@@ -9,6 +9,7 @@
 #include <timer.h>
 #include <boost/program_options.hpp>
 #include <future>
+#include <abstract_index.h>
 #include <index_factory.h>
 
 #include "utils.h"
@@ -82,8 +83,8 @@ std::string get_save_filename(const std::string &save_path, size_t active_window
     return final_path;
 }
 
-template <typename T, typename TagT, typename LabelT>
-void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, size_t end, size_t insert_threads, T *data,
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
+void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, size_t insert_threads, T *data,
                        size_t aligned_dim)
 {
     try
@@ -114,9 +115,9 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
     }
 }
 
-template <typename T, typename TagT, typename LabelT>
-void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::IndexWriteParameters &delete_params,
-                            size_t start, size_t end)
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
+void delete_and_consolidate(diskann::AbstractIndex &index, diskann::IndexWriteParameters &delete_params, size_t start,
+                            size_t end)
 {
     try
     {
@@ -169,7 +170,8 @@ template <typename T>
 void build_incremental_index(const std::string &data_path, const uint32_t L, const uint32_t R, const float alpha,
                              const uint32_t insert_threads, const uint32_t consolidate_threads,
                              size_t max_points_to_insert, size_t active_window, size_t consolidate_interval,
-                             const float start_point_norm, uint32_t num_start_pts, const std::string &save_path)
+                             const float start_point_norm, uint32_t num_start_pts, const std::string &save_path,
+                             diskann::AbstractIndex &index)
 {
     const uint32_t C = 500;
     const bool saturate_graph = false;
@@ -217,10 +219,12 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     using TagT = uint32_t;
     using LabelT = uint32_t;
+    /*
     const bool enable_tags = true;
 
     diskann::Index<T, TagT, LabelT> index(diskann::L2, dim, active_window + 4 * consolidate_interval, true, params, L,
-                                          insert_threads, enable_tags, true);
+                                          insert_threads, enable_tags, true);*/
+
     index.set_start_points_at_random(static_cast<T>(start_point_norm));
     index.enable_delete();
 
@@ -237,7 +241,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     auto insert_task = std::async(std::launch::async, [&]() {
         load_aligned_bin_part(data_path, data, 0, active_window);
-        insert_next_batch(index, 0, active_window, insert_threads, data, aligned_dim);
+        insert_next_batch(index, (size_t)0, active_window, insert_threads, data, aligned_dim);
     });
     insert_task.wait();
 
@@ -258,8 +262,9 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
             auto start_del = start - active_window - consolidate_interval;
             auto end_del = start - active_window;
 
-            delete_tasks.emplace_back(std::async(
-                std::launch::async, [&]() { delete_and_consolidate(index, delete_params, start_del, end_del); }));
+            delete_tasks.emplace_back(std::async(std::launch::async, [&]() {
+                delete_and_consolidate<T, TagT, LabelT>(index, delete_params, (size_t)start_del, (size_t)end_del);
+            }));
         }
     }
     if (delete_tasks.size() > 0)
@@ -350,35 +355,52 @@ int main(int argc, char **argv)
     try
     {
         // uisng index factory to do the same
-        // size_t dim, num_points;
-        // diskann::get_bin_metadata(data_path, num_points, dim);
+        size_t dim, num_points;
+        diskann::get_bin_metadata(data_path, num_points, dim);
 
-        // diskann::IndexConfig index_config;
-        // index_config.metric = diskann::L2;
-        // index_config.data_load_store_stratagy = diskann::MEMORY;
-        // index_config.graph_load_store_stratagy = diskann::MEMORY;
-        // index_config.data_type = data_type;
-        //// config.label_type = label_type;
-        // index_config.enable_tags = true;
-        // index_config.dynamic_index = true;
-        // index_config.max_points = 0;
-        // index_config.dimension = dim;
+        const uint32_t C = 500;
+        const bool saturate_graph = false;
 
-        // diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
-        // auto index = index_factory.instance();
+        diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
+                                                   .with_max_occlusion_size(C)
+                                                   .with_alpha(alpha)
+                                                   .with_saturate_graph(saturate_graph)
+                                                   .with_num_threads(insert_threads)
+                                                   .with_num_frozen_points(num_start_pts)
+                                                   .build();
+
+        // Index Build Params
+        auto index_config = diskann::IndexConfigBuilder()
+                                .with_metric(diskann::L2)
+                                .with_dimension(dim)
+                                .with_max_points(active_window + 4 * consolidate_interval)
+                                .is_dynamic_index(true)
+                                .is_enable_tags(true)
+                                .is_use_opq(false)
+                                .with_num_pq_chunks(0)
+                                .is_pq_dist_build(false)
+                                .with_tag_type("uint32")
+                                .with_label_type("uint32")
+                                .with_data_type(data_type)
+                                .with_index_write_params(params)
+                                .with_data_load_store_strategy(diskann::MEMORY)
+                                .build();
+
+        diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
+        auto index = index_factory.instance();
 
         if (data_type == std::string("int8"))
             build_incremental_index<int8_t>(data_path, L, R, alpha, insert_threads, consolidate_threads,
                                             max_points_to_insert, active_window, consolidate_interval, start_point_norm,
-                                            num_start_pts, index_path_prefix);
+                                            num_start_pts, index_path_prefix, *index);
         else if (data_type == std::string("uint8"))
             build_incremental_index<uint8_t>(data_path, L, R, alpha, insert_threads, consolidate_threads,
                                              max_points_to_insert, active_window, consolidate_interval,
-                                             start_point_norm, num_start_pts, index_path_prefix);
+                                             start_point_norm, num_start_pts, index_path_prefix, *index);
         else if (data_type == std::string("float"))
             build_incremental_index<float>(data_path, L, R, alpha, insert_threads, consolidate_threads,
                                            max_points_to_insert, active_window, consolidate_interval, start_point_norm,
-                                           num_start_pts, index_path_prefix);
+                                           num_start_pts, index_path_prefix, *index);
         else
             std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
     }

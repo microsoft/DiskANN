@@ -7,6 +7,28 @@
 namespace diskann
 {
 
+struct consolidation_report
+{
+    enum status_code
+    {
+        SUCCESS = 0,
+        FAIL = 1,
+        LOCK_FAIL = 2,
+        INCONSISTENT_COUNT_ERROR = 3
+    };
+    status_code _status;
+    size_t _active_points, _max_points, _empty_slots, _slots_released, _delete_set_size, _num_calls_to_process_delete;
+    double _time;
+
+    consolidation_report(status_code status, size_t active_points, size_t max_points, size_t empty_slots,
+                         size_t slots_released, size_t delete_set_size, size_t num_calls_to_process_delete,
+                         double time_secs)
+        : _status(status), _active_points(active_points), _max_points(max_points), _empty_slots(empty_slots),
+          _slots_released(slots_released), _delete_set_size(delete_set_size),
+          _num_calls_to_process_delete(num_calls_to_process_delete), _time(time_secs)
+    {
+    }
+};
 struct AnyRobinSet
 {
     template <typename T>
@@ -77,6 +99,7 @@ using TagType = std::any;
 using LabelType = std::any;
 using TagVector = AnyVector;
 using TagRobinSet = AnyRobinSet;
+
 // Enum to store load store stratagy for data_store and graph_store.
 enum LoadStoreStrategy
 {
@@ -109,12 +132,14 @@ struct IndexConfig
     std::string tag_type;
     std::string data_type;
 
+    IndexWriteParameters *index_write_params;
+
   private:
     IndexConfig(LoadStoreStrategy data_store_strategy, LoadStoreStrategy graph_store_strategy,
                 LoadStoreStrategy filtered_data_store_strategy, Metric metric, size_t dimension, size_t max_points,
                 size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
                 bool pq_dist_build, bool concurrent_consolidate, bool use_opq, std::string &data_type,
-                std::string &tag_type, std::string &label_type)
+                std::string &tag_type, std::string &label_type, IndexWriteParameters &index_write_params)
     {
         this->data_load_store_strategy = data_store_strategy;
         this->graph_load_store_strategy = graph_store_strategy;
@@ -136,6 +161,8 @@ struct IndexConfig
         this->data_type = data_type;
         this->tag_type = tag_type;
         this->label_type = label_type;
+
+        this->index_write_params = &index_write_params;
     }
 
     friend class IndexConfigBuilder;
@@ -372,11 +399,18 @@ class IndexConfigBuilder
         return *this;
     }
 
+    IndexConfigBuilder &with_index_write_params(IndexWriteParameters &index_write_params)
+    {
+        this->index_write_params = &index_write_params;
+        return *this;
+    }
+
     IndexConfig build()
     {
         return IndexConfig(data_load_store_strategy, graph_load_store_strategy, filtered_data_load_store_strategy,
                            metric, dimension, max_points, num_pq_chunks, num_frozen_pts, dynamic_index, enable_tags,
-                           pq_dist_build, concurrent_consolidate, use_opq, data_type, tag_type, label_type);
+                           pq_dist_build, concurrent_consolidate, use_opq, data_type, tag_type, label_type,
+                           *index_write_params);
     }
 
     IndexConfigBuilder(const IndexConfigBuilder &) = delete;
@@ -404,6 +438,8 @@ class IndexConfigBuilder
     std::string label_type;
     std::string tag_type;
     std::string data_type;
+
+    IndexWriteParameters *index_write_params;
 };
 
 class AbstractIndex
@@ -436,6 +472,11 @@ class AbstractIndex
 
     virtual void get_active_tags(TagRobinSet &active_tags) = 0;
 
+    virtual void set_start_points_at_random(DataType radius, uint32_t random_seed = 0) = 0;
+
+    virtual int enable_delete() = 0;
+
+    virtual consolidation_report consolidate_deletes(const IndexWriteParameters &parameters) = 0;
     // TODO: add other methods as api promise to end user.
 };
 } // namespace diskann

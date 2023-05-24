@@ -38,29 +38,6 @@ inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, u
     return OVERHEAD_FACTOR * (size_of_data + size_of_graph + size_of_locks + size_of_outer_vector);
 }
 
-struct consolidation_report
-{
-    enum status_code
-    {
-        SUCCESS = 0,
-        FAIL = 1,
-        LOCK_FAIL = 2,
-        INCONSISTENT_COUNT_ERROR = 3
-    };
-    status_code _status;
-    size_t _active_points, _max_points, _empty_slots, _slots_released, _delete_set_size, _num_calls_to_process_delete;
-    double _time;
-
-    consolidation_report(status_code status, size_t active_points, size_t max_points, size_t empty_slots,
-                         size_t slots_released, size_t delete_set_size, size_t num_calls_to_process_delete,
-                         double time_secs)
-        : _status(status), _active_points(active_points), _max_points(max_points), _empty_slots(empty_slots),
-          _slots_released(slots_released), _delete_set_size(delete_set_size),
-          _num_calls_to_process_delete(num_calls_to_process_delete), _time(time_secs)
-    {
-    }
-};
-
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index : public AbstractIndex
 {
     /**************************************************************************
@@ -135,6 +112,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void lazy_delete(const TagVector &tags, TagVector &failed_tags);
 
     DISKANN_DLLEXPORT void get_active_tags(TagRobinSet &active_tags);
+
+    DISKANN_DLLEXPORT void set_start_points_at_random(DataType radius, uint32_t random_seed = 0);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,

@@ -134,6 +134,22 @@ Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::unique_ptr<Abstrac
             index_config.num_pq_chunks, index_config.use_opq, index_config.num_frozen_pts)
 {
     //_data_store.reset(std::move(data_store));
+    if (index_config.dynamic_index)
+    {
+        auto search_threads = 20;
+        auto initial_search_list_size = index_config.index_write_params->search_list_size;
+        _indexingQueueSize = index_config.index_write_params->search_list_size;
+        _indexingRange = index_config.index_write_params->max_degree;
+        _indexingMaxC = index_config.index_write_params->max_occlusion_size;
+        _indexingAlpha = index_config.index_write_params->alpha;
+        _filterIndexingQueueSize = index_config.index_write_params->filter_list_size;
+
+        uint32_t num_threads_indx = index_config.index_write_params->num_threads;
+        uint32_t num_scratch_spaces = search_threads + num_threads_indx;
+
+        initialize_query_scratch(num_scratch_spaces, initial_search_list_size, _indexingQueueSize, _indexingRange,
+                                 _indexingMaxC, data_store->get_dims());
+    }
 }
 
 template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~Index()
@@ -1556,6 +1572,13 @@ void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
     }
     _has_built = true;
     diskann::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::set_start_points_at_random(DataType radius, uint32_t random_seed)
+{
+    T radius_to_use = std::any_cast<T>(radius);
+    this->set_start_points_at_random(radius_to_use, random_seed);
 }
 
 template <typename T, typename TagT, typename LabelT>
