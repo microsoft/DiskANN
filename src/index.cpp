@@ -134,7 +134,7 @@ Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::unique_ptr<Abstrac
             index_config.num_pq_chunks, index_config.use_opq, index_config.num_frozen_pts)
 {
     //_data_store.reset(std::move(data_store));
-    if (index_config.dynamic_index)
+    if (index_config.dynamic_index && index_config.index_write_params != nullptr)
     {
         auto search_threads = 20;
         auto initial_search_list_size = index_config.index_write_params->search_list_size;
