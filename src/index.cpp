@@ -837,6 +837,38 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
     return init_ids;
 }
 
+// Find common filter between a node's labels and a given set of labels, while taking into account universal label
+template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
+                                                   const std::vector<LabelT> &incoming_labels)
+{
+    auto &curr_node_labels = _pts_to_labels[point_id];
+    std::vector<LabelT> common_filters;
+    std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
+                          curr_node_labels.end(), std::back_inserter(common_filters));
+    if (common_filters.size() > 0)
+    {
+        // This is to reduce the repetitive calls. If common_filters size is > 0 , we dont need to check further for
+        // universal label
+        return true;
+    }
+    if (_use_universal_label)
+    {
+        if (!search_invocation)
+        {
+            if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) != incoming_labels.end() ||
+                std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
+                common_filters.push_back(_universal_label);
+        }
+        else
+        {
+            if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
+                common_filters.push_back(_universal_label);
+        }
+    }
+    return (common_filters.size() > 0);
+}
+
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
@@ -933,18 +965,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter)
         {
-            std::vector<LabelT> common_filters;
-            auto &x = _pts_to_labels[id];
-            std::set_intersection(filter_label.begin(), filter_label.end(), x.begin(), x.end(),
-                                  std::back_inserter(common_filters));
-            if (_use_universal_label)
-            {
-                if (std::find(filter_label.begin(), filter_label.end(), _universal_label) != filter_label.end() ||
-                    std::find(x.begin(), x.end(), _universal_label) != x.end())
-                    common_filters.emplace_back(_universal_label);
-            }
-
-            if (common_filters.size() == 0)
+            if (!detect_common_filters(id, search_invocation, filter_label))
                 continue;
         }
 
@@ -1012,19 +1033,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    std::vector<LabelT> common_filters;
-                    auto &x = _pts_to_labels[id];
-                    std::set_intersection(filter_label.begin(), filter_label.end(), x.begin(), x.end(),
-                                          std::back_inserter(common_filters));
-                    if (_use_universal_label)
-                    {
-                        if (std::find(filter_label.begin(), filter_label.end(), _universal_label) !=
-                                filter_label.end() ||
-                            std::find(x.begin(), x.end(), _universal_label) != x.end())
-                            common_filters.emplace_back(_universal_label);
-                    }
-
-                    if (common_filters.size() == 0)
+                    if (!detect_common_filters(id, search_invocation, filter_label))
                         continue;
                 }
 
