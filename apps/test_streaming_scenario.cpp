@@ -175,14 +175,14 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 {
     const uint32_t C = 500;
     const bool saturate_graph = false;
-
+    /*
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(C)
                                                .with_alpha(alpha)
                                                .with_saturate_graph(saturate_graph)
                                                .with_num_threads(insert_threads)
                                                .with_num_frozen_points(num_start_pts)
-                                               .build();
+                                               .build();*/
 
     diskann::IndexWriteParameters delete_params = diskann::IndexWriteParametersBuilder(L, R)
                                                       .with_max_occlusion_size(C)
