@@ -1665,7 +1665,12 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
     _max_observed_degree = std::max((uint32_t)max, _max_observed_degree);
     _has_built = true;
 }
-
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::build(const DataType &data, const size_t num_points_to_load,
+                                   const IndexWriteParameters &parameters, const TagVector &tags)
+{
+    this->build(std::any_cast<T *>(data), num_points_to_load, parameters, tags.get<TagT>());
+}
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load,
                                    const IndexWriteParameters &parameters, const std::vector<TagT> &tags)

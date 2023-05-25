@@ -452,6 +452,8 @@ class AbstractIndex
     {
     }
     virtual void build(IndexBuildParams &build_params) = 0;
+    virtual void build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
+                       const TagVector &tags) = 0;
     virtual void save(const char *filename, bool compact_before_save = false) = 0;
 
 #ifdef EXEC_ENV_OLS
