@@ -389,10 +389,8 @@ int main(int argc, char **argv)
         // building index with factory
         using TagT = uint32_t;
         const bool enable_tags = true;
-        size_t dim, aligned_dim;
-        size_t num_points;
+        size_t dim, num_points;
         diskann::get_bin_metadata(data_path, num_points, dim);
-        aligned_dim = ROUND_UP(dim, 8);
 
         diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                    .with_max_occlusion_size(500) // C = 500
