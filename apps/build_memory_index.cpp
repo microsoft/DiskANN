@@ -186,12 +186,11 @@ int main(int argc, char **argv)
         auto build_params = diskann::IndexBuildParamsBuilder(paras)
                                 .with_universal_label(universal_label)
                                 .with_label_file(label_file)
-                                .with_data_file(data_path)
                                 .with_save_path_prefix(index_path_prefix)
                                 .build();
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();
-        index->build(build_params);
+        index->build(data_path, data_num, build_params);
         index->save(index_path_prefix.c_str());
         return 0;
     }

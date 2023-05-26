@@ -99,7 +99,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                  const std::vector<TagT> &tags);
 
     // Exposed with Abstract Index
-    DISKANN_DLLEXPORT void build(IndexBuildParams &build_params);
+    DISKANN_DLLEXPORT void build(const std::string &data_file, const size_t num_points_to_load,
+                                 IndexBuildParams &build_params);
     DISKANN_DLLEXPORT void build(const DataType &data, const size_t num_points_to_load,
                                  const IndexWriteParameters &parameters, const TagVector &tags);
 

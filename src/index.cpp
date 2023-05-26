@@ -1845,17 +1845,19 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
     build(filename, num_points_to_load, parameters, tags);
 }
 
-template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::build(IndexBuildParams &build_params)
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t num_points_to_load,
+                                   IndexBuildParams &build_params)
 {
     std::string labels_file_to_use = build_params.save_path_prefix + "_label_formatted.txt";
     std::string mem_labels_int_map_file = build_params.save_path_prefix + "_labels_map.txt";
 
-    size_t points_to_load = build_params.num_points_to_load == 0 ? _max_points : build_params.num_points_to_load;
+    size_t points_to_load = num_points_to_load == 0 ? _max_points : num_points_to_load;
 
     auto s = std::chrono::high_resolution_clock::now();
     if (build_params.label_file == "")
     {
-        this->build(build_params.data_file.c_str(), points_to_load, build_params.index_write_params);
+        this->build(data_file.c_str(), points_to_load, build_params.index_write_params);
     }
     else
     {
@@ -1868,7 +1870,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             this->set_universal_label(unv_label_as_num);
             _universal_label_raw = build_params.universal_label;
         }
-        this->build_filtered_index(build_params.data_file.c_str(), labels_file_to_use, points_to_load,
+        this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load,
                                    build_params.index_write_params);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;

@@ -173,20 +173,16 @@ struct IndexBuildParams
 {
   public:
     diskann::IndexWriteParameters index_write_params;
-    std::string data_file;
     std::string save_path_prefix;
     std::string label_file;
     std::string universal_label;
     uint32_t filter_threshold = 0;
-    size_t num_points_to_load = 0;
 
   private:
-    IndexBuildParams(IndexWriteParameters &index_write_params, std::string &data_file, std::string &save_path_prefix,
-                     std::string &label_file, std::string &universal_label, uint32_t filter_threshold,
-                     size_t num_points_to_load)
-        : index_write_params(index_write_params), data_file(data_file), save_path_prefix(save_path_prefix),
-          label_file(label_file), universal_label(universal_label), filter_threshold(filter_threshold),
-          num_points_to_load(num_points_to_load)
+    IndexBuildParams(IndexWriteParameters &index_write_params, std::string &save_path_prefix, std::string &label_file,
+                     std::string &universal_label, uint32_t filter_threshold)
+        : index_write_params(index_write_params), save_path_prefix(save_path_prefix), label_file(label_file),
+          universal_label(universal_label), filter_threshold(filter_threshold)
     {
     }
 
@@ -234,17 +230,6 @@ class IndexBuildParamsBuilder
   public:
     IndexBuildParamsBuilder(diskann::IndexWriteParameters &paras) : index_write_params(paras){};
 
-    IndexBuildParamsBuilder &with_data_file(std::string &data_file)
-    {
-        if (data_file == "" || data_file.empty())
-            throw ANNException("Error: data path provides is empty.", -1);
-        if (!file_exists(data_file))
-            throw ANNException("Error: data path" + data_file + " does not exist.", -1);
-
-        this->data_file = data_file;
-        return *this;
-    }
-
     IndexBuildParamsBuilder &with_save_path_prefix(std::string &save_path_prefix)
     {
         if (save_path_prefix.empty() || save_path_prefix == "")
@@ -271,16 +256,9 @@ class IndexBuildParamsBuilder
         return *this;
     }
 
-    IndexBuildParamsBuilder &with_points_to_load(std::size_t &num_points_to_load)
-    {
-        this->num_points_to_load = num_points_to_load;
-        return *this;
-    }
-
     IndexBuildParams build()
     {
-        return IndexBuildParams(index_write_params, data_file, save_path_prefix, label_file, universal_label,
-                                filter_threshold, num_points_to_load);
+        return IndexBuildParams(index_write_params, save_path_prefix, label_file, universal_label, filter_threshold);
     }
 
     IndexBuildParamsBuilder(const IndexBuildParamsBuilder &) = delete;
@@ -288,12 +266,10 @@ class IndexBuildParamsBuilder
 
   private:
     diskann::IndexWriteParameters index_write_params;
-    std::string data_file;
     std::string save_path_prefix;
     std::string label_file;
     std::string universal_label;
     uint32_t filter_threshold = 0;
-    size_t num_points_to_load = 0;
 };
 
 class IndexConfigBuilder
@@ -451,7 +427,8 @@ class AbstractIndex
     virtual ~AbstractIndex()
     {
     }
-    virtual void build(IndexBuildParams &build_params) = 0;
+    virtual void build(const std::string &data_file, const size_t num_points_to_load,
+                       IndexBuildParams &build_params) = 0;
     virtual void build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
                        const TagVector &tags) = 0;
     virtual void save(const char *filename, bool compact_before_save = false) = 0;
