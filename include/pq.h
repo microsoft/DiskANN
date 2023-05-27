@@ -43,9 +43,9 @@ class FixedChunkPQTable
     // assumes pre-processed query
     void populate_chunk_distances(const float *query_vec, float *dist_vec);
 
-    float l2_distance(const float *query_vec, const uint8_t *base_vec);
+    float l2_distance(const float *query_vec, uint8_t *base_vec);
 
-    float inner_product(const float *query_vec, const uint8_t *base_vec);
+    float inner_product(const float *query_vec, uint8_t *base_vec);
 
     // assumes no rotation is involved
     void inflate_vector(uint8_t *base_vec, float *out_vec);
