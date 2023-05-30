@@ -238,9 +238,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
-    // Find common filter between a node's labels and a given set of labels, while taking into account universal label
-    bool detect_common_filters(uint32_t point_id, bool search_invocation, const std::vector<LabelT> &incoming_labels);
-
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();

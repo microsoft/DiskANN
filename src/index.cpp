@@ -874,37 +874,6 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
 }
 
 template <typename T, typename TagT, typename LabelT>
-bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
-                                                   const std::vector<LabelT> &incoming_labels)
-{
-    auto &curr_node_labels = _pts_to_labels[point_id];
-    std::vector<LabelT> common_filters;
-    std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
-                          curr_node_labels.end(), std::back_inserter(common_filters));
-    if (common_filters.size() > 0)
-    {
-        // This is to reduce the repetitive calls. If common_filters size is > 0 , we dont need to check further for
-        // universal label
-        return true;
-    }
-    if (_use_universal_label)
-    {
-        if (!search_invocation)
-        {
-            if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) != incoming_labels.end() ||
-                std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
-                common_filters.push_back(_universal_label);
-        }
-        else
-        {
-            if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
-                common_filters.push_back(_universal_label);
-        }
-    }
-    return (common_filters.size() > 0);
-}
-
-template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
     bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation,
