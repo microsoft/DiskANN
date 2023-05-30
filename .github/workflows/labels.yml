@@ -31,11 +31,6 @@ jobs:
         
       - name: Generate Labels
         run: |
-          echo "Computing ground truth for uint8s across l2, mips, and cosine distance functions"
-          dist/bin/compute_groundtruth  --data_type uint8 --dist_fn l2 --base_file data/rand_uint8_10D_10K_norm50.0.bin --query_file data/rand_uint8_10D_1K_norm50.0.bin --gt_file data/l2_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100 --K 100
-          dist/bin/compute_groundtruth  --data_type uint8 --dist_fn mips --base_file data/rand_uint8_10D_10K_norm50.0.bin --query_file data/rand_uint8_10D_1K_norm50.0.bin --gt_file data/mips_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100 --K 100
-          dist/bin/compute_groundtruth  --data_type uint8 --dist_fn cosine --base_file data/rand_uint8_10D_10K_norm50.0.bin --query_file data/rand_uint8_10D_1K_norm50.0.bin --gt_file data/cosine_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100 --K 100
-
           echo "Generating synthetic labels and computing ground truth for filtered search with universal label"
           dist/bin/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file data/rand_labels_50_10K.txt --distribution_type random
           dist/bin/compute_groundtruth_for_filters  --data_type uint8 --dist_fn l2 --universal_label 0 --filter_label 10 --base_file data/rand_uint8_10D_10K_norm50.0.bin --query_file data/rand_uint8_10D_1K_norm50.0.bin --label_file data/rand_labels_50_10K.txt --gt_file data/l2_rand_uint8_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel --K 100
