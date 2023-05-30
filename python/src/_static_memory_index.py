@@ -55,7 +55,7 @@ class StaticMemoryIndex:
         :type index_prefix: str
         """
         index_prefix = _valid_index_prefix(index_directory, index_prefix)
-        vector_dtype, metric, _, _ = _ensure_index_metadata(
+        vector_dtype, metric, _, dims = _ensure_index_metadata(
             index_prefix,
             vector_dtype,
             distance_metric,
@@ -70,7 +70,7 @@ class StaticMemoryIndex:
         )
 
         self._vector_dtype = vector_dtype
-        self._dimensions = dimensions
+        self._dimensions = dims
 
         if vector_dtype == np.single:
             _index = _native_dap.StaticMemoryFloatIndex
@@ -79,9 +79,9 @@ class StaticMemoryIndex:
         else:
             _index = _native_dap.StaticMemoryInt8Index
         self._index = _index(
-            metric=dap_metric,
-            num_points=num_vectors,
-            dimensions=dimensions,
+            distance_metric=dap_metric,
+            num_points=num_points,
+            dimensions=dims,
             index_path=os.path.join(index_directory, index_prefix),
             num_threads=num_threads,
             initial_search_complexity=initial_search_complexity,

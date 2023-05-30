@@ -182,6 +182,10 @@ template <class T> struct DynamicInMemIndex
     }
 
     void load(const std::string &index_path) {
+        const std::string tags_file = index_path + ".tags";
+        if (!file_exists(tags_file)) {
+            throw std::runtime_error("tags file not found at expected path: " + tags_file);
+        }
         _index->load(index_path.c_str(), _write_params.num_threads, _initial_search_complexity);
     }
 
@@ -281,7 +285,7 @@ template <class T> struct StaticInMemIndex
                               false, // pq_dist_build
                               0,     // num_pq_chunks
                               false, // use_opq = false
-                              0);    // num_frozen_pts = 0
+                              0); // num_frozen_points
         _index->load(index_prefix.c_str(), _num_threads, initial_search_complexity);
     }
 
@@ -338,8 +342,7 @@ template <typename T, typename TagT = IdT, typename LabelT = filterT>
 void build_in_memory_index(const diskann::Metric &metric, const std::string &vector_bin_path,
                            const std::string &index_output_path, const uint32_t graph_degree, const uint32_t complexity,
                            const float alpha, const uint32_t num_threads, const bool use_pq_build,
-                           const size_t num_pq_bytes, const bool use_opq, const std::string &label_file,
-                           const std::string &universal_label, const uint32_t filter_complexity,
+                           const size_t num_pq_bytes, const bool use_opq, const uint32_t filter_complexity,
                            const bool use_tags = false)
 {
     diskann::IndexWriteParameters index_build_params = diskann::IndexWriteParametersBuilder(complexity, graph_degree)
@@ -350,28 +353,23 @@ void build_in_memory_index(const diskann::Metric &metric, const std::string &vec
                                                            .build();
     size_t data_num, data_dim;
     diskann::get_bin_metadata(vector_bin_path, data_num, data_dim);
-    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, use_tags, false, use_pq_build,
+    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, use_tags, use_tags, false, use_pq_build,
                                           num_pq_bytes, use_opq);
+
     if (use_tags) {
-        std::vector<IdT> tags(data_num);
-        diskann::load_bin(index_output_path + ".tags", tags, data_num, 1);
-    }
-    if (label_file == "")
-    {
+        const std::string tags_file = index_output_path + ".tags";
+        if (!file_exists(tags_file)) {
+            throw std::runtime_error("tags file not found at expected path: " + tags_file);
+        }
+        TagT *tags_data;
+        size_t tag_dims = 1;
+        diskann::load_bin(tags_file, tags_data, data_num, tag_dims);
+        std::vector<TagT> tags(tags_data, tags_data + data_num);
+        index.build(vector_bin_path.c_str(), data_num, index_build_params, tags);
+    } else {
         index.build(vector_bin_path.c_str(), data_num, index_build_params);
     }
-    else
-    {
-        std::string labels_file_to_use = index_output_path + "_label_formatted.txt";
-        std::string mem_labels_int_map_file = index_output_path + "_labels_map.txt";
-        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
-        if (universal_label != "")
-        {
-            filterT unv_label_as_num = 0;
-            index.set_universal_label(unv_label_as_num);
-        }
-        index.build_filtered_index(index_output_path.c_str(), labels_file_to_use, data_num, index_build_params);
-    }
+
     index.save(index_output_path.c_str());
 }
 
@@ -388,8 +386,7 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
     m.def(build_in_memory_name.c_str(), &build_in_memory_index<T>, py::arg("distance_metric"), py::arg("data_file_path"),
           py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"), py::arg("alpha"),
           py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"), py::arg("use_opq"),
-          py::arg("label_file") = "", py::arg("universal_label") = "", py::arg("filter_complexity") = 0,
-          py::arg("use_tags") = false);
+          py::arg("filter_complexity") = 0, py::arg("use_tags") = false);
 
     const std::string static_index = "StaticMemory" + class_name + "Index";
     py::class_<StaticInMemIndex<T>>(m, static_index.c_str())

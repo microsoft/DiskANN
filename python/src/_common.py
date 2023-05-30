@@ -246,7 +246,7 @@ def _ensure_index_metadata(
         return vector_dtype, distance_metric, max_vectors, dimensions  # type: ignore
     else:
         vector_dtype, distance_metric, num_vectors, dimensions = possible_metadata
-        if num_vectors > max_vectors:
+        if max_vectors is not None and num_vectors > max_vectors:
             warnings.warn(
                 "The number of vectors in the saved index exceeds the max_vectors parameter. "
                 "max_vectors is being adjusted to accommodate the dataset, but any insertions will fail."

@@ -196,8 +196,6 @@ def build_memory_index(
     num_pq_bytes: int = defaults.NUM_PQ_BYTES,
     use_opq: bool = defaults.USE_OPQ,
     vector_dtype: Optional[VectorDType] = None,
-    label_file: str = "",
-    universal_label: str = "",
     filter_complexity: int = defaults.FILTER_COMPLEXITY,
     tags: Union[str, VectorIdentifierBatch] = "",
     index_prefix: str = "ann"
@@ -232,9 +230,6 @@ def build_memory_index(
     :param vector_dtype: Required if the provided ``vector_path_or_np_array`` is of type ``str``, else we use the
         ``vector_path_or_np_array.dtype`` if np array.
     :type vector_dtype: Optional[VectorDType], default is ``None``.
-    :param label_file: Defaults to ""
-    :type label_file: str
-    :param universal_label: Defaults to ""
     :param filter_complexity: Complexity to use when using filters. Default is 0.
     :type filter_complexity: int
     :param tags: uint32 ids corresponding to the ordinal position of the vectors provided to build the index.
@@ -311,8 +306,6 @@ def build_memory_index(
         use_pq_build=use_pq_build,
         num_pq_bytes=num_pq_bytes,
         use_opq=use_opq,
-        label_file=label_file,
-        universal_label=universal_label,
         filter_complexity=filter_complexity,
         use_tags=use_tags
     )
