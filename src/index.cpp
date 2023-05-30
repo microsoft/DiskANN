@@ -841,6 +841,38 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
     return init_ids;
 }
 
+// Find common filter between a node's labels and a given set of labels, while taking into account universal label
+template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
+                                                   const std::vector<LabelT> &incoming_labels)
+{
+    auto &curr_node_labels = _pts_to_labels[point_id];
+    std::vector<LabelT> common_filters;
+    std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
+                          curr_node_labels.end(), std::back_inserter(common_filters));
+    if (common_filters.size() > 0)
+    {
+        // This is to reduce the repetitive calls. If common_filters size is > 0 , we dont need to check further for
+        // universal label
+        return true;
+    }
+    if (_use_universal_label)
+    {
+        if (!search_invocation)
+        {
+            if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) != incoming_labels.end() ||
+                std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
+                common_filters.push_back(_universal_label);
+        }
+        else
+        {
+            if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
+                common_filters.push_back(_universal_label);
+        }
+    }
+    return (common_filters.size() > 0);
+}
+
 template <typename T, typename TagT, typename LabelT>
 bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
