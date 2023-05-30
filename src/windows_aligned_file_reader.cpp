@@ -6,6 +6,8 @@
 #include "windows_aligned_file_reader.h"
 #include <iostream>
 #include "utils.h"
+#include <locale>
+#include <codecvt>
 
 #define SECTOR_LEN 4096
 
@@ -43,9 +45,8 @@ void WindowsAlignedFileReader::register_thread()
         FILE_ATTRIBUTE_READONLY | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS, NULL);
     if (ctx.fhandle == INVALID_HANDLE_VALUE)
     {
-        std::stringstream ss;
-        ss << std::string(m_filename.begin(), m_filename.end());
-        diskann::cout << "Error opening " << ss.str() << " -- error=" << GetLastError() << std::endl;
+        auto filename = std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t>().to_bytes(m_filename);
+        diskann::cout << "Error opening " << filename << " -- error=" << GetLastError() << std::endl;
     }
 
     // create IOCompletionPort
