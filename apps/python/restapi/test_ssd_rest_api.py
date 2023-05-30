@@ -67,7 +67,7 @@ class TestSSDRestApi(unittest.TestCase):
             rest_port = rng.integers(10000, 10100)
             cls._rest_address = f"http://127.0.0.1:{rest_port}/"
 
-            ssd_server_path = os.path.join(diskann_build_dir, "tests", "restapi", "ssd_server")
+            ssd_server_path = os.path.join(diskann_build_dir, "apps", "restapi", "ssd_server")
 
             args = [
                 ssd_server_path,

@@ -1,7 +1,7 @@
 **Usage for filtered indices**
 ================================
 ## Building a filtered Index
-DiskANN provides two algorithms for building an index with filters support: filtered-vamana and stitched-vamana. Here, we describe the parameters for building both. `tests/build_memory_index.cpp` and `tests/build_stitched_index.cpp` are respectively used to build each kind of index. 
+DiskANN provides two algorithms for building an index with filters support: filtered-vamana and stitched-vamana. Here, we describe the parameters for building both. `apps/build_memory_index.cpp` and `apps/build_stitched_index.cpp` are respectively used to build each kind of index. 
 
 ### 1. filtered-vamana
 
@@ -32,7 +32,7 @@ DiskANN provides two algorithms for building an index with filters support: filt
 10. **`--Stitched_R`**: Once all sub-indices are "stitched" together, we prune the resulting graph down to the degree given by this parameter.
 
 ## Computing a groundtruth file for a filtered index
-In order to evaluate the performance of our algorithms, we can compare its results (i.e. the top `k` neighbors found for each query) against the results found by an exact nearest neighbor search. We provide the program `tests/utils/compute_groundtruth.cpp` to provide the results for the latter:
+In order to evaluate the performance of our algorithms, we can compare its results (i.e. the top `k` neighbors found for each query) against the results found by an exact nearest neighbor search. We provide the program `apps/utils/compute_groundtruth.cpp` to provide the results for the latter:
 
 1. **`--data_type`** The type of dataset you built an index with. float(32 bit), signed int8 and unsigned uint8 are supported. 
 2. **`--dist_fn`**: There are two distance functions supported: l2 and mips.
@@ -48,7 +48,7 @@ In order to evaluate the performance of our algorithms, we can compare its resul
 
 ## Searching a Filtered Index
 
-Searching a filtered index uses the `tests/search_memory_index.cpp`:
+Searching a filtered index uses the `apps/search_memory_index.cpp`:
 
 1. **`--data_type`**: The type of dataset you built the index on. float(32 bit), signed int8 and unsigned uint8 are supported. Use the same data type as in arg (1) above used in building the index.
 2. **`--dist_fn`**: There are two distance functions supported: l2 and mips. There is an additional *fast_l2* implementation that could provide faster results for small (about a million-sized) indices. Use the same distance as in arg (2) above used in building the index. Note that stitched-vamana only supports l2.
@@ -64,23 +64,23 @@ Searching a filtered index uses the `tests/search_memory_index.cpp`:
 Example with SIFT10K:
 --------------------
 We demonstrate how to work through this pipeline using the SIFT10K dataset (http://corpus-texmex.irisa.fr/). Before starting, make sure you have compiled diskANN according to the instructions in the README and can see the following binaries (paths with respect to repository root):
-- `build/tests/utils/compute_groundtruth`
-- `build/tests/utils/fvecs_to_bin`
-- `build/tests/build_memory_index`
-- `build/tests/build_stitched_index`
-- `build/tests/search_memory_index`
+- `build/apps/utils/compute_groundtruth`
+- `build/apps/utils/fvecs_to_bin`
+- `build/apps/build_memory_index`
+- `build/apps/build_stitched_index`
+- `build/apps/search_memory_index`
 
 Now, download the base and query set and convert the data to binary format:
 ```bash
 wget ftp://ftp.irisa.fr/local/texmex/corpus/siftsmall.tar.gz
 tar -zxvf siftsmall.tar.gz
-build/tests/utils/fvecs_to_bin float siftsmall/siftsmall_base.fvecs siftsmall/siftsmall_base.bin
-build/tests/utils/fvecs_to_bin float siftsmall/siftsmall_query.fvecs siftsmall/siftsmall_query.bin
+build/apps/utils/fvecs_to_bin float siftsmall/siftsmall_base.fvecs siftsmall/siftsmall_base.bin
+build/apps/utils/fvecs_to_bin float siftsmall/siftsmall_query.fvecs siftsmall/siftsmall_query.bin
 ```
 
 We now need to make label file for our vectors. For convenience, we've included a synthetic label generator through which we can generate label file as follow
 ```bash
-  build/tests/utils/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file ./rand_labels_50_10K.txt --distribution_type zipf
+  build/apps/utils/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file ./rand_labels_50_10K.txt --distribution_type zipf
 ```
 Note : `distribution_type` can be `rand` or `zipf`
 
@@ -88,18 +88,18 @@ This will genearate label file with 10000 data points with 50 distinct labels, r
 
 Label count for each unique label in the generated label file can be printed with help of following command
 ```bash
-  build/tests/utils/stats_label_data.exe --labels_file ./rand_labels_50_10K.txt --universal_label 0
+  build/apps/utils/stats_label_data.exe --labels_file ./rand_labels_50_10K.txt --universal_label 0
 ```
 	
 Note that neither approach is designed for use with random synthetic labels, which will lead to unpredictable accuracy at search time.
 
 Now build and search the index and measure the recall using ground truth computed using bruteforce. We search for results with the filter 35.
 ```bash
-build/tests/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file siftsmall/siftsmall_base.bin --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --K 100 --label_file ./rand_labels_50_10K.txt --filter_label 35 --universal_label 0
-build/tests/build_memory_index  --data_type float --dist_fn l2 --data_path siftsmall/siftsmall_base.bin --index_path_prefix siftsmall/siftsmall_R32_L50_filtered_index -R 32 --FilteredLbuild 50 --alpha 1.2 --label_file ./rand_labels_50_10K.txt --universal_label 0
-build/tests/build_stitched_index --data_type float --data_path siftsmall/siftsmall_base.bin --index_path_prefix siftsmall/siftsmall_R20_L40_SR32_stitched_index -R 20 -L 40 --stitched_R 32 --alpha 1.2 --label_file ./rand_labels_50_10K.txt --universal_label 0
-build/tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R20_L40_SR32_filtered_index --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --filter_label 35 -K 10 -L 10 20 30 40 50 100 --result_path siftsmall/filtered_search_results
-build/tests/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R20_L40_SR32_stitched_index --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --filter_label 35 -K 10 -L 10 20 30 40 50 100 --result_path siftsmall/stitched_search_results
+build/apps/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file siftsmall/siftsmall_base.bin --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --K 100 --label_file ./rand_labels_50_10K.txt --filter_label 35 --universal_label 0
+build/apps/build_memory_index  --data_type float --dist_fn l2 --data_path siftsmall/siftsmall_base.bin --index_path_prefix siftsmall/siftsmall_R32_L50_filtered_index -R 32 --FilteredLbuild 50 --alpha 1.2 --label_file ./rand_labels_50_10K.txt --universal_label 0
+build/apps/build_stitched_index --data_type float --data_path siftsmall/siftsmall_base.bin --index_path_prefix siftsmall/siftsmall_R20_L40_SR32_stitched_index -R 20 -L 40 --stitched_R 32 --alpha 1.2 --label_file ./rand_labels_50_10K.txt --universal_label 0
+build/apps/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R20_L40_SR32_filtered_index --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --filter_label 35 -K 10 -L 10 20 30 40 50 100 --result_path siftsmall/filtered_search_results
+build/apps/search_memory_index  --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R20_L40_SR32_stitched_index --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall/siftsmall_gt_35.bin --filter_label 35 -K 10 -L 10 20 30 40 50 100 --result_path siftsmall/stitched_search_results
 ```
 
  The output of both searches is listed below. The throughput (Queries/sec) as well as mean and 99.9 latency in microseconds for each `L` parameter provided. (Measured on a physical machine with a Intel(R) Xeon(R) W-2145 CPU and 64 GB RAM)

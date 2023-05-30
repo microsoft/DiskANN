@@ -1,7 +1,7 @@
 #Copyright(c) Microsoft Corporation.All rights reserved.
 #Licensed under the MIT                        license.
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
 if(MSVC)
@@ -20,4 +20,7 @@ else()
     add_library(${PROJECT_NAME} ${CPP_SOURCES})
     add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})
 endif()
-install()
+
+if (NOT MSVC)
+    install(TARGETS ${PROJECT_NAME} LIBRARY)
+endif()
