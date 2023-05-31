@@ -378,7 +378,8 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
     if (_enable_tags && !file_exists(tag_filename))
     {
         diskann::cerr << "Tag file " << tag_filename << " does not exist!" << std::endl;
-        throw diskann::ANNException("Tag file " + tag_filename + " does not exist!", -1, __FUNCSIG__, __FILE__, __LINE__);
+        throw diskann::ANNException("Tag file " + tag_filename + " does not exist!", -1, __FUNCSIG__, __FILE__,
+                                    __LINE__);
     }
 #endif
     if (!_enable_tags)

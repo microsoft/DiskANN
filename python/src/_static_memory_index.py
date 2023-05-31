@@ -55,7 +55,7 @@ class StaticMemoryIndex:
         :type index_prefix: str
         """
         index_prefix = _valid_index_prefix(index_directory, index_prefix)
-        vector_dtype, metric, _, dims = _ensure_index_metadata(
+        vector_dtype, metric, num_points, dims = _ensure_index_metadata(
             index_prefix,
             vector_dtype,
             distance_metric,
