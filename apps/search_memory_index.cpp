@@ -135,14 +135,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
                         const std::vector<std::string> &query_filters, const float fail_if_recall_below)
 {
-    // Load the query file
     T *query = nullptr;
     uint32_t *gt_ids = nullptr;
     float *gt_dists = nullptr;
     size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
     diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
 
-    // Check for ground truth
     bool calc_recall_flag = false;
     if (truthset_file != std::string("null") && file_exists(truthset_file))
     {
@@ -467,8 +465,6 @@ int main(int argc, char **argv)
 
     try
     {
-        // load data
-
         diskann::DataType query;
         size_t query_num, query_dim, query_aligned_dim;
         diskann::load_aligned_bin(query_file, query, query_num, query_dim, query_aligned_dim, data_type);

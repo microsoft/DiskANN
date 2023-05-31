@@ -98,13 +98,12 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
                                  const std::vector<TagT> &tags);
 
-    // Exposed with Abstract Index
     DISKANN_DLLEXPORT void build(const std::string &data_file, const size_t num_points_to_load,
                                  IndexBuildParams &build_params);
+
     DISKANN_DLLEXPORT void build(const DataType &data, const size_t num_points_to_load,
                                  const IndexWriteParameters &parameters, const TagVector &tags);
 
-    // TODO: Add indivudial search when yinli's PR to consolidate search
     DISKANN_DLLEXPORT SearchResult batch_search(const diskann::DataType &query, size_t K, std::vector<uint32_t> &Lvec,
                                                 IndexSearchParams &search_params);
 

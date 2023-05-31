@@ -8,21 +8,12 @@ IndexFactory::IndexFactory(IndexConfig &config) : _config(config)
     checkConfig();
 }
 
-// TODO: Parse the yml config to IndexConfig object
-void IndexFactory::parse_config(const std::string &config_path)
-{
-    if (!file_exists(config_path))
-        throw ANNException("Unable to find config file: " + config_path, -1, __FUNCSIG__, __FILE__, __LINE__);
-}
-
 std::shared_ptr<AbstractIndex> IndexFactory::instance()
 {
-    // calculate points and dimension of data
     size_t num_points = _config.max_points;
     size_t dim = _config.dimension;
     if (_config.data_type == "float")
     {
-        // datastore and graph store objects to be passed to index
         auto data_store = construct_datastore<float>(_config.data_strategy, num_points, dim);
         auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
 
@@ -66,12 +57,6 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
         throw diskann::ANNException(
             "Error: Data type " + _config.data_type + " . is not supported please cloose from <float/int8/uint8>", -1);
     }
-    //// datastore and graph store objects to be passed to index
-    // auto data_store = construct_datastore<float>(_config.data_load_store_stratagy, num_points, dim);
-    //// if (_pq_dist_build)
-    ////  pq_data_store  = construct_datastore<float>(...);
-    // auto graph_store = construct_graphstore(_config.graph_load_store_stratagy, num_points);
-    // return std::make_shared<diskann::Index<float>>(_config, std::move(data_store));
 }
 
 void IndexFactory::checkConfig()
@@ -94,15 +79,12 @@ void IndexFactory::checkConfig()
                                -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    // check if data_type is valid
     if (_config.data_type != "float" && _config.data_type != "uint8" && _config.data_type != "int8")
     {
         throw ANNException("ERROR: invalid data type : + " + _config.data_type +
                                " is not supported. please select from [float, int8, uint8]",
                            -1);
     }
-
-    // check if label type is valid
 }
 
 template <typename T>
@@ -129,25 +111,22 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(LoadStor
         break;
     default:
         break;
+
+        return nullptr;
     }
 
-    // default return (just to remove warnings)
-    return nullptr;
-}
-
-std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(LoadStoreStrategy strategy, size_t size)
-{
-    // TODO : Return once the concrete classes are implemented
-    switch (strategy)
+    std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(LoadStoreStrategy strategy, size_t size)
     {
-    case MEMORY:
-        break;
-    case DISK:
-        break;
-    default:
-        break;
+        switch (strategy)
+        {
+        case MEMORY:
+            break;
+        case DISK:
+            break;
+        default:
+            break;
+        }
+        return std::make_unique<InMemGraphStore>(size);
     }
-    return std::make_unique<InMemGraphStore>(size);
-}
 
 } // namespace diskann

@@ -384,20 +384,18 @@ int main(int argc, char **argv)
 
     try
     {
-        // building index with factory
         using TagT = uint32_t;
         const bool enable_tags = true;
         size_t dim, num_points;
         diskann::get_bin_metadata(data_path, num_points, dim);
 
         diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
-                                                   .with_max_occlusion_size(500) // C = 500
+                                                   .with_max_occlusion_size(500)
                                                    .with_alpha(alpha)
                                                    .with_num_threads(num_threads)
                                                    .with_num_frozen_points(num_start_pts)
                                                    .build();
-        /*diskann::Index<T, TagT> index(diskann::L2, dim, max_points_to_insert, true, params, L, thread_count,
-                                      enable_tags, concurrent);*/
+
         diskann::IndexConfig index_config = diskann::IndexConfigBuilder()
                                                 .with_metric(diskann::L2)
                                                 .with_dimension(dim)

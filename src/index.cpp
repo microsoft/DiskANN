@@ -2937,8 +2937,7 @@ int Index<T, TagT, LabelT>::insert_point(const DataType &point, const TagType &t
 {
     try
     {
-        const T *data = std::any_cast<T *>(point);
-        return this->insert_point(data, std::any_cast<TagT>(tag));
+        return this->insert_point(std::any_cast<T *>(point), std::any_cast<TagT>(tag));
     }
     catch (const std::bad_any_cast &anycast_e)
     {
@@ -3078,9 +3077,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::lazy_delete(const TagVector &tags, TagVector &failed_tags)
 {
-    const auto &tags_vec = tags.get<TagT>();
-    auto &failed_tags_vec = failed_tags.get<TagT>();
-    this->lazy_delete(tags_vec, failed_tags_vec);
+    this->lazy_delete(tags.get<TagT>(), failed_tags.get<TagT>());
 }
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagT &tag)
@@ -3141,8 +3138,7 @@ template <typename T, typename TagT, typename LabelT> bool Index<T, TagT, LabelT
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::get_active_tags(TagRobinSet &active_tags)
 {
-    auto &current_tags = active_tags.get<TagT>();
-    this->get_active_tags(current_tags);
+    this->get_active_tags(active_tags.get<TagT>());
 }
 
 template <typename T, typename TagT, typename LabelT>

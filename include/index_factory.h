@@ -9,7 +9,6 @@ class IndexFactory
   public:
     DISKANN_DLLEXPORT explicit IndexFactory(IndexConfig &config);
     DISKANN_DLLEXPORT std::shared_ptr<AbstractIndex> instance();
-    DISKANN_DLLEXPORT static void parse_config(const std::string &config_path);
 
   private:
     void checkConfig();
@@ -17,8 +16,6 @@ class IndexFactory
     template <typename T>
     std::unique_ptr<AbstractDataStore<T>> construct_datastore(LoadStoreStrategy stratagy, size_t num_points,
                                                               size_t dimension);
-    /*std::unique_ptr<AbstractDataStore<T>> construct_pq_datastore(LoadStoreStratagy stratagy, size_t num_points,
-                                                                 size_t dimension);*/
     std::unique_ptr<AbstractGraphStore> construct_graphstore(LoadStoreStrategy stratagy, size_t size);
 
     IndexConfig &_config;

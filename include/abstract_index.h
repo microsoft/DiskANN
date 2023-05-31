@@ -6,7 +6,6 @@
 
 namespace diskann
 {
-
 struct consolidation_report
 {
     enum status_code
@@ -155,6 +154,7 @@ class IndexConfigBuilder
     IndexConfigBuilder()
     {
     }
+
     IndexConfigBuilder &with_metric(Metric m)
     {
         this->_metric = m;
@@ -391,8 +391,6 @@ class IndexBuildParamsBuilder
     std::string universal_label;
     uint32_t filter_threshold = 0;
 };
-
-
 
 class AbstractIndex
 {

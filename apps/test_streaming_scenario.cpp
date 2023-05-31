@@ -326,7 +326,6 @@ int main(int argc, char **argv)
 
     try
     {
-        // uisng index factory to do the same
         size_t dim, num_points;
         diskann::get_bin_metadata(data_path, num_points, dim);
 
