@@ -246,10 +246,13 @@ else()
     endif()
 endif()
 
+enable_testing()
+
 add_subdirectory(src)
 if (NOT PYBIND)
     add_subdirectory(apps)
     add_subdirectory(apps/utils)
+    add_subdirectory(tests)
 endif()
 
 if (MSVC)

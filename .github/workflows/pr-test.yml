@@ -6,6 +6,9 @@ jobs:
       fail-fast: true
     name: DiskANN Common Build Checks
     uses: ./.github/workflows/common.yml
+  unit-tests:
+    name: Unit tests
+    uses: ./.github/workflows/unit-tests.yml
   in-mem-pq:
     name: In-Memory with PQ
     uses: ./.github/workflows/in-mem-pq.yml
