@@ -111,22 +111,22 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(LoadStor
         break;
     default:
         break;
-
-        return nullptr;
     }
+    return nullptr;
+}
 
-    std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(LoadStoreStrategy strategy, size_t size)
+std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(LoadStoreStrategy strategy, size_t size)
+{
+    switch (strategy)
     {
-        switch (strategy)
-        {
-        case MEMORY:
-            break;
-        case DISK:
-            break;
-        default:
-            break;
-        }
-        return std::make_unique<InMemGraphStore>(size);
+    case MEMORY:
+        break;
+    case DISK:
+        break;
+    default:
+        break;
     }
+    return std::make_unique<InMemGraphStore>(size);
+}
 
 } // namespace diskann

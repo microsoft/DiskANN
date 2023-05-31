@@ -108,8 +108,8 @@ enum LoadStoreStrategy
 
 struct IndexConfig
 {
-    LoadStoreStrategy graph_strategy;
     LoadStoreStrategy data_strategy;
+    LoadStoreStrategy graph_strategy;
     LoadStoreStrategy filtered_data_strategy;
 
     Metric metric;
@@ -268,8 +268,8 @@ class IndexConfigBuilder
     IndexConfigBuilder &operator=(const IndexConfigBuilder &) = delete;
 
   private:
-    LoadStoreStrategy _graph_strategy;
     LoadStoreStrategy _data_strategy;
+    LoadStoreStrategy _graph_strategy;
     LoadStoreStrategy _filtered_data_strategy;
 
     Metric _metric;
