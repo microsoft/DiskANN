@@ -54,7 +54,7 @@ void WindowsAlignedFileReader::register_thread()
         }
         else
         {
-            diskann::cout << "Error converting wchar to char" << " -- error=" << GetLastError() << std::endl;
+            diskann::cout << "Error converting wchar to char -- error=" << GetLastError() << std::endl;
         }
     }
 
