@@ -116,14 +116,14 @@ struct IndexConfig
     size_t dimension;
     size_t max_points;
 
-    bool dynamic_index = false;
-    bool enable_tags = false;
-    bool pq_dist_build = false;
-    bool concurrent_consolidate = false;
-    bool use_opq = false;
+    bool dynamic_index;
+    bool enable_tags;
+    bool pq_dist_build;
+    bool concurrent_consolidate;
+    bool use_opq;
 
-    size_t num_pq_chunks = 0;
-    size_t num_frozen_pts = 0;
+    size_t num_pq_chunks;
+    size_t num_frozen_pts;
 
     std::string label_type;
     std::string tag_type;
@@ -138,10 +138,10 @@ struct IndexConfig
                 bool pq_dist_build, bool concurrent_consolidate, bool use_opq, std::string data_type,
                 std::string tag_type, std::string label_type, IndexWriteParameters &index_write_params)
         : data_strategy(data_strategy), graph_strategy(graph_strategy), filtered_data_strategy(filtered_data_strategy),
-          metric(metric), dimension(dimension), max_points(max_points), num_pq_chunks(num_pq_chunks),
-          num_frozen_pts(num_frozen_points), dynamic_index(dynamic_index), enable_tags(enable_tags),
-          pq_dist_build(pq_dist_build), concurrent_consolidate(concurrent_consolidate), use_opq(use_opq),
-          data_type(data_type), tag_type(tag_type), label_type(label_type), index_write_params(&index_write_params)
+          metric(metric), dimension(dimension), max_points(max_points), dynamic_index(dynamic_index),
+          enable_tags(enable_tags), pq_dist_build(pq_dist_build), concurrent_consolidate(concurrent_consolidate),
+          use_opq(use_opq), num_pq_chunks(num_pq_chunks), num_frozen_pts(num_frozen_points), label_type(label_type),
+          tag_type(tag_type), data_type(data_type), index_write_params(&index_write_params)
     {
     }
 
