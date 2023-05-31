@@ -29,6 +29,7 @@ struct consolidation_report
     {
     }
 };
+
 struct AnyRobinSet
 {
     template <typename T>
@@ -100,19 +101,17 @@ using LabelType = std::any;
 using TagVector = AnyVector;
 using TagRobinSet = AnyRobinSet;
 
-// Enum to store load store stratagy for data_store and graph_store.
 enum LoadStoreStrategy
 {
     DISK,
     MEMORY
 };
 
-// config object to initialize Index via IndexFcatory.
 struct IndexConfig
 {
-    LoadStoreStrategy graph_load_store_strategy;
-    LoadStoreStrategy data_load_store_strategy;
-    LoadStoreStrategy filtered_data_load_store_strategy;
+    LoadStoreStrategy graph_strategy;
+    LoadStoreStrategy data_strategy;
+    LoadStoreStrategy filtered_data_strategy;
 
     Metric metric;
     size_t dimension;
@@ -127,7 +126,6 @@ struct IndexConfig
     size_t num_pq_chunks = 0;
     size_t num_frozen_pts = 0;
 
-    // type info to make DiskANN config driven
     std::string label_type;
     std::string tag_type;
     std::string data_type;
@@ -135,40 +133,165 @@ struct IndexConfig
     IndexWriteParameters *index_write_params;
 
   private:
-    IndexConfig(LoadStoreStrategy data_store_strategy, LoadStoreStrategy graph_store_strategy,
-                LoadStoreStrategy filtered_data_store_strategy, Metric metric, size_t dimension, size_t max_points,
+    IndexConfig(LoadStoreStrategy data_strategy, LoadStoreStrategy graph_strategy,
+                LoadStoreStrategy filtered_data_strategy, Metric metric, size_t dimension, size_t max_points,
                 size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
-                bool pq_dist_build, bool concurrent_consolidate, bool use_opq, std::string &data_type,
-                std::string &tag_type, std::string &label_type, IndexWriteParameters &index_write_params)
+                bool pq_dist_build, bool concurrent_consolidate, bool use_opq, std::string data_type,
+                std::string tag_type, std::string label_type, IndexWriteParameters &index_write_params)
+        : data_strategy(data_strategy), graph_strategy(graph_strategy), filtered_data_strategy(filtered_data_strategy),
+          metric(metric), dimension(dimension), max_points(max_points), num_pq_chunks(num_pq_chunks),
+          num_frozen_pts(num_frozen_points), dynamic_index(dynamic_index), enable_tags(enable_tags),
+          pq_dist_build(pq_dist_build), concurrent_consolidate(concurrent_consolidate), use_opq(use_opq),
+          data_type(data_type), tag_type(tag_type), label_type(label_type), index_write_params(&index_write_params)
     {
-        this->data_load_store_strategy = data_store_strategy;
-        this->graph_load_store_strategy = graph_store_strategy;
-        this->filtered_data_load_store_strategy = filtered_data_store_strategy;
-
-        this->metric = metric;
-        this->dimension = dimension;
-        this->max_points = max_points;
-
-        this->dynamic_index = dynamic_index;
-        this->enable_tags = enable_tags;
-        this->pq_dist_build = pq_dist_build;
-        this->concurrent_consolidate = concurrent_consolidate;
-        this->use_opq = use_opq;
-
-        this->num_pq_chunks = num_pq_chunks;
-        this->num_frozen_pts = num_frozen_points;
-
-        this->data_type = data_type;
-        this->tag_type = tag_type;
-        this->label_type = label_type;
-
-        this->index_write_params = &index_write_params;
     }
 
     friend class IndexConfigBuilder;
 };
 
-// Build params for building index.
+class IndexConfigBuilder
+{
+  public:
+    IndexConfigBuilder()
+    {
+    }
+    IndexConfigBuilder &with_metric(Metric m)
+    {
+        this->_metric = m;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_graph_load_store_strategy(LoadStoreStrategy graph_strategy)
+    {
+        this->_graph_strategy = graph_strategy;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_data_load_store_strategy(LoadStoreStrategy data_strategy)
+    {
+        this->_data_strategy = data_strategy;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_filtered_data_load_store_strategy(LoadStoreStrategy filtered_data_strategy)
+    {
+        this->_filtered_data_strategy = filtered_data_strategy;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_dimension(size_t dim)
+    {
+        this->_dimension = dim;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_max_points(size_t maxPts)
+    {
+        this->_max_points = maxPts;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_dynamic_index(bool dynamicIdx)
+    {
+        this->_dynamic_index = dynamicIdx;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_enable_tags(bool enableTags)
+    {
+        this->_enable_tags = enableTags;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_pq_dist_build(bool pqDistBuild)
+    {
+        this->_pq_dist_build = pqDistBuild;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_concurrent_consolidate(bool concurrentConsolidate)
+    {
+        this->_concurrent_consolidate = concurrentConsolidate;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_use_opq(bool useOPQ)
+    {
+        this->_use_opq = useOPQ;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_num_pq_chunks(size_t numPqChunks)
+    {
+        this->_num_pq_chunks = numPqChunks;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_num_frozen_pts(size_t numFrozenPts)
+    {
+        this->_num_frozen_pts = numFrozenPts;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_label_type(const std::string &labelType)
+    {
+        this->_label_type = labelType;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_tag_type(const std::string &tagType)
+    {
+        this->_tag_type = tagType;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_data_type(const std::string &dataType)
+    {
+        this->_data_type = dataType;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_index_write_params(IndexWriteParameters &index_write_params)
+    {
+        this->_index_write_params = &index_write_params;
+        return *this;
+    }
+
+    IndexConfig build()
+    {
+        return IndexConfig(_data_strategy, _graph_strategy, _filtered_data_strategy, _metric, _dimension, _max_points,
+                           _num_pq_chunks, _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build,
+                           _concurrent_consolidate, _use_opq, _data_type, _tag_type, _label_type, *_index_write_params);
+    }
+
+    IndexConfigBuilder(const IndexConfigBuilder &) = delete;
+    IndexConfigBuilder &operator=(const IndexConfigBuilder &) = delete;
+
+  private:
+    LoadStoreStrategy _graph_strategy;
+    LoadStoreStrategy _data_strategy;
+    LoadStoreStrategy _filtered_data_strategy;
+
+    Metric _metric;
+    size_t _dimension;
+    size_t _max_points;
+
+    bool _dynamic_index = false;
+    bool _enable_tags = false;
+    bool _pq_dist_build = false;
+    bool _concurrent_consolidate = false;
+    bool _use_opq = false;
+
+    size_t _num_pq_chunks = 0;
+    size_t _num_frozen_pts = 0;
+
+    std::string _label_type;
+    std::string _tag_type;
+    std::string _data_type;
+
+    IndexWriteParameters *_index_write_params;
+};
+
 struct IndexBuildParams
 {
   public:
@@ -189,17 +312,15 @@ struct IndexBuildParams
     friend class IndexBuildParamsBuilder;
 };
 
-// Search params for searching indedx.
 struct IndexSearchParams
 {
     std::string result_path = "";
     size_t query_num, query_dim, query_aligned_dim;
     std::string filter_label = "";
     std::string query_filter_file = "";
-    uint32_t num_threads{20}; // or some other default val
+    uint32_t num_threads{20};
 };
 
-// Stats produced while searching index
 struct QuerySearchStats
 {
     std::vector<std::chrono::duration<double>> diff_stats;
@@ -207,7 +328,6 @@ struct QuerySearchStats
     std::vector<float> latency_stats;
 };
 
-// results from search.
 struct SearchResult
 {
     SearchResult()
@@ -272,151 +392,7 @@ class IndexBuildParamsBuilder
     uint32_t filter_threshold = 0;
 };
 
-class IndexConfigBuilder
-{
-  public:
-    IndexConfigBuilder()
-    {
-    }
-    IndexConfigBuilder &with_metric(Metric m)
-    {
-        this->metric = m;
-        return *this;
-    }
 
-    // Populate fields
-    IndexConfigBuilder &with_graph_load_store_strategy(LoadStoreStrategy lss)
-    {
-        this->graph_load_store_strategy = lss;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_data_load_store_strategy(LoadStoreStrategy lss)
-    {
-        this->data_load_store_strategy = lss;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_filtered_data_load_store_strategy(LoadStoreStrategy lss)
-    {
-        this->filtered_data_load_store_strategy = lss;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_dimension(size_t dim)
-    {
-        this->dimension = dim;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_max_points(size_t maxPts)
-    {
-        this->max_points = maxPts;
-        return *this;
-    }
-
-    IndexConfigBuilder &is_dynamic_index(bool dynamicIdx)
-    {
-        this->dynamic_index = dynamicIdx;
-        return *this;
-    }
-
-    IndexConfigBuilder &is_enable_tags(bool enableTags)
-    {
-        this->enable_tags = enableTags;
-        return *this;
-    }
-
-    IndexConfigBuilder &is_pq_dist_build(bool pqDistBuild)
-    {
-        this->pq_dist_build = pqDistBuild;
-        return *this;
-    }
-
-    IndexConfigBuilder &is_concurrent_consolidate(bool concurrentConsolidate)
-    {
-        this->concurrent_consolidate = concurrentConsolidate;
-        return *this;
-    }
-
-    IndexConfigBuilder &is_use_opq(bool useOPQ)
-    {
-        this->use_opq = useOPQ;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_num_pq_chunks(size_t numPqChunks)
-    {
-        this->num_pq_chunks = numPqChunks;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_num_frozen_pts(size_t numFrozenPts)
-    {
-        this->num_frozen_pts = numFrozenPts;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_label_type(const std::string &labelType)
-    {
-        this->label_type = labelType;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_tag_type(const std::string &tagType)
-    {
-        this->tag_type = tagType;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_data_type(const std::string &dataType)
-    {
-        this->data_type = dataType;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_index_write_params(IndexWriteParameters &index_write_params)
-    {
-        this->index_write_params = &index_write_params;
-        return *this;
-    }
-
-    IndexConfig build()
-    {
-        return IndexConfig(data_load_store_strategy, graph_load_store_strategy, filtered_data_load_store_strategy,
-                           metric, dimension, max_points, num_pq_chunks, num_frozen_pts, dynamic_index, enable_tags,
-                           pq_dist_build, concurrent_consolidate, use_opq, data_type, tag_type, label_type,
-                           *index_write_params);
-    }
-
-    IndexConfigBuilder(const IndexConfigBuilder &) = delete;
-    IndexConfigBuilder &operator=(const IndexConfigBuilder &) = delete;
-
-  private:
-    LoadStoreStrategy graph_load_store_strategy;
-    LoadStoreStrategy data_load_store_strategy;
-    LoadStoreStrategy filtered_data_load_store_strategy;
-
-    Metric metric;
-    size_t dimension;
-    size_t max_points;
-
-    bool dynamic_index = false;
-    bool enable_tags = false;
-    bool pq_dist_build = false;
-    bool concurrent_consolidate = false;
-    bool use_opq = false;
-
-    size_t num_pq_chunks = 0;
-    size_t num_frozen_pts = 0;
-
-    // type info to make DiskANN config driven
-    std::string label_type;
-    std::string tag_type;
-    std::string data_type;
-
-    IndexWriteParameters *index_write_params;
-};
 
 class AbstractIndex
 {
@@ -436,7 +412,6 @@ class AbstractIndex
 #ifdef EXEC_ENV_OLS
     virtual void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l) = 0;
 #else
-    // Reads the number of frozen points from graph's metadata file section.
     virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
 #endif
 
@@ -453,9 +428,6 @@ class AbstractIndex
 
     virtual void set_start_points_at_random(DataType radius, uint32_t random_seed = 0) = 0;
 
-    virtual int enable_delete() = 0;
-
     virtual consolidation_report consolidate_deletes(const IndexWriteParameters &parameters) = 0;
-    // TODO: add other methods as api promise to end user.
 };
 } // namespace diskann

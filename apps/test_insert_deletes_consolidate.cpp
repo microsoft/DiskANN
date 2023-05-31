@@ -194,12 +194,10 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
     if (beginning_index_size > 0)
     {
         index.build(data, beginning_index_size, params, tags);
-        index.enable_delete();
     }
     else
     {
         index.set_start_points_at_random(static_cast<T>(start_point_norm));
-        index.enable_delete();
     }
 
     const double elapsedSeconds = timer.elapsed() / 1000000.0;

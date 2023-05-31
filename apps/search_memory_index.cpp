@@ -497,10 +497,7 @@ int main(int argc, char **argv)
 
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.instance();
-        // load index
         index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
-
-        // search index
         auto res = index->batch_search(query, K, Lvec, search_param);
         auto best_recall =
             print_search_results(res, gt_file, K, Lvec, show_qps_per_thread, tags, print_all_recalls, num_threads);

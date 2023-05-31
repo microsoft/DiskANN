@@ -34,7 +34,10 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     : Index(m, dim, max_points, dynamic_index, enable_tags, concurrent_consolidate, pq_dist_build, num_pq_chunks,
             use_opq, indexParams.num_frozen_points)
 {
-    // why we initialize search_query_scratch in index constructor
+    if (dynamic_index)
+    {
+        this->enable_delete();
+    }
     _indexingQueueSize = indexParams.search_list_size;
     _indexingRange = indexParams.max_degree;
     _indexingMaxC = indexParams.max_occlusion_size;
@@ -134,7 +137,11 @@ Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::unique_ptr<Abstrac
             index_config.num_pq_chunks, index_config.use_opq, index_config.num_frozen_pts)
 {
     //_data_store.reset(std::move(data_store));
-    if (index_config.dynamic_index && index_config.index_write_params != nullptr)
+    if (_dynamic_index)
+    {
+        this->enable_delete();
+    }
+    if (_dynamic_index && index_config.index_write_params != nullptr)
     {
         auto search_threads = 20;
         auto initial_search_list_size = index_config.index_write_params->search_list_size;
@@ -2930,9 +2937,8 @@ int Index<T, TagT, LabelT>::insert_point(const DataType &point, const TagType &t
 {
     try
     {
-        TagT underlying_tag = std::any_cast<TagT>(tag);
         const T *data = std::any_cast<T *>(point);
-        return this->insert_point(data, underlying_tag);
+        return this->insert_point(data, std::any_cast<TagT>(tag));
     }
     catch (const std::bad_any_cast &anycast_e)
     {

@@ -175,15 +175,14 @@ int main(int argc, char **argv)
                           .with_num_pq_chunks(build_PQ_bytes)
                           .build();
 
-        // Build params for speific build from instance
-        diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
-                                                  .with_filter_list_size(Lf)
-                                                  .with_alpha(alpha)
-                                                  .with_saturate_graph(false)
-                                                  .with_num_threads(num_threads)
-                                                  .build();
+        auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
+                                      .with_filter_list_size(Lf)
+                                      .with_alpha(alpha)
+                                      .with_saturate_graph(false)
+                                      .with_num_threads(num_threads)
+                                      .build();
 
-        auto build_params = diskann::IndexBuildParamsBuilder(paras)
+        auto build_params = diskann::IndexBuildParamsBuilder(index_build_params)
                                 .with_universal_label(universal_label)
                                 .with_label_file(label_file)
                                 .with_save_path_prefix(index_path_prefix)

@@ -1,5 +1,4 @@
 #include "index_factory.h"
-#include "yaml_utils.h"
 
 namespace diskann
 {
@@ -10,7 +9,6 @@ IndexFactory::IndexFactory(IndexConfig &config) : _config(config)
 }
 
 // TODO: Parse the yml config to IndexConfig object
-
 void IndexFactory::parse_config(const std::string &config_path)
 {
     if (!file_exists(config_path))
@@ -25,8 +23,8 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
     if (_config.data_type == "float")
     {
         // datastore and graph store objects to be passed to index
-        auto data_store = construct_datastore<float>(_config.data_load_store_strategy, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_load_store_strategy, num_points);
+        auto data_store = construct_datastore<float>(_config.data_strategy, num_points, dim);
+        auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
 
         if (_config.label_type == "ushort")
         {
@@ -39,8 +37,8 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
     }
     else if (_config.data_type == "uint8")
     {
-        auto data_store = construct_datastore<uint8_t>(_config.data_load_store_strategy, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_load_store_strategy, num_points);
+        auto data_store = construct_datastore<uint8_t>(_config.data_strategy, num_points, dim);
+        auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
         if (_config.label_type == "ushort")
         {
             return std::make_shared<diskann::Index<uint8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
@@ -52,8 +50,8 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
     }
     else if (_config.data_type == "int8")
     {
-        auto data_store = construct_datastore<int8_t>(_config.data_load_store_strategy, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_load_store_strategy, num_points);
+        auto data_store = construct_datastore<int8_t>(_config.data_strategy, num_points, dim);
+        auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
         if (_config.label_type == "ushort")
         {
             return std::make_shared<diskann::Index<int8_t, uint32_t, uint16_t>>(_config, std::move(data_store));

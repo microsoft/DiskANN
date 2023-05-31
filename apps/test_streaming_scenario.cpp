@@ -199,7 +199,6 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
         throw diskann::ANNException("ERROR: consolidate_interval is too small", -1, __FUNCSIG__, __FILE__, __LINE__);
 
     index.set_start_points_at_random(static_cast<T>(start_point_norm));
-    index.enable_delete();
 
     T *data = nullptr;
     diskann::alloc_aligned((void **)&data, std::max(consolidate_interval, active_window) * aligned_dim * sizeof(T),
@@ -348,7 +347,6 @@ int main(int argc, char **argv)
                                                           .with_num_threads(consolidate_threads)
                                                           .build();
 
-        // Index Build Params
         auto index_config = diskann::IndexConfigBuilder()
                                 .with_metric(diskann::L2)
                                 .with_dimension(dim)
