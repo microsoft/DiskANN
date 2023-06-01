@@ -85,7 +85,6 @@ template <typename T> InMemQueryScratch<T>::~InMemQueryScratch()
 //
 template <typename T> void SSDQueryScratch<T>::reset()
 {
-    coord_idx = 0;
     sector_idx = 0;
     visited.clear();
     retset.clear();
@@ -94,7 +93,7 @@ template <typename T> void SSDQueryScratch<T>::reset()
 
 template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve)
 {
-    size_t coord_alloc_size = ROUND_UP(MAX_N_CMPS * aligned_dim, 256);
+    size_t coord_alloc_size = ROUND_UP(sizeof(T) * aligned_dim, 256);
 
     diskann::alloc_aligned((void **)&coord_scratch, coord_alloc_size, 256);
     diskann::alloc_aligned((void **)&sector_scratch, (size_t)MAX_N_SECTOR_READS * (size_t)SECTOR_LEN, SECTOR_LEN);
@@ -102,7 +101,7 @@ template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, si
 
     _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
 
-    memset(coord_scratch, 0, MAX_N_CMPS * aligned_dim);
+    memset(coord_scratch, 0, coord_alloc_size);
     memset(aligned_query_T, 0, aligned_dim * sizeof(T));
 
     visited.reserve(visited_reserve);
@@ -113,6 +112,7 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
 {
     diskann::aligned_free((void *)coord_scratch);
     diskann::aligned_free((void *)sector_scratch);
+    diskann::aligned_free((void *)aligned_query_T);
 
     delete[] _pq_scratch;
 }

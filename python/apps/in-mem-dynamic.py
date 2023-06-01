@@ -106,7 +106,11 @@ if __name__ == "__main__":
         args.gt_file,
     )
 
-# An ingest optimized example with SIFT1M
-# python3 ~/DiskANN/python/apps/in-mem-dynamic.py -d float \
-# -i sift_base.fbin -q sift_query.fbin --gt_file  gt100_base \
-# -Lb 10 -R 30 -Ls 200
+"""
+An ingest optimized example with SIFT1M
+source venv/bin/activate
+python python/apps/in-mem-dynamic.py -d float \
+-i "$HOME/data/sift/sift_base.fbin" -q "$HOME/data/sift/sift_query.fbin" --gt_file "$HOME/data/sift/gt100_base" \
+-Lb 10 -R 30 -Ls 200
+"""
+

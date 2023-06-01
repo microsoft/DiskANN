@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "boost_dynamic_bitset_fwd.h"
-//#include "boost/dynamic_bitset.hpp"
+// #include "boost/dynamic_bitset.hpp"
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
 #include "tsl/sparse_map.h"
@@ -21,7 +21,6 @@
 
 // SSD Index related limits
 #define MAX_GRAPH_DEGREE 512
-#define MAX_N_CMPS 16384
 #define SECTOR_LEN (size_t)4096
 #define MAX_N_SECTOR_READS 128
 
@@ -153,8 +152,7 @@ template <typename T> class InMemQueryScratch
 template <typename T> class SSDQueryScratch
 {
   public:
-    T *coord_scratch = nullptr; // MUST BE AT LEAST [MAX_N_CMPS * data_dim]
-    size_t coord_idx = 0;       // index of next [data_dim] scratch to use
+    T *coord_scratch = nullptr; // MUST BE AT LEAST [sizeof(T) * data_dim]
 
     char *sector_scratch = nullptr; // MUST BE AT LEAST [MAX_N_SECTOR_READS * SECTOR_LEN]
     size_t sector_idx = 0;          // index of next [SECTOR_LEN] scratch to use

@@ -1137,7 +1137,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     // pointers to buffers for data
     T *data_buf = query_scratch->coord_scratch;
-    uint64_t &data_buf_idx = query_scratch->coord_idx;
     _mm_prefetch((char *)data_buf, _MM_HINT_T1);
 
     // sector scratch
@@ -1345,24 +1344,18 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             uint32_t *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
             uint64_t nnbrs = (uint64_t)(*node_buf);
             T *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);
-            //        assert(data_buf_idx < MAX_N_CMPS);
-            if (data_buf_idx == MAX_N_CMPS)
-                data_buf_idx = 0;
-
-            T *node_fp_coords_copy = data_buf + (data_buf_idx * aligned_dim);
-            data_buf_idx++;
-            memcpy(node_fp_coords_copy, node_fp_coords, disk_bytes_per_point);
+            memcpy(data_buf, node_fp_coords, disk_bytes_per_point);
             float cur_expanded_dist;
             if (!use_disk_index_pq)
             {
-                cur_expanded_dist = dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)aligned_dim);
+                cur_expanded_dist = dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)aligned_dim);
             }
             else
             {
                 if (metric == diskann::Metric::INNER_PRODUCT)
-                    cur_expanded_dist = disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
+                    cur_expanded_dist = disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
                 else
-                    cur_expanded_dist = disk_pq_table.l2_distance(query_float, (uint8_t *)node_fp_coords_copy);
+                    cur_expanded_dist = disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
             }
             full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
             uint32_t *node_nbrs = (node_buf + 1);
