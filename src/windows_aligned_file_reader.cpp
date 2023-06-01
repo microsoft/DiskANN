@@ -6,7 +6,6 @@
 #include "windows_aligned_file_reader.h"
 #include <iostream>
 #include "utils.h"
-#include <locale>
 #include <stdlib.h>
 
 #define SECTOR_LEN 4096
