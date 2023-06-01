@@ -1,3 +1,6 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
+
 #include <boost/test/unit_test.hpp>
 
 #include "parameters.h"
