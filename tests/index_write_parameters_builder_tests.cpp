@@ -33,13 +33,24 @@ BOOST_AUTO_TEST_CASE(test_build)
         BOOST_TEST(max_occlusion_size == parameters.max_occlusion_size);
         BOOST_TEST(num_frozen_points == parameters.num_frozen_points);
         BOOST_TEST(saturate_graph == parameters.saturate_graph);
+
         BOOST_TEST(parameters.num_threads > (uint32_t)0);
     }
 
     {
         uint32_t num_threads = rand() + 1;
         builder.with_num_threads(num_threads);
+
         auto parameters = builder.build();
+
+        BOOST_TEST(search_list_size == parameters.search_list_size);
+        BOOST_TEST(max_degree == parameters.max_degree);
+        BOOST_TEST(alpha == parameters.alpha);
+        BOOST_TEST(filter_list_size == parameters.filter_list_size);
+        BOOST_TEST(max_occlusion_size == parameters.max_occlusion_size);
+        BOOST_TEST(num_frozen_points == parameters.num_frozen_points);
+        BOOST_TEST(saturate_graph == parameters.saturate_graph);
+
         BOOST_TEST(num_threads == parameters.num_threads);
     }
 }
