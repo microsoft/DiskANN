@@ -28,4 +28,5 @@ jobs:
         
       - name: Run Unit Tests
         run: |
+          cd build
           ctest -C Release

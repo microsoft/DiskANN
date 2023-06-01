@@ -31,7 +31,7 @@ if (NOT Boost_FOUND)
     message(FATAL_ERROR "Couldn't find Boost dependency")
 endif()
 
-file(GLOB DISKANN_UNIT_TEST_SOURCES ./*.cpp)
+set(DISKANN_UNIT_TEST_SOURCES main.cpp memory_manager_tests.cpp)
 add_executable(${PROJECT_NAME}_unit_tests ${DISKANN_SOURCES} ${DISKANN_UNIT_TEST_SOURCES})
 target_link_libraries(${PROJECT_NAME}_unit_tests ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::unit_test_framework)
 
