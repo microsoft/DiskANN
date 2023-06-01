@@ -7,10 +7,15 @@ set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 if(MSVC)
     add_subdirectory(dll)
 else()
-    file(GLOB CPP_SOURCES *.cpp)
+    #file(GLOB CPP_SOURCES *.cpp)
+    set(CPP_SOURCES abstract_data_store.cpp ann_exception.cpp disk_utils.cpp 
+        distance.cpp index.cpp in_mem_graph_store.cpp in_mem_data_store.cpp
+        linux_aligned_file_reader.cpp math_utils.cpp natural_number_map.cpp
+        in_mem_data_store.cpp in_mem_graph_store.cpp
+        natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp
+        pq_flash_index.cpp scratch.cpp logger.cpp utils.cpp filter_utils.cpp)
     if (RESTAPI)
-        file(GLOB RESTAPI_CPP_SOURCES restapi/*.cpp)
-        list(APPEND CPP_SOURCES ${RESTAPI_CPP_SOURCES})
+        list(APPEND CPP_SOURCES restapi/search_wrapper.cpp restapi/server.cpp)
     endif()
     add_library(${PROJECT_NAME} ${CPP_SOURCES})
     add_library(${PROJECT_NAME}_s STATIC ${CPP_SOURCES})
