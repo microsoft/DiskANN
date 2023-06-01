@@ -2055,144 +2055,47 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
 // Refactored search
 template <typename T, typename TagT, typename LabelT>
-SearchResult Index<T, TagT, LabelT>::batch_search(const diskann::DataType &q, size_t K, std::vector<uint32_t> &Lvec,
-                                                  IndexSearchParams &search_params)
+SearchResult Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K, uint32_t L, std::string &filter_label)
 {
-
-    SearchResult result;
-    result.init(Lvec.size());
-
-    // Load query file
-    /*T *query = nullptr;
-    size_t query_num, query_dim, query_aligned_dim;
-    diskann::load_aligned_bin<T>(search_params.query_file, query, query_num, query_dim, query_aligned_dim);*/
+    auto result = SearchResult(K);
+    auto recall_at = K;
 
     T *query = std::any_cast<T *>(q);
-    size_t query_num = search_params.query_num;
-    size_t query_aligned_dim = search_params.query_aligned_dim;
+    result.query_result_ids.resize(K);
+    result.query_result_dists.resize(K);
+    std::vector<uint32_t> &query_result_ids = result.query_result_ids;
+    std::vector<float> &query_result_dists = result.query_result_dists;
 
-    // filter search
-    bool filtered_search = false;
-    std::vector<std::string> query_filters;
-    if (search_params.filter_label != "")
+    if (filter_label != "" && !filter_label.empty())
     {
-        query_filters.push_back(search_params.filter_label);
+        LabelT filter_label_as_num = this->get_converted_label(filter_label);
+        auto retval = this->search_with_filters(query, filter_label_as_num, recall_at, (uint32_t)L,
+                                                query_result_ids.data(), query_result_dists.data());
+        result.res = retval;
     }
-    else if (search_params.query_filter_file != "")
+    else if (_dist_metric == diskann::FAST_L2)
     {
-        query_filters = read_file_to_vector_of_strings(search_params.query_filter_file);
+        this->search_with_optimized_layout(query, recall_at, L, query_result_ids.data());
     }
-    if (!query_filters.empty())
+    else if (_enable_tags)
     {
-        filtered_search = true;
-        if (query_filters.size() != 1 && query_filters.size() != query_num)
+        std::vector<T *> res = std::vector<T *>();
+        std::vector<TagT> query_result_tags;
+        this->search_with_tags(query, recall_at, (uint32_t)L, query_result_tags.data(), query_result_dists.data(), res);
+        /*std::transform(query_result_tags.begin(), query_result_tags.end(), query_result_ids.begin(),
+                       [](TagT i) { return static_cast<uint32_t>(i); });
+        */
+        for (int64_t r = 0; r < (int64_t)recall_at; r++)
         {
-            throw ANNException("Error. Mismatch in number of queries and size of query filters file.", -1);
+            query_result_ids[r] = (uint32_t)query_result_tags[r];
         }
     }
-
-    std::cout << "Using " << search_params.num_threads << " threads to search" << std::endl;
-
-    // query results
-    auto recall_at = K;
-    std::vector<std::vector<uint32_t>> &query_result_ids = result.query_result_ids;
-    std::vector<std::vector<float>> &query_result_dists = result.query_result_dists;
-    std::vector<TagT> query_result_tags;
-    if (_enable_tags)
+    else
     {
-        query_result_tags.resize(recall_at * query_num);
+        auto retval = this->search(query, recall_at, (uint32_t)L, query_result_ids.data());
+        result.res = retval;
     }
-
-    std::vector<float> &latency_stats = result.stats.latency_stats;
-    std::vector<uint32_t> &cmp_stats = result.stats.cmp_stats;
-    latency_stats.resize(query_num, 0);
-    if (not _enable_tags)
-    {
-        cmp_stats = std::vector<uint32_t>(query_num, 0);
-    }
-
-    if (_dist_metric == diskann::FAST_L2)
-    {
-        this->optimize_index_layout();
-    }
-
-    // search for each L value
-    for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
-    {
-        uint64_t L = Lvec[test_id];
-        if (L < recall_at)
-        {
-            diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
-            continue;
-        }
-
-        query_result_ids[test_id].resize(recall_at * query_num);
-        query_result_dists[test_id].resize(recall_at * query_num);
-
-        auto s = std::chrono::high_resolution_clock::now();
-        omp_set_num_threads(search_params.num_threads);
-#pragma omp parallel for schedule(dynamic, 1)
-        for (int64_t i = 0; i < (int64_t)query_num; i++)
-        {
-            auto qs = std::chrono::high_resolution_clock::now();
-            if (filtered_search)
-            {
-                LabelT filter_label_as_num;
-                if (query_filters.size() == 1)
-                {
-                    filter_label_as_num = this->get_converted_label(query_filters[0]);
-                }
-                else
-                {
-                    filter_label_as_num = this->get_converted_label(query_filters[i]);
-                }
-                auto retval = this->search_with_filters(query + i * query_aligned_dim, filter_label_as_num, recall_at,
-                                                        (uint32_t)L, query_result_ids[test_id].data() + i * recall_at,
-                                                        query_result_dists[test_id].data() + i * recall_at);
-                cmp_stats[i] = retval.second;
-            }
-            else if (_dist_metric == diskann::FAST_L2)
-            {
-                this->search_with_optimized_layout(query + i * query_aligned_dim, recall_at, L,
-                                                   query_result_ids[test_id].data() + i * recall_at);
-            }
-            else if (_enable_tags)
-            {
-                std::vector<T *> res = std::vector<T *>();
-                this->search_with_tags(query + i * query_aligned_dim, recall_at, (uint32_t)L,
-                                       query_result_tags.data() + i * recall_at, nullptr, res);
-                for (int64_t r = 0; r < (int64_t)recall_at; r++)
-                {
-                    query_result_ids[test_id][recall_at * i + r] = (uint32_t)query_result_tags[recall_at * i + r];
-                }
-            }
-            else
-            {
-                auto retval = this->search(query + i * query_aligned_dim, recall_at, (uint32_t)L,
-                                           query_result_ids[test_id].data() + i * recall_at);
-                cmp_stats[i] = retval.second;
-            }
-            auto qe = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double> diff = qe - qs;
-            latency_stats[i] = (float)diff.count() * 1000000;
-        }
-        result.stats.diff_stats[test_id] = std::chrono::high_resolution_clock::now() - s;
-    }
-
-    std::cout << "Done searching. Now saving results " << std::endl;
-    uint64_t test_id = 0;
-    for (auto L : Lvec)
-    {
-        if (L < recall_at)
-        {
-            diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
-            continue;
-        }
-        std::string cur_result_path = search_params.result_path + "_" + std::to_string(L) + "_idx_uint32.bin";
-        diskann::save_bin<uint32_t>(cur_result_path, query_result_ids[test_id].data(), query_num, recall_at);
-        test_id++;
-    }
-    diskann::aligned_free(query);
+    // diskann::aligned_free(query);
     return result;
 }
 
