@@ -8,4 +8,4 @@ This unit test project is based on the [boost unit test framework](https://www.b
 
 - Add [BOOST_AUTO_TEST_CASE](https://www.boost.org/doc/libs/1_78_0/libs/test/doc/html/boost_test/utf_reference/test_org_reference/test_org_boost_auto_test_case.html) for each test case in the [BOOST_AUTO_TEST_SUITE](https://www.boost.org/doc/libs/1_78_0/libs/test/doc/html/boost_test/utf_reference/test_org_reference/test_org_boost_auto_test_suite.html)
 
-- Update the [CMakeLists.txt](https://github.com/microsoft/DiskANN/blob/main/tests/CMakeLists.txt) file to add the new cpp file to the test project
+- Update the [CMakeLists.txt](CMakeLists.txt) file to add the new cpp file to the test project
