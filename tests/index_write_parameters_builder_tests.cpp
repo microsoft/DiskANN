@@ -39,7 +39,9 @@ BOOST_AUTO_TEST_CASE(test_build)
 
     {
         uint32_t num_threads = rand() + 1;
-        builder.with_num_threads(num_threads);
+        saturate_graph = false;
+        builder.with_num_threads(num_threads)
+            .with_saturate_graph(saturate_graph);
 
         auto parameters = builder.build();
 
