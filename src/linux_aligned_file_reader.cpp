@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#ifndef _WINDOWS
 #include "linux_aligned_file_reader.h"
 
 #include <cassert>
@@ -222,3 +223,5 @@ void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, io_contex
     assert(this->file_desc != -1);
     execute_io(ctx, this->file_desc, read_reqs);
 }
+
+#endif

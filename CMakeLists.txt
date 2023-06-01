@@ -156,6 +156,9 @@ else()
 endif()
 
 add_definitions(-DMKL_ILP64)
+if (TRACK_MEM_ALLOCATED)
+    add_definitions(-DTRACK_MEM_ALLOCATED)
+endif()
 
 # Section for tcmalloc. The DiskANN tools are always linked to tcmalloc. For Windows, they also need to
 # force-include the _tcmalloc symbol for enabling tcmalloc.
@@ -246,10 +249,13 @@ else()
     endif()
 endif()
 
+enable_testing()
+
 add_subdirectory(src)
 if (NOT PYBIND)
     add_subdirectory(apps)
     add_subdirectory(apps/utils)
+    add_subdirectory(tests)
 endif()
 
 if (MSVC)

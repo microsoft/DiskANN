@@ -213,17 +213,17 @@ inline void print_error_and_terminate(std::stringstream &error_stream)
     throw diskann::ANNException(error_stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 }
 
-inline void report_memory_allocation_failure()
+inline void report_memory_allocation_failure(size_t size, size_t align)
 {
     std::stringstream stream;
-    stream << "Memory Allocation Failed.";
+    stream << "Memory Allocation Failed, size = " << size << ", align = " << align;
     print_error_and_terminate(stream);
 }
 
-inline void report_misalignment_of_requested_size(size_t align)
+inline void report_misalignment_of_requested_size(size_t size, size_t align)
 {
     std::stringstream stream;
-    stream << "Requested memory size is not a multiple of " << align << ". Can not be allocated.";
+    stream << "Requested memory size " << size << " is not a multiple of " << align << ". Can not be allocated.";
     print_error_and_terminate(stream);
 }
 
@@ -231,20 +231,20 @@ inline void alloc_aligned(void **ptr, size_t size, size_t align)
 {
     *ptr = nullptr;
     if (IS_ALIGNED(size, align) == 0)
-        report_misalignment_of_requested_size(align);
+        report_misalignment_of_requested_size(size, align);
 #ifndef _WINDOWS
     *ptr = ::aligned_alloc(align, size);
 #else
     *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
 #endif
     if (*ptr == nullptr)
-        report_memory_allocation_failure();
+        report_memory_allocation_failure(size, align);
 }
 
 inline void realloc_aligned(void **ptr, size_t size, size_t align)
 {
     if (IS_ALIGNED(size, align) == 0)
-        report_misalignment_of_requested_size(align);
+        report_misalignment_of_requested_size(size, align);
 #ifdef _WINDOWS
     *ptr = ::_aligned_realloc(*ptr, size, align);
 #else
@@ -253,7 +253,7 @@ inline void realloc_aligned(void **ptr, size_t size, size_t align)
                   << std::endl;
 #endif
     if (*ptr == nullptr)
-        report_memory_allocation_failure();
+        report_memory_allocation_failure(size, align);
 }
 
 inline void check_stop(std::string arnd)
