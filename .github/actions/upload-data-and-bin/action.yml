@@ -1,0 +1,11 @@
+name: 'Upload data and bin'
+description: 'Upload data and bin to artifact'
+runs:
+  using: "composite"
+  steps:
+      - uses: actions/upload-artifact@v3
+        with:
+          name: data-stash
+          path: |
+            ./dist/**
+            ./data/**
