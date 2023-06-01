@@ -104,6 +104,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
 
+    DISKANN_DLLEXPORT bool detect_common_filters(uint32_t point_id, bool search_invocation,
+                                                 const std::vector<LabelT> &incoming_labels);
+
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
                                  const IndexWriteParameters &parameters,
