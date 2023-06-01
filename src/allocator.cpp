@@ -22,9 +22,9 @@ template <class T> void Allocator<T>::deallocate(T *ptr, std::size_t count)
 
 template <class T> void Allocator<T>::update_memory_usage(std::size_t count, bool is_allocation)
 {
-#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#ifdef TRACK_MEM_ALLOCATED
     assert(_memory_used_in_bytes_ptr != nullptr);
-#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#endif //  TRACK_MEM_ALLOCATED
     if (_memory_used_in_bytes_ptr == nullptr)
     {
         return;

@@ -8,7 +8,7 @@ runs:
       if: ${{ runner.os == 'Linux' }}
       run: |
         sudo scripts/dev/install-dev-deps-ubuntu.bash
-        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFORCE_TO_TRACK_MEMORY_IN_ALLOCATOR=True
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DTRACK_MEM_ALLOCATED=True
         cmake --build build -- -j
         cmake --install build --prefix="dist"
       shell: bash

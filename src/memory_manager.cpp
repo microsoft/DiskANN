@@ -68,9 +68,9 @@ void MemoryManager::aligned_free(void *ptr)
 
 void MemoryManager::insert_block(void *ptr, size_t size)
 {
-#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#ifdef TRACK_MEM_ALLOCATED
     assert(ptr != nullptr);
-#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#endif //  TRACK_MEM_ALLOCATED
     if (ptr == nullptr)
     {
         diskann::cerr << "block address should not be null" << std::endl;
@@ -80,9 +80,9 @@ void MemoryManager::insert_block(void *ptr, size_t size)
     {
         std::lock_guard<std::mutex> lock(_mutex);
         auto it = _block_to_size.find(ptr);
-#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#ifdef TRACK_MEM_ALLOCATED
         assert(it == _block_to_size.end());
-#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#endif //  TRACK_MEM_ALLOCATED
         if (it != _block_to_size.end())
         {
             diskann::cerr << "block address " << ptr << " conflicts" << std::endl;
@@ -97,9 +97,9 @@ void MemoryManager::insert_block(void *ptr, size_t size)
 
 void MemoryManager::erase_block(void *ptr)
 {
-#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#ifdef TRACK_MEM_ALLOCATED
     assert(ptr != nullptr);
-#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#endif //  TRACK_MEM_ALLOCATED
     if (ptr == nullptr)
     {
         diskann::cerr << "block address should not be null" << std::endl;
@@ -110,9 +110,9 @@ void MemoryManager::erase_block(void *ptr)
     {
         std::lock_guard<std::mutex> lock(_mutex);
         auto it = _block_to_size.find(ptr);
-#ifdef FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#ifdef TRACK_MEM_ALLOCATED
         assert(it != _block_to_size.end());
-#endif //  FORCE_TO_TRACK_MEMORY_IN_ALLOCATOR
+#endif //  TRACK_MEM_ALLOCATED
         if (it == _block_to_size.end())
         {
             diskann::cerr << "can not find block address " << ptr << " in _block_to_size" << std::endl;
