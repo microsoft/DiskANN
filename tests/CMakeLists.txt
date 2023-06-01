@@ -32,7 +32,7 @@ if (NOT Boost_FOUND)
 endif()
 
 
-set(DISKANN_UNIT_TEST_SOURCES main.cpp example_tests.cpp)
+set(DISKANN_UNIT_TEST_SOURCES main.cpp index_write_parameters_builder_tests.cpp)
 
 add_executable(${PROJECT_NAME}_unit_tests ${DISKANN_SOURCES} ${DISKANN_UNIT_TEST_SOURCES})
 target_link_libraries(${PROJECT_NAME}_unit_tests ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::unit_test_framework)
