@@ -1,7 +1,6 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-import os
 import shutil
 import unittest
 
@@ -15,9 +14,12 @@ class TestStaticMemoryIndex(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._test_matrix = [
-            build_random_vectors_and_memory_index(np.single, "l2"),
-            build_random_vectors_and_memory_index(np.ubyte, "l2"),
-            build_random_vectors_and_memory_index(np.byte, "l2"),
+            build_random_vectors_and_memory_index(np.float32, "l2"),
+            build_random_vectors_and_memory_index(np.uint8, "l2"),
+            build_random_vectors_and_memory_index(np.int8, "l2"),
+            build_random_vectors_and_memory_index(np.float32, "cosine"),
+            build_random_vectors_and_memory_index(np.uint8, "cosine"),
+            build_random_vectors_and_memory_index(np.int8, "cosine"),
         ]
         cls._example_ann_dir = cls._test_matrix[0][4]
 
@@ -42,9 +44,6 @@ class TestStaticMemoryIndex(unittest.TestCase):
         ) in self._test_matrix:
             with self.subTest():
                 index = dap.StaticMemoryIndex(
-                    metric="l2",
-                    vector_dtype=dtype,
-                    data_path=os.path.join(ann_dir, "vectors.bin"),
                     index_directory=ann_dir,
                     num_threads=16,
                     initial_search_complexity=32,
@@ -57,9 +56,9 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     complexity=5,
                     num_threads=16,
                 )
-                if metric == "l2":
+                if metric in ["l2", "cosine"]:
                     knn = NearestNeighbors(
-                        n_neighbors=100, algorithm="auto", metric="l2"
+                        n_neighbors=100, algorithm="auto", metric=metric
                     )
                     knn.fit(index_vectors)
                     knn_distances, knn_indices = knn.kneighbors(query_vectors)
@@ -81,9 +80,6 @@ class TestStaticMemoryIndex(unittest.TestCase):
         ) in self._test_matrix:
             with self.subTest():
                 index = dap.StaticMemoryIndex(
-                    metric="l2",
-                    vector_dtype=dtype,
-                    data_path=vector_bin_file,
                     index_directory=ann_dir,
                     num_threads=16,
                     initial_search_complexity=32,
@@ -93,87 +89,6 @@ class TestStaticMemoryIndex(unittest.TestCase):
                 ids, dists = index.search(query_vectors[0], k_neighbors=k, complexity=5)
                 self.assertEqual(ids.shape[0], k)
                 self.assertEqual(dists.shape[0], k)
-
-    def test_valid_metric(self):
-        ann_dir = self._example_ann_dir
-        vector_bin_file = self._test_matrix[0][5]
-        with self.assertRaises(ValueError):
-            dap.StaticMemoryIndex(
-                metric="sandwich",
-                vector_dtype=np.single,
-                data_path=vector_bin_file,
-                index_directory=ann_dir,
-                num_threads=16,
-                initial_search_complexity=32,
-            )
-        with self.assertRaises(ValueError):
-            dap.StaticMemoryIndex(
-                metric=None,
-                vector_dtype=np.single,
-                data_path=vector_bin_file,
-                index_directory=ann_dir,
-                num_threads=16,
-                initial_search_complexity=32,
-            )
-        dap.StaticMemoryIndex(
-            metric="l2",
-            vector_dtype=np.single,
-            data_path=vector_bin_file,
-            index_directory=ann_dir,
-            num_threads=16,
-            initial_search_complexity=32,
-        )
-        dap.StaticMemoryIndex(
-            metric="mips",
-            vector_dtype=np.single,
-            data_path=vector_bin_file,
-            index_directory=ann_dir,
-            num_threads=16,
-            initial_search_complexity=32,
-        )
-        dap.StaticMemoryIndex(
-            metric="MiPs",
-            vector_dtype=np.single,
-            data_path=vector_bin_file,
-            index_directory=ann_dir,
-            num_threads=16,
-            initial_search_complexity=32,
-        )
-
-    def test_valid_vector_dtype(self):
-        aliases = {np.single: np.float32, np.byte: np.int8, np.ubyte: np.uint8}
-        for (
-            metric,
-            dtype,
-            query_vectors,
-            index_vectors,
-            ann_dir,
-            vector_bin_file,
-            _
-        ) in self._test_matrix:
-            with self.subTest():
-                index = dap.StaticMemoryIndex(
-                    metric="l2",
-                    vector_dtype=aliases[dtype],
-                    data_path=vector_bin_file,
-                    index_directory=ann_dir,
-                    num_threads=16,
-                    initial_search_complexity=32,
-                )
-        ann_dir = self._example_ann_dir
-        vector_bin_file = self._test_matrix[0][5]
-        invalid = [np.double, np.float64, np.ulonglong, np.float16]
-        for invalid_vector_dtype in invalid:
-            with self.subTest():
-                with self.assertRaises(ValueError):
-                    dap.StaticMemoryIndex(
-                        metric="l2",
-                        vector_dtype=invalid_vector_dtype,
-                        data_path=vector_bin_file,
-                        index_directory=ann_dir,
-                        num_threads=16,
-                        initial_search_complexity=32,
-                    )
 
     def test_value_ranges_ctor(self):
         (
@@ -186,9 +101,6 @@ class TestStaticMemoryIndex(unittest.TestCase):
             _
         ) = build_random_vectors_and_memory_index(np.single, "l2", "not_ann")
         good_ranges = {
-            "metric": "l2",
-            "vector_dtype": np.single,
-            "data_path": vector_bin_file,
             "index_directory": ann_dir,
             "num_threads": 16,
             "initial_search_complexity": 32,
@@ -196,9 +108,6 @@ class TestStaticMemoryIndex(unittest.TestCase):
         }
 
         bad_ranges = {
-            "metric": "l200000",
-            "vector_dtype": np.double,
-            "data_path": "I do not exist.bin",
             "index_directory": "sandwiches",
             "num_threads": -100,
             "initial_search_complexity": 0,
@@ -214,16 +123,12 @@ class TestStaticMemoryIndex(unittest.TestCase):
     def test_value_ranges_search(self):
         good_ranges = {"complexity": 5, "k_neighbors": 10}
         bad_ranges = {"complexity": -1, "k_neighbors": 0}
-        vector_bin_file = self._test_matrix[0][5]
         for bad_value_key in good_ranges.keys():
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
             with self.subTest():
                 with self.assertRaises(ValueError):
                     index = dap.StaticMemoryIndex(
-                        metric="l2",
-                        vector_dtype=np.single,
-                        data_path=vector_bin_file,
                         index_directory=self._example_ann_dir,
                         num_threads=16,
                         initial_search_complexity=32,
@@ -248,9 +153,6 @@ class TestStaticMemoryIndex(unittest.TestCase):
             with self.subTest():
                 with self.assertRaises(ValueError):
                     index = dap.StaticMemoryIndex(
-                        metric="l2",
-                        vector_dtype=np.single,
-                        data_path=vector_bin_file,
                         index_directory=self._example_ann_dir,
                         num_threads=16,
                         initial_search_complexity=32,

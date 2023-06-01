@@ -3,26 +3,40 @@
 
 import os
 import shutil
+
 from pathlib import Path
-from typing import BinaryIO, Literal, Optional, Tuple, Union
+from typing import BinaryIO, Optional, Tuple, Union
 
 import numpy as np
 
 from . import _diskannpy as _native_dap
 from ._common import (
+    DistanceMetric,
     VectorDType,
+    VectorLikeBatch,
+    VectorIdentifierBatch,
     _assert,
     _assert_2d,
     _assert_dtype,
-    _assert_existing_file,
+    _castable_dtype_or_raise,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
-    _get_valid_metric,
+    _valid_metric,
+    _write_index_metadata
 )
+from ._files import vector_file_metadata
 from ._diskannpy import defaults
 
 
-def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO):
+def _write_bin(data: np.ndarray, file_handler: BinaryIO):
+    if len(data.shape) == 1:
+        _ = file_handler.write(np.array([data.shape[0], 1], dtype=np.int32).tobytes())
+    else:
+        _ = file_handler.write(np.array(data.shape, dtype=np.int32).tobytes())
+    _ = file_handler.write(data.tobytes())
+
+
+def numpy_to_diskann_file(vectors: VectorLikeBatch, dtype: VectorDType, file_handler: BinaryIO):
     """
     Utility function that writes a DiskANN binary vector formatted file to the location of your choosing.
 
@@ -33,41 +47,38 @@ def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO):
     :raises ValueError: If vectors are the wrong shape or an unsupported dtype
     :raises ValueError: If output_path is not a str or ``io.BinaryIO``
     """
+    _assert_dtype(dtype)
+    _vectors = _castable_dtype_or_raise(vectors, expected=dtype, message=f"Unable to cast vectors to numpy array of type {dtype}")
     _assert_2d(vectors, "vectors")
-    _assert_dtype(vectors.dtype, "vectors.dtype")
-
-    _ = file_handler.write(np.array(vectors.shape, dtype=np.intc).tobytes())
-    _ = file_handler.write(vectors.tobytes())
+    _write_bin(_vectors, file_handler)
 
 
 def _valid_path_and_dtype(
-    data: Union[str, np.ndarray], vector_dtype: Optional[VectorDType], index_path: str
+    data: Union[str, VectorLikeBatch], vector_dtype: VectorDType, index_path: str
 ) -> Tuple[str, VectorDType]:
-    if isinstance(data, np.ndarray):
-        _assert_2d(data, "data")
-        _assert_dtype(data.dtype, "data.dtype")
-
+    if isinstance(data, str):
+        vector_bin_path = data
+        _assert(
+            Path(data).exists() and Path(data).is_file(),
+            "if data is of type `str`, it must both exist and be a file",
+            )
+        vector_dtype_actual = vector_dtype
+    else:
         vector_bin_path = os.path.join(index_path, "vectors.bin")
         if Path(vector_bin_path).exists():
             raise ValueError(
                 f"The path {vector_bin_path} already exists. Remove it and try again."
             )
         with open(vector_bin_path, "wb") as temp_vector_bin:
-            numpy_to_diskann_file(data, temp_vector_bin)
+            numpy_to_diskann_file(vectors=data, dtype=data.dtype, file_handler=temp_vector_bin)
         vector_dtype_actual = data.dtype
-    else:
-        vector_bin_path = data
-        _assert(
-            Path(data).exists() and Path(data).is_file(),
-            "if data is of type `str`, it must both exist and be a file",
-        )
-        vector_dtype_actual = vector_dtype
+
     return vector_bin_path, vector_dtype_actual
 
 
 def build_disk_index(
-    data: Union[str, np.ndarray],
-    metric: Literal["l2", "mips"],
+    data: Union[str, VectorLikeBatch],
+    distance_metric: DistanceMetric,
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -89,9 +100,9 @@ def build_disk_index(
         of a supported dtype, in 2 dimensions. Note that vector_dtype must be provided if vector_path_or_np_array is a
         ``str``
     :type data: Union[str, numpy.ndarray]
-    :param metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
+    :param distance_metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
         available for single point floating numbers (numpy.single)
-    :type metric: str
+    :type distance_metric: str
     :param index_directory: The path on disk that the index will be created in.
     :type index_directory: str
     :param complexity: The size of queue to use when building the index for search. Values between 75 and 200 are
@@ -129,7 +140,7 @@ def build_disk_index(
         or isinstance(data, np.ndarray),
         "vector_dtype is required if data is a str representing a path to the vector bin file",
     )
-    dap_metric = _get_valid_metric(metric)
+    dap_metric = _valid_metric(distance_metric)
     _assert_is_positive_uint32(complexity, "complexity")
     _assert_is_positive_uint32(graph_degree, "graph_degree")
     _assert(search_memory_maximum > 0, "search_memory_maximum must be larger than 0")
@@ -145,8 +156,10 @@ def build_disk_index(
     )
 
     vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
-        data, vector_dtype, index_prefix
+        data, vector_dtype, index_directory
     )
+
+    num_points, dimensions = vector_file_metadata(vector_bin_path)
 
     if vector_dtype_actual == np.single:
         _builder = _native_dap.build_disk_float_index
@@ -155,10 +168,12 @@ def build_disk_index(
     else:
         _builder = _native_dap.build_disk_int8_index
 
+    index_prefix_path = os.path.join(index_directory, index_prefix)
+
     _builder(
-        metric=dap_metric,
+        distance_metric=dap_metric,
         data_file_path=vector_bin_path,
-        index_prefix_path=os.path.join(index_directory, index_prefix),
+        index_prefix_path=index_prefix_path,
         complexity=complexity,
         graph_degree=graph_degree,
         final_index_ram_limit=search_memory_maximum,
@@ -166,11 +181,12 @@ def build_disk_index(
         num_threads=num_threads,
         pq_disk_bytes=pq_disk_bytes,
     )
+    _write_index_metadata(index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions)
 
 
 def build_memory_index(
-    data: Union[str, np.ndarray],
-    metric: Literal["l2", "mips"],
+    data: Union[str, VectorLikeBatch],
+    distance_metric: DistanceMetric,
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -180,9 +196,8 @@ def build_memory_index(
     num_pq_bytes: int = defaults.NUM_PQ_BYTES,
     use_opq: bool = defaults.USE_OPQ,
     vector_dtype: Optional[VectorDType] = None,
-    label_file: str = "",
-    universal_label: str = "",
     filter_complexity: int = defaults.FILTER_COMPLEXITY,
+    tags: Union[str, VectorIdentifierBatch] = "",
     index_prefix: str = "ann"
 ):
     """
@@ -192,9 +207,9 @@ def build_memory_index(
         of a supported dtype, in 2 dimensions. Note that vector_dtype must be provided if vector_path_or_np_array is a
         ``str``
     :type data: Union[str, numpy.ndarray]
-    :param metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
+    :param distance_metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
         available for single point floating numbers (numpy.single)
-    :type metric: str
+    :type distance_metric: str
     :param index_directory: The path on disk that the index will be created in.
     :type index_directory: str
     :param complexity: The size of queue to use when building the index for search. Values between 75 and 200 are
@@ -215,11 +230,11 @@ def build_memory_index(
     :param vector_dtype: Required if the provided ``vector_path_or_np_array`` is of type ``str``, else we use the
         ``vector_path_or_np_array.dtype`` if np array.
     :type vector_dtype: Optional[VectorDType], default is ``None``.
-    :param label_file: Defaults to ""
-    :type label_file: str
-    :param universal_label: Defaults to ""
     :param filter_complexity: Complexity to use when using filters. Default is 0.
     :type filter_complexity: int
+    :param tags: uint32 ids corresponding to the ordinal position of the vectors provided to build the index.
+        Defaults to "".
+    :type tags: Union[str, VectorIdentifierBatch]
     :param index_prefix: The prefix to give your index files. Defaults to ``ann``.
     :type index_prefix: str, default="ann"
     :return:
@@ -229,7 +244,7 @@ def build_memory_index(
         or isinstance(data, np.ndarray),
         "vector_dtype is required if data is a str representing a path to the vector bin file",
     )
-    dap_metric = _get_valid_metric(metric)
+    dap_metric = _valid_metric(distance_metric)
     _assert_is_positive_uint32(complexity, "complexity")
     _assert_is_positive_uint32(graph_degree, "graph_degree")
     _assert(alpha >= 1, "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)")
@@ -248,6 +263,8 @@ def build_memory_index(
         data, vector_dtype, index_directory
     )
 
+    num_points, dimensions = vector_file_metadata(vector_bin_path)
+
     if vector_dtype_actual == np.single:
         _builder = _native_dap.build_in_memory_float_index
     elif vector_dtype_actual == np.ubyte:
@@ -255,10 +272,33 @@ def build_memory_index(
     else:
         _builder = _native_dap.build_in_memory_int8_index
 
+    index_prefix_path = os.path.join(index_directory, index_prefix)
+
+    if isinstance(tags, str) and tags != "":
+        use_tags = True
+        shutil.copy(tags, index_prefix_path + ".tags")
+    elif not isinstance(tags, str):
+        use_tags = True
+        tags_as_array = _castable_dtype_or_raise(
+            tags,
+            expected=np.uint32,
+            message="tags must be a numpy array of dtype np.uint32"
+        )
+        _assert(len(tags_as_array.shape) == 1, "Provided tags must be 1 dimensional")
+        _assert(
+            tags_as_array.shape[0] == num_points,
+            "Provided tags must contain an identical population to the number of points, "
+            f"{tags_as_array.shape[0]=}, {num_points=}"
+        )
+        with open(index_prefix_path + ".tags", "wb") as tags_out:
+            _write_bin(tags, tags_out)
+    else:
+        use_tags = False
+
     _builder(
-        metric=dap_metric,
+        distance_metric=dap_metric,
         data_file_path=vector_bin_path,
-        index_output_path=os.path.join(index_directory, index_prefix),
+        index_output_path=index_prefix_path,
         complexity=complexity,
         graph_degree=graph_degree,
         alpha=alpha,
@@ -266,7 +306,8 @@ def build_memory_index(
         use_pq_build=use_pq_build,
         num_pq_bytes=num_pq_bytes,
         use_opq=use_opq,
-        label_file=label_file,
-        universal_label=universal_label,
-        filter_complexity=filter_complexity
+        filter_complexity=filter_complexity,
+        use_tags=use_tags
     )
+
+    _write_index_metadata(index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions)

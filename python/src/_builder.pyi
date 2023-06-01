@@ -1,17 +1,17 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-from typing import BinaryIO, Literal, overload
+from typing import BinaryIO, overload, Optional
 
 import numpy as np
 
-from ._common import VectorDType
+from ._common import DistanceMetric, VectorDType, VectorLikeBatch, VectorIdentifierBatch
 
 def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO): ...
 @overload
 def build_disk_index(
     data: str,
-    metric: Literal["l2", "mips"],
+    distance_metric: DistanceMetric,
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -24,8 +24,8 @@ def build_disk_index(
 ): ...
 @overload
 def build_disk_index(
-    data: np.ndarray,
-    metric: Literal["l2", "mips"],
+    data: VectorLikeBatch,
+    distance_metric: DistanceMetric,
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -37,8 +37,8 @@ def build_disk_index(
 ): ...
 @overload
 def build_memory_index(
-    data: np.ndarray,
-    metric: Literal["l2", "mips"],
+    data: VectorLikeBatch,
+    distance_metric: DistanceMetric,
     index_directory: str,
     complexity: int,
     graph_degree: int,
@@ -50,24 +50,26 @@ def build_memory_index(
     label_file: str,
     universal_label: str,
     filter_complexity: int,
+    tags: Optional[VectorIdentifierBatch],
     index_prefix: str,
 ): ...
 @overload
 def build_memory_index(
-        data: str,
-        metric: Literal["l2", "mips"],
-        index_directory: str,
-        complexity: int,
-        graph_degree: int,
-        alpha: float,
-        num_threads: int,
-        use_pq_build: bool,
-        num_pq_bytes: int,
-        use_opq: bool,
-        vector_dtype: VectorDType,
-        label_file: str,
-        universal_label: str,
-        filter_complexity: int,
-        index_prefix: str,
+    data: str,
+    distance_metric: DistanceMetric,
+    index_directory: str,
+    complexity: int,
+    graph_degree: int,
+    alpha: float,
+    num_threads: int,
+    use_pq_build: bool,
+    num_pq_bytes: int,
+    use_opq: bool,
+    vector_dtype: VectorDType,
+    label_file: str,
+    universal_label: str,
+    filter_complexity: int,
+    tags: Optional[str],
+    index_prefix: str,
 ): ...
 
