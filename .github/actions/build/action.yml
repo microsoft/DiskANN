@@ -8,7 +8,7 @@ runs:
       if: ${{ runner.os == 'Linux' }}
       run: |
         sudo scripts/dev/install-dev-deps-ubuntu.bash
-        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUNIT_TEST=True
         cmake --build build -- -j
         cmake --install build --prefix="dist"
       shell: bash
@@ -20,9 +20,9 @@ runs:
     - name: Run configure and build for Windows
       if: runner.os == 'Windows'
       run: |
-        mkdir build && cd build && cmake .. && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary"
+        mkdir build && cd build && cmake .. -DUNIT_TEST=True && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary"
         cd ..
         mkdir dist
-        mv .\x64\Release\ .\dist\bin
+        mklink /j .\dist\bin .\x64\Release\
       shell: cmd
     # ------------ End Windows Build ---------------

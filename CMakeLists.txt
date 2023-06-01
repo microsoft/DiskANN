@@ -298,6 +298,11 @@ if (NOT PYBIND)
     add_subdirectory(apps/utils)
 endif()
 
+if (UNIT_TEST)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 if (MSVC)
     message(STATUS "The ${PROJECT_NAME}.sln has been created, opened it from VisualStudio to build Release or Debug configurations.\n"
                    "Alternatively, use MSBuild to build:\n\n"
