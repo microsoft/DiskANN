@@ -133,7 +133,8 @@ class AbstractIndex
     virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l) = 0;
 #endif
 
-    virtual SearchResult search(const DataType &query, size_t K, uint32_t L, std::string &filter_label) = 0;
+    virtual std::pair<uint32_t, uint32_t> search(const DataType &query, size_t K, uint32_t L, uint32_t *result_ids,
+                                                 float *distances, std::string &filter_label) = 0;
 
     virtual int insert_point(const DataType &data_point, const TagType &tag) = 0;
 

@@ -2055,48 +2055,32 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
 // Refactored search
 template <typename T, typename TagT, typename LabelT>
-SearchResult Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K, uint32_t L, std::string &filter_label)
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K, uint32_t L,
+                                                             uint32_t *result_ids, float *distances,
+                                                             std::string &filter_label)
 {
-    auto result = SearchResult(K);
     auto recall_at = K;
-
+    std::pair<uint32_t, uint32_t> res;
     T *query = std::any_cast<T *>(q);
-    result.query_result_ids.resize(K);
-    result.query_result_dists.resize(K);
-    std::vector<uint32_t> &query_result_ids = result.query_result_ids;
-    std::vector<float> &query_result_dists = result.query_result_dists;
-
     if (filter_label != "" && !filter_label.empty())
     {
         LabelT filter_label_as_num = this->get_converted_label(filter_label);
-        auto retval = this->search_with_filters(query, filter_label_as_num, recall_at, (uint32_t)L,
-                                                query_result_ids.data(), query_result_dists.data());
-        result.res = retval;
+        return this->search_with_filters(query, filter_label_as_num, recall_at, (uint32_t)L, result_ids, distances);
     }
     else if (_dist_metric == diskann::FAST_L2)
     {
-        this->search_with_optimized_layout(query, recall_at, L, query_result_ids.data());
+        this->search_with_optimized_layout(query, recall_at, L, result_ids);
     }
     else if (_enable_tags)
     {
         std::vector<T *> res = std::vector<T *>();
-        std::vector<TagT> query_result_tags(recall_at);
-        this->search_with_tags(query, recall_at, (uint32_t)L, query_result_tags.data(), query_result_dists.data(), res);
-        /*std::transform(query_result_tags.begin(), query_result_tags.end(), query_result_ids.begin(),
-                       [](TagT i) { return static_cast<uint32_t>(i); });
-        */
-        for (int64_t r = 0; r < (int64_t)recall_at; r++)
-        {
-            query_result_ids[r] = (uint32_t)query_result_tags[r];
-        }
+        this->search_with_tags(query, recall_at, (uint32_t)L, result_ids, distances, res);
     }
     else
     {
-        auto retval = this->search(query, recall_at, (uint32_t)L, query_result_ids.data());
-        result.res = retval;
+        return this->search(query, recall_at, (uint32_t)L, result_ids);
     }
-    // diskann::aligned_free(query);
-    return result;
+    return res;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2241,7 +2225,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 }
 
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
+size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K, const uint32_t L, uint32_t *tags,
                                                 float *distances, std::vector<T *> &res_vectors)
 {
     if (K > (uint64_t)L)
@@ -2280,7 +2264,7 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
         TagT tag;
         if (_location_to_tag.try_get(node.id, tag))
         {
-            tags[pos] = tag;
+            tags[pos] = (uint32_t)tag;
 
             if (res_vectors.size() > 0)
             {

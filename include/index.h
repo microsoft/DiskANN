@@ -104,8 +104,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void build(const DataType &data, const size_t num_points_to_load,
                                  const IndexWriteParameters &parameters, const TagVector &tags);
 
-    DISKANN_DLLEXPORT SearchResult search(const diskann::DataType &query, size_t K, uint32_t L,
-                                          std::string &filter_label = "");
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const diskann::DataType &query, size_t K, uint32_t L,
+                                                           uint32_t *result_ids, float *distances,
+                                                           std::string &filter_label = "");
 
     DISKANN_DLLEXPORT int insert_point(const DataType &data_point, const TagType &tag);
 
@@ -148,7 +149,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                            IDType *indices, float *distances = nullptr);
 
     // Initialize space for res_vectors before calling.
-    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
+    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, uint32_t *tags,
                                               float *distances, std::vector<T *> &res_vectors);
 
     // Filter support search
