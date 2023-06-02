@@ -2080,7 +2080,7 @@ SearchResult Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K
     else if (_enable_tags)
     {
         std::vector<T *> res = std::vector<T *>();
-        std::vector<TagT> query_result_tags;
+        std::vector<TagT> query_result_tags(recall_at);
         this->search_with_tags(query, recall_at, (uint32_t)L, query_result_tags.data(), query_result_dists.data(), res);
         /*std::transform(query_result_tags.begin(), query_result_tags.end(), query_result_ids.begin(),
                        [](TagT i) { return static_cast<uint32_t>(i); });

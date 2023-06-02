@@ -327,20 +327,9 @@ int search_index(diskann::AbstractIndex &index, diskann::Metric &metric, const s
     std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
     std::vector<float> latency_stats(query_num, 0);
-    std::vector<uint32_t> cmp_stats;
-    if (not tags)
-    {
-        cmp_stats = std::vector<uint32_t>(query_num, 0);
-    }
-
-    std::vector<TagT> query_result_tags;
-    if (tags)
-    {
-        query_result_tags.resize(recall_at * query_num);
-    }
+    std::vector<uint32_t> cmp_stats = std::vector<uint32_t>(query_num, 0);
 
     double best_recall = 0.0;
-
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
         uint32_t L = Lvec[test_id];
@@ -368,6 +357,7 @@ int search_index(diskann::AbstractIndex &index, diskann::Metric &metric, const s
             auto search_res = index.search(query + i * query_aligned_dim, recall_at, L, query_filter_to_use);
             query_result_ids[test_id].insert(query_result_ids[test_id].end(), search_res.query_result_ids.begin(),
                                              search_res.query_result_ids.end());
+
             cmp_stats[i] = search_res.res.second;
             auto qe = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> diff = qe - qs;
