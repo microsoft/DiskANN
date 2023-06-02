@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #pragma once
+#include <omp.h>
 #include <sstream>
 #include <typeinfo>
 #include <unordered_map>

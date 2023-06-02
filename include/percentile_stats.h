@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -20,16 +21,12 @@ namespace diskann
 {
 struct QueryStats
 {
-    float total_us = 0; // total time to process query in micros
-    float io_us = 0;    // total time spent in IO
-    float cpu_us = 0;   // total time spent in CPU
+    float total_us = 0;   // total time to process query in micros
+    float io_us = 0;      // total time spent in IO
+    float cpu_us = 0;     // total time spent in CPU
+    float scratch_us = 0; // time spent to allocate scratch
 
-    unsigned n_4k = 0;         // # of 4kB reads
-    unsigned n_8k = 0;         // # of 8kB reads
-    unsigned n_12k = 0;        // # of 12kB reads
     unsigned n_ios = 0;        // total # of IOs issued
-    unsigned read_size = 0;    // total # of bytes read
-    unsigned n_cmps_saved = 0; // # cmps saved
     unsigned n_cmps = 0;       // # cmps
     unsigned n_cache_hits = 0; // # cache_hits
     unsigned n_hops = 0;       // # search hops

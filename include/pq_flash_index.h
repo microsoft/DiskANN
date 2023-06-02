@@ -6,6 +6,7 @@
 
 #include "aligned_file_reader.h"
 #include "concurrent_queue.h"
+#include "index_search_context.h"
 #include "neighbor.h"
 #include "parameters.h"
 #include "percentile_stats.h"
@@ -80,6 +81,10 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                               const bool use_filter, const LabelT &filter_label,
                                               const uint32_t io_limit, const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr);
+
+    DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
+                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                              IndexSearchContext<LabelT> &context, const bool use_reorder_data = false);
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
 

@@ -10,6 +10,7 @@
 #endif
 
 #include "distance.h"
+#include "index_search_context.h"
 #include "locking.h"
 #include "natural_number_map.h"
 #include "natural_number_set.h"
@@ -150,6 +151,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const uint32_t L,
                                                            IDType *indices, float *distances = nullptr);
 
+    template <typename IDType>
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const uint32_t L,
+                                                           IDType *indices, float *distances,
+                                                           IndexSearchContext<LabelT> &context);
+
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                               float *distances, std::vector<T *> &res_vectors);
@@ -239,7 +245,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids,
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool search_invocation);
+                                                         const std::vector<LabelT> &filters, bool search_invocation,
+                                                         IndexSearchContext<LabelT> *context = nullptr);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
@@ -312,6 +319,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 #endif
+
+    template <typename IndexType>
+    std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const size_t K, const uint32_t L,
+                                                      IndexType *indices, float *distances,
+                                                      IndexSearchContext<LabelT> &context);
 
   private:
     // Distance functions
