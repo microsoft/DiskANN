@@ -1128,7 +1128,6 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
     prune_neighbors(location, pool, pruned_list, scratch);
 
-    assert(!pruned_list.empty());
     assert(_final_graph.size() == _max_points + _num_frozen_pts);
 }
 
@@ -1402,7 +1401,7 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
             search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, _filtered_index,
                                        _filterIndexingQueueSize);
         }
-        else
+        if (pruned_list.size() == 0)
         {
             search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
         }
@@ -2808,7 +2807,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     {
         search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
     }
-    else
+    if (pruned_list.size() == 0)
     {
         search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch);
     }
