@@ -276,10 +276,8 @@ int search_index(diskann::AbstractIndex &index, diskann::Metric &metric, const s
         diskann::cout << " Truthset file " << truthset_file << " not found. Not computing recall." << std::endl;
     }
 
-    bool filtered_search = false;
     if (!query_filters.empty())
     {
-        filtered_search = true;
         if (query_filters.size() != 1 && query_filters.size() != query_num)
         {
             std::cout << "Error. Mismatch in number of queries and size of query "
