@@ -276,8 +276,10 @@ int search_index(diskann::AbstractIndex &index, diskann::Metric &metric, const s
         diskann::cout << " Truthset file " << truthset_file << " not found. Not computing recall." << std::endl;
     }
 
+    bool is_filtered = false;
     if (!query_filters.empty())
     {
+        is_filtered = true;
         if (query_filters.size() != 1 && query_filters.size() != query_num)
         {
             std::cout << "Error. Mismatch in number of queries and size of query "
@@ -358,7 +360,11 @@ int search_index(diskann::AbstractIndex &index, diskann::Metric &metric, const s
         for (int64_t i = 0; i < (int64_t)query_num; i++)
         {
             auto qs = std::chrono::high_resolution_clock::now();
-            std::string query_filter_to_use = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+            std::string query_filter_to_use = "";
+            if (is_filtered)
+            {
+                query_filter_to_use = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+            }
             auto search_res = index.search(query + i * query_aligned_dim, recall_at, L, query_filter_to_use);
             query_result_ids[test_id].insert(query_result_ids[test_id].end(), search_res.query_result_ids.begin(),
                                              search_res.query_result_ids.end());
