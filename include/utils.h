@@ -338,6 +338,26 @@ inline void get_bin_metadata(const std::string &bin_file, size_t &nrows, size_t 
 }
 // get_bin_metadata functions END
 
+#ifndef EXEC_ENV_OLS
+inline size_t get_graph_num_frozen_points(const std::string &graph_file)
+{
+    size_t expected_file_size;
+    uint32_t max_observed_degree, start;
+    size_t file_frozen_pts;
+
+    std::ifstream in;
+    in.exceptions(std::ios::badbit | std::ios::failbit);
+
+    in.open(graph_file, std::ios::binary);
+    in.read((char *)&expected_file_size, sizeof(size_t));
+    in.read((char *)&max_observed_degree, sizeof(uint32_t));
+    in.read((char *)&start, sizeof(uint32_t));
+    in.read((char *)&file_frozen_pts, sizeof(size_t));
+
+    return file_frozen_pts;
+}
+#endif
+
 template <typename T> inline std::string getValues(T *data, size_t num)
 {
     std::stringstream stream;

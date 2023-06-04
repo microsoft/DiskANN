@@ -542,7 +542,7 @@ int main(int argc, char **argv)
         size_t query_num, query_dim, query_aligned_dim;
         diskann::load_aligned_bin(query_file, query, query_num, query_dim, query_aligned_dim, data_type);
 
-        // const size_t num_frozen_pts = diskann::AbstractIndex::get_graph_num_frozen_points(index_path_prefix);
+        const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path_prefix);
 
         auto config = diskann::IndexConfigBuilder()
                           .with_metric(metric)
@@ -554,7 +554,7 @@ int main(int argc, char **argv)
                           .with_label_type(label_type)
                           .is_dynamic_index(dynamic)
                           .is_enable_tags(tags)
-                          //.with_num_frozen_pts(num_frozen_pts)
+                          .with_num_frozen_pts(num_frozen_pts)
                           .build();
 
         std::vector<std::string> query_filters;
