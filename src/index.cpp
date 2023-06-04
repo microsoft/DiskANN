@@ -2060,30 +2060,27 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const diskann::Data
                                                              std::string &filter_label)
 {
     auto recall_at = K;
-    std::pair<uint32_t, uint32_t> res;
+    std::pair<uint32_t, uint32_t> result;
     T *query = std::any_cast<T *>(q);
     if (filter_label != std::string("") && !filter_label.empty())
     {
-        std::cout << "Searching with filters..." << std::endl;
         LabelT filter_label_as_num = this->get_converted_label(filter_label);
         return this->search_with_filters(query, filter_label_as_num, recall_at, (uint32_t)L, result_ids, distances);
     }
     else if (_dist_metric == diskann::FAST_L2)
     {
-        std::cout << "Searching with optimized layout..." << std::endl;
         this->search_with_optimized_layout(query, recall_at, L, result_ids);
     }
     else if (_enable_tags)
     {
-        std::cout << "Searching with Tags..." << std::endl;
-        std::vector<T *> res = std::vector<T *>();
-        this->search_with_tags(query, recall_at, (uint32_t)L, result_ids, distances, res);
+        std::vector<T *> res_vecs = std::vector<T *>();
+        this->search_with_tags(query, recall_at, (uint32_t)L, result_ids, distances, res_vecs);
     }
     else
     {
         return this->search(query, recall_at, (uint32_t)L, result_ids);
     }
-    return res;
+    return result;
 }
 
 template <typename T, typename TagT, typename LabelT>
