@@ -340,7 +340,6 @@ int search_index(diskann::AbstractIndex &index, diskann::Metric &metric, const s
 
         query_result_ids[test_id].reserve(recall_at * query_num);
         query_result_dists[test_id].reserve(recall_at * query_num);
-        std::vector<T *> res = std::vector<T *>();
 
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);
@@ -554,6 +553,10 @@ int main(int argc, char **argv)
                           .with_label_type(label_type)
                           .is_dynamic_index(dynamic)
                           .is_enable_tags(tags)
+                          .is_concurrent_consolidate(false)
+                          .is_pq_dist_build(false)
+                          .is_use_opq(false)
+                          .with_num_pq_chunks(0)
                           .with_num_frozen_pts(num_frozen_pts)
                           .build();
 

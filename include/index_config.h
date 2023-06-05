@@ -32,7 +32,7 @@ struct IndexConfig
     std::string tag_type;
     std::string data_type;
 
-    IndexWriteParameters *index_write_params;
+    IndexWriteParameters *index_write_params = nullptr;
 
   private:
     IndexConfig(LoadStoreStrategy data_strategy, LoadStoreStrategy graph_strategy,
@@ -192,6 +192,6 @@ class IndexConfigBuilder
     std::string _tag_type;
     std::string _data_type;
 
-    IndexWriteParameters *_index_write_params;
+    IndexWriteParameters *_index_write_params = nullptr;
 };
 } // namespace diskann
