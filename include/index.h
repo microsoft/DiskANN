@@ -233,7 +233,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
-    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids,
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);

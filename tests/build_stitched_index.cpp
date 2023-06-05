@@ -265,9 +265,8 @@ stitch_indices_return_values stitch_label_indices(
  */
 template <typename T>
 void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, path input_data_path,
-                    std::vector<std::vector<uint32_t>> stitched_graph, uint32_t stitched_R,
-                    tsl::robin_map<std::string, uint32_t> label_entry_points, std::string universal_label,
-                    path label_data_path, uint32_t num_threads)
+                    uint32_t stitched_R,
+    uint32_t num_threads)
 {
     size_t dimension, number_of_label_points;
     auto diskann_cout_buffer = diskann::cout.rdbuf(nullptr);
@@ -411,14 +410,14 @@ int main(int argc, char **argv)
 
     // 6. run a prune on the stitched index, and save to disk
     if (data_type == "uint8")
-        prune_and_save<uint8_t>(final_index_path_prefix, full_index_path_prefix, input_data_path, stitched_graph,
-                                stitched_R, label_entry_points, universal_label, labels_file_to_use, num_threads);
+        prune_and_save<uint8_t>(final_index_path_prefix, full_index_path_prefix, input_data_path, 
+                                stitched_R, num_threads);
     else if (data_type == "int8")
-        prune_and_save<int8_t>(final_index_path_prefix, full_index_path_prefix, input_data_path, stitched_graph,
-                               stitched_R, label_entry_points, universal_label, labels_file_to_use, num_threads);
+        prune_and_save<int8_t>(final_index_path_prefix, full_index_path_prefix, input_data_path, 
+                               stitched_R,   num_threads);
     else if (data_type == "float")
-        prune_and_save<float>(final_index_path_prefix, full_index_path_prefix, input_data_path, stitched_graph,
-                              stitched_R, label_entry_points, universal_label, labels_file_to_use, num_threads);
+        prune_and_save<float>(final_index_path_prefix, full_index_path_prefix, input_data_path, 
+                              stitched_R,   num_threads);
     else
         throw;
 

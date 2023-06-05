@@ -306,6 +306,7 @@ inline std::vector<size_t> load_filtered_bin_as_float(const char *filename, floa
                                                       const std::string &universal_label, size_t &npoints_filt,
                                                       std::vector<std::vector<std::string>> &pts_to_labels)
 {
+    diskann::cout<<" Label file not used in this function " << label_file << std::endl;
     std::ifstream reader(filename, std::ios::binary);
     if (reader.fail())
     {
@@ -393,7 +394,7 @@ inline void save_groundtruth_as_one_file(const std::string filename, int32_t *da
     std::cout << "Finished writing truthset" << std::endl;
 }
 
-inline void parse_label_file_into_vec(size_t &line_cnt, const std::string &map_file,
+inline void parse_label_file_into_vec(const std::string &map_file,
                                       std::vector<std::vector<std::string>> &pts_to_labels)
 {
     std::ifstream infile(map_file);
@@ -483,7 +484,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processFilteredParts(
 
     std::vector<std::vector<std::string>> pts_to_labels;
     if (filter_label != "")
-        parse_label_file_into_vec(npoints, label_file, pts_to_labels);
+        parse_label_file_into_vec(label_file, pts_to_labels);
 
     for (int p = 0; p < num_parts; p++)
     {
@@ -777,9 +778,8 @@ int main(int argc, char **argv)
             labels_to_number_of_queries[label] += 1;
         }
 
-        size_t npoints;
         std::vector<std::vector<std::string>> point_to_labels;
-        parse_label_file_into_vec(npoints, label_file, point_to_labels);
+        parse_label_file_into_vec(label_file, point_to_labels);
         std::vector<label_set> point_ids_to_labels(point_to_labels.size());
         std::vector<label_set> query_ids_to_labels(filter_labels.size());
 

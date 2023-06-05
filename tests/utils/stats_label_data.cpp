@@ -30,6 +30,7 @@ namespace po = boost::program_options;
 
 void stats_analysis(const std::string labels_file, std::string univeral_label, uint32_t density = 10)
 {
+    std::cout << "WARNING: Not differentiating universal label " << univeral_label << " from other labels " << std::endl;    
     std::string token, line;
     std::ifstream labels_stream(labels_file);
     std::unordered_map<std::string, uint32_t> label_counts;

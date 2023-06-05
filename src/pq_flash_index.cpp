@@ -241,11 +241,19 @@ void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::strin
     std::vector<uint64_t> tmp_result_ids_64(sample_num, 0);
     std::vector<float> tmp_result_dists(sample_num, 0);
 
+    bool filtered_search = false;
+    std::vector<LabelT> random_query_filters(sample_num);
+    if (_filter_to_medoid_ids.size() != 0) {
+        filtered_search = true;
+        generate_random_labels(random_query_filters, sample_num, nthreads);
+    }
+
 #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
     for (int64_t i = 0; i < (int64_t)sample_num; i++)
     {
+        auto &label_for_search = random_query_filters[i];
         cached_beam_search(samples + (i * sample_aligned_dim), 1, l_search, tmp_result_ids_64.data() + (i * 1),
-                           tmp_result_dists.data() + (i * 1), beamwidth);
+                           tmp_result_dists.data() + (i * 1), beamwidth, filtered_search, label_for_search, false);
     }
 
     std::sort(this->node_visit_counter.begin(), node_visit_counter.end(),
@@ -292,14 +300,26 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
     cur_level = std::make_unique<tsl::robin_set<uint32_t>>();
     prev_level = std::make_unique<tsl::robin_set<uint32_t>>();
 
-    for (uint64_t miter = 0; miter < num_medoids; miter++)
+    for (uint64_t miter = 0; miter < num_medoids && cur_level->size() < num_nodes_to_cache; miter++)
     {
         cur_level->insert(medoids[miter]);
     }
 
+    if (_filter_to_medoid_ids.size() > 0) {
+        for (auto &x : _filter_to_medoid_ids) {
+            for (auto &y : x.second) {
+                cur_level->insert(y);
+                if (cur_level->size() == num_nodes_to_cache)
+                    break;
+            }
+            if (cur_level->size() == num_nodes_to_cache)
+                break;
+        }
+    }
+
     uint64_t lvl = 1;
     uint64_t prev_node_set_size = 0;
-    while ((node_set.size() + cur_level->size() < num_nodes_to_cache) && cur_level->size() != 0)
+    while ((node_set.size() + cur_level->size() <  num_nodes_to_cache) && cur_level->size() != 0)
     {
         // swap prev_level and cur_level
         std::swap(prev_level, cur_level);
@@ -464,6 +484,34 @@ inline int32_t PQFlashIndex<T, LabelT>::get_filter_number(const LabelT &filter_l
         }
     }
     return idx;
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels, const uint32_t nthreads) {
+    std::random_device rd;  
+    labels.clear();
+    labels.resize(num_labels);
+
+    uint64_t num_total_labels = _pts_to_label_offsets[num_points - 1] + _pts_to_labels[_pts_to_label_offsets[num_points - 1]];
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<uint64_t> dis(0, num_total_labels);
+
+    tsl::robin_set<uint64_t> skip_locs;
+    for (uint32_t i = 0; i < num_points; i++) {
+        skip_locs.insert(_pts_to_label_offsets[i]);
+    }
+
+#pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
+    for (uint32_t i = 0; i < num_labels; i++) {
+        bool found_flag = false;
+        while (!found_flag) {
+        uint64_t rnd_loc = dis(gen);
+        if (skip_locs.find(rnd_loc) == skip_locs.end()) {
+            found_flag = true;
+            labels[i] = _filter_list[_pts_to_labels[rnd_loc]];
+        }
+        }
+    }
 }
 
 template <typename T, typename LabelT>
@@ -705,24 +753,24 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             assert(medoid_stream.is_open());
             std::string line, token;
 
-            _filter_to_medoid_id.clear();
+            _filter_to_medoid_ids.clear();
             try
             {
                 while (std::getline(medoid_stream, line))
                 {
                     std::istringstream iss(line);
                     uint32_t cnt = 0;
-                    uint32_t medoid = 0;
+                    std::vector<uint32_t> medoids;
                     LabelT label;
                     while (std::getline(iss, token, ','))
                     {
                         if (cnt == 0)
                             label = (LabelT)std::stoul(token);
                         else
-                            medoid = (uint32_t)stoul(token);
+                            medoids.push_back((uint32_t)stoul(token));
                         cnt++;
                     }
-                    _filter_to_medoid_id[label] = medoid;
+                    _filter_to_medoid_ids[label] = medoids;
                 }
             }
             catch (std::system_error &e)
@@ -1049,7 +1097,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 {
     LabelT dummy_filter = 0;
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter,
-                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+                       io_limit, use_reorder_data, stats);
 }
 
 
@@ -1186,9 +1234,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
 
     uint32_t best_medoid = 0;
+    uint32_t best_shard = 0;
     float best_dist = (std::numeric_limits<float>::max)();
-    if (!use_filter)
-    {
         for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++)
         {
             float cur_expanded_dist =
@@ -1197,16 +1244,20 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             {
                 best_medoid = medoids[cur_m];
                 best_dist = cur_expanded_dist;
+                best_shard = cur_m;
             }
         }
-    }
-    else if (_filter_to_medoid_id.find(filter_label) != _filter_to_medoid_id.end())
+    if (use_filter) {
+    if (_filter_to_medoid_ids.find(filter_label) != _filter_to_medoid_ids.end())
     {
-        best_medoid = _filter_to_medoid_id[filter_label];
+        best_medoid = _filter_to_medoid_ids[filter_label][best_shard]; 
     }
     else
     {
-        throw ANNException("Cannot find medoid for specified filter.", -1, __FUNCSIG__, __FILE__, __LINE__);
+        std::string exception("Cannot find medoid for specified filter.");
+        exception += std::to_string(filter_label);
+        throw ANNException(exception, -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);

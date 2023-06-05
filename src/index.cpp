@@ -839,7 +839,7 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
-    const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
+    const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
     bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
@@ -1096,7 +1096,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     if (!use_filter)
     {
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label, false);
+        iterate_to_fixed_point(Lindex, init_ids, scratch, false, unused_filter_label, false);
     }
     else
     {
@@ -1105,7 +1105,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
             filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
 
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
+        iterate_to_fixed_point(filteredLindex, filter_specific_start_nodes, scratch, true,
                                _pts_to_labels[location], false);
     }
 
@@ -1994,7 +1994,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
     auto retval =
-        iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
+        iterate_to_fixed_point(L, init_ids, scratch, false, unused_filter_label, true);
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
@@ -2072,7 +2072,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     // T *aligned_query = scratch->aligned_query();
     // memcpy(aligned_query, query, _dim * sizeof(T));
     _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
-    auto retval = iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, true, filter_vec, true);
+    auto retval = iterate_to_fixed_point(L, init_ids, scratch, true, filter_vec, true);
 
     auto best_L_nodes = scratch->best_l_nodes();
 
@@ -2132,7 +2132,7 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     const std::vector<LabelT> unused_filter_label;
 
     _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
-    iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
+    iterate_to_fixed_point(L, init_ids, scratch, false, unused_filter_label, true);
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     assert(best_L_nodes.size() <= L);

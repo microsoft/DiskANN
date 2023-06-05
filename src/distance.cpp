@@ -28,6 +28,7 @@ namespace diskann
 template <typename T>
 float Distance<T>::compare(const T *a, const T *b, const float normA, const float normB, uint32_t length) const
 {
+    diskann::cout<< a[0] << " " << b[0] << " " << normA << " " << normB << " " << length << std::endl;
     throw std::logic_error("This function is not implemented.");
 }
 
@@ -49,6 +50,7 @@ template <typename T> bool Distance<T>::preprocessing_required() const
 template <typename T>
 void Distance<T>::preprocess_base_points(T *original_data, const size_t orig_dim, const size_t num_points)
 {
+    diskann::cout<<original_data[0] << " " << orig_dim << " " << num_points << std::endl;
 }
 
 template <typename T> void Distance<T>::preprocess_query(const T *query_vec, const size_t query_dim, T *scratch_query)
