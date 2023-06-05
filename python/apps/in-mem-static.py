@@ -37,7 +37,7 @@ def build_and_search(
     if not search_only:
         diskannpy.build_memory_index(
             data=indexdata_file,
-            metric=metric,
+            distance_metric=metric,
             vector_dtype=dtype,
             index_directory=index_directory,
             complexity=Lb,
@@ -52,9 +52,8 @@ def build_and_search(
 
     # ready search object
     index = diskannpy.StaticMemoryIndex(
-        metric=metric,
+        distance_metric=metric,
         vector_dtype=dtype,
-        data_path=indexdata_file,
         index_directory=index_directory,
         num_threads=num_threads,  # this can be different at search time if you would like
         initial_search_complexity=Ls,

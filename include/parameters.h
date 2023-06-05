@@ -7,6 +7,7 @@
 #include <typeinfo>
 #include <unordered_map>
 
+#include "omp.h"
 #include "defaults.h"
 #include "timer.h"
 #include "windows_customizations.h"
