@@ -2061,7 +2061,6 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
     this->build(filename, num_points_to_load, parameters, tags);
 }
 
-// Refactored search
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K, uint32_t L,
                                                              uint32_t *result_ids, float *distances,
