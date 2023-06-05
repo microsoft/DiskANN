@@ -85,21 +85,6 @@ void IndexFactory::check_config()
                                " is not supported. please select from [float, int8, uint8]",
                            -1);
     }
-
-    if (!_config.data_strategy)
-    {
-        throw ANNException("Error: data load store stratagy is required to initialize index", -1);
-    }
-
-    if (!_config.metric)
-    {
-        throw ANNException("Error: please pass metric in index config, can't initialize index without a valic metric.",
-                           -1);
-    }
-    if (_config.dimension == 0)
-    {
-        throw ANNException("Error: dimension of an index can not be zero.", -1);
-    }
 }
 
 template <typename T>
