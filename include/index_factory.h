@@ -11,7 +11,7 @@ class IndexFactory
     DISKANN_DLLEXPORT std::shared_ptr<AbstractIndex> instance();
 
   private:
-    void checkConfig();
+    void check_config();
 
     template <typename T>
     std::unique_ptr<AbstractDataStore<T>> construct_datastore(LoadStoreStrategy stratagy, size_t num_points,

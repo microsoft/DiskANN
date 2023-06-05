@@ -118,6 +118,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT void set_start_points_at_random(DataType radius, uint32_t random_seed = 0);
 
+    DISKANN_DLLEXPORT int get_vector_by_tag(TagType &tag, DataType &vec);
+
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
                                                 const size_t num_points_to_load, IndexWriteParameters &parameters,

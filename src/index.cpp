@@ -823,6 +823,14 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     return nodes_read;
 }
 
+template <typename T, typename TagT, typename LabelT>
+int Index<T, TagT, LabelT>::get_vector_by_tag(TagType &tag, DataType &vec)
+{
+    TagT tag_val = std::any_cast<TagT>(tag);
+    T *vec_val = std::any_cast<T *>(vec);
+    return this->get_vector_by_tag(tag_val, vec_val);
+}
+
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::get_vector_by_tag(TagT &tag, T *vec)
 {
     std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);

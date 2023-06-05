@@ -3,7 +3,6 @@
 
 namespace diskann
 {
-
 enum LoadStoreStrategy
 {
     DISK,

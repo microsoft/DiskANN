@@ -32,86 +32,6 @@ struct consolidation_report
     }
 };
 
-struct AnyRobinSet
-{
-    template <typename T>
-    AnyRobinSet(const tsl::robin_set<T> &robin_set) : data(const_cast<tsl::robin_set<T> *>(&robin_set))
-    {
-    }
-
-    template <typename T> const tsl::robin_set<T> &get() const
-    {
-        auto set_ptr = std::any_cast<tsl::robin_set<T> *>(&data);
-        if (set_ptr)
-        {
-            return *(*set_ptr);
-        }
-
-        throw std::bad_any_cast();
-    }
-
-    template <typename T> tsl::robin_set<T> &get()
-    {
-        auto set_ptr = std::any_cast<tsl::robin_set<T> *>(&data);
-        if (set_ptr)
-        {
-            return *(*set_ptr);
-        }
-
-        throw std::bad_any_cast();
-    }
-
-  private:
-    std::any data;
-};
-
-struct AnyVector
-{
-    template <typename T> AnyVector(const std::vector<T> &vector) : data(const_cast<std::vector<T> *>(&vector))
-    {
-    }
-
-    template <typename T> const std::vector<T> &get() const
-    {
-        auto sharedVector = std::any_cast<std::vector<T> *>(&data);
-        if (sharedVector)
-        {
-            return *(*sharedVector);
-        }
-
-        throw std::bad_any_cast();
-    }
-
-    template <typename T> std::vector<T> &get()
-    {
-        auto sharedVector = std::any_cast<std::vector<T> *>(&data);
-        if (sharedVector)
-        {
-            return *(*sharedVector);
-        }
-
-        throw std::bad_any_cast();
-    }
-
-  private:
-    std::any data;
-};
-
-using TagVector = AnyVector;
-using TagRobinSet = AnyRobinSet;
-
-struct SearchResult
-{
-    SearchResult(size_t k)
-    {
-        query_result_ids.resize(k);
-        query_result_dists.resize(k);
-    }
-    std::vector<uint32_t> query_result_ids;
-    std::vector<float> query_result_dists;
-    std::pair<uint32_t, uint32_t> res;
-};
-
 class AbstractIndex
 {
   public:
@@ -149,5 +69,8 @@ class AbstractIndex
     virtual consolidation_report consolidate_deletes(const IndexWriteParameters &parameters) = 0;
 
     virtual void optimize_index_layout() = 0;
+
+    // memory should be allocated for vec before calling this function
+    virtual int get_vector_by_tag(TagType &tag, DataType &vec) = 0;
 };
 } // namespace diskann
