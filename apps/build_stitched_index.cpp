@@ -282,7 +282,7 @@ void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, p
 
     std::cout << "parsing labels" << std::endl;
 
-    index.prune_all_neighbors(stitched_R, 750, 1.2);
+    index.prune_all_neighbors(stitched_R, 750, 1.2f);
     index.save((final_index_path_prefix).c_str());
 
     diskann::cout.rdbuf(diskann_cout_buffer);
