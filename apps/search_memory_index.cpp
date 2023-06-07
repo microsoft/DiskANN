@@ -67,8 +67,8 @@ int search_memory_index(diskann::AbstractIndex &index, diskann::Metric &metric, 
     }
 
     using TagT = uint32_t;
-    const bool concurrent = false, pq_dist_build = false, use_opq = false;
-    const size_t num_pq_chunks = 0;
+    /*const bool concurrent = false, pq_dist_build = false, use_opq = false;
+    const size_t num_pq_chunks = 0;*/
     // using IndexType = diskann::Index<T, TagT, LabelT>;
     // const size_t num_frozen_pts = IndexType::get_graph_num_frozen_points(index_path);
     // IndexType index(metric, query_dim, 0, dynamic, tags, concurrent, pq_dist_build, num_pq_chunks, use_opq,
