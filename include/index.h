@@ -104,10 +104,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void build(const DataType &data, const size_t num_points_to_load,
                                  const IndexWriteParameters &parameters, const TagVector &tags);
 
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const diskann::DataType &query, size_t K, uint32_t L,
-                                                           uint32_t *result_ids, float *distances,
-                                                           std::string &filter_label = "");
-
     DISKANN_DLLEXPORT int insert_point(const DataType &data_point, const TagType &tag);
 
     DISKANN_DLLEXPORT int lazy_delete(const TagType &tag);
@@ -119,6 +115,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void set_start_points_at_random(DataType radius, uint32_t random_seed = 0);
 
     DISKANN_DLLEXPORT int get_vector_by_tag(TagType &tag, DataType &vec);
+
+    DISKANN_DLLEXPORT void search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices);
+
+    DISKANN_DLLEXPORT size_t search_with_tags(const DataType &query, const uint64_t K, const uint32_t L,
+                                              const TagType &tags, float *distances, DataVector &res_vectors);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
@@ -151,7 +152,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                            IDType *indices, float *distances = nullptr);
 
     // Initialize space for res_vectors before calling.
-    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, uint32_t *tags,
+    DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                               float *distances, std::vector<T *> &res_vectors);
 
     // Filter support search
@@ -213,6 +214,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // ********************************
 
   protected:
+    //
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
+                                                            std::any &indices, float *distances = nullptr);
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query,
+                                                                         const std::string &filter_label_raw,
+                                                                         const size_t K, const uint32_t L,
+                                                                         std::any &indices, float *distances);
+
     // No copy/assign.
     Index(const Index<T, TagT, LabelT> &) = delete;
     Index<T, TagT, LabelT> &operator=(const Index<T, TagT, LabelT> &) = delete;

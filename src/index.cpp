@@ -2062,32 +2062,24 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 }
 
 template <typename T, typename TagT, typename LabelT>
-std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const diskann::DataType &q, size_t K, uint32_t L,
-                                                             uint32_t *result_ids, float *distances,
-                                                             std::string &filter_label)
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search(const DataType &query, const size_t K, const uint32_t L,
+                                                              std::any &indices, float *distances)
 {
-    auto recall_at = K;
-    std::pair<uint32_t, uint32_t> result;
-    T *query = std::any_cast<T *>(q);
-    if (filter_label != std::string("") && !filter_label.empty())
+    auto actual_query = std::any_cast<T *>(query);
+    if (typeid(uint32_t *) == indices.type())
     {
-        LabelT filter_label_as_num = this->get_converted_label(filter_label);
-        return this->search_with_filters(query, filter_label_as_num, recall_at, (uint32_t)L, result_ids, distances);
+        auto u32_ptr = std::any_cast<uint32_t *>(indices);
+        return this->search(actual_query, K, L, u32_ptr, distances);
     }
-    else if (_dist_metric == diskann::FAST_L2)
+    else if (typeid(uint64_t *) == indices.type())
     {
-        this->search_with_optimized_layout(query, recall_at, L, result_ids);
-    }
-    else if (_enable_tags)
-    {
-        std::vector<T *> res_vecs = std::vector<T *>();
-        this->search_with_tags(query, recall_at, (uint32_t)L, result_ids, distances, res_vecs);
+        auto u64_ptr = std::any_cast<uint64_t *>(indices);
+        return this->search(actual_query, K, L, u64_ptr, distances);
     }
     else
     {
-        return this->search(query, recall_at, (uint32_t)L, result_ids);
+        throw ANNException("Error: indices type can only be uint64_t or uint32_t.", -1);
     }
-    return result;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2154,11 +2146,35 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 }
 
 template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const DataType &query,
+                                                                           const std::string &raw_label, const size_t K,
+                                                                           const uint32_t L, std::any &indices,
+                                                                           float *distances)
+{
+    auto converted_label = this->get_converted_label(raw_label);
+    if (typeid(uint64_t *) == indices.type())
+    {
+        auto ptr = std::any_cast<uint64_t *>(indices) return this->search_with_filters(
+            std::any_cast<T *>(query), converted_label, K, L, ptr, distances);
+    }
+    else if (typeid(uint32_t *) == indices.type())
+    {
+        auto ptr = std::any_cast<uint32_t *>(indices) return this->search_with_filters(
+            std::any_cast<T *>(query), converted_label, K, L, ptr, distances);
+    }
+    else
+    {
+        throw ANNException("Error: Id type can only be uint64_t or uint32_t.", -1);
+    }
+}
+
+template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const LabelT &filter_label,
                                                                           const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
 {
+    indices = static_cast<IdType *>(indices);
     if (K > (uint64_t)L)
     {
         throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -2232,7 +2248,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 }
 
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K, const uint32_t L, uint32_t *tags,
+size_t Index<T, TagT, LabelT>::search_with_tags(const DataType &query, const uint64_t K, const uint32_t L,
+                                                const TagType &tags, float *distances, DataVector &res_vectors)
+{
+
+    return this->search_with_tags(std::any_cast<T *>(query), K, L, std::any_cast<TagT *>(tags), distances,
+                                  res_vectors.get<T *>());
+}
+
+template <typename T, typename TagT, typename LabelT>
+size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                                 float *distances, std::vector<T *> &res_vectors)
 {
     if (K > (uint64_t)L)
@@ -2271,7 +2296,7 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
         TagT tag;
         if (_location_to_tag.try_get(node.id, tag))
         {
-            tags[pos] = (uint32_t)tag;
+            tags[pos] = tag;
 
             if (res_vectors.size() > 0)
             {
@@ -3157,6 +3182,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 //}
 
 template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices)
+{
+    return this->search_with_optimized_layout(std::any_cast<T *>(query), K, L, indices);
+}
+
+template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
 {
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)_data_store->get_dist_fn();
@@ -3396,5 +3427,4 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-
 } // namespace diskann
