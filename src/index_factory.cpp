@@ -8,7 +8,7 @@ IndexFactory::IndexFactory(IndexConfig &config) : _config(config)
     check_config();
 }
 
-std::shared_ptr<AbstractIndex> IndexFactory::instance()
+std::unique_ptr<AbstractIndex> IndexFactory::instance()
 {
     size_t num_points = _config.max_points;
     size_t dim = _config.dimension;
@@ -19,11 +19,11 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
 
         if (_config.label_type == "ushort")
         {
-            return std::make_shared<diskann::Index<float, uint32_t, uint16_t>>(_config, std::move(data_store));
+            return std::make_unique<diskann::Index<float, uint32_t, uint16_t>>(_config, std::move(data_store));
         }
         else
         {
-            return std::make_shared<diskann::Index<float>>(_config, std::move(data_store));
+            return std::make_unique<diskann::Index<float>>(_config, std::move(data_store));
         }
     }
     else if (_config.data_type == "uint8")
@@ -32,11 +32,11 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
         auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
         if (_config.label_type == "ushort")
         {
-            return std::make_shared<diskann::Index<uint8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
+            return std::make_unique<diskann::Index<uint8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
         }
         else
         {
-            return std::make_shared<diskann::Index<uint8_t>>(_config, std::move(data_store));
+            return std::make_unique<diskann::Index<uint8_t>>(_config, std::move(data_store));
         }
     }
     else if (_config.data_type == "int8")
@@ -45,11 +45,11 @@ std::shared_ptr<AbstractIndex> IndexFactory::instance()
         auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
         if (_config.label_type == "ushort")
         {
-            return std::make_shared<diskann::Index<int8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
+            return std::make_unique<diskann::Index<int8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
         }
         else
         {
-            return std::make_shared<diskann::Index<int8_t>>(_config, std::move(data_store));
+            return std::make_unique<diskann::Index<int8_t>>(_config, std::move(data_store));
         }
     }
     else

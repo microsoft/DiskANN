@@ -8,7 +8,7 @@ class IndexFactory
 {
   public:
     DISKANN_DLLEXPORT explicit IndexFactory(IndexConfig &config);
-    DISKANN_DLLEXPORT std::shared_ptr<AbstractIndex> instance();
+    DISKANN_DLLEXPORT std::unique_ptr<AbstractIndex> instance();
 
   private:
     void check_config();
