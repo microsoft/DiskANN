@@ -367,13 +367,15 @@ void selecting_pivots(float *data, size_t num_points, size_t dim, float *pivot_d
     std::uniform_int_distribution<size_t> distribution(0, num_points - 1);
 
     size_t tmp_pivot;
-    for (size_t j = 0; j < num_centers; j++)
+    size_t j = 0;
+    while (j < num_centers)
     {
         tmp_pivot = distribution(generator);
         if (std::find(picked.begin(), picked.end(), tmp_pivot) != picked.end())
             continue;
         picked.push_back(tmp_pivot);
         std::memcpy(pivot_data + j * dim, data + tmp_pivot * dim, dim * sizeof(float));
+        ++j;
     }
 }
 
