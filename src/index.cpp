@@ -824,11 +824,22 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 }
 
 template <typename T, typename TagT, typename LabelT>
-int Index<T, TagT, LabelT>::get_vector_by_tag(TagType &tag, DataType &vec)
+int Index<T, TagT, LabelT>::_get_vector_by_tag(TagType &tag, DataType &vec)
 {
-    TagT tag_val = std::any_cast<TagT>(tag);
-    T *vec_val = std::any_cast<T *>(vec);
-    return this->get_vector_by_tag(tag_val, vec_val);
+    try
+    {
+        TagT tag_val = std::any_cast<TagT>(tag);
+        T *vec_val = std::any_cast<T *>(vec);
+        return this->get_vector_by_tag(tag_val, vec_val);
+    }
+    catch (const std::bad_any_cast &)
+    {
+        throw ANNException("Error: bad any cast while performing _get_vector_by_tags()", -1);
+    }
+    catch (const std::exception &e)
+    {
+        throw ANNException("Error: " + std::string(e.what()), -1);
+    }
 }
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::get_vector_by_tag(TagT &tag, T *vec)
@@ -1590,10 +1601,21 @@ void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::set_start_points_at_random(DataType radius, uint32_t random_seed)
+void Index<T, TagT, LabelT>::_set_start_points_at_random(DataType radius, uint32_t random_seed)
 {
-    T radius_to_use = std::any_cast<T>(radius);
-    this->set_start_points_at_random(radius_to_use, random_seed);
+    try
+    {
+        T radius_to_use = std::any_cast<T>(radius);
+        this->set_start_points_at_random(radius_to_use, random_seed);
+    }
+    catch (const std::bad_any_cast &)
+    {
+        throw ANNException("Error: bad any cast while performing _set_start_points_at_random()", -1);
+    }
+    catch (const std::exception &e)
+    {
+        throw ANNException("Error: " + std::string(e.what()), -1);
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1681,10 +1703,21 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
     _has_built = true;
 }
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const DataType &data, const size_t num_points_to_load,
-                                   const IndexWriteParameters &parameters, const TagVector &tags)
+void Index<T, TagT, LabelT>::_build(const DataType &data, const size_t num_points_to_load,
+                                    const IndexWriteParameters &parameters, const TagVector &tags)
 {
-    this->build(std::any_cast<T *>(data), num_points_to_load, parameters, tags.get<TagT>());
+    try
+    {
+        this->build(std::any_cast<const T *>(data), num_points_to_load, parameters, tags.get<TagT>());
+    }
+    catch (const std::bad_any_cast &)
+    {
+        throw ANNException("Error: bad any cast in while building index.", -1);
+    }
+    catch (const std::exception &e)
+    {
+        throw ANNException("Error" + std::string(e.what()), -1);
+    }
 }
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load,
@@ -2065,20 +2098,31 @@ template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search(const DataType &query, const size_t K, const uint32_t L,
                                                               std::any &indices, float *distances)
 {
-    auto actual_query = std::any_cast<T *>(query);
-    if (typeid(uint32_t *) == indices.type())
+    try
     {
-        auto u32_ptr = std::any_cast<uint32_t *>(indices);
-        return this->search(actual_query, K, L, u32_ptr, distances);
+        auto actual_query = std::any_cast<const T *>(query);
+        if (typeid(uint32_t *) == indices.type())
+        {
+            auto u32_ptr = std::any_cast<uint32_t *>(indices);
+            return this->search(actual_query, K, L, u32_ptr, distances);
+        }
+        else if (typeid(uint64_t *) == indices.type())
+        {
+            auto u64_ptr = std::any_cast<uint64_t *>(indices);
+            return this->search(actual_query, K, L, u64_ptr, distances);
+        }
+        else
+        {
+            throw ANNException("Error: indices type can only be uint64_t or uint32_t.", -1);
+        }
     }
-    else if (typeid(uint64_t *) == indices.type())
+    catch (const std::bad_any_cast &)
     {
-        auto u64_ptr = std::any_cast<uint64_t *>(indices);
-        return this->search(actual_query, K, L, u64_ptr, distances);
+        throw ANNException("Error: bad any cast while searching.", -1);
     }
-    else
+    catch (const std::exception &e)
     {
-        throw ANNException("Error: indices type can only be uint64_t or uint32_t.", -1);
+        throw ANNException("Error: " + std::string(e.what()), -1);
     }
 }
 
@@ -2248,12 +2292,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 }
 
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::search_with_tags(const DataType &query, const uint64_t K, const uint32_t L,
-                                                const TagType &tags, float *distances, DataVector &res_vectors)
+size_t Index<T, TagT, LabelT>::_search_with_tags(const DataType &query, const uint64_t K, const uint32_t L,
+                                                 const TagType &tags, float *distances, DataVector &res_vectors)
 {
-
-    return this->search_with_tags(std::any_cast<T *>(query), K, L, std::any_cast<TagT *>(tags), distances,
-                                  res_vectors.get<T *>());
+    try
+    {
+        return this->search_with_tags(std::any_cast<const T *>(query), K, L, std::any_cast<TagT *>(tags), distances,
+                                      res_vectors.get<T *>());
+    }
+    catch (const std::bad_any_cast &)
+    {
+        throw ANNException("Error: bad any cast while performing _search_with_tags()", -1);
+    }
+    catch (const std::exception &e)
+    {
+        throw ANNException("Error: " + std::string(e.what()), -1);
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2852,11 +2906,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 }
 
 template <typename T, typename TagT, typename LabelT>
-int Index<T, TagT, LabelT>::insert_point(const DataType &point, const TagType &tag)
+int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType tag)
 {
     try
     {
-        return this->insert_point(std::any_cast<T *>(point), std::any_cast<TagT>(tag));
+        return this->insert_point(std::any_cast<const T *>(point), std::any_cast<const TagT>(tag));
     }
     catch (const std::bad_any_cast &anycast_e)
     {
@@ -2981,11 +3035,11 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
     return 0;
 }
 
-template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagType &tag)
+template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::_lazy_delete(const TagType &tag)
 {
     try
     {
-        return lazy_delete(std::any_cast<TagT>(tag));
+        return lazy_delete(std::any_cast<const TagT>(tag));
     }
     catch (const std::bad_any_cast &e)
     {
@@ -2994,9 +3048,20 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::lazy_delete(const TagVector &tags, TagVector &failed_tags)
+void Index<T, TagT, LabelT>::_lazy_delete(const TagVector &tags, TagVector &failed_tags)
 {
-    this->lazy_delete(tags.get<TagT>(), failed_tags.get<TagT>());
+    try
+    {
+        this->lazy_delete(tags.get<TagT>(), failed_tags.get<TagT>());
+    }
+    catch (const std::bad_any_cast &)
+    {
+        throw ANNException("Error: bad any cast while performing _lazy_delete", -1);
+    }
+    catch (const std::exception &e)
+    {
+        throw ANNException("Error: " + std::string(e.what()), -1);
+    }
 }
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagT &tag)
@@ -3055,9 +3120,20 @@ template <typename T, typename TagT, typename LabelT> bool Index<T, TagT, LabelT
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::get_active_tags(TagRobinSet &active_tags)
+void Index<T, TagT, LabelT>::_get_active_tags(TagRobinSet &active_tags)
 {
-    this->get_active_tags(active_tags.get<TagT>());
+    try
+    {
+        this->get_active_tags(active_tags.get<TagT>());
+    }
+    catch (const std::bad_any_cast &)
+    {
+        throw ANNException("Error: bad_any cast while performing _get_active_tags()", -1);
+    }
+    catch (const std::exception &e)
+    {
+        throw ANNException("Error :" + std::string(e.what()), -1);
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -3182,9 +3258,20 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 //}
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices)
+void Index<T, TagT, LabelT>::_search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices)
 {
-    return this->search_with_optimized_layout(std::any_cast<T *>(query), K, L, indices);
+    try
+    {
+        return this->search_with_optimized_layout(std::any_cast<const T *>(query), K, L, indices);
+    }
+    catch (const std::bad_any_cast &)
+    {
+        throw ANNException("Error: bad any cast while performing _search_with_optimized_layout()", -1);
+    }
+    catch (const std::exception &e)
+    {
+        throw ANNException("Error: " + std::string(e.what()), -1);
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>

@@ -139,7 +139,6 @@ int search_memory_index(diskann::AbstractIndex &index, diskann::Metric &metric, 
         query_result_ids[test_id].resize(recall_at * query_num);
         query_result_dists[test_id].resize(recall_at * query_num);
         std::vector<T *> res = std::vector<T *>();
-        auto anyres = diskann::DataVector(res);
 
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(1);
@@ -164,7 +163,7 @@ int search_memory_index(diskann::AbstractIndex &index, diskann::Metric &metric, 
             else if (tags)
             {
                 index.search_with_tags(query + i * query_aligned_dim, recall_at, L,
-                                       query_result_tags.data() + i * recall_at, nullptr, anyres);
+                                       query_result_tags.data() + i * recall_at, nullptr, res);
                 for (int64_t r = 0; r < (int64_t)recall_at; r++)
                 {
                     query_result_ids[test_id][recall_at * i + r] = query_result_tags[recall_at * i + r];
