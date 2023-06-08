@@ -63,22 +63,14 @@ class AbstractIndex
     // Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
     template <typename IDType>
-    std::pair<uint32_t, uint32_t> search(const DataType &query, const size_t K, const uint32_t L, IDType *indices,
-                                         float *distances = nullptr)
-    {
-        auto indices_any = std::any(indices);
-        return _search(query, K, L, indices_any, distances);
-    }
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const DataType &query, const size_t K, const uint32_t L,
+                                                           IDType *indices, float *distances = nullptr);
 
     // Filter support search
     template <typename IndexType>
     std::pair<uint32_t, uint32_t> search_with_filters(const DataType &query, const std::string &raw_label,
                                                       const size_t K, const uint32_t L, IndexType *indices,
-                                                      float *distances)
-    {
-        auto indices_any = std::any(indices);
-        return _search_with_filters(query, raw_label, K, L, indices_any, distances);
-    }
+                                                      float *distances);
 
     virtual int insert_point(const DataType &data_point, const TagType &tag) = 0;
 
