@@ -304,7 +304,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         }
         else
         {
-            std::cout << "Warning: Deleting points is not yet supported for labeled data";
+            std::cout << "Warning: Deleting points is not yet supported for labeled data\n";
         }
     }
     if (delete_tasks.size() > 0)
