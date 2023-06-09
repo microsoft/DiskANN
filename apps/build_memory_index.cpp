@@ -191,6 +191,7 @@ int main(int argc, char **argv)
         auto index = index_factory.instance();
         index->build(data_path, data_num, build_params);
         index->save(index_path_prefix.c_str());
+        index.reset();
         return 0;
     }
     catch (const std::exception &e)

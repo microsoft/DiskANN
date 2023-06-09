@@ -382,6 +382,7 @@ int main(int argc, char **argv)
                                                          num_start_pts, index_path_prefix);
         else
             std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+        index.reset();
     }
     catch (const std::exception &e)
     {

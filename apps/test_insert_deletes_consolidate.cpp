@@ -430,6 +430,8 @@ int main(int argc, char **argv)
                                                  points_to_delete_from_beginning, start_deletes_after, concurrent);
         else
             std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+
+        index.reset();
     }
     catch (const std::exception &e)
     {
