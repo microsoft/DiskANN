@@ -2714,21 +2714,6 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 template <typename T, typename TagT, typename LabelT>
 int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const std::vector<LabelT> &labels)
 {
-    if (_filtered_index)
-    {
-        // TODO: Make this thread safe
-        size_t point_id = _pts_to_labels.size();
-        _pts_to_labels.emplace_back(labels);
-
-        for (LabelT label : labels)
-        {
-            if (_labels.find(label) == _labels.end())
-            {
-                _labels.insert(label);
-                _label_to_medoid_id[label] = (uint32_t)point_id;
-            }
-        }
-    }
 
     assert(_has_built);
     if (tag == static_cast<TagT>(0))
@@ -2742,6 +2727,21 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+
+    if (_filtered_index)
+    {
+        size_t point_id = _pts_to_labels.size();
+        _pts_to_labels.emplace_back(labels);
+
+        for (LabelT label : labels)
+        {
+            if (_labels.find(label) == _labels.end())
+            {
+                _labels.insert(label);
+                _label_to_medoid_id[label] = (uint32_t)point_id;
+            }
+        }
+    }
 
     // Find a vacant location in the data array to insert the new point
     auto location = reserve_location();
