@@ -20,6 +20,7 @@
 #include "index.h"
 #include "memory_mapper.h"
 #include "utils.h"
+#include "program_options_utils.hpp"
 
 namespace po = boost::program_options;
 
@@ -258,19 +259,27 @@ int main(int argc, char **argv)
     bool print_all_recalls, dynamic, tags, show_qps_per_thread;
     float fail_if_recall_below = 0.0f;
 
-    po::options_description desc{"Arguments"};
+    po::options_description desc{
+        program_options_utils::make_program_description("search_memory_index", "Searches in-memory DiskANN indexes")};
     try
     {
-        desc.add_options()("help,h", "Print information on arguments");
-        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
-        desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
-                           "distance function <l2/mips/fast_l2/cosine>");
+        desc.add_options()("help,h", "Print this information on arguments");
+        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                           program_options_utils::make_required_param("data type <int8/uint8/float>").c_str());
+        desc.add_options()(
+            "dist_fn", po::value<std::string>(&dist_fn)->required(),
+            program_options_utils::make_required_param("distance function <l2/mips/fast_l2/cosine>").c_str());
         desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
-                           "Path prefix to the index");
-        desc.add_options()("result_path", po::value<std::string>(&result_path)->required(),
-                           "Path prefix for saving results of the queries");
+                           program_options_utils::make_required_param("Path prefix to the index").c_str());
+        desc.add_options()(
+            "result_path", po::value<std::string>(&result_path)->required(),
+            program_options_utils::make_required_param("Path prefix for saving results of the queries").c_str());
         desc.add_options()("query_file", po::value<std::string>(&query_file)->required(),
-                           "Query file in binary format");
+                           program_options_utils::make_required_param("Query file in binary format").c_str());
+        desc.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(),
+                           program_options_utils::make_required_param("Number of neighbors to be returned").c_str());
+        desc.add_options()("search_list,L", po::value<std::vector<uint32_t>>(&Lvec)->multitoken()->required(),
+                           program_options_utils::make_required_param("List of L values of search").c_str());
         desc.add_options()("filter_label", po::value<std::string>(&filter_label)->default_value(std::string("")),
                            "Filter Label for Filtered Search");
         desc.add_options()("query_filters_file",
@@ -281,12 +290,9 @@ int main(int argc, char **argv)
                            "will consume memory 4 bytes per filter");
         desc.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
                            "ground truth file for the queryset");
-        desc.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(), "Number of neighbors to be returned");
         desc.add_options()("print_all_recalls", po::bool_switch(&print_all_recalls),
                            "Print recalls at all positions, from 1 up to specified "
                            "recall_at value");
-        desc.add_options()("search_list,L", po::value<std::vector<uint32_t>>(&Lvec)->multitoken(),
-                           "List of L values of search");
         desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                            "Number of threads used for building index (defaults to "
                            "omp_get_num_procs())");
