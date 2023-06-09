@@ -14,9 +14,9 @@ class IndexFactory
     void check_config();
 
     template <typename T>
-    std::unique_ptr<AbstractDataStore<T>> construct_datastore(LoadStoreStrategy stratagy, size_t num_points,
+    std::unique_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy, size_t num_points,
                                                               size_t dimension);
-    std::unique_ptr<AbstractGraphStore> construct_graphstore(LoadStoreStrategy stratagy, size_t size);
+    std::unique_ptr<AbstractGraphStore> construct_graphstore(GraphStoreStrategy stratagy, size_t size);
 
     IndexConfig &_config;
 };

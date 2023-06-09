@@ -3,16 +3,18 @@
 
 namespace diskann
 {
-enum LoadStoreStrategy
+enum DataStoreStrategy
 {
-    DISK,
     MEMORY
+};
+
+enum GraphStoreStrategy
+{
 };
 struct IndexConfig
 {
-    LoadStoreStrategy data_strategy;
-    LoadStoreStrategy graph_strategy;
-    LoadStoreStrategy filtered_data_strategy;
+    DataStoreStrategy data_strategy;
+    GraphStoreStrategy graph_strategy;
 
     Metric metric;
     size_t dimension;
@@ -34,16 +36,15 @@ struct IndexConfig
     IndexWriteParameters *index_write_params = nullptr;
 
   private:
-    IndexConfig(LoadStoreStrategy data_strategy, LoadStoreStrategy graph_strategy,
-                LoadStoreStrategy filtered_data_strategy, Metric metric, size_t dimension, size_t max_points,
-                size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
+    IndexConfig(DataStoreStrategy data_strategy, GraphStoreStrategy graph_strategy, Metric metric, size_t dimension,
+                size_t max_points, size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
                 bool pq_dist_build, bool concurrent_consolidate, bool use_opq, std::string data_type,
                 std::string tag_type, std::string label_type, IndexWriteParameters &index_write_params)
-        : data_strategy(data_strategy), graph_strategy(graph_strategy), filtered_data_strategy(filtered_data_strategy),
-          metric(metric), dimension(dimension), max_points(max_points), dynamic_index(dynamic_index),
-          enable_tags(enable_tags), pq_dist_build(pq_dist_build), concurrent_consolidate(concurrent_consolidate),
-          use_opq(use_opq), num_pq_chunks(num_pq_chunks), num_frozen_pts(num_frozen_points), label_type(label_type),
-          tag_type(tag_type), data_type(data_type), index_write_params(&index_write_params)
+        : data_strategy(data_strategy), graph_strategy(graph_strategy), metric(metric), dimension(dimension),
+          max_points(max_points), dynamic_index(dynamic_index), enable_tags(enable_tags), pq_dist_build(pq_dist_build),
+          concurrent_consolidate(concurrent_consolidate), use_opq(use_opq), num_pq_chunks(num_pq_chunks),
+          num_frozen_pts(num_frozen_points), label_type(label_type), tag_type(tag_type), data_type(data_type),
+          index_write_params(&index_write_params)
     {
     }
 
@@ -63,21 +64,15 @@ class IndexConfigBuilder
         return *this;
     }
 
-    IndexConfigBuilder &with_graph_load_store_strategy(LoadStoreStrategy graph_strategy)
+    IndexConfigBuilder &with_graph_load_store_strategy(GraphStoreStrategy graph_strategy)
     {
         this->_graph_strategy = graph_strategy;
         return *this;
     }
 
-    IndexConfigBuilder &with_data_load_store_strategy(LoadStoreStrategy data_strategy)
+    IndexConfigBuilder &with_data_load_store_strategy(DataStoreStrategy data_strategy)
     {
         this->_data_strategy = data_strategy;
-        return *this;
-    }
-
-    IndexConfigBuilder &with_filtered_data_load_store_strategy(LoadStoreStrategy filtered_data_strategy)
-    {
-        this->_filtered_data_strategy = filtered_data_strategy;
         return *this;
     }
 
@@ -161,18 +156,17 @@ class IndexConfigBuilder
 
     IndexConfig build()
     {
-        return IndexConfig(_data_strategy, _graph_strategy, _filtered_data_strategy, _metric, _dimension, _max_points,
-                           _num_pq_chunks, _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build,
-                           _concurrent_consolidate, _use_opq, _data_type, _tag_type, _label_type, *_index_write_params);
+        return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
+                           _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build, _concurrent_consolidate,
+                           _use_opq, _data_type, _tag_type, _label_type, *_index_write_params);
     }
 
     IndexConfigBuilder(const IndexConfigBuilder &) = delete;
     IndexConfigBuilder &operator=(const IndexConfigBuilder &) = delete;
 
   private:
-    LoadStoreStrategy _data_strategy;
-    LoadStoreStrategy _graph_strategy;
-    LoadStoreStrategy _filtered_data_strategy;
+    DataStoreStrategy _data_strategy;
+    GraphStoreStrategy _graph_strategy;
 
     Metric _metric;
     size_t _dimension;

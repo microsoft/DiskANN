@@ -346,9 +346,8 @@ int main(int argc, char **argv)
 
     try
     {
-        diskann::DataType query;
-        size_t query_num, query_dim, query_aligned_dim;
-        diskann::load_aligned_bin(query_file, query, query_num, query_dim, query_aligned_dim, data_type);
+        size_t query_num, query_dim;
+        diskann::get_bin_metadata(query_file, query_num, query_dim);
 
         const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path_prefix);
 
@@ -357,7 +356,6 @@ int main(int argc, char **argv)
                           .with_dimension(query_dim)
                           .with_max_points(0)
                           .with_data_load_store_strategy(diskann::MEMORY)
-                          .with_graph_load_store_strategy(diskann::MEMORY)
                           .with_data_type(data_type)
                           .with_label_type(label_type)
                           .is_dynamic_index(dynamic)

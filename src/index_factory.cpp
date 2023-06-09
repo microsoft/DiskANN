@@ -15,7 +15,7 @@ std::unique_ptr<AbstractIndex> IndexFactory::instance()
     if (_config.data_type == "float")
     {
         auto data_store = construct_datastore<float>(_config.data_strategy, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
+        // auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
 
         if (_config.label_type == "ushort")
         {
@@ -29,7 +29,7 @@ std::unique_ptr<AbstractIndex> IndexFactory::instance()
     else if (_config.data_type == "uint8")
     {
         auto data_store = construct_datastore<uint8_t>(_config.data_strategy, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
+        // auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
         if (_config.label_type == "ushort")
         {
             return std::make_unique<diskann::Index<uint8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
@@ -42,7 +42,7 @@ std::unique_ptr<AbstractIndex> IndexFactory::instance()
     else if (_config.data_type == "int8")
     {
         auto data_store = construct_datastore<int8_t>(_config.data_strategy, num_points, dim);
-        auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
+        // auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
         if (_config.label_type == "ushort")
         {
             return std::make_unique<diskann::Index<int8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
@@ -88,7 +88,7 @@ void IndexFactory::check_config()
 }
 
 template <typename T>
-std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(LoadStoreStrategy strategy, size_t num_points,
+std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStoreStrategy strategy, size_t num_points,
                                                                         size_t dimension)
 {
     const size_t total_internal_points = num_points + _config.num_frozen_pts;
@@ -107,25 +107,14 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(LoadStor
             return std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, dimension, distance);
         }
         break;
-    case DISK:
-        break;
     default:
         break;
     }
     return nullptr;
 }
 
-std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(LoadStoreStrategy strategy, size_t size)
+std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStoreStrategy, size_t size)
 {
-    switch (strategy)
-    {
-    case MEMORY:
-        break;
-    case DISK:
-        break;
-    default:
-        break;
-    }
     return std::make_unique<InMemGraphStore>(size);
 }
 

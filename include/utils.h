@@ -801,59 +801,6 @@ inline void load_aligned_bin(const std::string &bin_file, T *&data, size_t &npts
     }
 }
 
-inline void load_aligned_bin(const std::string &bin_file, std::any &data, size_t &npts, size_t &dim,
-                             size_t &rounded_dim, const std::string &data_type)
-{
-    try
-    {
-        if (data_type == std::string("float"))
-        {
-            if (!data.has_value())
-            {
-                float *var = nullptr;
-                data = var;
-            }
-            if (auto *ptr = std::any_cast<float *>(&data))
-            {
-                load_aligned_bin<float>(bin_file, *ptr, npts, dim, rounded_dim);
-            }
-        }
-        else if (data_type == std::string("uint8"))
-        {
-            if (!data.has_value())
-            {
-                uint8_t *var = nullptr;
-                data = var;
-            }
-            if (auto *ptr = std::any_cast<uint8_t *>(&data))
-            {
-                load_aligned_bin<uint8_t>(bin_file, *ptr, npts, dim, rounded_dim);
-            }
-        }
-        else if (data_type == std::string("int8"))
-        {
-            if (!data.has_value())
-            {
-                int8_t *var = nullptr;
-                data = var;
-            }
-            if (auto *ptr = std::any_cast<int8_t *>(&data))
-            {
-                load_aligned_bin<int8_t>(bin_file, *ptr, npts, dim, rounded_dim);
-            }
-        }
-        else
-        {
-            throw new ANNException(
-                "Error: Invalid data_type " + data_type + ". Valid data types are <float/int8/uint8>", -1);
-        }
-    }
-    catch (const std::bad_any_cast &e)
-    {
-        throw e;
-    }
-}
-
 template <typename InType, typename OutType>
 void convert_types(const InType *srcmat, OutType *destmat, size_t npts, size_t dim)
 {

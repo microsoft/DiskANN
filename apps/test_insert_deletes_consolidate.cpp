@@ -405,7 +405,6 @@ int main(int argc, char **argv)
                                                 .with_data_type(data_type)
                                                 .with_tag_type("uint32")
                                                 .with_data_load_store_strategy(diskann::MEMORY)
-                                                .with_graph_load_store_strategy(diskann::MEMORY)
                                                 .is_enable_tags(enable_tags)
                                                 .is_concurrent_consolidate(concurrent)
                                                 .build();
