@@ -1189,6 +1189,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     uint32_t a = iter->id;
                     uint32_t b = iter2->id;
+                    if (_pts_to_labels.size() < b || _pts_to_labels.size() < a)
+                        continue;
                     for (auto &x : _pts_to_labels[b])
                     {
                         if (std::find(_pts_to_labels[a].begin(), _pts_to_labels[a].end(), x) == _pts_to_labels[a].end())
