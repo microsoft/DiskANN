@@ -1919,28 +1919,25 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
 
-    for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++)
+    for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
     {
-        auto itr = _labels.begin();
-        std::advance(itr, lbl);
-        auto &x = *itr;
-
-        std::vector<uint32_t> labeled_points;
-        for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
+        for (auto label : _pts_to_labels[point_id])
         {
-            bool pt_has_lbl = std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(), x) !=
-                              _pts_to_labels[point_id].end();
-
-            bool pt_has_univ_lbl =
-                (_use_universal_label && (std::find(_pts_to_labels[point_id].begin(), _pts_to_labels[point_id].end(),
-                                                    _universal_label) != _pts_to_labels[point_id].end()));
-
-            if (pt_has_lbl || pt_has_univ_lbl)
+            if (label != _universal_label)
             {
-                labeled_points.emplace_back(point_id);
+                label_to_points[label].emplace_back(point_id);
+            }
+            else
+            {
+                for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++)
+                {
+                    auto itr = _labels.begin();
+                    std::advance(itr, lbl);
+                    auto &x = *itr;
+                    label_to_points[x].emplace_back(point_id);
+                }
             }
         }
-        label_to_points[x] = labeled_points;
     }
 
     uint32_t num_cands = 25;
