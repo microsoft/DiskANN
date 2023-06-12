@@ -1919,19 +1919,22 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
 
-    for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++){
-        for (auto label : _pts_to_labels[point_id]){
-            if (label != _universal_label){
-                label_to_points[label].emplace_back(point_id);
-            }
-            else{
-                for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++){
-                    auto itr = _labels.begin();
-                    std::advance(itr, lbl);
-                    auto &x = *itr;
-                    label_to_points[x].emplace_back(point_id);
-                }
-            }
+    for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
+    {
+        for (auto label : _pts_to_labels[point_id])
+        {
+            label_to_points[label].emplace_back(point_id);
+            // if (label != _universal_label){
+            //     label_to_points[label].emplace_back(point_id);
+            // }
+            // else{
+            //     for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++){
+            //         auto itr = _labels.begin();
+            //         std::advance(itr, lbl);
+            //         auto &x = *itr;
+            //         label_to_points[x].emplace_back(point_id);
+            //     }
+            // }
         }
     }
 
@@ -1958,8 +1961,6 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
     //     }
     //     label_to_points[x] = labeled_points;
     // }
-
-
 
     uint32_t num_cands = 25;
     for (auto itr = _labels.begin(); itr != _labels.end(); itr++)
