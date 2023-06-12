@@ -1923,11 +1923,14 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
     {
         for (auto label : _pts_to_labels[point_id])
         {
-            if (label != _universal_label){
+            if (label != _universal_label)
+            {
                 label_to_points[label].emplace_back(point_id);
             }
-            else{
-                for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++){
+            else
+            {
+                for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++)
+                {
                     auto itr = _labels.begin();
                     std::advance(itr, lbl);
                     auto &x = *itr;
