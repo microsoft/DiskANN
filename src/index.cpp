@@ -132,11 +132,64 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
 
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store)
-    : Index(index_config.metric, data_store->get_dims(), data_store->capacity(), index_config.dynamic_index,
-            index_config.enable_tags, index_config.concurrent_consolidate, index_config.pq_dist_build,
-            index_config.num_pq_chunks, index_config.use_opq, index_config.num_frozen_pts)
+    : _dist_metric(index_config.metric), _dim(index_config.dimension), _max_points(index_config.max_points),
+      _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
+      _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
+      _pq_dist(index_config.pq_dist_build), _use_opq(index_config.use_opq), _num_pq_chunks(index_config.num_pq_chunks),
+      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
 {
-    //_data_store.reset(std::move(data_store));
+    if (_dynamic_index && !_enable_tags)
+    {
+        throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    if (_pq_dist)
+    {
+        if (_dynamic_index)
+            throw ANNException("ERROR: Dynamic Indexing not supported with PQ distance based "
+                               "index construction",
+                               -1, __FUNCSIG__, __FILE__, __LINE__);
+        if (_dist_metric == diskann::Metric::INNER_PRODUCT)
+            throw ANNException("ERROR: Inner product metrics not yet supported "
+                               "with PQ distance "
+                               "base index",
+                               -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    if (_dynamic_index && _num_frozen_pts == 0)
+    {
+        _num_frozen_pts = 1;
+    }
+    // Sanity check. While logically it is correct, max_points = 0 causes
+    // downstream problems.
+    if (_max_points == 0)
+    {
+        _max_points = 1;
+    }
+    const size_t total_internal_points = _max_points + _num_frozen_pts;
+
+    if (_pq_dist)
+    {
+        if (_num_pq_chunks > _dim)
+            throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
+        alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
+        std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
+    }
+
+    _start = (uint32_t)_max_points;
+    _final_graph.resize(total_internal_points);
+
+    _data_store = std::move(data_store);
+
+    _locks = std::vector<non_recursive_mutex>(total_internal_points);
+
+    if (_enable_tags)
+    {
+        _location_to_tag.reserve(total_internal_points);
+        _tag_to_location.reserve(total_internal_points);
+    }
+
+    // enable delete by default for dynamic index
     if (_dynamic_index)
     {
         this->enable_delete();
@@ -155,7 +208,7 @@ Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::unique_ptr<Abstrac
         uint32_t num_scratch_spaces = search_threads + num_threads_indx;
 
         initialize_query_scratch(num_scratch_spaces, initial_search_list_size, _indexingQueueSize, _indexingRange,
-                                 _indexingMaxC, data_store->get_dims());
+                                 _indexingMaxC, _data_store->get_dims());
     }
 }
 
