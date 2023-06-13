@@ -1247,7 +1247,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     {
         if (_filter_to_medoid_ids.find(filter_label) != _filter_to_medoid_ids.end())
         {
-            const auto& medoid_ids = _filter_to_medoid_ids[filter_label];
+            const auto &medoid_ids = _filter_to_medoid_ids[filter_label];
             for (uint64_t cur_m = 0; cur_m < medoid_ids.size(); cur_m++)
             {
                 // for filtered index, we dont store global centroid data as for unfiltered index, so we use PQ distance
