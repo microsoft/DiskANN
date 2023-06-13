@@ -268,54 +268,44 @@ int main(int argc, char **argv)
         // Required parameters
         po::options_description required_configs("Required");
         required_configs.add_options()("data_type", po::value<std::string>(&data_type)->required(),
-                                       "data type, one of {int8, uint8, float} - float is single precision (32 bit)");
-        required_configs.add_options()(
-            "dist_fn", po::value<std::string>(&dist_fn)->required(),
-            "distance function <l2/mips/fast_l2/cosine>.  'fast l2' and 'mips' only support data_type float");
+                                       program_options_utils::DATA_TYPE_DESCRIPTION);
+        required_configs.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                                       program_options_utils::DISTANCE_FUNCTION_DESCRIPTION);
         required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
-                                       "Path prefix to the index, e.ge '/mnt/data/my_ann_index'");
-        required_configs.add_options()(
-            "result_path", po::value<std::string>(&result_path)->required(),
-            "Path prefix for saving results of the queries, e.g. '/mnt/data/query_file_X.bin'");
+                                       program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
+        required_configs.add_options()("result_path", po::value<std::string>(&result_path)->required(),
+                                       program_options_utils::RESULT_PATH_DESCRIPTION);
         required_configs.add_options()("query_file", po::value<std::string>(&query_file)->required(),
-                                       "Query file in binary format, e.g. '/mnt/data/query_file_X.bin'");
+                                       program_options_utils::QUERY_FILE_DESCRIPTION);
         required_configs.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(),
-                                       "Number of neighbors to be returned");
+                                       program_options_utils::NUMBER_OF_RESULTS_DESCRIPTION);
         required_configs.add_options()("search_list,L",
                                        po::value<std::vector<uint32_t>>(&Lvec)->multitoken()->required(),
-                                       "List of L values of search");
+                                       program_options_utils::SEARCH_LIST_DESCRIPTION);
 
         // Optional parameters
         po::options_description optional_configs("Optional");
         optional_configs.add_options()("filter_label",
                                        po::value<std::string>(&filter_label)->default_value(std::string("")),
-                                       "Filter to use when running a query.  'filter_label' and 'query_filters_file' are mutually exclusive.");
-        optional_configs.add_options()(
-            "query_filters_file", po::value<std::string>(&query_filters_file)->default_value(std::string("")),
-            "Filter file for Queries for Filtered Search.  File format is text with one filter per line.  File must "
-            "have exactly one filter OR the same number of filters as there are queries in the 'query_file'.");
+                                       program_options_utils::FILTER_LABEL_DESCRIPTION);
+        optional_configs.add_options()("query_filters_file",
+                                       po::value<std::string>(&query_filters_file)->default_value(std::string("")),
+                                       program_options_utils::FILTERS_FILE_DESCRIPTION);
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
-                                       "Storage type of Labels <uint/ushort>, default value is uint which "
-                                       "will consume memory 4 bytes per filter");
-        optional_configs.add_options()(
-            "gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
-            "ground truth file for the queryset"); // what's the format, what's the requirements? does it need to
-                                                   // include an entry for every item or just a small subset? I have so
-                                                   // many questions about this file
+                                       program_options_utils::LABEL_TYPE_DESCRIPTION);
+        optional_configs.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
+                                       program_options_utils::GROUND_TRUTH_FILE_DESCRIPTION);
         optional_configs.add_options()("num_threads,T",
                                        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
-                                       "Number of threads used for building index.  Defaults to number of logical "
-                                       "processor cores on your this machine returned by omp_get_num_procs()");
+                                       program_options_utils::NUMBER_THREADS_DESCRIPTION);
         optional_configs.add_options()(
             "dynamic", po::value<bool>(&dynamic)->default_value(false),
             "Whether the index is dynamic. Dynamic indices must have associated tags.  Default false.");
         optional_configs.add_options()("tags", po::value<bool>(&tags)->default_value(false),
                                        "Whether to search with external identifiers (tags). Default false.");
-        optional_configs.add_options()(
-            "fail_if_recall_below", po::value<float>(&fail_if_recall_below)->default_value(0.0f),
-            "If set to a value >0 and <100%, program returns -1 if best recall "
-            "found is below this threshold. "); // does it continue running or die immediately?  Will I still get my
-                                                // results even if the return code is -1?
+        optional_configs.add_options()("fail_if_recall_below",
+                                       po::value<float>(&fail_if_recall_below)->default_value(0.0f),
+                                       program_options_utils::FAIl_IF_RECALL_BELOW);
 
         // Output controls
         po::options_description output_controls("Output controls");
