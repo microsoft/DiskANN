@@ -20,7 +20,7 @@
 #include "index.h"
 #include "memory_mapper.h"
 #include "utils.h"
-#include "program_options_utils.hpp"
+#include "../src/program_options_utils.hpp"
 
 namespace po = boost::program_options;
 
@@ -264,48 +264,70 @@ int main(int argc, char **argv)
     try
     {
         desc.add_options()("help,h", "Print this information on arguments");
-        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(),
-                           program_options_utils::make_required_param("data type <int8/uint8/float>").c_str());
-        desc.add_options()(
+
+        // Required parameters
+        po::options_description required_configs("Required");
+        required_configs.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                                       "data type, one of {int8, uint8, float} - float is single precision (32 bit)");
+        required_configs.add_options()(
             "dist_fn", po::value<std::string>(&dist_fn)->required(),
-            program_options_utils::make_required_param("distance function <l2/mips/fast_l2/cosine>").c_str());
-        desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
-                           program_options_utils::make_required_param("Path prefix to the index").c_str());
-        desc.add_options()(
+            "distance function <l2/mips/fast_l2/cosine>.  'fast l2' and 'mips' only support data_type float");
+        required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
+                                       "Path prefix to the index, e.ge '/mnt/data/my_ann_index'");
+        required_configs.add_options()(
             "result_path", po::value<std::string>(&result_path)->required(),
-            program_options_utils::make_required_param("Path prefix for saving results of the queries").c_str());
-        desc.add_options()("query_file", po::value<std::string>(&query_file)->required(),
-                           program_options_utils::make_required_param("Query file in binary format").c_str());
-        desc.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(),
-                           program_options_utils::make_required_param("Number of neighbors to be returned").c_str());
-        desc.add_options()("search_list,L", po::value<std::vector<uint32_t>>(&Lvec)->multitoken()->required(),
-                           program_options_utils::make_required_param("List of L values of search").c_str());
-        desc.add_options()("filter_label", po::value<std::string>(&filter_label)->default_value(std::string("")),
-                           "Filter Label for Filtered Search");
-        desc.add_options()("query_filters_file",
-                           po::value<std::string>(&query_filters_file)->default_value(std::string("")),
-                           "Filter file for Queries for Filtered Search ");
-        desc.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
-                           "Storage type of Labels <uint/ushort>, default value is uint which "
-                           "will consume memory 4 bytes per filter");
-        desc.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
-                           "ground truth file for the queryset");
-        desc.add_options()("print_all_recalls", po::bool_switch(&print_all_recalls),
-                           "Print recalls at all positions, from 1 up to specified "
-                           "recall_at value");
-        desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
-                           "Number of threads used for building index (defaults to "
-                           "omp_get_num_procs())");
-        desc.add_options()("dynamic", po::value<bool>(&dynamic)->default_value(false),
-                           "Whether the index is dynamic. Default false.");
-        desc.add_options()("tags", po::value<bool>(&tags)->default_value(false),
-                           "Whether to search with tags. Default false.");
-        desc.add_options()("qps_per_thread", po::bool_switch(&show_qps_per_thread),
-                           "Print overall QPS divided by the number of threads in "
-                           "the output table");
-        desc.add_options()("fail_if_recall_below", po::value<float>(&fail_if_recall_below)->default_value(0.0f),
-                           "If set to a value >0 and <100%, program returns -1 if best recall "
-                           "found is below this threshold. ");
+            "Path prefix for saving results of the queries, e.g. '/mnt/data/query_file_X.bin'");
+        required_configs.add_options()("query_file", po::value<std::string>(&query_file)->required(),
+                                       "Query file in binary format, e.g. '/mnt/data/query_file_X.bin'");
+        required_configs.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(),
+                                       "Number of neighbors to be returned");
+        required_configs.add_options()("search_list,L",
+                                       po::value<std::vector<uint32_t>>(&Lvec)->multitoken()->required(),
+                                       "List of L values of search");
+
+        // Optional parameters
+        po::options_description optional_configs("Optional");
+        optional_configs.add_options()("filter_label",
+                                       po::value<std::string>(&filter_label)->default_value(std::string("")),
+                                       "Filter to use when running a query.  'filter_label' and 'query_filters_file' are mutually exclusive.");
+        optional_configs.add_options()(
+            "query_filters_file", po::value<std::string>(&query_filters_file)->default_value(std::string("")),
+            "Filter file for Queries for Filtered Search.  File format is text with one filter per line.  File must "
+            "have exactly one filter OR the same number of filters as there are queries in the 'query_file'.");
+        optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
+                                       "Storage type of Labels <uint/ushort>, default value is uint which "
+                                       "will consume memory 4 bytes per filter");
+        optional_configs.add_options()(
+            "gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
+            "ground truth file for the queryset"); // what's the format, what's the requirements? does it need to
+                                                   // include an entry for every item or just a small subset? I have so
+                                                   // many questions about this file
+        optional_configs.add_options()("num_threads,T",
+                                       po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
+                                       "Number of threads used for building index.  Defaults to number of logical "
+                                       "processor cores on your this machine returned by omp_get_num_procs()");
+        optional_configs.add_options()(
+            "dynamic", po::value<bool>(&dynamic)->default_value(false),
+            "Whether the index is dynamic. Dynamic indices must have associated tags.  Default false.");
+        optional_configs.add_options()("tags", po::value<bool>(&tags)->default_value(false),
+                                       "Whether to search with external identifiers (tags). Default false.");
+        optional_configs.add_options()(
+            "fail_if_recall_below", po::value<float>(&fail_if_recall_below)->default_value(0.0f),
+            "If set to a value >0 and <100%, program returns -1 if best recall "
+            "found is below this threshold. "); // does it continue running or die immediately?  Will I still get my
+                                                // results even if the return code is -1?
+
+        // Output controls
+        po::options_description output_controls("Output controls");
+        output_controls.add_options()("print_all_recalls", po::bool_switch(&print_all_recalls),
+                                      "Print recalls at all positions, from 1 up to specified "
+                                      "recall_at value");
+        output_controls.add_options()("print_qps_per_thread", po::bool_switch(&show_qps_per_thread),
+                                      "Print overall QPS divided by the number of threads in "
+                                      "the output table");
+
+        // Merge required and optional parameters
+        desc.add(required_configs).add(optional_configs).add(output_controls);
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
