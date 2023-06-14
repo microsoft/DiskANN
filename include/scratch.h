@@ -11,9 +11,9 @@
 #include "tsl/robin_map.h"
 #include "tsl/sparse_map.h"
 
+#include "abstract_scratch.h"
 #include "neighbor.h"
 #include "concurrent_queue.h"
-#include "pq.h"
 #include "aligned_file_reader.h"
 
 // In-mem index related limits
@@ -26,11 +26,13 @@
 
 namespace diskann
 {
+template <typename T>
+struct PQScratch;
 
 //
-// Scratch space for in-memory index based search
+// AbstractScratch space for in-memory index based search
 //
-template <typename T> class InMemQueryScratch
+template <typename T> class InMemQueryScratch : public AbstractScratch
 {
   public:
     ~InMemQueryScratch();
@@ -146,10 +148,10 @@ template <typename T> class InMemQueryScratch
 };
 
 //
-// Scratch space for SSD index based search
+// AbstractScratch space for SSD index based search
 //
 
-template <typename T> class SSDQueryScratch
+template <typename T> class SSDQueryScratch : public AbstractScratch
 {
   public:
     T *coord_scratch = nullptr; // MUST BE AT LEAST [sizeof(T) * data_dim]
