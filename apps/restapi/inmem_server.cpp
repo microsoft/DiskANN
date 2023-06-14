@@ -107,7 +107,7 @@ int main(int argc, char *argv[])
         std::cerr << "Unsupported data type " << argv[2] << std::endl;
     }
 
-	auto wAddress = utility::conversions::to_string_t(address);
+    auto wAddress = utility::conversions::to_string_t(address);
     while (1)
     {
         try
