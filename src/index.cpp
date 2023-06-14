@@ -18,6 +18,9 @@
 #ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif
+// REFACTOR TODO: Must move to factory.
+#include "pq_scratch.h"
+#include "pq_l2_distance.h"
 #include "index.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
@@ -91,14 +94,6 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     }
     const size_t total_internal_points = _max_points + _num_frozen_pts;
 
-    if (_pq_dist)
-    {
-        if (_num_pq_chunks > _dim)
-            throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
-        alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
-        std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
-    }
-
     _start = (uint32_t)_max_points;
 
     _final_graph.resize(total_internal_points);
@@ -123,6 +118,25 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         // Note: moved this to factory, keeping this for backward compatibility.
         _data_store =
             std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
+    }
+
+    if (_pq_dist)
+    {
+        if (_num_pq_chunks > _dim)
+        {
+            throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        // REFACTOR TODO: This should move to a factory method and support OPQ.
+        _pq_distance_fn = std::make_shared<PQL2Distance<T>>(_num_pq_chunks);
+        // REFACTOR TODO: Unlike Distance and DataStore, where distance object is ready when the data store
+        // is constructed. Here the distance object will not be fully ready until populate_data() is called
+        _pq_data_store = std::make_shared<PQDataStore<T>>(_dim, total_internal_points, _num_pq_chunks, this->_distance,
+                                                          _pq_distance_fn);
+        // REFACTOR
+        // alloc_aligned(
+        //     ((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
+        // std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
     }
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
@@ -866,14 +880,13 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 
 template <typename T, typename TagT, typename LabelT> uint32_t Index<T, TagT, LabelT>::calculate_entry_point()
 {
-    //  TODO: need to compute medoid with PQ data too, for now sample at random
     if (_pq_dist)
     {
-        size_t r = (size_t)rand() * (size_t)RAND_MAX + (size_t)rand();
-        return (uint32_t)(r % (size_t)_nd);
+        // REFACTOR TODO: This function returns a random point. Must change
+        // to actually compute the medoid.
+        return _pq_data_store->calculate_medoid();
     }
-
-    // TODO: This function does not support multi-threaded calculation of medoid.
+    // REFACTOR TODO: This function does not support multi-threaded calculation of medoid.
     // Must revisit if perf is a concern.
     return _data_store->calculate_medoid();
 }
@@ -896,7 +909,8 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
     return init_ids;
 }
 
-// Find common filter between a node's labels and a given set of labels, while taking into account universal label
+// Find common filter between a node's labels and a given set of labels, while
+// taking into account universal label
 template <typename T, typename TagT, typename LabelT>
 bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
@@ -907,8 +921,8 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
                           curr_node_labels.end(), std::back_inserter(common_filters));
     if (common_filters.size() > 0)
     {
-        // This is to reduce the repetitive calls. If common_filters size is > 0 , we dont need to check further for
-        // universal label
+        // This is to reduce the repetitive calls. If common_filters size is > 0 ,
+        // we dont need to check further for universal label
         return true;
     }
     if (_use_universal_label)
@@ -952,31 +966,31 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     T *aligned_query = scratch->aligned_query();
 
-    float *query_float = nullptr;
-    float *query_rotated = nullptr;
     float *pq_dists = nullptr;
-    uint8_t *pq_coord_scratch = nullptr;
+    //  uint8_t *pq_coord_scratch = nullptr;
     // Intialize PQ related scratch to use PQ based distances
     if (_pq_dist)
     {
-        // Get scratch spaces
-        PQScratch<T> *pq_query_scratch = scratch->pq_scratch();
-        query_float = pq_query_scratch->aligned_query_float;
-        query_rotated = pq_query_scratch->rotated_query;
-        pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
+        _pq_data_store->preprocess_query(aligned_query, scratch);
 
-        // Copy query vector to float and then to "rotated" query
-        for (size_t d = 0; d < _dim; d++)
-        {
-            query_float[d] = (float)aligned_query[d];
-        }
-        pq_query_scratch->set(_dim, aligned_query);
+        // REFACTOR: Commented out.
+        //  Get scratch spaces
+        // PQScratch<T> *pq_query_scratch = scratch->pq_scratch();
+        // query_float = pq_query_scratch->aligned_query_float;
+        // query_rotated = pq_query_scratch->rotated_query;
+        // pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
 
-        // center the query and rotate if we have a rotation matrix
-        _pq_table.preprocess_query(query_rotated);
-        _pq_table.populate_chunk_distances(query_rotated, pq_dists);
+        //// Copy query vector to float and then to "rotated" query
+        // for (size_t d = 0; d < _dim; d++) {
+        //   query_float[d] = (float)aligned_query[d];
+        // }
+        // pq_query_scratch->set(_dim, aligned_query);
 
-        pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+        //// center the query and rotate if we have a rotation matrix
+        //_pq_table.preprocess_query(query_rotated);
+        //_pq_table.populate_chunk_distances(query_rotated, pq_dists);
+
+        //    pq_coord_scratch = scratch->pq_scratch()->aligned_pq_coord_scratch;
     }
 
     if (expanded_nodes.size() > 0 || id_scratch.size() > 0)
@@ -1006,10 +1020,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     };
 
     // Lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, pq_coord_scratch, pq_dists](const std::vector<uint32_t> &ids,
-                                                            std::vector<float> &dists_out) {
-        diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks, pq_coord_scratch);
-        diskann::pq_dist_lookup(pq_coord_scratch, ids.size(), this->_num_pq_chunks, pq_dists, dists_out);
+    auto compute_dists = [this, scratch, pq_dists](const std::vector<uint32_t> &ids, std::vector<float> &dists_out) {
+        // REFACTOR
+        _pq_data_store->get_distance(scratch->aligned_query(), ids, dists_out, scratch);
+
+        // diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks,
+        //                           pq_coord_scratch);
+        // diskann::pq_dist_lookup(pq_coord_scratch, ids.size(), this->_num_pq_chunks,
+        //                         pq_dists, dists_out);
     };
 
     // Initialize the candidate pool with starting points
@@ -1042,7 +1060,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             float distance;
             if (_pq_dist)
             {
-                pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists, &distance);
+                // REFACTOR
+                std::vector<uint32_t> ids = {id};
+                std::vector<float> distances = {std::numeric_limits<float>::max()};
+                _pq_data_store->get_distance(aligned_query, ids, distances, scratch);
+                distance = distances[0];
+                // pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists,
+                //                &distance);
             }
             else
             {
@@ -1807,8 +1831,8 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
                << " points, but "
                << "index can support only " << _max_points << " points as specified in constructor." << std::endl;
 
-        if (_pq_dist)
-            aligned_free(_pq_data);
+        // REFACTOR PQDataStore will take care of its memory
+        // if (_pq_dist) aligned_free(_pq_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -1818,8 +1842,8 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         stream << "ERROR: Driver requests loading " << num_points_to_load << " points and file has only "
                << file_num_points << " points." << std::endl;
 
-        if (_pq_dist)
-            aligned_free(_pq_data);
+        // REFACTOR: PQDataStore will take care of its memory
+        // if (_pq_dist) aligned_free(_pq_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -1830,31 +1854,51 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
                << "but file has " << file_dim << " dimension." << std::endl;
         diskann::cerr << stream.str() << std::endl;
 
-        if (_pq_dist)
-            aligned_free(_pq_data);
+        // REFACTOR: PQDataStore will take care of its memory
+        // if (_pq_dist) aligned_free(_pq_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
     if (_pq_dist)
     {
-        double p_val = std::min(1.0, ((double)MAX_PQ_TRAINING_SET_SIZE / (double)file_num_points));
-
-        std::string suffix = _use_opq ? "_opq" : "_pq";
-        suffix += std::to_string(_num_pq_chunks);
-        auto pq_pivots_file = std::string(filename) + suffix + "_pivots.bin";
-        auto pq_compressed_file = std::string(filename) + suffix + "_compressed.bin";
-        generate_quantized_data<T>(std::string(filename), pq_pivots_file, pq_compressed_file, _dist_metric, p_val,
-                                   _num_pq_chunks, _use_opq);
-
-        copy_aligned_data_from_file<uint8_t>(pq_compressed_file.c_str(), _pq_data, file_num_points, _num_pq_chunks,
-                                             _num_pq_chunks);
+        // REFACTOR
 #ifdef EXEC_ENV_OLS
         throw ANNException("load_pq_centroid_bin should not be called when "
                            "EXEC_ENV_OLS is defined.",
                            -1, __FUNCSIG__, __FILE__, __LINE__);
 #else
-        _pq_table.load_pq_centroid_bin(pq_pivots_file.c_str(), _num_pq_chunks);
+        // REFACTOR TODO: Both in the previous code and in the current PQDataStore,
+        // we are writing the PQ files in the same path as the input file. Now we
+        // may not have write permissions to that folder, but we will always have
+        // write permissions to the output folder. So we should write the PQ files
+        // there. The problem is that the Index class gets the output folder prefix
+        // only at the time of save(), by which time we are too late. So leaving it
+        // as-is for now.
+        _pq_data_store->populate_data(filename, 0U);
 #endif
+        //    double p_val = std::min(
+        //        1.0, ((double)MAX_PQ_TRAINING_SET_SIZE / (double)file_num_points));
+        //
+        //    std::string suffix = _use_opq ? "_opq" : "_pq";
+        //    suffix += std::to_string(_num_pq_chunks);
+        //    auto pq_pivots_file = std::string(filename) + suffix + "_pivots.bin";
+        //    auto pq_compressed_file =
+        //        std::string(filename) + suffix + "_compressed.bin";
+        //    generate_quantized_data<T>(std::string(filename), pq_pivots_file,
+        //                               pq_compressed_file, _dist_metric, p_val,
+        //                               _num_pq_chunks, _use_opq);
+        //
+        //    copy_aligned_data_from_file<uint8_t>(pq_compressed_file.c_str(), _pq_data,
+        //                                         file_num_points, _num_pq_chunks,
+        //                                         _num_pq_chunks);
+        //#ifdef EXEC_ENV_OLS
+        //    throw ANNException(
+        //        "load_pq_centroid_bin should not be called when "
+        //        "EXEC_ENV_OLS is defined.",
+        //        -1, __FUNCSIG__, __FILE__, __LINE__);
+        //#else
+        //    _pq_table.load_pq_centroid_bin(pq_pivots_file.c_str(), _num_pq_chunks);
+        //#endif
     }
 
     _data_store->populate_data(filename, 0U);
@@ -2421,8 +2465,10 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         // copy the PQ data corresponding to the point returned by
         // calculate_entry_point
-        memcpy(_pq_data + _max_points * _num_pq_chunks, _pq_data + res * _num_pq_chunks,
-               _num_pq_chunks * DIV_ROUND_UP(NUM_PQ_BITS, 8));
+        // memcpy(_pq_data + _max_points * _num_pq_chunks,
+        //       _pq_data + res * _num_pq_chunks,
+        //       _num_pq_chunks * DIV_ROUND_UP(NUM_PQ_BITS, 8));
+        _pq_data_store->copy_vectors((location_t)res, (location_t)_max_points, 1);
     }
     else
     {

@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 #include <vector>
-
 #include "abstract_data_store.h"
 
 namespace diskann
@@ -38,6 +37,18 @@ template <typename data_t> location_t AbstractDataStore<data_t>::resize(const lo
     {
         return _capacity;
     }
+}
+
+template <typename data_t>
+void AbstractDataStore<data_t>::preprocess_query(const data_t *query, AbstractScratch<data_t> *query_scratch) const
+{
+}
+
+template <typename data_t>
+void AbstractDataStore<data_t>::get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
+                                             std::vector<float> &distances,
+                                             AbstractScratch<data_t> *scratch_space) const
+{
 }
 
 template DISKANN_DLLEXPORT class AbstractDataStore<float>;
