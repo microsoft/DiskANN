@@ -3,12 +3,12 @@
 namespace diskann
 {
 
-IndexFactory::IndexFactory(IndexConfig &config) : _config(config)
+IndexFactory::IndexFactory(const IndexConfig &config) : _config(config)
 {
     check_config();
 }
 
-std::unique_ptr<AbstractIndex> IndexFactory::instance()
+std::unique_ptr<AbstractIndex> IndexFactory::get_instance()
 {
     size_t num_points = _config.max_points;
     size_t dim = _config.dimension;
@@ -96,7 +96,7 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStor
     switch (strategy)
     {
     case MEMORY:
-        if (_config.metric == diskann::Metric::COSINE && std::is_floating_point<T>::value)
+        if (_config.metric == diskann::Metric::COSINE && std::is_same<T, float>::value)
         {
             distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
             return std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, dimension, distance);

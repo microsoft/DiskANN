@@ -378,7 +378,7 @@ int main(int argc, char **argv)
         }
 
         auto index_factory = diskann::IndexFactory(config);
-        auto index = index_factory.instance();
+        auto index = index_factory.get_instance();
         index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
         std::cout << "Index loaded" << std::endl;
 

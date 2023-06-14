@@ -187,7 +187,7 @@ int main(int argc, char **argv)
                                 .with_save_path_prefix(index_path_prefix)
                                 .build();
         auto index_factory = diskann::IndexFactory(config);
-        auto index = index_factory.instance();
+        auto index = index_factory.get_instance();
         index->build(data_path, data_num, build_params);
         index->save(index_path_prefix.c_str());
         index.reset();

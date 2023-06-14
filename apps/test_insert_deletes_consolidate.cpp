@@ -410,7 +410,7 @@ int main(int argc, char **argv)
                                                 .build();
 
         diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
-        auto index = index_factory.instance();
+        auto index = index_factory.get_instance();
 
         if (data_type == std::string("int8"))
             build_incremental_index<int8_t, TagT>(*index, data_path, params, points_to_skip, max_points_to_insert,

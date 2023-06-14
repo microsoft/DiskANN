@@ -7,8 +7,8 @@ namespace diskann
 class IndexFactory
 {
   public:
-    DISKANN_DLLEXPORT explicit IndexFactory(IndexConfig &config);
-    DISKANN_DLLEXPORT std::unique_ptr<AbstractIndex> instance();
+    DISKANN_DLLEXPORT explicit IndexFactory(const IndexConfig &config);
+    DISKANN_DLLEXPORT std::unique_ptr<AbstractIndex> get_instance();
 
   private:
     void check_config();
@@ -18,7 +18,7 @@ class IndexFactory
                                                               size_t dimension);
     std::unique_ptr<AbstractGraphStore> construct_graphstore(GraphStoreStrategy stratagy, size_t size);
 
-    IndexConfig &_config;
+    const IndexConfig &_config;
 };
 
 } // namespace diskann

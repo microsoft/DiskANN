@@ -33,18 +33,19 @@ struct IndexConfig
     std::string tag_type;
     std::string data_type;
 
-    IndexWriteParameters *index_write_params = nullptr;
+    std::unique_ptr<IndexWriteParameters> index_write_params;
 
   private:
     IndexConfig(DataStoreStrategy data_strategy, GraphStoreStrategy graph_strategy, Metric metric, size_t dimension,
                 size_t max_points, size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
-                bool pq_dist_build, bool concurrent_consolidate, bool use_opq, std::string data_type,
-                std::string tag_type, std::string label_type, IndexWriteParameters &index_write_params)
+                bool pq_dist_build, bool concurrent_consolidate, bool use_opq, const std::string &data_type,
+                const std::string &tag_type, const std::string &label_type,
+                std::unique_ptr<IndexWriteParameters> index_write_params)
         : data_strategy(data_strategy), graph_strategy(graph_strategy), metric(metric), dimension(dimension),
           max_points(max_points), dynamic_index(dynamic_index), enable_tags(enable_tags), pq_dist_build(pq_dist_build),
           concurrent_consolidate(concurrent_consolidate), use_opq(use_opq), num_pq_chunks(num_pq_chunks),
           num_frozen_pts(num_frozen_points), label_type(label_type), tag_type(tag_type), data_type(data_type),
-          index_write_params(&index_write_params)
+          index_write_params(std::move(index_write_params))
     {
     }
 
@@ -76,81 +77,81 @@ class IndexConfigBuilder
         return *this;
     }
 
-    IndexConfigBuilder &with_dimension(size_t dim)
+    IndexConfigBuilder &with_dimension(size_t dimension)
     {
-        this->_dimension = dim;
+        this->_dimension = dimension;
         return *this;
     }
 
-    IndexConfigBuilder &with_max_points(size_t maxPts)
+    IndexConfigBuilder &with_max_points(size_t max_points)
     {
-        this->_max_points = maxPts;
+        this->_max_points = max_points;
         return *this;
     }
 
-    IndexConfigBuilder &is_dynamic_index(bool dynamicIdx)
+    IndexConfigBuilder &is_dynamic_index(bool dynamic_index)
     {
-        this->_dynamic_index = dynamicIdx;
+        this->_dynamic_index = dynamic_index;
         return *this;
     }
 
-    IndexConfigBuilder &is_enable_tags(bool enableTags)
+    IndexConfigBuilder &is_enable_tags(bool enable_tags)
     {
-        this->_enable_tags = enableTags;
+        this->_enable_tags = enable_tags;
         return *this;
     }
 
-    IndexConfigBuilder &is_pq_dist_build(bool pqDistBuild)
+    IndexConfigBuilder &is_pq_dist_build(bool pq_dist_build)
     {
-        this->_pq_dist_build = pqDistBuild;
+        this->_pq_dist_build = pq_dist_build;
         return *this;
     }
 
-    IndexConfigBuilder &is_concurrent_consolidate(bool concurrentConsolidate)
+    IndexConfigBuilder &is_concurrent_consolidate(bool concurrent_consolidate)
     {
-        this->_concurrent_consolidate = concurrentConsolidate;
+        this->_concurrent_consolidate = concurrent_consolidate;
         return *this;
     }
 
-    IndexConfigBuilder &is_use_opq(bool useOPQ)
+    IndexConfigBuilder &is_use_opq(bool use_opq)
     {
-        this->_use_opq = useOPQ;
+        this->_use_opq = use_opq;
         return *this;
     }
 
-    IndexConfigBuilder &with_num_pq_chunks(size_t numPqChunks)
+    IndexConfigBuilder &with_num_pq_chunks(size_t num_pq_chunks)
     {
-        this->_num_pq_chunks = numPqChunks;
+        this->_num_pq_chunks = num_pq_chunks;
         return *this;
     }
 
-    IndexConfigBuilder &with_num_frozen_pts(size_t numFrozenPts)
+    IndexConfigBuilder &with_num_frozen_pts(size_t num_frozen_pts)
     {
-        this->_num_frozen_pts = numFrozenPts;
+        this->_num_frozen_pts = num_frozen_pts;
         return *this;
     }
 
-    IndexConfigBuilder &with_label_type(const std::string &labelType)
+    IndexConfigBuilder &with_label_type(const std::string &label_type)
     {
-        this->_label_type = labelType;
+        this->_label_type = label_type;
         return *this;
     }
 
-    IndexConfigBuilder &with_tag_type(const std::string &tagType)
+    IndexConfigBuilder &with_tag_type(const std::string &tag_type)
     {
-        this->_tag_type = tagType;
+        this->_tag_type = tag_type;
         return *this;
     }
 
-    IndexConfigBuilder &with_data_type(const std::string &dataType)
+    IndexConfigBuilder &with_data_type(const std::string &data_type)
     {
-        this->_data_type = dataType;
+        this->_data_type = data_type;
         return *this;
     }
 
-    IndexConfigBuilder &with_index_write_params(IndexWriteParameters &index_write_params)
+    IndexConfigBuilder &with_index_write_params(IndexWriteParameters index_write_params)
     {
-        this->_index_write_params = &index_write_params;
+        this->_index_write_params = std::make_unique<IndexWriteParameters>(index_write_params);
         return *this;
     }
 
@@ -158,7 +159,7 @@ class IndexConfigBuilder
     {
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
                            _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build, _concurrent_consolidate,
-                           _use_opq, _data_type, _tag_type, _label_type, *_index_write_params);
+                           _use_opq, _data_type, _tag_type, _label_type, std::move(_index_write_params));
     }
 
     IndexConfigBuilder(const IndexConfigBuilder &) = delete;
@@ -185,6 +186,6 @@ class IndexConfigBuilder
     std::string _tag_type;
     std::string _data_type;
 
-    IndexWriteParameters *_index_write_params = nullptr;
+    std::unique_ptr<IndexWriteParameters> _index_write_params;
 };
 } // namespace diskann

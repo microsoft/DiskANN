@@ -63,7 +63,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const bool concurrent_consolidate = false, const bool pq_dist_build = false,
                             const size_t num_pq_chunks = 0, const bool use_opq = false);
 
-    DISKANN_DLLEXPORT Index(IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store
+    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store
                             /* std::unique_ptr<AbstractGraphStore> graph_store*/);
 
     DISKANN_DLLEXPORT ~Index();
@@ -195,31 +195,32 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
   protected:
     // overload of abstract index virtual methods
-    void _build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                const TagVector &tags);
+    virtual void _build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
+                        const TagVector &tags) override;
 
-    std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L, std::any &indices,
-                                          float *distances = nullptr);
-    std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::string &filter_label_raw,
-                                                       const size_t K, const uint32_t L, std::any &indices,
-                                                       float *distances);
+    virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
+                                                  std::any &indices, float *distances = nullptr) override;
+    virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query,
+                                                               const std::string &filter_label_raw, const size_t K,
+                                                               const uint32_t L, std::any &indices,
+                                                               float *distances) override;
 
-    int _insert_point(const DataType &data_point, const TagType tag);
+    virtual int _insert_point(const DataType &data_point, const TagType tag) override;
 
-    int _lazy_delete(const TagType &tag);
+    virtual int _lazy_delete(const TagType &tag) override;
 
-    void _lazy_delete(const TagVector &tags, TagVector &failed_tags);
+    virtual void _lazy_delete(const TagVector &tags, TagVector &failed_tags) override;
 
-    void _get_active_tags(TagRobinSet &active_tags);
+    virtual void _get_active_tags(TagRobinSet &active_tags) override;
 
-    void _set_start_points_at_random(DataType radius, uint32_t random_seed = 0);
+    virtual void _set_start_points_at_random(DataType radius, uint32_t random_seed = 0) override;
 
-    int _get_vector_by_tag(TagType &tag, DataType &vec);
+    virtual int _get_vector_by_tag(TagType &tag, DataType &vec) override;
 
-    void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices);
+    virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) override;
 
-    size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
-                             float *distances, DataVector &res_vectors);
+    virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
+                                     float *distances, DataVector &res_vectors) override;
 
     // No copy/assign.
     Index(const Index<T, TagT, LabelT> &) = delete;

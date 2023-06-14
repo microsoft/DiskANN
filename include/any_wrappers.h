@@ -62,6 +62,8 @@ struct AnyVector
 
     template <typename T> std::vector<T> &get()
     {
+        /* auto vector_ptr = std::any_cast<std::vector<T> *>(_data);
+         return *vector_ptr;*/
         auto sharedVector = std::any_cast<std::vector<T> *>(&_data);
         if (sharedVector)
         {

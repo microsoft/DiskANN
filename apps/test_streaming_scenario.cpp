@@ -366,7 +366,7 @@ int main(int argc, char **argv)
         using LabelT = uint32_t;
 
         diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
-        auto index = index_factory.instance();
+        auto index = index_factory.get_instance();
 
         if (data_type == std::string("int8"))
             build_incremental_index<int8_t, TagT, LabelT>(*index, data_path, params, delete_params,

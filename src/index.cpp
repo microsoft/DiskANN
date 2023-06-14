@@ -131,7 +131,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
 }
 
 template <typename T, typename TagT, typename LabelT>
-Index<T, TagT, LabelT>::Index(IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store)
+Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store)
     : _dist_metric(index_config.metric), _dim(index_config.dimension), _max_points(index_config.max_points),
       _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
       _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
@@ -2154,16 +2154,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search(const DataType &qu
 {
     try
     {
-        auto actual_query = std::any_cast<const T *>(query);
+        auto typed_query = std::any_cast<const T *>(query);
         if (typeid(uint32_t *) == indices.type())
         {
             auto u32_ptr = std::any_cast<uint32_t *>(indices);
-            return this->search(actual_query, K, L, u32_ptr, distances);
+            return this->search(typed_query, K, L, u32_ptr, distances);
         }
         else if (typeid(uint64_t *) == indices.type())
         {
             auto u64_ptr = std::any_cast<uint64_t *>(indices);
-            return this->search(actual_query, K, L, u64_ptr, distances);
+            return this->search(typed_query, K, L, u64_ptr, distances);
         }
         else
         {
@@ -2272,7 +2272,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                                                                           const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
 {
-    indices = static_cast<IdType *>(indices);
     if (K > (uint64_t)L)
     {
         throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);

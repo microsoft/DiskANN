@@ -32,15 +32,15 @@ struct consolidation_report
     }
 };
 
+/* A templated independent class for intercation with Index. Uses Type Erasure to add virtual implemetation of methods
+that can take any type(using std::any) and Provides a clean API that can be inherited by different type of Index.
+*/
 class AbstractIndex
 {
   public:
-    AbstractIndex()
-    {
-    }
-    virtual ~AbstractIndex()
-    {
-    }
+    AbstractIndex() = default;
+    virtual ~AbstractIndex() = default;
+
     virtual void build(const std::string &data_file, const size_t num_points_to_load,
                        IndexBuildParams &build_params) = 0;
 
