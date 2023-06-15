@@ -2218,7 +2218,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             if (unv_count != nullptr)
             {
                 simple_bitmask bm(_bitmask_buf.get_bitmask(best_L_nodes[i].id), _bitmask_buf._bitmask_size);
-                if (bm.test(filter_label))
+                if (bm.test(_universal_label))
                 {
                     (*unv_count)++;
                 }
