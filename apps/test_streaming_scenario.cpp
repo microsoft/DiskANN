@@ -176,7 +176,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     const bool saturate_graph = false;
     using TagT = uint32_t;
     using LabelT = uint32_t;
-    const bool enable_tags = true;
 
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(C)
