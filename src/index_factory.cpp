@@ -16,40 +16,159 @@ std::unique_ptr<AbstractIndex> IndexFactory::get_instance()
     {
         auto data_store = construct_datastore<float>(_config.data_strategy, num_points, dim);
         // auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
-
-        if (_config.label_type == "ushort")
+        if (_config.tag_type == "int32")
         {
-            return std::make_unique<diskann::Index<float, uint32_t, uint16_t>>(_config, std::move(data_store));
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<float, int32_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<float, int32_t>>(_config, std::move(data_store));
+            }
+        }
+        else if (_config.tag_type == "uint32")
+        {
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<float, uint32_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<float, uint32_t>>(_config, std::move(data_store));
+            }
+        }
+        else if (_config.tag_type == "int64")
+        {
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<float, int64_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<float, int64_t>>(_config, std::move(data_store));
+            }
+        }
+        else if (_config.tag_type == "uint64")
+        {
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<float, uint64_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<float, uint64_t>>(_config, std::move(data_store));
+            }
         }
         else
         {
-            return std::make_unique<diskann::Index<float>>(_config, std::move(data_store));
+            throw ANNException("Error: unsupported tag_type", -1);
         }
     }
     else if (_config.data_type == "uint8")
     {
         auto data_store = construct_datastore<uint8_t>(_config.data_strategy, num_points, dim);
         // auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
-        if (_config.label_type == "ushort")
+        if (_config.tag_type == "int32")
         {
-            return std::make_unique<diskann::Index<uint8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<uint8_t, int32_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<uint8_t, int32_t>>(_config, std::move(data_store));
+            }
+        }
+        else if (_config.tag_type == "uint32")
+        {
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<uint8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<uint8_t, uint32_t>>(_config, std::move(data_store));
+            }
+        }
+        else if (_config.tag_type == "int64")
+        {
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<uint8_t, int64_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<uint8_t, int64_t>>(_config, std::move(data_store));
+            }
+        }
+        else if (_config.tag_type == "uint64")
+        {
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<uint8_t, uint64_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<uint8_t, uint64_t>>(_config, std::move(data_store));
+            }
         }
         else
         {
-            return std::make_unique<diskann::Index<uint8_t>>(_config, std::move(data_store));
+            throw ANNException("Error: unsupported tag_type", -1);
         }
     }
     else if (_config.data_type == "int8")
     {
         auto data_store = construct_datastore<int8_t>(_config.data_strategy, num_points, dim);
         // auto graph_store = construct_graphstore(_config.graph_strategy, num_points);
-        if (_config.label_type == "ushort")
+        if (_config.tag_type == "int32")
         {
-            return std::make_unique<diskann::Index<int8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<int8_t, int32_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<int8_t, int32_t>>(_config, std::move(data_store));
+            }
+        }
+        else if (_config.tag_type == "uint32")
+        {
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<int8_t, uint32_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<int8_t, uint32_t>>(_config, std::move(data_store));
+            }
+        }
+        else if (_config.tag_type == "int64")
+        {
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<int8_t, int64_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<int8_t, int64_t>>(_config, std::move(data_store));
+            }
+        }
+        else if (_config.tag_type == "uint64")
+        {
+            if (_config.label_type == "ushort" || _config.label_type == "uint16")
+            {
+                return std::make_unique<diskann::Index<int8_t, uint64_t, uint16_t>>(_config, std::move(data_store));
+            }
+            else
+            {
+                return std::make_unique<diskann::Index<int8_t, uint64_t>>(_config, std::move(data_store));
+            }
         }
         else
         {
-            return std::make_unique<diskann::Index<int8_t>>(_config, std::move(data_store));
+            throw ANNException("Error: unsupported tag_type", -1);
         }
     }
     else
@@ -83,6 +202,14 @@ void IndexFactory::check_config()
     {
         throw ANNException("ERROR: invalid data type : + " + _config.data_type +
                                " is not supported. please select from [float, int8, uint8]",
+                           -1);
+    }
+
+    if (_config.tag_type != "int32" && _config.tag_type != "uint32" && _config.tag_type != "int64" &&
+        _config.tag_type != "uint64")
+    {
+        throw ANNException("ERROR: invalid data type : + " + _config.tag_type +
+                               " is not supported. please select from [int32, uint32, int64, uint64]",
                            -1);
     }
 }

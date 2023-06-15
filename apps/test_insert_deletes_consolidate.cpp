@@ -135,11 +135,10 @@ void delete_from_beginning(diskann::AbstractIndex &index, diskann::IndexWritePar
     }
 }
 
-template <typename T, typename TagT>
-void build_incremental_index(diskann::AbstractIndex &index, const std::string &data_path,
-                             diskann::IndexWriteParameters &params, size_t points_to_skip, size_t max_points_to_insert,
-                             size_t beginning_index_size, float start_point_norm, uint32_t num_start_pts,
-                             size_t points_per_checkpoint, size_t checkpoints_per_snapshot,
+template <typename T>
+void build_incremental_index(const std::string &data_path, diskann::IndexWriteParameters &params, size_t points_to_skip,
+                             size_t max_points_to_insert, size_t beginning_index_size, float start_point_norm,
+                             uint32_t num_start_pts, size_t points_per_checkpoint, size_t checkpoints_per_snapshot,
                              const std::string &save_path, size_t points_to_delete_from_beginning,
                              size_t start_deletes_after, bool concurrent)
 {
@@ -147,6 +146,26 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
     size_t num_points;
     diskann::get_bin_metadata(data_path, num_points, dim);
     aligned_dim = ROUND_UP(dim, 8);
+
+    bool enable_tags = true;
+    using TagT = uint32_t;
+    auto data_type = diskann_type_to_name<T>();
+    auto tag_type = diskann_type_to_name<TagT>();
+    diskann::IndexConfig index_config = diskann::IndexConfigBuilder()
+                                            .with_metric(diskann::L2)
+                                            .with_dimension(dim)
+                                            .with_max_points(max_points_to_insert)
+                                            .is_dynamic_index(true)
+                                            .with_index_write_params(params)
+                                            .with_data_type(data_type)
+                                            .with_tag_type(tag_type)
+                                            .with_data_load_store_strategy(diskann::MEMORY)
+                                            .is_enable_tags(enable_tags)
+                                            .is_concurrent_consolidate(concurrent)
+                                            .build();
+
+    diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
+    auto index = index_factory.get_instance();
 
     if (points_to_skip > num_points)
     {
@@ -193,11 +212,11 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
 
     if (beginning_index_size > 0)
     {
-        index.build(data, beginning_index_size, params, tags);
+        index->build(data, beginning_index_size, params, tags);
     }
     else
     {
-        index.set_start_points_at_random(static_cast<T>(start_point_norm));
+        index->set_start_points_at_random(static_cast<T>(start_point_norm));
     }
 
     const double elapsedSeconds = timer.elapsed() / 1000000.0;
@@ -229,7 +248,7 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
 
             auto insert_task = std::async(std::launch::async, [&]() {
                 load_aligned_bin_part(data_path, data, start, end - start);
-                insert_till_next_checkpoint<T, TagT>(index, start, end, sub_threads, data, aligned_dim);
+                insert_till_next_checkpoint<T, TagT>(*index, start, end, sub_threads, data, aligned_dim);
             });
             insert_task.wait();
 
@@ -241,7 +260,7 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
                     diskann::IndexWriteParametersBuilder(params).with_num_threads(sub_threads).build();
 
                 delete_task = std::async(std::launch::async, [&]() {
-                    delete_from_beginning<T, TagT>(index, delete_params, points_to_skip,
+                    delete_from_beginning<T, TagT>(*index, delete_params, points_to_skip,
                                                    points_to_delete_from_beginning);
                 });
             }
@@ -251,7 +270,7 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
         std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
         const auto save_path_inc = get_save_filename(save_path + ".after-concurrent-delete-", points_to_skip,
                                                      points_to_delete_from_beginning, last_point_threshold);
-        index.save(save_path_inc.c_str(), true);
+        index->save(save_path_inc.c_str(), true);
     }
     else
     {
@@ -265,7 +284,7 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
             std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
             load_aligned_bin_part(data_path, data, start, end - start);
-            insert_till_next_checkpoint<T, TagT>(index, start, end, (int32_t)params.num_threads, data, aligned_dim);
+            insert_till_next_checkpoint<T, TagT>(*index, start, end, (int32_t)params.num_threads, data, aligned_dim);
 
             if (checkpoints_per_snapshot > 0 && --num_checkpoints_till_snapshot == 0)
             {
@@ -273,7 +292,7 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
 
                 const auto save_path_inc =
                     get_save_filename(save_path + ".inc-", points_to_skip, points_to_delete_from_beginning, end);
-                index.save(save_path_inc.c_str(), false);
+                index->save(save_path_inc.c_str(), false);
                 const double elapsedSeconds = save_timer.elapsed() / 1000000.0;
                 const size_t points_saved = end - points_to_skip;
 
@@ -296,11 +315,11 @@ void build_incremental_index(diskann::AbstractIndex &index, const std::string &d
 
         if (points_to_delete_from_beginning > 0)
         {
-            delete_from_beginning<T, TagT>(index, params, points_to_skip, points_to_delete_from_beginning);
+            delete_from_beginning<T, TagT>(*index, params, points_to_skip, points_to_delete_from_beginning);
         }
         const auto save_path_inc = get_save_filename(save_path + ".after-delete-", points_to_skip,
                                                      points_to_delete_from_beginning, last_point_threshold);
-        index.save(save_path_inc.c_str(), true);
+        index->save(save_path_inc.c_str(), true);
     }
 
     diskann::aligned_free(data);
@@ -396,41 +415,23 @@ int main(int argc, char **argv)
                                                    .with_num_frozen_points(num_start_pts)
                                                    .build();
 
-        diskann::IndexConfig index_config = diskann::IndexConfigBuilder()
-                                                .with_metric(diskann::L2)
-                                                .with_dimension(dim)
-                                                .with_max_points(max_points_to_insert)
-                                                .is_dynamic_index(true)
-                                                .with_index_write_params(params)
-                                                .with_data_type(data_type)
-                                                .with_tag_type("uint32")
-                                                .with_data_load_store_strategy(diskann::MEMORY)
-                                                .is_enable_tags(enable_tags)
-                                                .is_concurrent_consolidate(concurrent)
-                                                .build();
-
-        diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
-        auto index = index_factory.get_instance();
-
         if (data_type == std::string("int8"))
-            build_incremental_index<int8_t, TagT>(*index, data_path, params, points_to_skip, max_points_to_insert,
-                                                  beginning_index_size, start_point_norm, num_start_pts,
-                                                  points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
-                                                  points_to_delete_from_beginning, start_deletes_after, concurrent);
+            build_incremental_index<int8_t>(data_path, params, points_to_skip, max_points_to_insert,
+                                            beginning_index_size, start_point_norm, num_start_pts,
+                                            points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
+                                            points_to_delete_from_beginning, start_deletes_after, concurrent);
         else if (data_type == std::string("uint8"))
-            build_incremental_index<uint8_t, TagT>(*index, data_path, params, points_to_skip, max_points_to_insert,
-                                                   beginning_index_size, start_point_norm, num_start_pts,
-                                                   points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
-                                                   points_to_delete_from_beginning, start_deletes_after, concurrent);
+            build_incremental_index<uint8_t>(data_path, params, points_to_skip, max_points_to_insert,
+                                             beginning_index_size, start_point_norm, num_start_pts,
+                                             points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
+                                             points_to_delete_from_beginning, start_deletes_after, concurrent);
         else if (data_type == std::string("float"))
-            build_incremental_index<float, TagT>(*index, data_path, params, points_to_skip, max_points_to_insert,
-                                                 beginning_index_size, start_point_norm, num_start_pts,
-                                                 points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
-                                                 points_to_delete_from_beginning, start_deletes_after, concurrent);
+            build_incremental_index<float>(data_path, params, points_to_skip, max_points_to_insert,
+                                           beginning_index_size, start_point_norm, num_start_pts, points_per_checkpoint,
+                                           checkpoints_per_snapshot, index_path_prefix, points_to_delete_from_beginning,
+                                           start_deletes_after, concurrent);
         else
             std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
-
-        index.reset();
     }
     catch (const std::exception &e)
     {

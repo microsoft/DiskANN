@@ -1113,6 +1113,47 @@ inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::
     }
 }
 
+template <typename T> inline const char *diskann_type_to_name()
+{
+    if (std::is_same<T, float>::value)
+    {
+        return "float";
+    }
+    else if (std::is_same<T, uint8_t>::value)
+    {
+        return "uint8";
+    }
+    else if (std::is_same<T, int8_t>::value)
+    {
+        return "int8";
+    }
+    else if (std::is_same<T, uint16_t>::value)
+    {
+        return "uint16";
+    }
+    else if (std::is_same<T, int16_t>::value)
+    {
+        return "int16";
+    }
+    else if (std::is_same<T, uint32_t>::value)
+    {
+        return "uint32";
+    }
+    else if (std::is_same<T, int32_t>::value)
+    {
+        return "int32";
+    }
+    else if (std::is_same<T, uint64_t>::value)
+    {
+        return "uint64";
+    }
+    else if (std::is_same<T, int64_t>::value)
+    {
+        return "int64";
+    }
+    throw std::exception("Error: can't convert type_to_name, index does not support the passed type.");
+}
+
 #ifdef _WINDOWS
 #include <intrin.h>
 #include <Psapi.h>

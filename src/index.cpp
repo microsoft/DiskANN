@@ -102,7 +102,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
 
     _final_graph.resize(total_internal_points);
 
-    // Note: A factory is already made to inject data store, keeping this for backward compatibility.
+    // Issue #374: data_store is injected from index factory. Keeping this for backward compatibility.
     // distance is owned by data_store
     if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value)
     {
@@ -886,9 +886,9 @@ int Index<T, TagT, LabelT>::_get_vector_by_tag(TagType &tag, DataType &vec)
         T *vec_val = std::any_cast<T *>(vec);
         return this->get_vector_by_tag(tag_val, vec_val);
     }
-    catch (const std::bad_any_cast &)
+    catch (const std::bad_any_cast &e)
     {
-        throw ANNException("Error: bad any cast while performing _get_vector_by_tags()", -1);
+        throw ANNException("Error: bad any cast while performing _get_vector_by_tags() " + std::string(e.what()), -1);
     }
     catch (const std::exception &e)
     {
@@ -1662,9 +1662,10 @@ void Index<T, TagT, LabelT>::_set_start_points_at_random(DataType radius, uint32
         T radius_to_use = std::any_cast<T>(radius);
         this->set_start_points_at_random(radius_to_use, random_seed);
     }
-    catch (const std::bad_any_cast &)
+    catch (const std::bad_any_cast &e)
     {
-        throw ANNException("Error: bad any cast while performing _set_start_points_at_random()", -1);
+        throw ANNException(
+            "Error: bad any cast while performing _set_start_points_at_random() " + std::string(e.what()), -1);
     }
     catch (const std::exception &e)
     {
@@ -1764,9 +1765,9 @@ void Index<T, TagT, LabelT>::_build(const DataType &data, const size_t num_point
     {
         this->build(std::any_cast<const T *>(data), num_points_to_load, parameters, tags.get<TagT>());
     }
-    catch (const std::bad_any_cast &)
+    catch (const std::bad_any_cast &e)
     {
-        throw ANNException("Error: bad any cast in while building index.", -1);
+        throw ANNException("Error: bad any cast in while building index. " + std::string(e.what()), -1);
     }
     catch (const std::exception &e)
     {
@@ -2170,9 +2171,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search(const DataType &qu
             throw ANNException("Error: indices type can only be uint64_t or uint32_t.", -1);
         }
     }
-    catch (const std::bad_any_cast &)
+    catch (const std::bad_any_cast &e)
     {
-        throw ANNException("Error: bad any cast while searching.", -1);
+        throw ANNException("Error: bad any cast while searching. " + std::string(e.what()), -1);
     }
     catch (const std::exception &e)
     {
@@ -2353,9 +2354,9 @@ size_t Index<T, TagT, LabelT>::_search_with_tags(const DataType &query, const ui
         return this->search_with_tags(std::any_cast<const T *>(query), K, L, std::any_cast<TagT *>(tags), distances,
                                       res_vectors.get<T *>());
     }
-    catch (const std::bad_any_cast &)
+    catch (const std::bad_any_cast &e)
     {
-        throw ANNException("Error: bad any cast while performing _search_with_tags()", -1);
+        throw ANNException("Error: bad any cast while performing _search_with_tags() " + std::string(e.what()), -1);
     }
     catch (const std::exception &e)
     {
@@ -3107,9 +3108,9 @@ void Index<T, TagT, LabelT>::_lazy_delete(const TagVector &tags, TagVector &fail
     {
         this->lazy_delete(tags.get<TagT>(), failed_tags.get<TagT>());
     }
-    catch (const std::bad_any_cast &)
+    catch (const std::bad_any_cast &e)
     {
-        throw ANNException("Error: bad any cast while performing _lazy_delete", -1);
+        throw ANNException("Error: bad any cast while performing _lazy_delete() " + std::string(e.what()), -1);
     }
     catch (const std::exception &e)
     {
@@ -3179,9 +3180,9 @@ void Index<T, TagT, LabelT>::_get_active_tags(TagRobinSet &active_tags)
     {
         this->get_active_tags(active_tags.get<TagT>());
     }
-    catch (const std::bad_any_cast &)
+    catch (const std::bad_any_cast &e)
     {
-        throw ANNException("Error: bad_any cast while performing _get_active_tags()", -1);
+        throw ANNException("Error: bad_any cast while performing _get_active_tags() " + std::string(e.what()), -1);
     }
     catch (const std::exception &e)
     {
@@ -3317,9 +3318,10 @@ void Index<T, TagT, LabelT>::_search_with_optimized_layout(const DataType &query
     {
         return this->search_with_optimized_layout(std::any_cast<const T *>(query), K, L, indices);
     }
-    catch (const std::bad_any_cast &)
+    catch (const std::bad_any_cast &e)
     {
-        throw ANNException("Error: bad any cast while performing _search_with_optimized_layout()", -1);
+        throw ANNException(
+            "Error: bad any cast while performing _search_with_optimized_layout() " + std::string(e.what()), -1);
     }
     catch (const std::exception &e)
     {
