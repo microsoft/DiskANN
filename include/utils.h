@@ -1151,7 +1151,7 @@ template <typename T> inline const char *diskann_type_to_name()
     {
         return "int64";
     }
-    throw std::exception("Error: can't convert type_to_name, index does not support the passed type.");
+    throw std::runtime_error("Error: can't convert type_to_name, index does not support the passed type.");
 }
 
 #ifdef _WINDOWS
