@@ -157,6 +157,8 @@ class IndexConfigBuilder
 
     IndexConfig build()
     {
+        if (_data_type == "" || _data_type.empty())
+            throw ANNException("Error: data_type can not be empty", -1);
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
                            _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build, _concurrent_consolidate,
                            _use_opq, _data_type, _tag_type, _label_type, std::move(_index_write_params));

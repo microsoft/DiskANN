@@ -11,6 +11,21 @@
 
 namespace AnyWrapper
 {
+struct AnyContainerRef
+{
+    template <typename ContainerT> AnyContainerRef(ContainerT &container) : _data(&container)
+    {
+    }
+    template <typename ContainerT> ContainerT &get()
+    {
+        auto set_ptr = std::any_cast<ContainerT *>(_data);
+        return *set_ptr;
+    }
+
+  private:
+    std::any _data;
+};
+
 struct AnyRobinSet
 {
     template <typename T>
@@ -20,29 +35,20 @@ struct AnyRobinSet
 
     template <typename T> const tsl::robin_set<T> &get() const
     {
-        auto set_ptr = std::any_cast<tsl::robin_set<T> *>(&_data);
-        if (set_ptr)
-        {
-            return *(*set_ptr);
-        }
-
-        throw std::bad_any_cast();
+        auto set_ptr = std::any_cast<tsl::robin_set<T> *>(_data);
+        return *set_ptr;
     }
 
     template <typename T> tsl::robin_set<T> &get()
     {
-        auto set_ptr = std::any_cast<tsl::robin_set<T> *>(&_data);
-        if (set_ptr)
-        {
-            return *(*set_ptr);
-        }
-
-        throw std::bad_any_cast();
+        auto set_ptr = std::any_cast<tsl::robin_set<T> *>(_data);
+        return *set_ptr;
     }
 
   private:
     std::any _data;
 };
+
 struct AnyVector
 {
     template <typename T> AnyVector(const std::vector<T> &vector) : _data(const_cast<std::vector<T> *>(&vector))
@@ -51,26 +57,14 @@ struct AnyVector
 
     template <typename T> const std::vector<T> &get() const
     {
-        auto sharedVector = std::any_cast<std::vector<T> *>(&_data);
-        if (sharedVector)
-        {
-            return *(*sharedVector);
-        }
-
-        throw std::bad_any_cast();
+        auto sharedVector = std::any_cast<std::vector<T> *>(_data);
+        return *sharedVector;
     }
 
     template <typename T> std::vector<T> &get()
     {
-        /* auto vector_ptr = std::any_cast<std::vector<T> *>(_data);
-         return *vector_ptr;*/
-        auto sharedVector = std::any_cast<std::vector<T> *>(&_data);
-        if (sharedVector)
-        {
-            return *(*sharedVector);
-        }
-
-        throw std::bad_any_cast();
+        auto sharedVector = std::any_cast<std::vector<T> *>(_data);
+        return *sharedVector;
     }
 
   private:
