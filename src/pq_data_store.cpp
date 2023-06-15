@@ -7,16 +7,15 @@
 
 namespace diskann {
 
-//REFACTOR TODO: _use_opq should be removed and OPQ stuff added to a separate class.
+//REFACTOR TODO: Assuming that num_pq_chunks is known already. Must verify if this is true. 
 template <typename data_t>
 PQDataStore<data_t>::PQDataStore(uint32_t dim, uint32_t num_pq_chunks,
-                                 std::shared_ptr<Distance<data_t>> distance_fn, std::shared_ptr<AbstractPQDistance<data_t>> pq_distance_fn)
+                                 std::shared_ptr<Distance<data_t>> distance_fn, std::shared_ptr<QuantizedDistance<data_t>> pq_distance_fn)
     : AbstractDataStore(0, dim),
       _num_pq_chunks(num_pq_chunks),
       _quantized_data(nullptr),
       _distance_metric(distance_fn->get_metric()), 
-      _pq_distance_fn(pq_distance_fn),
-      _use_opq(false) {}
+      _pq_distance_fn(pq_distance_fn){}
 
 template <typename data_t>
 location_t PQDataStore<data_t>::load(const std::string& filename) {
@@ -47,15 +46,12 @@ template<typename data_t>
   double p_val = std::min(
       1.0, ((double)MAX_PQ_TRAINING_SET_SIZE / (double)file_num_points));
 
-  auto pq_pivots_file =
-      diskann::get_pq_pivots_filename(filename, _use_opq, _num_pq_chunks);
-  auto pq_compressed_file = diskann::get_pq_compressed_vectors_filename(
-      filename, _use_opq, _num_pq_chunks);
+  auto pivots_file = _pq_distance_fn->get_pivot_data_filename(filename);
+  auto compressed_file = _pq_distance_fn->get_quantized_vectors_filename(filename);
 
-  // REFACTOR TODO: Split OPQ and PQ into classes.
-  generate_quantized_data<T>(std::string(filename), pq_pivots_file,
-                             pq_compressed_file, _distance_metric, p_val,
-                             _num_pq_chunks, _use_opq);
+  generate_quantized_data<T>(std::string(filename), pivots_file,
+                             compressed_file, _distance_metric, p_val,
+                             _num_pq_chunks, _pq_distance_fn->is_opq());
 
   copy_aligned_data_from_file<uint8_t>(pq_compressed_file.c_str(),
                                        _quantized_data, file_num_points,
@@ -66,7 +62,7 @@ template<typename data_t>
       "EXEC_ENV_OLS is defined.",
       -1, __FUNCSIG__, __FILE__, __LINE__);
 #else
-  _pq_table.load_pq_centroid_bin(pq_pivots_file.c_str(), _num_pq_chunks);
+  _pq_distance_fn->load_pivot_data(pq_pivots_file.c_str(), _num_pq_chunks);
 #endif
 }
 
@@ -129,7 +125,7 @@ template<typename data_t>
  }
 
  template<typename data_t>
- void PQDataStore<data_t>::get_distance(const data_t* query, const location_t* locations,
+ void PQDataStore<data_t>::get_distance(const data_t* preprocessed_query, const location_t* locations,
    const uint32_t location_count,
    float* distances, AbstractScratch* scratch_space) const {
     if (scratch_space == nullptr) {
@@ -139,27 +135,36 @@ template<typename data_t>
     if (scratch == nullptr) {
       throw diskann::ANNException("Scratch space is not of type PQScratch", -1);
     }
-    _pq_distance_fn->preprocess_query(query, get_dims(), scratch);
-    diskann::aggregate_coords(locations, _quantized_data, this->_num_pq_chunks,
+    diskann::aggregate_coords(locations, location_count, _quantized_data, this->_num_pq_chunks,
                               scratch->aligned_pq_coord_scratch);
-    diskann::pq_dist_lookup(scratch->aligned_pq_coord_scratch, locations_count, this->_num_pq_chunks,
-                            scratch->aligned_dist_scratch, dists_out);
+    _pq_distance_fn->preprocessed_distance(scratch, location_count, distances);
  }
 
-
- location_t PQDataStore::calculate_medoid() const {
+ template<typename data_t>
+ location_t PQDataStore<data_t>::calculate_medoid() const {
+   //REFACTOR TODO: If we have a situation of low-res PQ and high-res PQ as our data
+   //stores, then this should be implemented. 
    throw std::logic_error("Not implemented yet");
 }
 
- Distance<data_t>* PQDataStore::get_dist_fn() const {
-
+template<typename data_t> 
+size_t PQDataStore<data_t>::get_alignment_factor() const { 
+  return 1; 
 }
 
- size_t get_alignment_factor() const { return 1; }
+template<typename data_t> location_t PQDataStore<data_t>::load_impl(const std::string &file_prefix)
+{
+  if (_quantized_data != nullptr) {
+    aligned_free(_quantized_data);
+  }
+  auto quantized_vectors_file = _pq_distance_fn->get_quantized_vectors_filename(file_prefix);
+  load_aligned_bin(quantized_vectors_file, _quantized_data, _num_points, _num_chunks, _rounded_num_chunks);
+  _pq_distance_fn->load_pivots_data(file_prefix + TABLE_FILE_SUFFIX);
+}
 
-
-virtual location_t load_impl(const std::string& filename);
 #ifdef EXEC_ENV_OLS
-virtual location_t load_impl(AlignedFileReader& reader);
+template<typename data_t> location_t PQDataStore<data_t>::load_impl(AlignedFileReader &reader)
+{
+}
 #endif
 }  // namespace diskann

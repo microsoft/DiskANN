@@ -15,23 +15,27 @@
 
 namespace diskann {
 
-const std::string PQ_PIVOTS_FILE_SUFFIX = "_pivots.bin";
-const std::string PQ_COMPRESSED_VECTORS_FILE_SUFFIX = "_compressed.bin";
+const std::string TABLE_FILE_SUFFIX = "_pivots.bin";
+const std::string QUANTIZED_VECTORS_FILE_SUFFIX = "_compressed.bin";
+const std::string OPQ_ROTATION_MATRIX_FILE_SUFFIX = "_rotation_matrix.bin";
 
-const std::string get_pq_pivots_filename(const std::string& pq_prefix,
+const std::string get_pivot_data_filename(const std::string& pq_prefix,
   bool use_opq, uint32_t num_pq_chunks) {
-  return pq_prefix + (use_opq ? "_opq" : "_pq") + std::to_string(num_pq_chunks) + PQ_PIVOTS_FILE_SUFFIX;
+  return pq_prefix + (use_opq ? "_opq" : "_pq") + std::to_string(num_pq_chunks) + TABLE_FILE_SUFFIX;
 }
-const std::string get_pq_compressed_vectors_filename(const std::string& pq_prefix,
+const std::string get_quantized_vectors_filename(const std::string& pq_prefix,
   bool use_opq, uint32_t num_pq_chunks) {
-  return pq_prefix + (use_opq ? "_opq" : "_pq") + std::to_string(num_pq_chunks) + PQ_COMPRESSED_VECTORS_FILE_SUFFIX;
+  return pq_prefix + (use_opq ? "_opq" : "_pq") + std::to_string(num_pq_chunks) + QUANTIZED_VECTORS_FILE_SUFFIX;
+}
+const std::string get_opq_rotation_matrix_filename(const std::string &pq_prefix) {
+  return pq_prefix + OPQ_ROTATION_MATRIX_FILE_SUFFIX;
 }
 
 template <typename data_t>
-class AbstractPQDistance  // FixedChunkPQTable
+class QuantizedDistance  // FixedChunkPQTable
 {
  public:
-  virtual ~AbstractPQDistance();
+  virtual ~QuantizedDistance();
 
   // Loading the PQ centroid table need not be part of the abstract class.
   // However, we want to indicate that this function will change once we have a
@@ -91,8 +95,7 @@ struct PQScratch : public AbstractScratch {
   float *aligned_pqtable_dist_scratch =
       nullptr;                            // MUST BE AT LEAST [256 * NCHUNKS]
   float *aligned_dist_scratch = nullptr;  // MUST BE AT LEAST diskann MAX_DEGREE
-  uint8_t *aligned_pq_coord_scratch =
-      nullptr;  // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
+  uint8_t *aligned_pq_coord_scratch = nullptr;  // AT LEAST  [N_CHUNKS * MAX_DEGREE]
   float *rotated_query = nullptr;
   float *aligned_query_float = nullptr;
 

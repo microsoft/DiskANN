@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include "distance.h"
+#include "quantized_distance.h"
 #include "pq.h"
 #include "abstract_data_store.h"
 
@@ -10,7 +11,7 @@ class PQDataStore : public AbstractDataStore {
   DISKANN_DLLEXPORT PQDataStore(
       uint32_t dim, uint32_t num_pq_chunks,
       std::shared_ptr<Distance<data_t>> distance_fn,
-      std::shared_ptr<AbstractPQDistance<data_t>> pq_distance_fn);
+      std::shared_ptr<QuantizedDistance<data_t>> pq_distance_fn);
   DISKANN_DLLEXPORT ~PQDataStore();
 
   //Load quantized vectors from a set of files. Here filename is treated
@@ -50,13 +51,14 @@ class PQDataStore : public AbstractDataStore {
                              const location_t loc) const override;
   virtual float get_distance(const location_t loc1,
                              const location_t loc2) const override;
-  virtual void get_distance(const data_t *query, const location_t *locations,
+
+  //NOTE: Caller must invoke "PQDistance->preprocess_query" ONCE before calling this
+  //function.
+  virtual void get_distance(const data_t *preprocessed_query, const location_t *locations,
                             const uint32_t location_count,
                             float *distances, AbstractScratch* scratch_space) const override;
 
   virtual location_t calculate_medoid() const override;
-
-  virtual Distance<data_t> *get_dist_fn();
 
   virtual size_t get_alignment_factor() const override;
 
