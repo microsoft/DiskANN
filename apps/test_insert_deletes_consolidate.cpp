@@ -403,11 +403,6 @@ int main(int argc, char **argv)
 
     try
     {
-        using TagT = uint32_t;
-        const bool enable_tags = true;
-        size_t dim, num_points;
-        diskann::get_bin_metadata(data_path, num_points, dim);
-
         diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                    .with_max_occlusion_size(500)
                                                    .with_alpha(alpha)
