@@ -567,7 +567,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     {
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
-        assert(label_num_pts == data_file_num_pts);
+        assert(label_num_pts == data_file_num_pts - _num_frozen_pts);
         if (file_exists(labels_to_medoids))
         {
             std::ifstream medoid_stream(labels_to_medoids);
