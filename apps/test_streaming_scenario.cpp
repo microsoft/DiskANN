@@ -186,8 +186,10 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     const uint32_t C = 500;
     const bool saturate_graph = false;
     bool has_labels = label_file != "";
-    std::string labels_file_to_use = save_path + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
+    const auto save_path_inc =
+        get_save_filename(save_path + ".after-streaming-", active_window, consolidate_interval, max_points_to_insert);
+    std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
+    std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
 
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(C)
@@ -257,7 +259,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     index.set_start_points_at_random(static_cast<T>(start_point_norm));
 
     // TODO: Is this necessary?
-    if (!has_labels)
+    if (false)
     {
         index.enable_delete();
     }
@@ -289,7 +291,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         });
         insert_task.wait();
 
-        if (!has_labels)
+        if (false)
         {
             if (delete_tasks.size() > 0)
                 delete_tasks[delete_tasks.size() - 1].wait();
@@ -311,8 +313,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         delete_tasks[delete_tasks.size() - 1].wait();
 
     std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
-    const auto save_path_inc =
-        get_save_filename(save_path + ".after-streaming-", active_window, consolidate_interval, max_points_to_insert);
     index.save(save_path_inc.c_str(), true);
 
     diskann::aligned_free(data);
