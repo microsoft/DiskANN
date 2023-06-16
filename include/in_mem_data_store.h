@@ -67,7 +67,10 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
   private:
     data_t *_data = nullptr;
 
+    size_t _dim;
     size_t _aligned_dim;
+    size_t _max_points = 0; // total number of points in given data set
+    size_t _num_frozen_pts = 0;
 
     // It may seem weird to put distance metric along with the data store class,
     // but this gives us perf benefits as the datastore can do distance
