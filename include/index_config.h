@@ -29,8 +29,8 @@ struct IndexConfig
     size_t num_pq_chunks;
     size_t num_frozen_pts;
 
-    std::string label_type = "uint32";
-    std::string tag_type = "uint32";
+    std::string label_type;
+    std::string tag_type;
     std::string data_type;
 
     std::unique_ptr<IndexWriteParameters> index_write_params;

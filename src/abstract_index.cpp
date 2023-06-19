@@ -253,20 +253,28 @@ template DISKANN_DLLEXPORT void AbstractIndex::lazy_delete<int64_t>(const std::v
 template DISKANN_DLLEXPORT void AbstractIndex::lazy_delete<uint64_t>(const std::vector<uint64_t> &tags,
                                                                      std::vector<uint64_t> &failed_tags);
 
-template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<uint16_t>(tsl::robin_set<uint16_t> &active_tags);
+template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<int32_t>(tsl::robin_set<int32_t> &active_tags);
 template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<uint32_t>(tsl::robin_set<uint32_t> &active_tags);
+template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<int64_t>(tsl::robin_set<int64_t> &active_tags);
+template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<uint64_t>(tsl::robin_set<uint64_t> &active_tags);
 
 template DISKANN_DLLEXPORT void AbstractIndex::set_start_points_at_random<float>(float radius, uint32_t random_seed);
 template DISKANN_DLLEXPORT void AbstractIndex::set_start_points_at_random<uint8_t>(uint8_t radius,
                                                                                    uint32_t random_seed);
 template DISKANN_DLLEXPORT void AbstractIndex::set_start_points_at_random<int8_t>(int8_t radius, uint32_t random_seed);
 
-template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint16_t, float>(uint16_t &tag, float *vec);
-template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint16_t, uint8_t>(uint16_t &tag, uint8_t *vec);
-template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint16_t, int8_t>(uint16_t &tag, int8_t *vec);
-
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<int32_t, float>(int32_t &tag, float *vec);
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<int32_t, uint8_t>(int32_t &tag, uint8_t *vec);
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<int32_t, int8_t>(int32_t &tag, int8_t *vec);
 template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint32_t, float>(uint32_t &tag, float *vec);
 template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint32_t, uint8_t>(uint32_t &tag, uint8_t *vec);
 template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint32_t, int8_t>(uint32_t &tag, int8_t *vec);
+
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<int64_t, float>(int64_t &tag, float *vec);
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<int64_t, uint8_t>(int64_t &tag, uint8_t *vec);
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<int64_t, int8_t>(int64_t &tag, int8_t *vec);
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint64_t, float>(uint64_t &tag, float *vec);
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint64_t, uint8_t>(uint64_t &tag, uint8_t *vec);
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint64_t, int8_t>(uint64_t &tag, int8_t *vec);
 
 } // namespace diskann
