@@ -35,6 +35,21 @@ struct IndexConfig
 
     std::unique_ptr<IndexWriteParameters> index_write_params;
 
+    // copy constructor
+    IndexConfig(const IndexConfig &other)
+        : data_strategy(other.data_strategy), graph_strategy(other.graph_strategy), metric(other.metric),
+          dimension(other.dimension), max_points(other.max_points), dynamic_index(other.dynamic_index),
+          enable_tags(other.enable_tags), pq_dist_build(other.pq_dist_build),
+          concurrent_consolidate(other.concurrent_consolidate), use_opq(other.use_opq),
+          num_pq_chunks(other.num_pq_chunks), num_frozen_pts(other.num_frozen_pts), label_type(other.label_type),
+          tag_type(other.tag_type), data_type(other.data_type)
+    {
+        if (other.index_write_params)
+        {
+            index_write_params = std::make_unique<IndexWriteParameters>(*other.index_write_params);
+        }
+    }
+
   private:
     IndexConfig(DataStoreStrategy data_strategy, GraphStoreStrategy graph_strategy, Metric metric, size_t dimension,
                 size_t max_points, size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,

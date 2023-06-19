@@ -18,7 +18,7 @@ class IndexFactory
                                                               size_t dimension);
     std::unique_ptr<AbstractGraphStore> construct_graphstore(GraphStoreStrategy stratagy, size_t size);
 
-    const IndexConfig &_config;
+    std::unique_ptr<IndexConfig> _config;
 };
 
 } // namespace diskann
