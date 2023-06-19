@@ -12,7 +12,6 @@
 namespace AnyWrapper
 {
 
-    
 struct AnyReference
 {
     template <typename T> AnyReference(T &container) : _data(&container)
