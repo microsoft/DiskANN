@@ -165,7 +165,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                                             .build();
 
     diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
-    auto index = index_factory.get_instance();
+    auto index = index_factory.create_instance();
 
     if (points_to_skip > num_points)
     {

@@ -87,7 +87,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       .build();
 
     auto index_factory = diskann::IndexFactory(config);
-    auto index = index_factory.get_instance();
+    auto index = index_factory.create_instance();
     index->load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
     std::cout << "Index loaded" << std::endl;
 
@@ -367,44 +367,18 @@ int main(int argc, char **argv)
         return -1;
     }
 
+    std::vector<std::string> query_filters;
+    if (filter_label != "")
+    {
+        query_filters.push_back(filter_label);
+    }
+    else if (query_filters_file != "")
+    {
+        query_filters = read_file_to_vector_of_strings(query_filters_file);
+    }
+
     try
     {
-        size_t query_num, query_dim;
-        diskann::get_bin_metadata(query_file, query_num, query_dim);
-
-        const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path_prefix);
-
-        auto config = diskann::IndexConfigBuilder()
-                          .with_metric(metric)
-                          .with_dimension(query_dim)
-                          .with_max_points(0)
-                          .with_data_load_store_strategy(diskann::MEMORY)
-                          .with_data_type(data_type)
-                          .with_label_type(label_type)
-                          .is_dynamic_index(dynamic)
-                          .is_enable_tags(tags)
-                          .is_concurrent_consolidate(false)
-                          .is_pq_dist_build(false)
-                          .is_use_opq(false)
-                          .with_num_pq_chunks(0)
-                          .with_num_frozen_pts(num_frozen_pts)
-                          .build();
-
-        std::vector<std::string> query_filters;
-        if (filter_label != "")
-        {
-            query_filters.push_back(filter_label);
-        }
-        else if (query_filters_file != "")
-        {
-            query_filters = read_file_to_vector_of_strings(query_filters_file);
-        }
-
-        auto index_factory = diskann::IndexFactory(config);
-        auto index = index_factory.get_instance();
-        index->load(index_path_prefix.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
-        std::cout << "Index loaded" << std::endl;
-
         if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("int8"))

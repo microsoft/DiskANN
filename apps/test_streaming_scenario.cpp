@@ -217,7 +217,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                             .build();
 
     diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
-    auto index = index_factory.get_instance();
+    auto index = index_factory.create_instance();
 
     if (max_points_to_insert == 0)
     {

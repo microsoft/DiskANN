@@ -11,14 +11,16 @@
 
 namespace AnyWrapper
 {
-struct AnyContainerRef
+
+    
+struct AnyReference
 {
-    template <typename ContainerT> AnyContainerRef(ContainerT &container) : _data(&container)
+    template <typename T> AnyReference(T &container) : _data(&container)
     {
     }
-    template <typename ContainerT> ContainerT &get()
+    template <typename T> T &get()
     {
-        auto set_ptr = std::any_cast<ContainerT *>(_data);
+        auto set_ptr = std::any_cast<T *>(_data);
         return *set_ptr;
     }
 

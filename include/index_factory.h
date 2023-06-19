@@ -8,10 +8,16 @@ class IndexFactory
 {
   public:
     DISKANN_DLLEXPORT explicit IndexFactory(const IndexConfig &config);
-    DISKANN_DLLEXPORT std::unique_ptr<AbstractIndex> get_instance();
+    DISKANN_DLLEXPORT std::unique_ptr<AbstractIndex> create_instance();
 
   private:
     void check_config();
+
+    template <typename T>
+    std::unique_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy, size_t num_points,
+                                                              size_t dimension);
+
+    std::unique_ptr<AbstractGraphStore> construct_graphstore(GraphStoreStrategy stratagy, size_t size);
 
     template <typename data_type, typename tag_type, typename label_type>
     std::unique_ptr<AbstractIndex> create_instance();
@@ -24,11 +30,6 @@ class IndexFactory
 
     template <typename data_type, typename tag_type>
     std::unique_ptr<AbstractIndex> create_instance(const std::string &label_type);
-
-    template <typename T>
-    std::unique_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy, size_t num_points,
-                                                              size_t dimension);
-    std::unique_ptr<AbstractGraphStore> construct_graphstore(GraphStoreStrategy stratagy, size_t size);
 
     std::unique_ptr<IndexConfig> _config;
 };

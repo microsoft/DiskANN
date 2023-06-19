@@ -8,7 +8,7 @@ IndexFactory::IndexFactory(const IndexConfig &config) : _config(std::make_unique
     check_config();
 }
 
-std::unique_ptr<AbstractIndex> IndexFactory::get_instance()
+std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
 {
     return create_instance(_config->data_type, _config->tag_type, _config->label_type);
 }
