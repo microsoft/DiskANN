@@ -48,10 +48,10 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(AlignedF
 
     diskann::get_bin_metadata(reader, file_num_points, file_dim);
 
-    if (file_dim != _aligned_dim)
+    if (file_dim != _dim)
     {
         std::stringstream stream;
-        stream << "ERROR: Driver requests loading " << _aligned_dim << " dimension,"
+        stream << "ERROR: Driver requests loading " << _dim << " dimension,"
                << "but file has " << file_dim << " dimension." << std::endl;
         diskann::cerr << stream.str() << std::endl;
         aligned_free(_data);
