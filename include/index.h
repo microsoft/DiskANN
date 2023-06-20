@@ -196,7 +196,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   protected:
     // overload of abstract index virtual methods
     virtual void _build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                        const TagVector &tags) override;
+                        TagVector &tags) override;
 
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) override;
@@ -209,7 +209,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     virtual int _lazy_delete(const TagType &tag) override;
 
-    virtual void _lazy_delete(const TagVector &tags, TagVector &failed_tags) override;
+    virtual void _lazy_delete(TagVector &tags, TagVector &failed_tags) override;
 
     virtual void _get_active_tags(TagRobinSet &active_tags) override;
 

@@ -67,11 +67,13 @@ class AbstractIndex
 
     // Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
+    // IDtype is either uint32_t or uint64_t
     template <typename data_type, typename IDType>
     std::pair<uint32_t, uint32_t> search(const data_type *query, const size_t K, const uint32_t L, IDType *indices,
                                          float *distances = nullptr);
 
     // Filter support search
+    // IndexType is either uint32_t or uint64_t
     template <typename IndexType>
     std::pair<uint32_t, uint32_t> search_with_filters(const DataType &query, const std::string &raw_label,
                                                       const size_t K, const uint32_t L, IndexType *indices,
@@ -97,7 +99,7 @@ class AbstractIndex
 
   private:
     virtual void _build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                        const TagVector &tags) = 0;
+                        TagVector &tags) = 0;
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) = 0;
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::string &filter_label,
@@ -105,7 +107,7 @@ class AbstractIndex
                                                                float *distances) = 0;
     virtual int _insert_point(const DataType &data_point, const TagType tag) = 0;
     virtual int _lazy_delete(const TagType &tag) = 0;
-    virtual void _lazy_delete(const TagVector &tags, TagVector &failed_tags) = 0;
+    virtual void _lazy_delete(TagVector &tags, TagVector &failed_tags) = 0;
     virtual void _get_active_tags(TagRobinSet &active_tags) = 0;
     virtual void _set_start_points_at_random(DataType radius, uint32_t random_seed = 0) = 0;
     virtual int _get_vector_by_tag(TagType &tag, DataType &vec) = 0;

@@ -12,63 +12,42 @@
 namespace AnyWrapper
 {
 
+/*
+ * Base Struct to hold refrence to the data.
+ * Note: No memory mamagement, caller need to keep object alive.
+ */
 struct AnyReference
 {
-    template <typename T> AnyReference(T &container) : _data(&container)
+    template <typename Ty> AnyReference(Ty &reference) : _data(&reference)
     {
     }
-    template <typename T> T &get()
+
+    template <typename Ty> Ty &get()
     {
-        auto set_ptr = std::any_cast<T *>(_data);
+        auto set_ptr = std::any_cast<Ty *>(_data);
         return *set_ptr;
     }
 
   private:
     std::any _data;
 };
-
-struct AnyRobinSet
+struct AnyRobinSet : public AnyReference
 {
-    template <typename T>
-    AnyRobinSet(const tsl::robin_set<T> &robin_set) : _data(const_cast<tsl::robin_set<T> *>(&robin_set))
+    template <typename T> AnyRobinSet(const tsl::robin_set<T> &robin_set) : AnyReference(robin_set)
     {
     }
-
-    template <typename T> const tsl::robin_set<T> &get() const
+    template <typename T> AnyRobinSet(tsl::robin_set<T> &robin_set) : AnyReference(robin_set)
     {
-        auto set_ptr = std::any_cast<tsl::robin_set<T> *>(_data);
-        return *set_ptr;
     }
-
-    template <typename T> tsl::robin_set<T> &get()
-    {
-        auto set_ptr = std::any_cast<tsl::robin_set<T> *>(_data);
-        return *set_ptr;
-    }
-
-  private:
-    std::any _data;
 };
 
-struct AnyVector
+struct AnyVector : public AnyReference
 {
-    template <typename T> AnyVector(const std::vector<T> &vector) : _data(const_cast<std::vector<T> *>(&vector))
+    template <typename T> AnyVector(const std::vector<T> &vector) : AnyReference(vector)
     {
     }
-
-    template <typename T> const std::vector<T> &get() const
+    template <typename T> AnyVector(std::vector<T> &vector) : AnyReference(vector)
     {
-        auto sharedVector = std::any_cast<std::vector<T> *>(_data);
-        return *sharedVector;
     }
-
-    template <typename T> std::vector<T> &get()
-    {
-        auto sharedVector = std::any_cast<std::vector<T> *>(_data);
-        return *sharedVector;
-    }
-
-  private:
-    std::any _data;
 };
 } // namespace AnyWrapper

@@ -1759,11 +1759,12 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
 }
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::_build(const DataType &data, const size_t num_points_to_load,
-                                    const IndexWriteParameters &parameters, const TagVector &tags)
+                                    const IndexWriteParameters &parameters, TagVector &tags)
 {
     try
     {
-        this->build(std::any_cast<const T *>(data), num_points_to_load, parameters, tags.get<TagT>());
+        this->build(std::any_cast<const T *>(data), num_points_to_load, parameters,
+                    tags.get<const std::vector<TagT>>());
     }
     catch (const std::bad_any_cast &e)
     {
@@ -2351,7 +2352,7 @@ size_t Index<T, TagT, LabelT>::_search_with_tags(const DataType &query, const ui
     try
     {
         return this->search_with_tags(std::any_cast<const T *>(query), K, L, std::any_cast<TagT *>(tags), distances,
-                                      res_vectors.get<T *>());
+                                      res_vectors.get<std::vector<T *>>());
     }
     catch (const std::bad_any_cast &e)
     {
@@ -3101,11 +3102,11 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::_lazy_delete(const TagVector &tags, TagVector &failed_tags)
+void Index<T, TagT, LabelT>::_lazy_delete(TagVector &tags, TagVector &failed_tags)
 {
     try
     {
-        this->lazy_delete(tags.get<TagT>(), failed_tags.get<TagT>());
+        this->lazy_delete(tags.get<const std::vector<TagT>>(), failed_tags.get<std::vector<TagT>>());
     }
     catch (const std::bad_any_cast &e)
     {
@@ -3177,7 +3178,7 @@ void Index<T, TagT, LabelT>::_get_active_tags(TagRobinSet &active_tags)
 {
     try
     {
-        this->get_active_tags(active_tags.get<TagT>());
+        this->get_active_tags(active_tags.get<tsl::robin_set<TagT>>());
     }
     catch (const std::bad_any_cast &e)
     {
