@@ -11,6 +11,7 @@
 
 namespace diskann {
 
+ template<typename data_t>
  struct AbstractScratch;
 
 template <typename data_t>
@@ -82,13 +83,25 @@ class AbstractDataStore {
   virtual void copy_vectors(const location_t from_loc, const location_t to_loc,
                             const location_t num_points) = 0;
 
-  // metric specific operations
-
+  //Some datastores like PQ stores need a preprocessing step before querying.
+  //Optionally, a scratch object can be passed in to avoid memory allocations
+  //Default implementation does nothing.
+  //REFACTOR TODO: Currently, we take an aligned_query as parameter, but this
+  //should change and this function should do the necessary alignment. 
+  virtual void preprocess_query(const data_t *aligned_query,
+                                AbstractScratch<data_t> *query_scratch = nullptr) const;
+  // distance functions.
   virtual float get_distance(const data_t *query,
                              const location_t loc) const = 0;
   virtual void get_distance(const data_t *query, const location_t *locations,
                             const uint32_t location_count,
-                            float *distances, AbstractScratch* scratch_space = nullptr) const = 0;
+                            float *distances, AbstractScratch<data_t>* scratch_space = nullptr) const = 0;
+  //Specific overload for index.cpp. 
+  //REFACTOR TODO: Check if the default implementation is sufficient for most cases. 
+  virtual void get_distance(const data_t *preprocessed_query,
+                            const std::vector<location_t> &ids,
+                            std::vector<float> &distances,
+                            AbstractScratch<data_t> *scratch_space) const;
   virtual float get_distance(const location_t loc1,
                              const location_t loc2) const = 0;
 

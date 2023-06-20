@@ -5,6 +5,7 @@
 #include <boost/dynamic_bitset.hpp>
 
 #include "scratch.h"
+#include "pq_scratch.h"
 
 namespace diskann
 {
@@ -13,7 +14,9 @@ namespace diskann
 //
 template <typename T>
 InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
-                                        size_t aligned_dim, size_t alignment_factor, bool init_pq_scratch)
+                                        size_t aligned_dim,
+                                        size_t alignment_factor,
+                                        bool init_pq_scratch)
     : _L(0), _R(r), _maxc(maxc)
 {
     if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0)
@@ -24,13 +27,13 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
         throw diskann::ANNException(ss.str(), -1);
     }
 
-    alloc_aligned(((void **)&_aligned_query), aligned_dim * sizeof(T), alignment_factor * sizeof(T));
-    memset(_aligned_query, 0, aligned_dim * sizeof(T));
+    alloc_aligned(((void **)& this->_aligned_query_T), aligned_dim * sizeof(T), alignment_factor * sizeof(T));
+    memset(this->_aligned_query_T, 0, aligned_dim * sizeof(T));
 
     if (init_pq_scratch)
-        _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
+        this->_pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
     else
-        _pq_scratch = nullptr;
+        this->_pq_scratch = nullptr;
 
     _occlude_factor.reserve(maxc);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
@@ -71,12 +74,12 @@ template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l
 
 template <typename T> InMemQueryScratch<T>::~InMemQueryScratch()
 {
-    if (_aligned_query != nullptr)
+    if (this->_aligned_query_T != nullptr)
     {
-        aligned_free(_aligned_query);
+        aligned_free(this->_aligned_query_T);
     }
 
-    delete _pq_scratch;
+    delete this->_pq_scratch;
     delete _inserted_into_pool_bs;
 }
 
@@ -97,12 +100,12 @@ template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, si
 
     diskann::alloc_aligned((void **)&coord_scratch, coord_alloc_size, 256);
     diskann::alloc_aligned((void **)&sector_scratch, (size_t)MAX_N_SECTOR_READS * (size_t)SECTOR_LEN, SECTOR_LEN);
-    diskann::alloc_aligned((void **)&aligned_query_T, aligned_dim * sizeof(T), 8 * sizeof(T));
+    diskann::alloc_aligned((void **)&this->_aligned_query_T, aligned_dim * sizeof(T), 8 * sizeof(T));
 
-    _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
+    this->_pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
 
     memset(coord_scratch, 0, coord_alloc_size);
-    memset(aligned_query_T, 0, aligned_dim * sizeof(T));
+    memset(this->_aligned_query_T, 0, aligned_dim * sizeof(T));
 
     visited.reserve(visited_reserve);
     full_retset.reserve(visited_reserve);
@@ -112,9 +115,9 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
 {
     diskann::aligned_free((void *)coord_scratch);
     diskann::aligned_free((void *)sector_scratch);
-    diskann::aligned_free((void *)aligned_query_T);
+    diskann::aligned_free((void *)this->_aligned_query_T);
 
-    delete[] _pq_scratch;
+    delete[] this->_pq_scratch;
 }
 
 template <typename T>

@@ -32,7 +32,7 @@ struct PQScratch;
 //
 // AbstractScratch space for in-memory index based search
 //
-template <typename T> class InMemQueryScratch : public AbstractScratch
+template <typename T> class InMemQueryScratch : public AbstractScratch<T>
 {
   public:
     ~InMemQueryScratch();
@@ -56,11 +56,11 @@ template <typename T> class InMemQueryScratch : public AbstractScratch
     }
     inline T *aligned_query()
     {
-        return _aligned_query;
+        return this->_aligned_query_T;
     }
     inline PQScratch<T> *pq_scratch()
     {
-        return _pq_scratch;
+        return this->_pq_scratch;
     }
     inline std::vector<Neighbor> &pool()
     {
@@ -108,9 +108,6 @@ template <typename T> class InMemQueryScratch : public AbstractScratch
     uint32_t _R;
     uint32_t _maxc;
 
-    T *_aligned_query = nullptr;
-
-    PQScratch<T> *_pq_scratch = nullptr;
 
     // _pool stores all neighbors explored from best_L_nodes.
     // Usually around L+R, but could be higher.
@@ -151,17 +148,13 @@ template <typename T> class InMemQueryScratch : public AbstractScratch
 // AbstractScratch space for SSD index based search
 //
 
-template <typename T> class SSDQueryScratch : public AbstractScratch
+template <typename T> class SSDQueryScratch : public AbstractScratch<T>
 {
   public:
     T *coord_scratch = nullptr; // MUST BE AT LEAST [sizeof(T) * data_dim]
 
     char *sector_scratch = nullptr; // MUST BE AT LEAST [MAX_N_SECTOR_READS * SECTOR_LEN]
     size_t sector_idx = 0;          // index of next [SECTOR_LEN] scratch to use
-
-    T *aligned_query_T = nullptr;
-
-    PQScratch<T> *_pq_scratch;
 
     tsl::robin_set<size_t> visited;
     NeighborPriorityQueue retset;

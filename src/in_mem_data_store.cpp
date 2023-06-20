@@ -185,7 +185,7 @@ template <typename data_t> float InMemDataStore<data_t>::get_distance(const data
 
 template <typename data_t>
 void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t *locations,
-                                          const uint32_t location_count, float *distances, AbstractScratch* scratch_space) const
+                                          const uint32_t location_count, float *distances, AbstractScratch<data_t>* scratch_space) const
 {
     assert(scratch_space == nullptr); //Scratch space should only be used by PQ data store. 
     for (location_t i = 0; i < location_count; i++)

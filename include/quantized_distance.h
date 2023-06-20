@@ -1,14 +1,23 @@
 #pragma once
-
+#include <memory>
+#include <string>
+#include <vector>
 #include "abstract_scratch.h"
+
+
 
 namespace diskann
 {
+  template <typename data_t>
+  struct PQScratch;
 
 template <typename data_t> class QuantizedDistance
 {
   public:
-    virtual ~QuantizedDistance() = 0;
+    QuantizedDistance() = default;
+    QuantizedDistance(const QuantizedDistance &) = delete;
+    QuantizedDistance &operator=(const QuantizedDistance &) = delete;
+    virtual ~QuantizedDistance(){};
 
     virtual bool is_opq() const = 0;
     virtual std::string get_quantized_vectors_filename(const std::string& prefix) const = 0;
@@ -20,9 +29,9 @@ template <typename data_t> class QuantizedDistance
     // However, we want to indicate that this function will change once we have a
     // file reader hierarchy, so leave it here as-is.
 #ifdef EXEC_ENV_OLS
-    virtual void load_pivot_data(MemoryMappedFiles &files, const char *pq_table_file, size_t num_chunks) = 0;
+    virtual void load_pivot_data(MemoryMappedFiles &files, const std::String& pq_table_file, size_t num_chunks) = 0;
 #else
-    virtual void load_pivot_data(const char *pq_table_file, size_t num_chunks) = 0;
+    virtual void load_pivot_data(const std::string& pq_table_file, size_t num_chunks) = 0;
 #endif
 
     // Number of chunks in the PQ table. Depends on the compression level used.
@@ -37,7 +46,12 @@ template <typename data_t> class QuantizedDistance
 
     // Workhorse
     // This function must be called after preprocess_query
-    virtual float preprocessed_distance(PQScratch<data_t> &pq_scratch, const std::vector<uint8_t> &data,
+    virtual void preprocessed_distance(PQScratch<data_t> &pq_scratch, const uint32_t id_count,
+                                        float *dists_out) = 0;
+
+    //Same as above, but convenience function for index.cpp.
+    virtual void preprocessed_distance(PQScratch<data_t> &pq_scratch,
+                                        const uint32_t n_ids,
                                         std::vector<float> &dists_out) = 0;
 
     // Currently this function is required for DiskPQ. However, it too can be subsumed
