@@ -9,7 +9,8 @@
 namespace diskann {
 
 template <typename data_t>
-PQL2Distance<data_t>::PQL2Distance() {}
+PQL2Distance<data_t>::PQL2Distance(uint32_t num_chunks)
+    : _num_chunks(num_chunks) {}
 
 template <typename data_t>
 PQL2Distance<data_t>::~PQL2Distance() {
@@ -27,16 +28,26 @@ bool PQL2Distance<data_t>::is_opq() const {
   return false;
 }
 
-// REFACTOR TODO: Undefined behavior if _num_chunks is not set.
 template <typename data_t>
 std::string PQL2Distance<data_t>::get_quantized_vectors_filename(
     const std::string &prefix) const {
-  return diskann::get_quantized_vectors_filename(prefix, false, (uint32_t) _num_chunks);
+  if (_num_chunks == 0) {
+    throw diskann::ANNException(
+        "Must set num_chunks before calling get_quantized_vectors_filename", -1,
+        __FUNCSIG__, __FILE__, __LINE__);
+  }
+  return diskann::get_quantized_vectors_filename(prefix, false,
+                                                 (uint32_t)_num_chunks);
 }
 template <typename data_t>
 std::string PQL2Distance<data_t>::get_pivot_data_filename(
     const std::string &prefix) const {
-  return diskann::get_pivot_data_filename(prefix, false, (uint32_t) _num_chunks);
+  if (_num_chunks == 0) {
+    throw diskann::ANNException(
+        "Must set num_chunks before calling get_pivot_data_filename", -1,
+        __FUNCSIG__, __FILE__, __LINE__);
+  }
+  return diskann::get_pivot_data_filename(prefix, false, (uint32_t)_num_chunks);
 }
 template <typename data_t>
 std::string PQL2Distance<data_t>::get_rotation_matrix_filename(
@@ -53,11 +64,12 @@ void PQL2Distance<data_t>::load_pivot_data(MemoryMappedFiles &files,
                                            size_t num_chunks) {
 #else
 template <typename data_t>
-void PQL2Distance<data_t>::load_pivot_data(const std::string& pq_table_file,
+void PQL2Distance<data_t>::load_pivot_data(const std::string &pq_table_file,
                                            size_t num_chunks) {
 #endif
   uint64_t nr, nc;
-  //std::string rotmat_file = get_opq_rot_matrix_filename(pq_table_file, false);
+  // std::string rotmat_file = get_opq_rot_matrix_filename(pq_table_file,
+  // false);
 
 #ifdef EXEC_ENV_OLS
   size_t *file_offset_data;  // since load_bin only sets the pointer, no need
@@ -153,20 +165,22 @@ void PQL2Distance<data_t>::load_pivot_data(const std::string& pq_table_file,
                 << ", #dims: " << this->_ndims
                 << ", #chunks: " << this->_num_chunks << std::endl;
 
-//For PQ there will be no rotation matrix.
-//  if (file_exists(rotmat_file)) {
-//#ifdef EXEC_ENV_OLS
-//    diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr, nc);
-//#else
-//    diskann::load_bin<float>(rotmat_file, _rotmat_tr, nr, nc);
-//#endif
-//    if (nr != this->_ndims || nc != this->_ndims) {
-//      diskann::cerr << "Error loading rotation matrix file" << std::endl;
-//      throw diskann::ANNException("Error loading rotation matrix file", -1,
-//                                  __FUNCSIG__, __FILE__, __LINE__);
-//    }
-//    _use_rotation = true;
-//  }
+
+  // For PQ there will be no rotation matrix.
+  //   if (file_exists(rotmat_file)) {
+  // #ifdef EXEC_ENV_OLS
+  //     diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr,
+  //     nc);
+  // #else
+  //     diskann::load_bin<float>(rotmat_file, _rotmat_tr, nr, nc);
+  // #endif
+  //     if (nr != this->_ndims || nc != this->_ndims) {
+  //       diskann::cerr << "Error loading rotation matrix file" << std::endl;
+  //       throw diskann::ANNException("Error loading rotation matrix file", -1,
+  //                                   __FUNCSIG__, __FILE__, __LINE__);
+  //     }
+  //     _use_rotation = true;
+  //   }
 
   // alloc and compute transpose
   _tables_tr = new float[256 * this->_ndims];
@@ -213,16 +227,16 @@ void PQL2Distance<data_t>::preprocess_query(const data_t *aligned_query,
 
 template <typename data_t>
 void PQL2Distance<data_t>::preprocessed_distance(PQScratch<data_t> &pq_scratch,
-                                                  const uint32_t n_ids,
-                                                  float *dists_out) {
+                                                 const uint32_t n_ids,
+                                                 float *dists_out) {
   pq_dist_lookup(pq_scratch.aligned_pq_coord_scratch, n_ids, _num_chunks,
                  pq_scratch.aligned_pqtable_dist_scratch, dists_out);
 }
 
 template <typename data_t>
-void PQL2Distance<data_t>::preprocessed_distance(PQScratch<data_t> &pq_scratch,
-                                                  const uint32_t n_ids,
-                                                  std::vector<float>& dists_out) {
+void PQL2Distance<data_t>::preprocessed_distance(
+    PQScratch<data_t> &pq_scratch, const uint32_t n_ids,
+    std::vector<float> &dists_out) {
   pq_dist_lookup(pq_scratch.aligned_pq_coord_scratch, n_ids, _num_chunks,
                  pq_scratch.aligned_pqtable_dist_scratch, dists_out);
 }

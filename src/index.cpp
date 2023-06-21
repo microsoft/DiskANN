@@ -130,7 +130,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim,
       }
 
       //REFACTOR TODO: This should move to a factory method and support OPQ.
-      _pq_distance_fn = std::make_shared<PQL2Distance<T>>();
+      _pq_distance_fn = std::make_shared<PQL2Distance<T>>(_num_pq_chunks);
       //REFACTOR TODO: Unlike Distance and DataStore, where distance object is ready when the data store 
       //is constructed. Here the distance object will not be fully ready until populate_data() is called
       _pq_data_store = std::make_shared<PQDataStore<T>>(_dim, total_internal_points, _num_pq_chunks, this->_distance, _pq_distance_fn);
@@ -1680,6 +1680,13 @@ void Index<T, TagT, LabelT>::build(const char *filename,
             "EXEC_ENV_OLS is defined.",
             -1, __FUNCSIG__, __FILE__, __LINE__);
 #else
+    //REFACTOR TODO: Both in the previous code and in the current PQDataStore,
+    //we are writing the PQ files in the same path as the input file. Now we 
+    //may not have write permissions to that folder, but we will always have 
+    //write permissions to the output folder. So we should write the PQ files
+    //there. The problem is that the Index class gets the output folder prefix
+    //only at the time of save(), by which time we are too late. So leaving it
+    //as-is for now. 
     _pq_data_store->populate_data(filename, 0U);
 #endif
 //    double p_val = std::min(

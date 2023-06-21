@@ -10,7 +10,13 @@ class PQL2Distance : public QuantizedDistance<data_t> {
   // immediately after construction. But this would not work well
   // with our data store concept where the store is created first
   // and data populated after.
-  PQL2Distance();
+  // REFACTOR TODO: Ideally, we should only read the num_chunks from
+  // the pivots file. However, we read the pivots file only later, but
+  // clients can call functions like get_<xxx>_filename without calling
+  // load_pivot_data. Hence this. The TODO is whether we should check
+  // that the num_chunks from the file is the same as this one.
+   
+  PQL2Distance(uint32_t num_chunks);
 
   virtual ~PQL2Distance() override;
 

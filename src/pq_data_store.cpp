@@ -19,7 +19,7 @@ PQDataStore<data_t>::PQDataStore(
       _num_chunks(num_pq_chunks),
       _quantized_data(nullptr),
       _distance_metric(distance_fn->get_metric()),
-      _pq_distance_fn(pq_distance_fn) {}
+      _pq_distance_fn(pq_distance_fn){}
 
 template <typename data_t>
 PQDataStore<data_t>::~PQDataStore() {
@@ -72,13 +72,15 @@ void PQDataStore<data_t>::populate_data(const std::string& filename,
       1.0, ((double)MAX_PQ_TRAINING_SET_SIZE / (double)file_num_points));
 
   auto pivots_file = _pq_distance_fn->get_pivot_data_filename(filename);
-  auto compressed_file =
-      _pq_distance_fn->get_quantized_vectors_filename(filename);
+  auto compressed_file = _pq_distance_fn->get_quantized_vectors_filename(filename);
 
-  generate_quantized_data<data_t>(std::string(filename), pivots_file,
+  generate_quantized_data<data_t>(filename, pivots_file,
                              compressed_file, _distance_metric, p_val,
                              _num_chunks, _pq_distance_fn->is_opq());
 
+  // REFACTOR TODO: Not sure of the alignment. Just copying from index.cpp
+  alloc_aligned(((void**)&_quantized_data),
+                          file_num_points * _num_chunks * sizeof(uint8_t), 8);
   copy_aligned_data_from_file<uint8_t>(compressed_file.c_str(),
                                        _quantized_data, file_num_points,
                                        _num_chunks, _num_chunks);
