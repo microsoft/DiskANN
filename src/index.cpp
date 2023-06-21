@@ -1413,10 +1413,8 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
             search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, _filtered_index,
                                        _filterIndexingQueueSize);
         }
-        if (pruned_list.size() == 0)
-        {
-            search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
-        }
+        search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
+
         {
             LockGuard guard(_locks[node]);
             _final_graph[node].reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
@@ -2749,6 +2747,11 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
             {
                 _labels.insert(label);
                 _label_to_medoid_id[label] = (uint32_t)point_id;
+                _label_count[label] = 1;
+            }
+            else
+            {
+                _label_count[label]++;
             }
         }
     }
@@ -2819,10 +2822,8 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     {
         search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
     }
-    if (pruned_list.size() == 0)
-    {
-        search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch);
-    }
+    search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch);
+
     {
         std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock, std::defer_lock);
         if (_conc_consolidate)
