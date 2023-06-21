@@ -2747,11 +2747,11 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
             {
                 _labels.insert(label);
                 _label_to_medoid_id[label] = (uint32_t)point_id;
-                _label_count[label] = 1;
+                _label_counts[label] = 1;
             }
             else
             {
-                _label_count[label]++;
+                _label_counts[label]++;
             }
         }
     }
