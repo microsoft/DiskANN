@@ -24,8 +24,8 @@ struct AnyReference
 
     template <typename Ty> Ty &get()
     {
-        auto set_ptr = std::any_cast<Ty *>(_data);
-        return *set_ptr;
+        auto ptr = std::any_cast<Ty *>(_data);
+        return *ptr;
     }
 
   private:

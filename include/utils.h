@@ -1113,45 +1113,42 @@ inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::
     }
 }
 
-template <typename T> inline const char *diskann_type_to_name()
+template <typename T> inline const char *diskann_type_to_name() = delete;
+template <> inline const char *diskann_type_to_name<float>()
 {
-    if (std::is_same<T, float>::value)
-    {
-        return "float";
-    }
-    else if (std::is_same<T, uint8_t>::value)
-    {
-        return "uint8";
-    }
-    else if (std::is_same<T, int8_t>::value)
-    {
-        return "int8";
-    }
-    else if (std::is_same<T, uint16_t>::value)
-    {
-        return "uint16";
-    }
-    else if (std::is_same<T, int16_t>::value)
-    {
-        return "int16";
-    }
-    else if (std::is_same<T, uint32_t>::value)
-    {
-        return "uint32";
-    }
-    else if (std::is_same<T, int32_t>::value)
-    {
-        return "int32";
-    }
-    else if (std::is_same<T, uint64_t>::value)
-    {
-        return "uint64";
-    }
-    else if (std::is_same<T, int64_t>::value)
-    {
-        return "int64";
-    }
-    throw std::runtime_error("Error: can't convert type_to_name, index does not support the passed type.");
+    return "float";
+}
+template <> inline const char *diskann_type_to_name<uint8_t>()
+{
+    return "uint8";
+}
+template <> inline const char *diskann_type_to_name<int8_t>()
+{
+    return "int8";
+}
+template <> inline const char *diskann_type_to_name<uint16_t>()
+{
+    return "uint16";
+}
+template <> inline const char *diskann_type_to_name<int16_t>()
+{
+    return "int16";
+}
+template <> inline const char *diskann_type_to_name<uint32_t>()
+{
+    return "uint32";
+}
+template <> inline const char *diskann_type_to_name<int32_t>()
+{
+    return "int32";
+}
+template <> inline const char *diskann_type_to_name<uint64_t>()
+{
+    return "uint64";
+}
+template <> inline const char *diskann_type_to_name<int64_t>()
+{
+    return "int64";
 }
 
 #ifdef _WINDOWS

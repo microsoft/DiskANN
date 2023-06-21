@@ -209,6 +209,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                             .is_use_opq(false)
                             .with_num_pq_chunks(0)
                             .is_pq_dist_build(false)
+                            .with_search_threads(insert_threads)
+                            .with_initial_search_list_size(L)
                             .with_tag_type(diskann_type_to_name<TagT>())
                             .with_label_type(diskann_type_to_name<LabelT>())
                             .with_data_type(diskann_type_to_name<T>())
