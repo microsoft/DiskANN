@@ -2851,6 +2851,43 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     return 0;
 }
 
+template <typename T, typename TagT, typename LabelT>
+uint32_t Index<T, TagT, LabelT>::bfs_medoid_search(uint32_t start, LabelT label, uint32_t depth)
+{
+    tsl::robin_set<uint32_t> visited;
+    std::vector<std::vector<uint32_t>> q(1);
+    q[0].assign(_final_graph[start].begin(), _final_graph[start].end());
+
+    while (!q.empty() && depth > 0)
+    {
+        std::vector<uint32_t> curr_level = q[0];
+        q.erase(q.begin());
+
+        std::vector<uint32_t> curr_level_nbrs;
+
+        for (auto nbr : curr_level)
+        {
+            if (visited.find(nbr) != visited.end())
+            {
+                visited.insert(nbr);
+                if (_pts_to_labels[nbr].find(label) != _pts_to_labels[nbr].end() &&
+                    _delete_set.find(nbr) == _delete_set.end())
+                {
+                    return nbr;
+                }
+                else
+                {
+                    curr_level_nbrs.push_back(nbr);
+                }
+            }
+        }
+        q.emplace_back(curr_level_nbrs);
+        depth--;
+    }
+
+    // TODO: Raise exception if no medoid found and search is over
+}
+
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagT &tag)
 {
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
@@ -2869,6 +2906,18 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     _delete_set->insert(location);
     _location_to_tag.erase(location);
     _tag_to_location.erase(tag);
+
+    if (_filtered_index)
+    {
+        for (LabelT label : _pts_to_labels[location])
+        {
+            if (_label_to_medoid_id[label] == location)
+            {
+                // TODO: Handle exception if new medoid is not found
+                _label_to_medoid_id[LabelT] = bfs_medoid_search(location, label, 2);
+            }
+        }
+    }
 
     return 0;
 }
