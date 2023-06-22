@@ -8,6 +8,7 @@
 
 #include "types.h"
 #include "windows_customizations.h"
+#include "distance.h"
 
 namespace diskann
 {
@@ -86,6 +87,8 @@ template <typename data_t> class AbstractDataStore
     // Returns the point in the dataset that is closest to the mean of all points
     // in the dataset
     virtual location_t calculate_medoid() const = 0;
+
+    virtual Distance<data_t> *get_dist_fn() = 0;
 
     // search helpers
     // if the base data is aligned per the request of the metric, this will tell
