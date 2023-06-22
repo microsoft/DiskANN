@@ -259,7 +259,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     index.set_start_points_at_random(static_cast<T>(start_point_norm));
 
     // TODO: Is this necessary?
-    if (false)
+    if (!has_labels)
     {
         index.enable_delete();
     }
@@ -291,7 +291,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         });
         insert_task.wait();
 
-        if (false)
+        if (!has_labels)
         {
             if (delete_tasks.size() > 0)
                 delete_tasks[delete_tasks.size() - 1].wait();
