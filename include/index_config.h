@@ -33,10 +33,10 @@ struct IndexConfig
     std::string tag_type;
     std::string data_type;
 
+    std::shared_ptr<IndexWriteParameters> index_write_params;
+
     uint32_t search_threads;
     uint32_t initial_search_list_size;
-
-    std::shared_ptr<IndexWriteParameters> index_write_params;
 
   private:
     IndexConfig(DataStoreStrategy data_strategy, GraphStoreStrategy graph_strategy, Metric metric, size_t dimension,
@@ -216,9 +216,9 @@ class IndexConfigBuilder
     std::string _tag_type = "uint32";
     std::string _data_type;
 
+    std::shared_ptr<IndexWriteParameters> _index_write_params;
+
     uint32_t _search_threads;
     uint32_t _initial_search_list_size;
-
-    std::shared_ptr<IndexWriteParameters> _index_write_params;
 };
 } // namespace diskann
