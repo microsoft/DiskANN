@@ -317,7 +317,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 #endif
 
   private:
-    uint32_t Index<T, TagT, LabelT>::bfs_medoid_search(uint32_t start, LabelT label, uint32_t depth)
+    uint32_t bfs_medoid_search(uint32_t start, LabelT label, uint32_t depth);
 
     // Distance functions
     Metric _dist_metric = diskann::L2;

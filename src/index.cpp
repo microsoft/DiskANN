@@ -2870,8 +2870,8 @@ uint32_t Index<T, TagT, LabelT>::bfs_medoid_search(uint32_t start, LabelT label,
             if (visited.find(nbr) != visited.end())
             {
                 visited.insert(nbr);
-                if (_pts_to_labels[nbr].find(label) != _pts_to_labels[nbr].end() &&
-                    _delete_set.find(nbr) == _delete_set.end())
+                if (auto it = std::find(_pts_to_labels[nbr].begin(), _pts_to_labels[nbr].end(), label);
+                    it != _pts_to_labels[nbr].end() && _delete_set->find(nbr) == _delete_set->end())
                 {
                     return nbr;
                 }
@@ -2884,8 +2884,7 @@ uint32_t Index<T, TagT, LabelT>::bfs_medoid_search(uint32_t start, LabelT label,
         q.emplace_back(curr_level_nbrs);
         depth--;
     }
-
-    // TODO: Raise exception if no medoid found and search is over
+    throw ANNException("Error: unable to find any medoid with depth " + depth, -1);
 }
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagT &tag)
@@ -2914,7 +2913,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
             if (_label_to_medoid_id[label] == location)
             {
                 // TODO: Handle exception if new medoid is not found
-                _label_to_medoid_id[LabelT] = bfs_medoid_search(location, label, 2);
+                _label_to_medoid_id[label] = bfs_medoid_search(location, label, 2);
             }
         }
     }
