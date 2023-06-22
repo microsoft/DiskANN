@@ -17,6 +17,7 @@
 
 #include "memory_mapper.h"
 #include "ann_exception.h"
+#include "index_factory.h"
 
 namespace po = boost::program_options;
 
@@ -155,46 +156,42 @@ int main(int argc, char **argv)
     {
         diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
                       << "  #threads: " << num_threads << std::endl;
-        if (label_file != "" && label_type == "ushort")
-        {
-            if (data_type == std::string("int8"))
-                return build_in_memory_index<int8_t, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                    use_opq, label_file, universal_label, Lf);
-            else if (data_type == std::string("uint8"))
-                return build_in_memory_index<uint8_t, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                    use_opq, label_file, universal_label, Lf);
-            else if (data_type == std::string("float"))
-                return build_in_memory_index<float, uint32_t, uint16_t>(
-                    metric, data_path, R, L, alpha, index_path_prefix, num_threads, use_pq_build, build_PQ_bytes,
-                    use_opq, label_file, universal_label, Lf);
-            else
-            {
-                std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                return -1;
-            }
-        }
-        else
-        {
-            if (data_type == std::string("int8"))
-                return build_in_memory_index<int8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                     use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
-                                                     Lf);
-            else if (data_type == std::string("uint8"))
-                return build_in_memory_index<uint8_t>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                      use_pq_build, build_PQ_bytes, use_opq, label_file,
-                                                      universal_label, Lf);
-            else if (data_type == std::string("float"))
-                return build_in_memory_index<float>(metric, data_path, R, L, alpha, index_path_prefix, num_threads,
-                                                    use_pq_build, build_PQ_bytes, use_opq, label_file, universal_label,
-                                                    Lf);
-            else
-            {
-                std::cout << "Unsupported type. Use one of int8, uint8 or float." << std::endl;
-                return -1;
-            }
-        }
+
+        size_t data_num, data_dim;
+        diskann::get_bin_metadata(data_path, data_num, data_dim);
+
+        auto config = diskann::IndexConfigBuilder()
+                          .with_metric(metric)
+                          .with_dimension(data_dim)
+                          .with_max_points(data_num)
+                          .with_data_load_store_strategy(diskann::MEMORY)
+                          .with_data_type(data_type)
+                          .with_label_type(label_type)
+                          .is_dynamic_index(false)
+                          .is_enable_tags(false)
+                          .is_use_opq(use_opq)
+                          .is_pq_dist_build(use_pq_build)
+                          .with_num_pq_chunks(build_PQ_bytes)
+                          .build();
+
+        auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
+                                      .with_filter_list_size(Lf)
+                                      .with_alpha(alpha)
+                                      .with_saturate_graph(false)
+                                      .with_num_threads(num_threads)
+                                      .build();
+
+        auto build_params = diskann::IndexBuildParamsBuilder(index_build_params)
+                                .with_universal_label(universal_label)
+                                .with_label_file(label_file)
+                                .with_save_path_prefix(index_path_prefix)
+                                .build();
+        auto index_factory = diskann::IndexFactory(config);
+        auto index = index_factory.create_instance();
+        index->build(data_path, data_num, build_params);
+        index->save(index_path_prefix.c_str());
+        index.reset();
+        return 0;
     }
     catch (const std::exception &e)
     {

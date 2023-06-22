@@ -20,6 +20,7 @@
 #include "index.h"
 #include "memory_mapper.h"
 #include "utils.h"
+#include "index_factory.h"
 
 namespace po = boost::program_options;
 
@@ -30,6 +31,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
                         const std::vector<std::string> &query_filters, const float fail_if_recall_below)
 {
+    using TagT = uint32_t;
     // Load the query file
     T *query = nullptr;
     uint32_t *gt_ids = nullptr;
@@ -37,7 +39,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
     diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
 
-    // Check for ground truth
     bool calc_recall_flag = false;
     if (truthset_file != std::string("null") && file_exists(truthset_file))
     {
@@ -66,18 +67,32 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
     }
 
-    using TagT = uint32_t;
-    const bool concurrent = false, pq_dist_build = false, use_opq = false;
-    const size_t num_pq_chunks = 0;
-    using IndexType = diskann::Index<T, TagT, LabelT>;
-    const size_t num_frozen_pts = IndexType::get_graph_num_frozen_points(index_path);
-    IndexType index(metric, query_dim, 0, dynamic, tags, concurrent, pq_dist_build, num_pq_chunks, use_opq,
-                    num_frozen_pts);
-    std::cout << "Index class instantiated" << std::endl;
-    index.load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
+    const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
+
+    auto config = diskann::IndexConfigBuilder()
+                      .with_metric(metric)
+                      .with_dimension(query_dim)
+                      .with_max_points(0)
+                      .with_data_load_store_strategy(diskann::MEMORY)
+                      .with_data_type(diskann_type_to_name<T>())
+                      .with_label_type(diskann_type_to_name<LabelT>())
+                      .with_tag_type(diskann_type_to_name<TagT>())
+                      .is_dynamic_index(dynamic)
+                      .is_enable_tags(tags)
+                      .is_concurrent_consolidate(false)
+                      .is_pq_dist_build(false)
+                      .is_use_opq(false)
+                      .with_num_pq_chunks(0)
+                      .with_num_frozen_pts(num_frozen_pts)
+                      .build();
+
+    auto index_factory = diskann::IndexFactory(config);
+    auto index = index_factory.create_instance();
+    index->load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
     std::cout << "Index loaded" << std::endl;
+
     if (metric == diskann::FAST_L2)
-        index.optimize_index_layout();
+        index->optimize_index_layout();
 
     std::cout << "Using " << num_threads << " threads to search" << std::endl;
     std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
@@ -148,29 +163,22 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search)
             {
-                LabelT filter_label_as_num;
-                if (query_filters.size() == 1)
-                {
-                    filter_label_as_num = index.get_converted_label(query_filters[0]);
-                }
-                else
-                {
-                    filter_label_as_num = index.get_converted_label(query_filters[i]);
-                }
-                auto retval = index.search_with_filters(query + i * query_aligned_dim, filter_label_as_num, recall_at,
-                                                        L, query_result_ids[test_id].data() + i * recall_at,
-                                                        query_result_dists[test_id].data() + i * recall_at);
+                std::string raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+
+                auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
+                                                         query_result_ids[test_id].data() + i * recall_at,
+                                                         query_result_dists[test_id].data() + i * recall_at);
                 cmp_stats[i] = retval.second;
             }
             else if (metric == diskann::FAST_L2)
             {
-                index.search_with_optimized_layout(query + i * query_aligned_dim, recall_at, L,
-                                                   query_result_ids[test_id].data() + i * recall_at);
+                index->search_with_optimized_layout(query + i * query_aligned_dim, recall_at, L,
+                                                    query_result_ids[test_id].data() + i * recall_at);
             }
             else if (tags)
             {
-                index.search_with_tags(query + i * query_aligned_dim, recall_at, L,
-                                       query_result_tags.data() + i * recall_at, nullptr, res);
+                index->search_with_tags(query + i * query_aligned_dim, recall_at, L,
+                                        query_result_tags.data() + i * recall_at, nullptr, res);
                 for (int64_t r = 0; r < (int64_t)recall_at; r++)
                 {
                     query_result_ids[test_id][recall_at * i + r] = query_result_tags[recall_at * i + r];
@@ -179,8 +187,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             else
             {
                 cmp_stats[i] = index
-                                   .search(query + i * query_aligned_dim, recall_at, L,
-                                           query_result_ids[test_id].data() + i * recall_at)
+                                   ->search(query + i * query_aligned_dim, recall_at, L,
+                                            query_result_ids[test_id].data() + i * recall_at)
                                    .second;
             }
             auto qe = std::chrono::high_resolution_clock::now();
@@ -245,7 +253,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
 
     diskann::aligned_free(query);
-
     return best_recall >= fail_if_recall_below ? 0 : -1;
 }
 
