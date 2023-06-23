@@ -38,14 +38,9 @@ template <typename data_t> size_t PQDataStore<data_t>::save(const std::string &f
     return diskann::save_bin(filename, _quantized_data, this->capacity(), _num_chunks, 0);
 }
 
-template <typename data_t> size_t PQDataStore<data_t>::get_dims() const
-{
-    return _num_chunks;
-}
-
 template <typename data_t> size_t PQDataStore<data_t>::get_aligned_dim() const
 {
-    return _num_chunks;
+    return this->get_dims();
 }
 
 // Populate quantized data from regular data.

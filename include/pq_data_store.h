@@ -24,13 +24,10 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     // Save quantized vectors to a set of files whose names start with
     // file_prefix.
     //  Currently, the plan is to save the quantized vectors to the quantized
-    //  vectors file
+    //  vectors file.
     virtual size_t save(const std::string &file_prefix, const location_t num_points) override;
 
-    // We want to override get_dims() because we are passing the original dim
-    // to the AbstractDataStore. However dims for PQDataStore is really num_chunks
-    // REFACTOR TODO: Check if we can do away with the original data dim.
-    virtual size_t get_dims() const override;
+    // Since base class function is pure virtual, we need to declare it here, even though alignent concept is not needed for Quantized data stores.
     virtual size_t get_aligned_dim() const override;
 
     // Populate quantized data from unaligned data using PQ functionality
