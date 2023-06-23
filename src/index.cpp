@@ -878,10 +878,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
   T *aligned_query = scratch->aligned_query();
 
-  float *query_float = nullptr;
-  float *query_rotated = nullptr;
   float *pq_dists = nullptr;
-  uint8_t *pq_coord_scratch = nullptr;
+//  uint8_t *pq_coord_scratch = nullptr;
   // Intialize PQ related scratch to use PQ based distances
   if (_pq_dist) {
     _pq_data_store->preprocess_query(aligned_query, scratch);
@@ -903,7 +901,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     //_pq_table.preprocess_query(query_rotated);
     //_pq_table.populate_chunk_distances(query_rotated, pq_dists);
 
-    pq_coord_scratch = scratch->pq_scratch()->aligned_pq_coord_scratch;
+//    pq_coord_scratch = scratch->pq_scratch()->aligned_pq_coord_scratch;
   }
 
   if (expanded_nodes.size() > 0 || id_scratch.size() > 0) {

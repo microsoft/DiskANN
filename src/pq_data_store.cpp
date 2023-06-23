@@ -16,8 +16,7 @@ PQDataStore<data_t>::PQDataStore(
     std::shared_ptr<Distance<data_t>> distance_fn,
     std::shared_ptr<QuantizedDistance<data_t>> pq_distance_fn)
     : AbstractDataStore<data_t>(num_points, dim),
-      _num_chunks(num_pq_chunks),
-      _quantized_data(nullptr),
+      _quantized_data(nullptr), _num_chunks(num_pq_chunks),
       _distance_metric(distance_fn->get_metric()),
       _pq_distance_fn(pq_distance_fn){}
 

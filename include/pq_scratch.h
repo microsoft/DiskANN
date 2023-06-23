@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include "pq_common.h"
+#include "utils.h"
 
 namespace diskann {
 
