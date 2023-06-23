@@ -1101,7 +1101,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
                                                         InMemQueryScratch<T> *scratch, bool use_filter,
                                                         uint32_t filteredLindex)
 {
-    const std::vector<uint32_t> init_ids = get_init_ids();
+    const std::vector<uint32_t> init_ids = get_init_ids(); // _start (first fz pt or one of point in graph) + all fz_pts
     const std::vector<LabelT> unused_filter_label;
 
     if (!use_filter)
@@ -1408,11 +1408,13 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
         auto scratch = manager.scratch_space();
 
         std::vector<uint32_t> pruned_list;
+
         if (_filtered_index)
         {
             search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, _filtered_index,
                                        _filterIndexingQueueSize);
         }
+
         search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
 
         {
@@ -2738,11 +2740,12 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 
     if (_filtered_index)
     {
-        size_t point_id = _pts_to_labels.size();
-        _pts_to_labels.emplace_back(labels);
+        size_t point_id = _pts_to_labels.size(); // point_id = number of points
+        _pts_to_labels.emplace_back(labels);     // set labels for this
 
         for (LabelT label : labels)
         {
+            // if label is not in _labels then insert it make point_id=>curr_point as medoid
             if (_labels.find(label) == _labels.end())
             {
                 _labels.insert(label);
@@ -2751,13 +2754,13 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
             }
             else
             {
-                _label_counts[label]++;
+                _label_counts[label]++; // if label already exist then increment count for this label
             }
         }
     }
 
     // Find a vacant location in the data array to insert the new point
-    auto location = reserve_location();
+    auto location = reserve_location(); // choose location to be _nd +1 (num active points+1) or from empty slots
     if (location == -1)
     {
 #if EXPAND_IF_FULL
@@ -2795,12 +2798,13 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 #else
         return -1;
 #endif
-    }
+    } // cant insert as active pts >= max_pts
     dl.unlock();
 
     // Insert tag and mapping to location
     if (_enable_tags)
     {
+        // if tags are enabled and tag is already inserted. so we can't reuse that tag.
         if (_tag_to_location.find(tag) != _tag_to_location.end())
         {
             release_location(location);
@@ -2812,17 +2816,47 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     }
     tl.unlock();
 
-    _data_store->set_vector(location, point);
+    _data_store->set_vector(location, point); // update datastore
 
     // Find and add appropriate graph edges
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
-    std::vector<uint32_t> pruned_list;
+    std::vector<uint32_t> non_filter_pruned_list;
+    std::vector<uint32_t> filter_pruned_list;
     if (_filtered_index)
     {
-        search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
+        // when filtered the best_candidates will share the same label ( label_present > distance)
+        search_for_point_and_prune(location, _indexingQueueSize, filter_pruned_list, scratch, true,
+                                   _filterIndexingQueueSize);
     }
-    search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch);
+    // when non filtered it will find best candidates based on distance only
+    search_for_point_and_prune(location, _indexingQueueSize, non_filter_pruned_list, scratch);
+
+    // make combined pruned list
+    std::vector<uint32_t> pruned_list; // it is the set best candidates to connect to this point
+    if (_filtered_index)
+    {
+        pruned_list.reserve(_filterIndexingQueueSize);
+        auto max_filtered_candidates = floor(
+            (_filterIndexingQueueSize / (_filterIndexingQueueSize + _indexingQueueSize)) * _filterIndexingQueueSize);
+        size_t i = 0;
+        for (; i < filter_pruned_list.size() && i < max_filtered_candidates; i++)
+        {
+            pruned_list.emplace_back(filter_pruned_list[i]);
+        }
+
+        for (; i < _filterIndexingQueueSize && i < non_filter_pruned_list.size(); i++)
+        {
+            pruned_list.emplace_back(non_filter_pruned_list[i]);
+        }
+
+        pruned_list.shrink_to_fit();
+    }
+    else
+    {
+        pruned_list = non_filter_pruned_list;
+    }
+    assert(pruned_list.size() > 0);
 
     {
         std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock, std::defer_lock);
@@ -2857,7 +2891,6 @@ uint32_t Index<T, TagT, LabelT>::bfs_medoid_search(uint32_t start, LabelT label,
     tsl::robin_set<uint32_t> visited;
     std::vector<std::vector<uint32_t>> q(1);
     q[0].assign(_final_graph[start].begin(), _final_graph[start].end());
-
     while (!q.empty() && depth > 0)
     {
         std::vector<uint32_t> curr_level = q[0];
@@ -2906,18 +2939,27 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     _location_to_tag.erase(location);
     _tag_to_location.erase(tag);
 
+    // if trying to delete medoid, find a new medoid
     if (_filtered_index)
     {
         for (LabelT label : _pts_to_labels[location])
         {
             if (_label_to_medoid_id[label] == location)
             {
-                // TODO: Handle exception if new medoid is not found
-                _label_to_medoid_id[label] = bfs_medoid_search(location, label, 2);
+                try
+                {
+                    // update the medoid for the label
+                    _label_to_medoid_id[label] = bfs_medoid_search(location, label, 2);
+                }
+                catch (const ANNException &)
+                {
+                    diskann::cerr << "Not able to delte this medoid point, no candidate medoid replacement found."
+                                  << tag << std::endl;
+                    return -1;
+                }
             }
         }
     }
-
     return 0;
 }
 
