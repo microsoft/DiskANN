@@ -128,10 +128,10 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         }
 
         // REFACTOR TODO: This should move to a factory method and support OPQ.
-        _pq_distance_fn = std::make_shared<PQL2Distance<T>>(_num_pq_chunks);
+        _pq_distance_fn = std::make_shared<PQL2Distance<T>>((uint32_t)_num_pq_chunks);
         // REFACTOR TODO: Unlike Distance and DataStore, where distance object is ready when the data store
         // is constructed. Here the distance object will not be fully ready until populate_data() is called
-        _pq_data_store = std::make_shared<PQDataStore<T>>(_dim, total_internal_points, _num_pq_chunks, this->_distance,
+        _pq_data_store = std::make_shared<PQDataStore<T>>(_dim, (location_t)total_internal_points, _num_pq_chunks, this->_distance,
                                                           _pq_distance_fn);
         // REFACTOR
         // alloc_aligned(
@@ -156,7 +156,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 {
 
     _data_store = std::move(data_store);
-    _distance.reset(_data_store->get_dist_fn());
+    _distance = _data_store->get_dist_fn();
 
     // enable delete by default for dynamic index
     if (_dynamic_index)
@@ -3288,7 +3288,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     _neighbor_len = (_max_observed_degree + 1) * sizeof(uint32_t);
     _node_size = _data_len + _neighbor_len;
     _opt_graph = new char[_node_size * _nd];
-    DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)_data_store->get_dist_fn();
+    auto dist_fast = (DistanceFastL2<T>*) (_data_store->get_dist_fn().get());
     for (uint32_t i = 0; i < _nd; i++)
     {
         char *cur_node_offset = _opt_graph + i * _node_size;
@@ -3337,7 +3337,7 @@ void Index<T, TagT, LabelT>::_search_with_optimized_layout(const DataType &query
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
 {
-    DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)_data_store->get_dist_fn();
+    DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)(_data_store->get_dist_fn().get());
 
     NeighborPriorityQueue retset(L);
     std::vector<uint32_t> init_ids(L);

@@ -99,7 +99,7 @@ template <typename data_t> class AbstractDataStore
     // in the dataset
     virtual location_t calculate_medoid() const = 0;
 
-    virtual Distance<data_t> *get_dist_fn() = 0;
+    virtual std::shared_ptr<Distance<data_t>> get_dist_fn() const = 0;
 
     // search helpers
     // if the base data is aligned per the request of the metric, this will tell

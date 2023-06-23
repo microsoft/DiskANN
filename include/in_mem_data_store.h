@@ -51,7 +51,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 
     virtual location_t calculate_medoid() const override;
 
-    virtual Distance<data_t> *get_dist_fn() override;
+    virtual std::shared_ptr<Distance<data_t>> get_dist_fn() const override;
 
     virtual size_t get_alignment_factor() const override;
 

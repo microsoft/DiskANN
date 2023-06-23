@@ -11,7 +11,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
 {
 
   public:
-    PQDataStore(uint32_t dim, uint32_t num_points, uint32_t num_pq_chunks,
+    PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks,
                 std::shared_ptr<Distance<data_t>> distance_fn,
                 std::shared_ptr<QuantizedDistance<data_t>> pq_distance_fn);
     ~PQDataStore();
@@ -60,6 +60,11 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     virtual void get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
                               std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const override;
 
+    //We are returning the distance function that is used for full precision 
+    //vectors here, not the PQ distance function. This is because the callers
+    //all are expecting a Distance<T> not QuantizedDistance<T>.
+    virtual std::shared_ptr<Distance<data_t>> get_dist_fn() const override;
+
     virtual location_t calculate_medoid() const override;
 
     virtual size_t get_alignment_factor() const override;
@@ -82,6 +87,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     bool _use_opq = false;
 
     Metric _distance_metric;
+    std::shared_ptr<Distance<data_t>> _distance_fn = nullptr;
     std::shared_ptr<QuantizedDistance<data_t>> _pq_distance_fn = nullptr;
 };
 } // namespace diskann

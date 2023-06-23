@@ -12,11 +12,11 @@ namespace diskann
 // REFACTOR TODO: Assuming that num_pq_chunks is known already. Must verify if
 // this is true.
 template <typename data_t>
-PQDataStore<data_t>::PQDataStore(uint32_t dim, uint32_t num_points, uint32_t num_pq_chunks,
+PQDataStore<data_t>::PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks,
                                  std::shared_ptr<Distance<data_t>> distance_fn,
                                  std::shared_ptr<QuantizedDistance<data_t>> pq_distance_fn)
     : AbstractDataStore<data_t>(num_points, dim), _quantized_data(nullptr), _num_chunks(num_pq_chunks),
-      _distance_metric(distance_fn->get_metric()), _pq_distance_fn(pq_distance_fn)
+      _distance_metric(distance_fn->get_metric()), _distance_fn(distance_fn), _pq_distance_fn(pq_distance_fn)
 {
 }
 
@@ -206,6 +206,11 @@ template <typename data_t> location_t PQDataStore<data_t>::calculate_medoid() co
 template <typename data_t> size_t PQDataStore<data_t>::get_alignment_factor() const
 {
     return 1;
+}
+
+template <typename data_t> std::shared_ptr<Distance<data_t>> PQDataStore<data_t>::get_dist_fn() const
+{
+    return _distance_fn;
 }
 
 template <typename data_t> location_t PQDataStore<data_t>::load_impl(const std::string &file_prefix)
