@@ -26,8 +26,7 @@
 
 namespace diskann
 {
-template <typename T>
-struct PQScratch;
+template <typename T> struct PQScratch;
 
 //
 // AbstractScratch space for in-memory index based search
@@ -107,7 +106,6 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     uint32_t _L;
     uint32_t _R;
     uint32_t _maxc;
-
 
     // _pool stores all neighbors explored from best_L_nodes.
     // Usually around L+R, but could be higher.

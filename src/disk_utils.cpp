@@ -560,20 +560,20 @@ void breakup_dense_points(const std::string data_file, const std::string labels_
     {
         diskann::cout << dummy_pt_ids.size() << " is the number of dummy points created" << std::endl;
 
-        T *ptr = (T *)std::realloc((void *)data,
-                                   labels_per_point.size() * ndims * sizeof(T));
-        if (ptr == nullptr) {
-            diskann::cerr << "Realloc failed while creating dummy points"
-                          << std::endl;
+        T *ptr = (T *)std::realloc((void *)data, labels_per_point.size() * ndims * sizeof(T));
+        if (ptr == nullptr)
+        {
+            diskann::cerr << "Realloc failed while creating dummy points" << std::endl;
             free(data);
             data = nullptr;
-            throw new diskann::ANNException(
-                "Realloc failed while expanding data.", -1, __FUNCTION__, __FILE__, __LINE__);
-        } else {
+            throw new diskann::ANNException("Realloc failed while expanding data.", -1, __FUNCTION__, __FILE__,
+                                            __LINE__);
+        }
+        else
+        {
             data = ptr;
         }
 
-        
         std::ofstream dummy_writer(out_metadata_file);
         assert(dummy_writer.is_open());
         for (auto i = dummy_pt_ids.begin(); i != dummy_pt_ids.end(); i++)
