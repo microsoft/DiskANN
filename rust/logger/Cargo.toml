@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
 [package]
 name = "logger"
 version = "0.1.0"
@@ -24,3 +26,4 @@ path= "src/examples/trace_example.rs"
 
 [target."cfg(target_os=\"windows\")".build-dependencies.vcpkg]
 version = "0.2"
+

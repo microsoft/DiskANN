@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
 [package]
 name = "build_memory_index"
 version = "0.1.0"
@@ -10,3 +12,4 @@ clap = { version = "4.3.8", features = ["derive"] }
 diskann = { path = "../../diskann" }
 logger = { path = "../../logger" }
 vector = { path = "../../vector" }
+

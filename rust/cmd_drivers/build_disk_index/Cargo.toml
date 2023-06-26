@@ -1,3 +1,5 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
 [package]
 name = "build_disk_index"
 version = "0.1.0"
