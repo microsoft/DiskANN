@@ -128,11 +128,11 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         }
 
         // REFACTOR TODO: This should move to a factory method and support OPQ.
-        _pq_distance_fn = std::make_shared<PQL2Distance<T>>((uint32_t)_num_pq_chunks);
+        _pq_distance_fn = std::make_shared<PQL2Distance<T>>((uint32_t)_num_pq_chunks, use_opq);
         // REFACTOR TODO: Unlike Distance and DataStore, where distance object is ready when the data store
         // is constructed. Here the distance object will not be fully ready until populate_data() is called
-        _pq_data_store = std::make_shared<PQDataStore<T>>(_dim, (location_t)total_internal_points, _num_pq_chunks, this->_distance,
-                                                          _pq_distance_fn);
+        _pq_data_store = std::make_shared<PQDataStore<T>>(_dim, (location_t)total_internal_points, _num_pq_chunks,
+                                                          this->_distance, _pq_distance_fn);
         // REFACTOR
         // alloc_aligned(
         //     ((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
@@ -3288,7 +3288,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     _neighbor_len = (_max_observed_degree + 1) * sizeof(uint32_t);
     _node_size = _data_len + _neighbor_len;
     _opt_graph = new char[_node_size * _nd];
-    auto dist_fast = (DistanceFastL2<T>*) (_data_store->get_dist_fn().get());
+    auto dist_fast = (DistanceFastL2<T> *)(_data_store->get_dist_fn().get());
     for (uint32_t i = 0; i < _nd; i++)
     {
         char *cur_node_offset = _opt_graph + i * _node_size;

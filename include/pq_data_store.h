@@ -11,8 +11,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
 {
 
   public:
-    PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks,
-                std::shared_ptr<Distance<data_t>> distance_fn,
+    PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks, std::shared_ptr<Distance<data_t>> distance_fn,
                 std::shared_ptr<QuantizedDistance<data_t>> pq_distance_fn);
     ~PQDataStore();
 
@@ -27,7 +26,8 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     //  vectors file.
     virtual size_t save(const std::string &file_prefix, const location_t num_points) override;
 
-    // Since base class function is pure virtual, we need to declare it here, even though alignent concept is not needed for Quantized data stores.
+    // Since base class function is pure virtual, we need to declare it here, even though alignent concept is not needed
+    // for Quantized data stores.
     virtual size_t get_aligned_dim() const override;
 
     // Populate quantized data from unaligned data using PQ functionality
@@ -60,9 +60,9 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     virtual void get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
                               std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const override;
 
-    //We are returning the distance function that is used for full precision 
-    //vectors here, not the PQ distance function. This is because the callers
-    //all are expecting a Distance<T> not QuantizedDistance<T>.
+    // We are returning the distance function that is used for full precision
+    // vectors here, not the PQ distance function. This is because the callers
+    // all are expecting a Distance<T> not QuantizedDistance<T>.
     virtual std::shared_ptr<Distance<data_t>> get_dist_fn() const override;
 
     virtual location_t calculate_medoid() const override;

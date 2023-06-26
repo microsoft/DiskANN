@@ -28,7 +28,7 @@ template <typename T> struct PQScratch
         memset(rotated_query, 0, aligned_dim * sizeof(float));
     }
 
-    void set_rotated_query(size_t dim, const T *query, const float norm = 1.0f)
+    void initialize(size_t dim, const T *query, const float norm = 1.0f)
     {
         for (size_t d = 0; d < dim; ++d)
         {

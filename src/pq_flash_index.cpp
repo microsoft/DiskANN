@@ -1188,7 +1188,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         {
             aligned_query_T[i] = (T)(aligned_query_T[i] / query_norm);
         }
-        pq_query_scratch->set_rotated_query(this->data_dim, aligned_query_T);
+        pq_query_scratch->initialize(this->data_dim, aligned_query_T);
     }
     else
     {
@@ -1196,7 +1196,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         {
             aligned_query_T[i] = query1[i];
         }
-        pq_query_scratch->set_rotated_query(this->data_dim, aligned_query_T);
+        pq_query_scratch->initialize(this->data_dim, aligned_query_T);
     }
 
     // pointers to buffers for data

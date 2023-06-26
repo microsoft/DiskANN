@@ -9,7 +9,7 @@
 namespace diskann
 {
 
-template <typename data_t> PQL2Distance<data_t>::PQL2Distance(uint32_t num_chunks) : _num_chunks(num_chunks)
+template <typename data_t> PQL2Distance<data_t>::PQL2Distance(uint32_t num_chunks, bool use_opq) : _num_chunks(num_chunks), _is_opq(use_opq)
 {
 }
 
@@ -31,7 +31,7 @@ template <typename data_t> PQL2Distance<data_t>::~PQL2Distance()
 
 template <typename data_t> bool PQL2Distance<data_t>::is_opq() const
 {
-    return false;
+    return this->_is_opq;
 }
 
 template <typename data_t>
@@ -42,7 +42,7 @@ std::string PQL2Distance<data_t>::get_quantized_vectors_filename(const std::stri
         throw diskann::ANNException("Must set num_chunks before calling get_quantized_vectors_filename", -1,
                                     __FUNCSIG__, __FILE__, __LINE__);
     }
-    return diskann::get_quantized_vectors_filename(prefix, false, (uint32_t)_num_chunks);
+    return diskann::get_quantized_vectors_filename(prefix, _is_opq, (uint32_t)_num_chunks);
 }
 template <typename data_t> std::string PQL2Distance<data_t>::get_pivot_data_filename(const std::string &prefix) const
 {
@@ -51,14 +51,12 @@ template <typename data_t> std::string PQL2Distance<data_t>::get_pivot_data_file
         throw diskann::ANNException("Must set num_chunks before calling get_pivot_data_filename", -1, __FUNCSIG__,
                                     __FILE__, __LINE__);
     }
-    return diskann::get_pivot_data_filename(prefix, false, (uint32_t)_num_chunks);
+    return diskann::get_pivot_data_filename(prefix, _is_opq, (uint32_t)_num_chunks);
 }
 template <typename data_t>
-std::string PQL2Distance<data_t>::get_rotation_matrix_filename(const std::string &prefix) const
+std::string PQL2Distance<data_t>::get_rotation_matrix_suffix(const std::string &pq_pivots_filename) const
 {
-    // REFACTOR TODO: Currently, we are assuming that PQ doesn't have a rotation
-    // matrix.
-    return "";
+    return diskann::get_rotation_matrix_suffix(pq_pivots_filename);
 }
 
 #ifdef EXEC_ENV_OLS
@@ -163,21 +161,21 @@ void PQL2Distance<data_t>::load_pivot_data(const std::string &pq_table_file, siz
     diskann::cout << "Loaded PQ Pivots: #ctrs: " << NUM_PQ_CENTROIDS << ", #dims: " << this->_ndims
                   << ", #chunks: " << this->_num_chunks << std::endl;
 
-    // For PQ there will be no rotation matrix.
-    //   if (file_exists(rotmat_file)) {
-    // #ifdef EXEC_ENV_OLS
-    //     diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr,
-    //     nc);
-    // #else
-    //     diskann::load_bin<float>(rotmat_file, _rotmat_tr, nr, nc);
-    // #endif
-    //     if (nr != this->_ndims || nc != this->_ndims) {
-    //       diskann::cerr << "Error loading rotation matrix file" << std::endl;
-    //       throw diskann::ANNException("Error loading rotation matrix file", -1,
-    //                                   __FUNCSIG__, __FILE__, __LINE__);
-    //     }
-    //     _use_rotation = true;
-    //   }
+    // For OPQ there will be a rotation matrix to load.
+    if (this->_is_opq) {
+        std::string rotmat_file = get_rotation_matrix_suffix(pq_table_file);
+     #ifdef EXEC_ENV_OLS
+         diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr,
+         nc);
+     #else
+         diskann::load_bin<float>(rotmat_file, _rotmat_tr, nr, nc);
+     #endif
+         if (nr != this->_ndims || nc != this->_ndims) {
+           diskann::cerr << "Error loading rotation matrix file" << std::endl;
+           throw diskann::ANNException("Error loading rotation matrix file", -1,
+                                       __FUNCSIG__, __FILE__, __LINE__);
+         }
+       }
 
     // alloc and compute transpose
     _tables_tr = new float[256 * this->_ndims];
@@ -206,14 +204,14 @@ void PQL2Distance<data_t>::preprocess_query(const data_t *aligned_query, uint32_
     {
         scratch.aligned_query_float[d] = (float)aligned_query[d];
     }
-    scratch.set_rotated_query(dim, aligned_query);
+    scratch.initialize(dim, aligned_query);
 
     for (uint32_t d = 0; d < _ndims; d++)
     {
         scratch.rotated_query[d] -= _centroid[d];
     }
     std::vector<float> tmp(_ndims, 0);
-    if (_use_rotation)
+    if (_is_opq)
     {
         for (uint32_t d = 0; d < _ndims; d++)
         {

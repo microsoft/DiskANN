@@ -19,7 +19,7 @@ template <typename data_t> class QuantizedDistance
     virtual bool is_opq() const = 0;
     virtual std::string get_quantized_vectors_filename(const std::string &prefix) const = 0;
     virtual std::string get_pivot_data_filename(const std::string &prefix) const = 0;
-    virtual std::string get_rotation_matrix_filename(const std::string &prefix) const = 0;
+    virtual std::string get_rotation_matrix_suffix(const std::string &pq_pivots_filename) const = 0;
 
     // Loading the PQ centroid table need not be part of the abstract class.
     // However, we want to indicate that this function will change once we have a

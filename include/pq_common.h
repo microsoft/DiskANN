@@ -22,4 +22,10 @@ inline std::string get_pivot_data_filename(const std::string &prefix, bool use_o
     return prefix + (use_opq ? "_opq" : "pq") + std::to_string(num_chunks) + "_pivots.bin";
 }
 
+inline std::string get_rotation_matrix_suffix(const std::string &pivot_data_filename)
+{
+    return pivot_data_filename + "_rotation_matrix.bin";
+}
+
+
 } // namespace diskann

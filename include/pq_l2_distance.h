@@ -17,7 +17,7 @@ template <typename data_t> class PQL2Distance : public QuantizedDistance<data_t>
     // load_pivot_data. Hence this. The TODO is whether we should check
     // that the num_chunks from the file is the same as this one.
 
-    PQL2Distance(uint32_t num_chunks);
+    PQL2Distance(uint32_t num_chunks, bool use_opq = false);
 
     virtual ~PQL2Distance() override;
 
@@ -25,7 +25,7 @@ template <typename data_t> class PQL2Distance : public QuantizedDistance<data_t>
 
     virtual std::string get_quantized_vectors_filename(const std::string &prefix) const override;
     virtual std::string get_pivot_data_filename(const std::string &prefix) const override;
-    virtual std::string get_rotation_matrix_filename(const std::string &prefix) const override;
+    virtual std::string get_rotation_matrix_suffix(const std::string &pq_pivots_filename) const override;
 
 #ifdef EXEC_ENV_OLS
     virtual void load_pivot_data(MemoryMappedFiles &files, const std::string &pq_table_file,
@@ -78,7 +78,7 @@ template <typename data_t> class PQL2Distance : public QuantizedDistance<data_t>
     float *_tables = nullptr; // pq_tables = float array of size [256 * ndims]
     uint64_t _ndims = 0;      // ndims = true dimension of vectors
     uint64_t _num_chunks = 0;
-    bool _use_rotation = false;
+    bool _is_opq = false;
     uint32_t *_chunk_offsets = nullptr;
     float *_centroid = nullptr;
     float *_tables_tr = nullptr; // same as pq_tables, but col-major
