@@ -9,7 +9,8 @@
 namespace diskann
 {
 
-template <typename data_t> PQL2Distance<data_t>::PQL2Distance(uint32_t num_chunks, bool use_opq) : _num_chunks(num_chunks), _is_opq(use_opq)
+template <typename data_t>
+PQL2Distance<data_t>::PQL2Distance(uint32_t num_chunks, bool use_opq) : _num_chunks(num_chunks), _is_opq(use_opq)
 {
 }
 
@@ -162,20 +163,20 @@ void PQL2Distance<data_t>::load_pivot_data(const std::string &pq_table_file, siz
                   << ", #chunks: " << this->_num_chunks << std::endl;
 
     // For OPQ there will be a rotation matrix to load.
-    if (this->_is_opq) {
+    if (this->_is_opq)
+    {
         std::string rotmat_file = get_rotation_matrix_suffix(pq_table_file);
-     #ifdef EXEC_ENV_OLS
-         diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr,
-         nc);
-     #else
-         diskann::load_bin<float>(rotmat_file, _rotmat_tr, nr, nc);
-     #endif
-         if (nr != this->_ndims || nc != this->_ndims) {
-           diskann::cerr << "Error loading rotation matrix file" << std::endl;
-           throw diskann::ANNException("Error loading rotation matrix file", -1,
-                                       __FUNCSIG__, __FILE__, __LINE__);
-         }
-       }
+#ifdef EXEC_ENV_OLS
+        diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr, nc);
+#else
+        diskann::load_bin<float>(rotmat_file, _rotmat_tr, nr, nc);
+#endif
+        if (nr != this->_ndims || nc != this->_ndims)
+        {
+            diskann::cerr << "Error loading rotation matrix file" << std::endl;
+            throw diskann::ANNException("Error loading rotation matrix file", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+    }
 
     // alloc and compute transpose
     _tables_tr = new float[256 * this->_ndims];

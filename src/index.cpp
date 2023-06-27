@@ -118,16 +118,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         // Note: moved this to factory, keeping this for backward compatibility.
         _data_store =
             std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
-    }
 
-    if (_pq_dist)
-    {
-        if (_num_pq_chunks > _dim)
-        {
-            throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
-        }
-
-        // REFACTOR TODO: This should move to a factory method and support OPQ.
         _pq_distance_fn = std::make_shared<PQL2Distance<T>>((uint32_t)_num_pq_chunks, use_opq);
         // REFACTOR TODO: Unlike Distance and DataStore, where distance object is ready when the data store
         // is constructed. Here the distance object will not be fully ready until populate_data() is called
@@ -137,6 +128,14 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         // alloc_aligned(
         //     ((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
         // std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
+    }
+
+    if (_pq_dist)
+    {
+        if (_num_pq_chunks > _dim)
+        {
+            throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
     }
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
@@ -157,6 +156,15 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
     _data_store = std::move(data_store);
     _distance = _data_store->get_dist_fn();
+
+    // REFACTOR TODO: This should also move to factory method.
+    _pq_distance_fn = std::make_shared<PQL2Distance<T>>((uint32_t)_num_pq_chunks, _use_opq);
+
+    const size_t total_internal_points = _max_points + _num_frozen_pts;
+    // REFACTOR TODO: Unlike Distance and DataStore, where distance object is ready when the data store
+    // is constructed. Here the distance object will not be fully ready until populate_data() is called
+    _pq_data_store = std::make_shared<PQDataStore<T>>(_dim, (location_t)total_internal_points, _num_pq_chunks,
+                                                      this->_distance, _pq_distance_fn);
 
     // enable delete by default for dynamic index
     if (_dynamic_index)

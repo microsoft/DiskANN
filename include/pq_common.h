@@ -27,5 +27,4 @@ inline std::string get_rotation_matrix_suffix(const std::string &pivot_data_file
     return pivot_data_filename + "_rotation_matrix.bin";
 }
 
-
 } // namespace diskann
