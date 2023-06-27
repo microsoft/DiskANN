@@ -155,7 +155,7 @@ template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~I
     if (!_query_scratch.empty())
     {
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
-        manager.destroy();
+        manager.destroy(); 
     }
 }
 
@@ -1413,6 +1413,7 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
         {
             search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, _filtered_index,
                                        _filterIndexingQueueSize);
+            scratch->pool().clear();
         }
 
         search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
@@ -2828,6 +2829,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         // when filtered the best_candidates will share the same label ( label_present > distance)
         search_for_point_and_prune(location, _indexingQueueSize, filter_pruned_list, scratch, true,
                                    _filterIndexingQueueSize);
+        scratch->pool().clear();
     }
     // when non filtered it will find best candidates based on distance only
     search_for_point_and_prune(location, _indexingQueueSize, non_filter_pruned_list, scratch);
@@ -2836,16 +2838,17 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     std::vector<uint32_t> pruned_list; // it is the set best candidates to connect to this point
     if (_filtered_index)
     {
-        pruned_list.reserve(_filterIndexingQueueSize);
-        auto max_filtered_candidates = floor(
-            (_filterIndexingQueueSize / (_filterIndexingQueueSize + _indexingQueueSize)) * _filterIndexingQueueSize);
+        pruned_list.reserve(_indexingRange);
+        auto max_filtered_candidates =
+            floor((_filterIndexingQueueSize / static_cast<float>(_filterIndexingQueueSize + _indexingQueueSize)) *
+                  _indexingRange);
         size_t i = 0;
         for (; i < filter_pruned_list.size() && i < max_filtered_candidates; i++)
         {
             pruned_list.emplace_back(filter_pruned_list[i]);
         }
 
-        for (; i < _filterIndexingQueueSize && i < non_filter_pruned_list.size(); i++)
+        for (; i < _indexingRange && i < non_filter_pruned_list.size(); i++)
         {
             pruned_list.emplace_back(non_filter_pruned_list[i]);
         }
