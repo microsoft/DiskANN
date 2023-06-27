@@ -366,6 +366,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _dynamic_index = false;
     bool _enable_tags = false;
     bool _normalize_vecs = false; // Using normalied L2 for cosine.
+    bool _deletes_enabled = false;
 
     // Filter Support
 
