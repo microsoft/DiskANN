@@ -2440,6 +2440,11 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
         return -2;
     }
 
+    if (this->_deletes_enabled)
+    {
+        return 0;
+    }
+
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
@@ -2451,7 +2456,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
             _empty_slots.insert(slot);
         }
     }
-
+    this->_deletes_enabled = true;
     return 0;
 }
 
