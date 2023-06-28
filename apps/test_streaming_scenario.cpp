@@ -9,6 +9,8 @@
 #include <timer.h>
 #include <boost/program_options.hpp>
 #include <future>
+#include <abstract_index.h>
+#include <index_factory.h>
 
 #include "utils.h"
 
@@ -81,8 +83,8 @@ std::string get_save_filename(const std::string &save_path, size_t active_window
     return final_path;
 }
 
-template <typename T, typename TagT, typename LabelT>
-void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, size_t end, size_t insert_threads, T *data,
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
+void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, size_t insert_threads, T *data,
                        size_t aligned_dim)
 {
     try
@@ -113,9 +115,9 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
     }
 }
 
-template <typename T, typename TagT, typename LabelT>
-void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::IndexWriteParameters &delete_params,
-                            size_t start, size_t end)
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
+void delete_and_consolidate(diskann::AbstractIndex &index, diskann::IndexWriteParameters &delete_params, size_t start,
+                            size_t end)
 {
     try
     {
@@ -149,7 +151,7 @@ void delete_and_consolidate(diskann::Index<T, TagT, LabelT> &index, diskann::Ind
         }
         auto points_processed = report._active_points + report._slots_released;
         auto deletion_rate = points_processed / report._time;
-        std::cout << "#active points: " << report._active_points << std::endl
+        std::cout << "#active   points: " << report._active_points << std::endl
                   << "max points: " << report._max_points << std::endl
                   << "empty slots: " << report._empty_slots << std::endl
                   << "deletes processed: " << report._slots_released << std::endl
@@ -172,6 +174,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 {
     const uint32_t C = 500;
     const bool saturate_graph = false;
+    using TagT = uint32_t;
+    using LabelT = uint32_t;
 
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(C)
@@ -196,6 +200,27 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                   << std::endl;
     aligned_dim = ROUND_UP(dim, 8);
 
+    auto index_config = diskann::IndexConfigBuilder()
+                            .with_metric(diskann::L2)
+                            .with_dimension(dim)
+                            .with_max_points(active_window + 4 * consolidate_interval)
+                            .is_dynamic_index(true)
+                            .is_enable_tags(true)
+                            .is_use_opq(false)
+                            .with_num_pq_chunks(0)
+                            .is_pq_dist_build(false)
+                            .with_search_threads(insert_threads)
+                            .with_initial_search_list_size(L)
+                            .with_tag_type(diskann_type_to_name<TagT>())
+                            .with_label_type(diskann_type_to_name<LabelT>())
+                            .with_data_type(diskann_type_to_name<T>())
+                            .with_index_write_params(params)
+                            .with_data_load_store_strategy(diskann::MEMORY)
+                            .build();
+
+    diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
+    auto index = index_factory.create_instance();
+
     if (max_points_to_insert == 0)
     {
         max_points_to_insert = num_points;
@@ -214,14 +239,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     if (consolidate_interval < max_points_to_insert / 1000)
         throw diskann::ANNException("ERROR: consolidate_interval is too small", -1, __FUNCSIG__, __FILE__, __LINE__);
 
-    using TagT = uint32_t;
-    using LabelT = uint32_t;
-    const bool enable_tags = true;
-
-    diskann::Index<T, TagT, LabelT> index(diskann::L2, dim, active_window + 4 * consolidate_interval, true, params, L,
-                                          insert_threads, enable_tags, true);
-    index.set_start_points_at_random(static_cast<T>(start_point_norm));
-    index.enable_delete();
+    index->set_start_points_at_random(static_cast<T>(start_point_norm));
 
     T *data = nullptr;
     diskann::alloc_aligned((void **)&data, std::max(consolidate_interval, active_window) * aligned_dim * sizeof(T),
@@ -236,7 +254,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     auto insert_task = std::async(std::launch::async, [&]() {
         load_aligned_bin_part(data_path, data, 0, active_window);
-        insert_next_batch(index, 0, active_window, insert_threads, data, aligned_dim);
+        insert_next_batch(*index, (size_t)0, active_window, params.num_threads, data, aligned_dim);
     });
     insert_task.wait();
 
@@ -246,7 +264,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         auto end = std::min(start + consolidate_interval, max_points_to_insert);
         auto insert_task = std::async(std::launch::async, [&]() {
             load_aligned_bin_part(data_path, data, start, end - start);
-            insert_next_batch(index, start, end, insert_threads, data, aligned_dim);
+            insert_next_batch(*index, start, end, params.num_threads, data, aligned_dim);
         });
         insert_task.wait();
 
@@ -257,8 +275,9 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
             auto start_del = start - active_window - consolidate_interval;
             auto end_del = start - active_window;
 
-            delete_tasks.emplace_back(std::async(
-                std::launch::async, [&]() { delete_and_consolidate(index, delete_params, start_del, end_del); }));
+            delete_tasks.emplace_back(std::async(std::launch::async, [&]() {
+                delete_and_consolidate<T, TagT, LabelT>(*index, delete_params, (size_t)start_del, (size_t)end_del);
+            }));
         }
     }
     if (delete_tasks.size() > 0)
@@ -267,7 +286,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
     const auto save_path_inc =
         get_save_filename(save_path + ".after-streaming-", active_window, consolidate_interval, max_points_to_insert);
-    index.save(save_path_inc.c_str(), true);
+    index->save(save_path_inc.c_str(), true);
 
     diskann::aligned_free(data);
 }
