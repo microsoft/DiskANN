@@ -556,12 +556,12 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     _has_built = true;
 
     size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0, label_num_pts = 0;
-
+#ifndef EXEC_ENV_OLS
     std::string mem_index_file(filename);
     std::string labels_file = mem_index_file + "_labels.txt";
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
-
+#endif
     if (!_save_as_one_file)
     {
         // For DLVS Store, we will not support saving the index in multiple
@@ -600,7 +600,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-
+#ifndef EXEC_ENV_OLS
     if (file_exists(labels_file))
     {
         _label_map = load_label_map(labels_map_file);
@@ -646,7 +646,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             universal_label_reader.close();
         }
     }
-
+#endif
     _nd = data_file_num_pts - _num_frozen_pts;
     _empty_slots.clear();
     _empty_slots.reserve(_max_points);

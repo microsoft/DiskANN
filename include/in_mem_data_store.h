@@ -14,6 +14,7 @@
 #include "distance.h"
 #include "natural_number_map.h"
 #include "natural_number_set.h"
+#include "aligned_file_reader.h"
 
 namespace diskann
 {
