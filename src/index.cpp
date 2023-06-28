@@ -1404,19 +1404,47 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
     {
         auto node = visit_order[node_ctr];
 
+        // Find and add appropriate graph edges
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         auto scratch = manager.scratch_space();
-
-        std::vector<uint32_t> pruned_list;
-
+        std::vector<uint32_t> non_filter_pruned_list;
+        std::vector<uint32_t> filter_pruned_list;
         if (_filtered_index)
         {
-            search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, _filtered_index,
+            // when filtered the best_candidates will share the same label ( label_present > distance)
+            search_for_point_and_prune(node, _indexingQueueSize, filter_pruned_list, scratch, true,
                                        _filterIndexingQueueSize);
-            scratch->pool().clear();
+            scratch->clear();
         }
+        // when non filtered it will find best candidates based on distance only
+        search_for_point_and_prune(node, _indexingQueueSize, non_filter_pruned_list, scratch);
 
-        search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
+        // make combined pruned list
+        std::vector<uint32_t> pruned_list; // it is the set best candidates to connect to this point
+        if (_filtered_index)
+        {
+            pruned_list.reserve(_indexingRange);
+            auto max_filtered_candidates =
+                floor((_filterIndexingQueueSize / static_cast<float>(_filterIndexingQueueSize + _indexingQueueSize)) *
+                      _indexingRange);
+            size_t i = 0;
+            for (; i < filter_pruned_list.size() && i < max_filtered_candidates; i++)
+            {
+                pruned_list.emplace_back(filter_pruned_list[i]);
+            }
+
+            for (; i < _indexingRange && i < non_filter_pruned_list.size(); i++)
+            {
+                pruned_list.emplace_back(non_filter_pruned_list[i]);
+            }
+
+            pruned_list.shrink_to_fit();
+        }
+        else
+        {
+            pruned_list = non_filter_pruned_list;
+        }
+        assert(pruned_list.size() > 0);
 
         {
             LockGuard guard(_locks[node]);
@@ -2739,9 +2767,10 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
 
+    // Find a vacant location in the data array to insert the new point
+    auto location = reserve_location(); // choose location to be _nd +1 (num active points+1) or from empty slots
     if (_filtered_index)
     {
-        size_t point_id = _pts_to_labels.size(); // point_id = number of points
         _pts_to_labels.emplace_back(labels);     // set labels for this
 
         for (LabelT label : labels)
@@ -2750,7 +2779,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
             if (_labels.find(label) == _labels.end())
             {
                 _labels.insert(label);
-                _label_to_medoid_id[label] = (uint32_t)point_id;
+                _label_to_medoid_id[label] = (uint32_t)location;
                 _label_counts[label] = 1;
             }
             else
@@ -2760,8 +2789,6 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         }
     }
 
-    // Find a vacant location in the data array to insert the new point
-    auto location = reserve_location(); // choose location to be _nd +1 (num active points+1) or from empty slots
     if (location == -1)
     {
 #if EXPAND_IF_FULL
@@ -2829,7 +2856,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         // when filtered the best_candidates will share the same label ( label_present > distance)
         search_for_point_and_prune(location, _indexingQueueSize, filter_pruned_list, scratch, true,
                                    _filterIndexingQueueSize);
-        scratch->pool().clear();
+        scratch->clear();
     }
     // when non filtered it will find best candidates based on distance only
     search_for_point_and_prune(location, _indexingQueueSize, non_filter_pruned_list, scratch);
