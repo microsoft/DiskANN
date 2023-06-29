@@ -55,9 +55,9 @@ template <typename T> inline void add_variant(py::module_ &m, const Variant &var
           "index_prefix_path"_a, "complexity"_a, "graph_degree"_a, "final_index_ram_limit"_a, "indexing_ram_budget"_a,
           "num_threads"_a, "pq_disk_bytes"_a);
 
-    m.def(variant.memory_builder_name.c_str(), &diskannpy::build_memory_index<T>, "distance_metric"_a, "data_file_path"_a,
-          "index_output_path"_a, "graph_degree"_a, "complexity"_a, "alpha"_a, "num_threads"_a, "use_pq_build"_a,
-          "num_pq_bytes"_a, "use_opq"_a, "filter_complexity"_a = 0, "use_tags"_a = false);
+    m.def(variant.memory_builder_name.c_str(), &diskannpy::build_memory_index<T>, "distance_metric"_a,
+          "data_file_path"_a, "index_output_path"_a, "graph_degree"_a, "complexity"_a, "alpha"_a, "num_threads"_a,
+          "use_pq_build"_a, "num_pq_bytes"_a, "use_opq"_a, "filter_complexity"_a = 0, "use_tags"_a = false);
 
     py::class_<diskannpy::StaticMemoryIndex<T>>(m, variant.static_memory_index_name.c_str())
         .def(py::init<const diskann::Metric, const std::string &, const size_t, const size_t, const uint32_t,
@@ -81,8 +81,8 @@ template <typename T> inline void add_variant(py::module_ &m, const Variant &var
              "search_threads"_a = 0, "concurrent_consolidation"_a = true)
         .def("search", &diskannpy::DynamicMemoryIndex<T>::search, "query"_a, "knn"_a, "complexity"_a)
         .def("load", &diskannpy::DynamicMemoryIndex<T>::load, "index_path"_a)
-        .def("batch_search", &diskannpy::DynamicMemoryIndex<T>::batch_search, "queries"_a, "num_queries"_a, "knn"_a, "complexity"_a,
-             "num_threads"_a)
+        .def("batch_search", &diskannpy::DynamicMemoryIndex<T>::batch_search, "queries"_a, "num_queries"_a, "knn"_a,
+             "complexity"_a, "num_threads"_a)
         .def("batch_insert", &diskannpy::DynamicMemoryIndex<T>::batch_insert, "vectors"_a, "ids"_a, "num_inserts"_a,
              "num_threads"_a)
         .def("save", &diskannpy::DynamicMemoryIndex<T>::save, "save_path"_a = "", "compact_before_save"_a = false)
@@ -96,8 +96,8 @@ template <typename T> inline void add_variant(py::module_ &m, const Variant &var
              "cache_mechanism"_a = 1)
         .def("cache_bfs_levels", &diskannpy::StaticDiskIndex<T>::cache_bfs_levels, "num_nodes_to_cache"_a)
         .def("search", &diskannpy::StaticDiskIndex<T>::search, "query"_a, "knn"_a, "complexity"_a, "beam_width"_a)
-        .def("batch_search", &diskannpy::StaticDiskIndex<T>::batch_search, "queries"_a, "num_queries"_a, "knn"_a, "complexity"_a,
-             "beam_width"_a, "num_threads"_a);
+        .def("batch_search", &diskannpy::StaticDiskIndex<T>::batch_search, "queries"_a, "num_queries"_a, "knn"_a,
+             "complexity"_a, "beam_width"_a, "num_threads"_a);
 }
 
 PYBIND11_MODULE(_diskannpy, m)

@@ -10,29 +10,29 @@ namespace diskannpy
 
 template <class DT>
 diskann::Index<DT, StaticIdType, filterT> static_index_builder(const diskann::Metric m, const size_t num_points,
-                                                      const size_t dimensions,
-                                                      const uint32_t initial_search_complexity) {
+                                                               const size_t dimensions,
+                                                               const uint32_t initial_search_complexity)
+{
     if (initial_search_complexity == 0)
     {
         throw std::runtime_error("initial_search_complexity must be a positive uint32_t");
     }
 
     return diskann::Index<DT>(m, dimensions, num_points,
-                                    false, // not a dynamic_index
-                                    false, // no enable_tags/ids
-                                    false, // no concurrent_consolidate,
-                                    false, // pq_dist_build
-                                    0,     // num_pq_chunks
-                                    false, // use_opq = false
-                                    0);    // num_frozen_points
+                              false, // not a dynamic_index
+                              false, // no enable_tags/ids
+                              false, // no concurrent_consolidate,
+                              false, // pq_dist_build
+                              0,     // num_pq_chunks
+                              false, // use_opq = false
+                              0);    // num_frozen_points
 }
 
 template <class DT>
 StaticMemoryIndex<DT>::StaticMemoryIndex(const diskann::Metric m, const std::string &index_prefix,
                                          const size_t num_points, const size_t dimensions, const uint32_t num_threads,
-                                         const uint32_t initial_search_complexity
-                                         ) : _index(static_index_builder<DT>(m, num_points, dimensions,
-                                      initial_search_complexity))
+                                         const uint32_t initial_search_complexity)
+    : _index(static_index_builder<DT>(m, num_points, dimensions, initial_search_complexity))
 {
     const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_threads();
     _index.load(index_prefix.c_str(), _num_threads, initial_search_complexity);
@@ -74,4 +74,4 @@ template class StaticMemoryIndex<float>;
 template class StaticMemoryIndex<uint8_t>;
 template class StaticMemoryIndex<int8_t>;
 
-}
+} // namespace diskannpy

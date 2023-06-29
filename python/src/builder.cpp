@@ -23,26 +23,20 @@ void build_disk_index(const diskann::Metric metric, const std::string &data_file
     diskann::build_disk_index<DT>(data_file_path.c_str(), index_prefix_path.c_str(), params.c_str(), metric);
 }
 
-template void build_disk_index<float>(diskann::Metric, const std::string&,
-                                      const std::string&, uint32_t, uint32_t,
-                                      double, double, uint32_t,
-                                      uint32_t);
+template void build_disk_index<float>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
+                                      double, double, uint32_t, uint32_t);
 
-template void build_disk_index<uint8_t>(diskann::Metric, const std::string&,
-                                      const std::string&, uint32_t, uint32_t,
-                                      double, double, uint32_t,
-                                      uint32_t);
-template void build_disk_index<int8_t>(diskann::Metric, const std::string&,
-                                      const std::string&, uint32_t, uint32_t,
-                                      double, double, uint32_t,
-                                      uint32_t);
+template void build_disk_index<uint8_t>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
+                                        double, double, uint32_t, uint32_t);
+template void build_disk_index<int8_t>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
+                                       double, double, uint32_t, uint32_t);
 
 template <typename T, typename TagT, typename LabelT>
 void build_memory_index(const diskann::Metric metric, const std::string &vector_bin_path,
-                           const std::string &index_output_path, const uint32_t graph_degree, const uint32_t complexity,
-                           const float alpha, const uint32_t num_threads, const bool use_pq_build,
-                           const size_t num_pq_bytes, const bool use_opq, const uint32_t filter_complexity,
-                           const bool use_tags)
+                        const std::string &index_output_path, const uint32_t graph_degree, const uint32_t complexity,
+                        const float alpha, const uint32_t num_threads, const bool use_pq_build,
+                        const size_t num_pq_bytes, const bool use_opq, const uint32_t filter_complexity,
+                        const bool use_tags)
 {
     diskann::IndexWriteParameters index_build_params = diskann::IndexWriteParametersBuilder(complexity, graph_degree)
                                                            .with_filter_list_size(filter_complexity)
@@ -76,13 +70,13 @@ void build_memory_index(const diskann::Metric metric, const std::string &vector_
     index.save(index_output_path.c_str());
 }
 
-template void build_memory_index<float>(diskann::Metric, const std::string&, const std::string&, uint32_t, uint32_t,
-                                           float, uint32_t, bool,size_t, bool, uint32_t, bool);
+template void build_memory_index<float>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
+                                        float, uint32_t, bool, size_t, bool, uint32_t, bool);
 
-template void build_memory_index<int8_t>(diskann::Metric, const std::string&, const std::string&, uint32_t, uint32_t,
-                                           float, uint32_t, bool,size_t, bool, uint32_t, bool);
+template void build_memory_index<int8_t>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
+                                         float, uint32_t, bool, size_t, bool, uint32_t, bool);
 
-template void build_memory_index<uint8_t>(diskann::Metric, const std::string&, const std::string&, uint32_t, uint32_t,
-                                           float, uint32_t, bool,size_t, bool, uint32_t, bool);
+template void build_memory_index<uint8_t>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
+                                          float, uint32_t, bool, size_t, bool, uint32_t, bool);
 
-}
+} // namespace diskannpy

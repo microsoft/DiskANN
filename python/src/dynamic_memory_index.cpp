@@ -28,11 +28,11 @@ diskann::IndexWriteParameters dynamic_index_write_parameters(const uint32_t comp
 
 template <class DT>
 diskann::Index<DT, DynamicIdType, filterT> dynamic_index_builder(const diskann::Metric m,
-                                                       const diskann::IndexWriteParameters &write_params,
-                                                       const size_t dimensions, const size_t max_vectors,
-                                                       const uint32_t initial_search_complexity,
-                                                       const uint32_t initial_search_threads,
-                                                       const bool concurrent_consolidation)
+                                                                 const diskann::IndexWriteParameters &write_params,
+                                                                 const size_t dimensions, const size_t max_vectors,
+                                                                 const uint32_t initial_search_complexity,
+                                                                 const uint32_t initial_search_threads,
+                                                                 const bool concurrent_consolidation)
 {
     const uint32_t _initial_search_threads =
         initial_search_threads != 0 ? initial_search_threads : omp_get_num_threads();
@@ -61,7 +61,8 @@ DynamicMemoryIndex<DT>::DynamicMemoryIndex(const diskann::Metric m, const size_t
     : _initial_search_complexity(initial_search_complexity != 0 ? initial_search_complexity : complexity),
       _write_parameters(dynamic_index_write_parameters(complexity, graph_degree, saturate_graph, max_occlusion_size,
                                                        alpha, num_threads, filter_complexity, num_frozen_points)),
-      _index(dynamic_index_builder<DT>(m, _write_parameters, dimensions, max_vectors, _initial_search_complexity, initial_search_threads, concurrent_consolidation))
+      _index(dynamic_index_builder<DT>(m, _write_parameters, dimensions, max_vectors, _initial_search_complexity,
+                                       initial_search_threads, concurrent_consolidation))
 {
 }
 
@@ -85,7 +86,8 @@ int DynamicMemoryIndex<DT>::insert(const py::array_t<DT, py::array::c_style | py
 template <class DT>
 py::array_t<int> DynamicMemoryIndex<DT>::batch_insert(
     py::array_t<DT, py::array::c_style | py::array::forcecast> &vectors,
-    py::array_t<DynamicIdType, py::array::c_style | py::array::forcecast> &ids, const int32_t num_inserts, const int num_threads)
+    py::array_t<DynamicIdType, py::array::c_style | py::array::forcecast> &ids, const int32_t num_inserts,
+    const int num_threads)
 {
     if (num_threads == 0)
         omp_set_num_threads(omp_get_num_procs());
@@ -141,11 +143,12 @@ NeighborsAndDistances<DynamicIdType> DynamicMemoryIndex<DT>::batch_search(
     else
         omp_set_num_threads(static_cast<int32_t>(num_threads));
 
-#pragma omp parallel for schedule(dynamic, 1) default(none) shared(num_queries, queries, knn, complexity, ids, dists, empty_vector)
+#pragma omp parallel for schedule(dynamic, 1) default(none)                                                            \
+    shared(num_queries, queries, knn, complexity, ids, dists, empty_vector)
     for (int64_t i = 0; i < (int64_t)num_queries; i++)
     {
         _index.search_with_tags(queries.data(i), knn, complexity, ids.mutable_data(i), dists.mutable_data(i),
-                                 empty_vector);
+                                empty_vector);
     }
 
     return std::make_pair(ids, dists);
