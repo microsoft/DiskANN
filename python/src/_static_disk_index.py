@@ -80,11 +80,11 @@ class StaticDiskIndex:
 
         self._vector_dtype = vector_dtype
         if vector_dtype == np.single:
-            _index = _native_dap.DiskFloatIndex
+            _index = _native_dap.StaticDiskFloatIndex
         elif vector_dtype == np.ubyte:
-            _index = _native_dap.DiskUInt8Index
+            _index = _native_dap.StaticDiskUInt8Index
         else:
-            _index = _native_dap.DiskInt8Index
+            _index = _native_dap.StaticDiskInt8Index
         self._index = _index(
             distance_metric=dap_metric,
             index_path_prefix=os.path.join(index_directory, index_prefix),

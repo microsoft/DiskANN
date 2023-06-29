@@ -266,11 +266,11 @@ def build_memory_index(
     num_points, dimensions = vector_file_metadata(vector_bin_path)
 
     if vector_dtype_actual == np.single:
-        _builder = _native_dap.build_in_memory_float_index
+        _builder = _native_dap.build_memory_float_index
     elif vector_dtype_actual == np.ubyte:
-        _builder = _native_dap.build_in_memory_uint8_index
+        _builder = _native_dap.build_memory_uint8_index
     else:
-        _builder = _native_dap.build_in_memory_int8_index
+        _builder = _native_dap.build_memory_int8_index
 
     index_prefix_path = os.path.join(index_directory, index_prefix)
 
