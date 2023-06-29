@@ -14,7 +14,7 @@ class TestBuildDiskIndex(unittest.TestCase):
         with self.assertRaises(ValueError):
             dap.build_disk_index(
                 data=rando,
-                metric="l2",
+                distance_metric="l2",
                 index_directory="test",
                 complexity=5,
                 graph_degree=5,
@@ -28,7 +28,7 @@ class TestBuildDiskIndex(unittest.TestCase):
         with self.assertRaises(ValueError):
             dap.build_disk_index(
                 data=rando,
-                metric="l2",
+                distance_metric="l2",
                 index_directory="test",
                 complexity=5,
                 graph_degree=5,
@@ -41,7 +41,7 @@ class TestBuildDiskIndex(unittest.TestCase):
     def test_value_ranges_build(self):
         good_ranges = {
             "vector_dtype": np.single,
-            "metric": "l2",
+            "distance_metric": "l2",
             "graph_degree": 5,
             "complexity": 5,
             "search_memory_maximum": 0.01,
@@ -51,7 +51,7 @@ class TestBuildDiskIndex(unittest.TestCase):
         }
         bad_ranges = {
             "vector_dtype": np.float64,
-            "metric": "soups this time",
+            "distance_metric": "soups this time",
             "graph_degree": -1,
             "complexity": -1,
             "search_memory_maximum": 0,
@@ -76,7 +76,7 @@ class TestBuildMemoryIndex(unittest.TestCase):
         with self.assertRaises(ValueError):
             dap.build_memory_index(
                 data=rando,
-                metric="l2",
+                distance_metric="l2",
                 index_directory="test",
                 complexity=5,
                 graph_degree=5,
@@ -91,7 +91,7 @@ class TestBuildMemoryIndex(unittest.TestCase):
         with self.assertRaises(ValueError):
             dap.build_memory_index(
                 data=rando,
-                metric="l2",
+                distance_metric="l2",
                 index_directory="test",
                 complexity=5,
                 graph_degree=5,
@@ -105,7 +105,7 @@ class TestBuildMemoryIndex(unittest.TestCase):
     def test_value_ranges_build(self):
         good_ranges = {
             "vector_dtype": np.single,
-            "metric": "l2",
+            "distance_metric": "l2",
             "graph_degree": 5,
             "complexity": 5,
             "alpha": 1.2,
@@ -114,7 +114,7 @@ class TestBuildMemoryIndex(unittest.TestCase):
         }
         bad_ranges = {
             "vector_dtype": np.float64,
-            "metric": "soups this time",
+            "distance_metric": "soups this time",
             "graph_degree": -1,
             "complexity": -1,
             "alpha": -1.2,

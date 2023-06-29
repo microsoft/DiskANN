@@ -8,4 +8,5 @@ apt install cmake \
   clang-format \
   libboost-dev \
   libboost-program-options-dev \
+  libboost-test-dev \
   libmkl-full-dev

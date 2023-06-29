@@ -15,7 +15,7 @@ def build_random_vectors_and_memory_index(
         dtype,
         metric,
         with_tags: bool = False,
-        index_prefix: str ="ann",
+        index_prefix: str = "ann",
         seed: int = 12345
 ):
     query_vectors: np.ndarray = random_vectors(1000, 10, dtype=dtype, seed=seed)
@@ -24,14 +24,14 @@ def build_random_vectors_and_memory_index(
 
     if with_tags:
         rng = np.random.default_rng(seed)
-        tags = np.arange(start=1, stop=10001, dtype=np.uint32)
+        tags = np.arange(start=1, stop=10001, dtype=np.uintc)
         rng.shuffle(tags)
     else:
-        tags = None
+        tags = ""
 
     dap.build_memory_index(
         data=index_vectors,
-        metric=metric,
+        distance_metric=metric,
         index_directory=ann_dir,
         graph_degree=16,
         complexity=32,
@@ -41,8 +41,10 @@ def build_random_vectors_and_memory_index(
         num_pq_bytes=8,
         use_opq=False,
         filter_complexity=32,
+        tags=tags,
         index_prefix=index_prefix
     )
+
     return (
         metric,
         dtype,

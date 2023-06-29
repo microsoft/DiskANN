@@ -142,14 +142,13 @@ template <class T> struct DynamicInMemIndex
 {
     Index<T, IdT, filterT> *_index;
     IndexWriteParameters _write_params;
-    const std::string &_index_path;
+    const uint32_t _initial_search_complexity;
 
-    DynamicInMemIndex(const Metric m, const size_t dim, const size_t max_points, const uint32_t complexity,
+    DynamicInMemIndex(const Metric m, const size_t dimensions, const size_t max_vectors, const uint32_t complexity,
                       const uint32_t graph_degree, const bool saturate_graph, const uint32_t max_occlusion_size,
                       const float alpha, const uint32_t num_threads, const uint32_t filter_complexity,
                       const uint32_t num_frozen_points, const uint32_t initial_search_complexity,
-                      const uint32_t initial_search_threads, const bool concurrent_consolidation,
-                      const std::string &index_path = "")
+                      const uint32_t initial_search_threads, const bool concurrent_consolidation)
         : _write_params(IndexWriteParametersBuilder(complexity, graph_degree)
                             .with_saturate_graph(saturate_graph)
                             .with_max_occlusion_size(max_occlusion_size)
@@ -158,14 +157,12 @@ template <class T> struct DynamicInMemIndex
                             .with_filter_list_size(filter_complexity)
                             .with_num_frozen_points(num_frozen_points)
                             .build()),
-          _index_path(index_path)
+          _initial_search_complexity(initial_search_complexity != 0 ? initial_search_complexity : complexity)
     {
-        const uint32_t _initial_search_complexity =
-            initial_search_complexity != 0 ? initial_search_complexity : complexity;
         const uint32_t _initial_search_threads =
             initial_search_threads != 0 ? initial_search_threads : omp_get_num_threads();
 
-        _index = new Index<T>(m, dim, max_points,
+        _index = new Index<T>(m, dimensions, max_vectors,
                               true,                       // dynamic_index
                               _write_params,              // used for insert
                               _initial_search_complexity, // used to prepare the scratch space for searching. can / may
@@ -176,16 +173,22 @@ template <class T> struct DynamicInMemIndex
                               false,  // pq_dist_build
                               0,      // num_pq_chunks
                               false); // use_opq = false
-        if (!index_path.empty())
-        {
-            _index->load(index_path.c_str(), _write_params.num_threads, complexity);
-        }
         _index->enable_delete();
     }
 
     ~DynamicInMemIndex()
     {
         delete _index;
+    }
+
+    void load(const std::string &index_path)
+    {
+        const std::string tags_file = index_path + ".tags";
+        if (!file_exists(tags_file))
+        {
+            throw std::runtime_error("tags file not found at expected path: " + tags_file);
+        }
+        _index->load(index_path.c_str(), _write_params.num_threads, _initial_search_complexity);
     }
 
     int insert(py::array_t<T, py::array::c_style | py::array::forcecast> &vector, const IdT id)
@@ -219,14 +222,11 @@ template <class T> struct DynamicInMemIndex
 
     void save(const std::string &save_path = "", const bool compact_before_save = false)
     {
-        const std::string path = !save_path.empty() ? save_path : _index_path;
-        if (path.empty())
+        if (save_path.empty())
         {
-            throw std::runtime_error(
-                "A save_path must be provided if a starting index was not provided in the DynamicMemoryIndex "
-                "constructor via the index_path parameter");
+            throw std::runtime_error("A save_path must be provided");
         }
-        _index->save(path.c_str(), compact_before_save);
+        _index->save(save_path.c_str(), compact_before_save);
     }
 
     auto search(py::array_t<T, py::array::c_style | py::array::forcecast> &query, const uint64_t knn,
@@ -271,7 +271,7 @@ template <class T> struct StaticInMemIndex
 {
     Index<T, IdT, filterT> *_index;
 
-    StaticInMemIndex(const Metric m, const std::string &data_path, const std::string &index_prefix,
+    StaticInMemIndex(const Metric m, const std::string &index_prefix, const size_t num_points, const size_t dimensions,
                      const uint32_t num_threads, const uint32_t initial_search_complexity)
     {
         const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_threads();
@@ -280,16 +280,14 @@ template <class T> struct StaticInMemIndex
             throw std::runtime_error("initial_search_complexity must be a positive uint32_t");
         }
 
-        size_t ndims, npoints;
-        diskann::get_bin_metadata(data_path, npoints, ndims);
-        _index = new Index<T>(m, ndims, npoints,
+        _index = new Index<T>(m, dimensions, num_points,
                               false, // not a dynamic_index
                               false, // no enable_tags/ids
                               false, // no concurrent_consolidate,
                               false, // pq_dist_build
                               0,     // num_pq_chunks
                               false, // use_opq = false
-                              0);    // num_frozen_pts = 0
+                              0);    // num_frozen_points
         _index->load(index_prefix.c_str(), _num_threads, initial_search_complexity);
     }
 
@@ -346,8 +344,7 @@ template <typename T, typename TagT = IdT, typename LabelT = filterT>
 void build_in_memory_index(const diskann::Metric &metric, const std::string &vector_bin_path,
                            const std::string &index_output_path, const uint32_t graph_degree, const uint32_t complexity,
                            const float alpha, const uint32_t num_threads, const bool use_pq_build,
-                           const size_t num_pq_bytes, const bool use_opq, const std::string &label_file,
-                           const std::string &universal_label, const uint32_t filter_complexity,
+                           const size_t num_pq_bytes, const bool use_opq, const uint32_t filter_complexity,
                            const bool use_tags = false)
 {
     diskann::IndexWriteParameters index_build_params = diskann::IndexWriteParametersBuilder(complexity, graph_degree)
@@ -358,24 +355,27 @@ void build_in_memory_index(const diskann::Metric &metric, const std::string &vec
                                                            .build();
     size_t data_num, data_dim;
     diskann::get_bin_metadata(vector_bin_path, data_num, data_dim);
-    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, use_tags, false, use_pq_build,
+    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, use_tags, use_tags, false, use_pq_build,
                                           num_pq_bytes, use_opq);
-    if (label_file == "")
+
+    if (use_tags)
     {
-        index.build(vector_bin_path.c_str(), data_num, index_build_params);
+        const std::string tags_file = index_output_path + ".tags";
+        if (!file_exists(tags_file))
+        {
+            throw std::runtime_error("tags file not found at expected path: " + tags_file);
+        }
+        TagT *tags_data;
+        size_t tag_dims = 1;
+        diskann::load_bin(tags_file, tags_data, data_num, tag_dims);
+        std::vector<TagT> tags(tags_data, tags_data + data_num);
+        index.build(vector_bin_path.c_str(), data_num, index_build_params, tags);
     }
     else
     {
-        std::string labels_file_to_use = index_output_path + "_label_formatted.txt";
-        std::string mem_labels_int_map_file = index_output_path + "_labels_map.txt";
-        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
-        if (universal_label != "")
-        {
-            filterT unv_label_as_num = 0;
-            index.set_universal_label(unv_label_as_num);
-        }
-        index.build_filtered_index(index_output_path.c_str(), labels_file_to_use, data_num, index_build_params);
+        index.build(vector_bin_path.c_str(), data_num, index_build_params);
     }
+
     index.save(index_output_path.c_str());
 }
 
@@ -383,53 +383,54 @@ template <typename T>
 inline void add_variant(py::module_ &m, const std::string &build_name, const std::string &class_name)
 {
     const std::string build_disk_name = "build_disk_" + build_name + "_index";
-    m.def(build_disk_name.c_str(), &build_disk_index2<T>, py::arg("metric"), py::arg("data_file_path"),
+    m.def(build_disk_name.c_str(), &build_disk_index2<T>, py::arg("distance_metric"), py::arg("data_file_path"),
           py::arg("index_prefix_path"), py::arg("complexity"), py::arg("graph_degree"),
           py::arg("final_index_ram_limit"), py::arg("indexing_ram_budget"), py::arg("num_threads"),
           py::arg("pq_disk_bytes"));
 
     const std::string build_in_memory_name = "build_in_memory_" + build_name + "_index";
-    m.def(build_in_memory_name.c_str(), &build_in_memory_index<T>, py::arg("metric"), py::arg("data_file_path"),
-          py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"), py::arg("alpha"),
-          py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"), py::arg("use_opq"),
-          py::arg("label_file") = "", py::arg("universal_label") = "", py::arg("filter_complexity") = 0,
-          py::arg("use_tags") = false);
+    m.def(build_in_memory_name.c_str(), &build_in_memory_index<T>, py::arg("distance_metric"),
+          py::arg("data_file_path"), py::arg("index_output_path"), py::arg("graph_degree"), py::arg("complexity"),
+          py::arg("alpha"), py::arg("num_threads"), py::arg("use_pq_build"), py::arg("num_pq_bytes"),
+          py::arg("use_opq"), py::arg("filter_complexity") = 0, py::arg("use_tags") = false);
 
     const std::string static_index = "StaticMemory" + class_name + "Index";
     py::class_<StaticInMemIndex<T>>(m, static_index.c_str())
-        .def(py::init([](const diskann::Metric metric, const std::string &data_path, const std::string &index_path,
-                         const uint32_t num_threads, const uint32_t initial_search_complexity) {
-                 return std::unique_ptr<StaticInMemIndex<T>>(
-                     new StaticInMemIndex<T>(metric, data_path, index_path, num_threads, initial_search_complexity));
-             }),
-             py::arg("metric"), py::arg("data_path"), py::arg("index_path"), py::arg("num_threads"),
-             py::arg("initial_search_complexity"))
+        .def(
+            py::init([](const diskann::Metric distance_metric, const std::string &index_path, const size_t num_points,
+                        const size_t dimensions, const uint32_t num_threads, const uint32_t initial_search_complexity) {
+                return std::unique_ptr<StaticInMemIndex<T>>(new StaticInMemIndex<T>(
+                    distance_metric, index_path, num_points, dimensions, num_threads, initial_search_complexity));
+            }),
+            py::arg("distance_metric"), py::arg("index_path"), py::arg("num_points"), py::arg("dimensions"),
+            py::arg("num_threads"), py::arg("initial_search_complexity"))
         .def("search", &StaticInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
         .def("batch_search", &StaticInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
              py::arg("knn"), py::arg("complexity"), py::arg("num_threads"));
 
     const std::string dynamic_index = "DynamicMemory" + class_name + "Index";
     py::class_<DynamicInMemIndex<T>>(m, dynamic_index.c_str())
-        .def(py::init([](const diskann::Metric metric, const size_t dim, const size_t max_points,
+        .def(py::init([](const diskann::Metric distance_metric, const size_t dimensions, const size_t max_vectors,
                          const uint32_t complexity, const uint32_t graph_degree, const bool saturate_graph,
                          const uint32_t max_occlusion_size, const float alpha, const uint32_t num_threads,
                          const uint32_t filter_complexity, const uint32_t num_frozen_points,
                          const uint32_t initial_search_complexity, const uint32_t search_threads,
-                         const bool concurrent_consolidation, const std::string &index_path) {
+                         const bool concurrent_consolidation) {
                  return std::unique_ptr<DynamicInMemIndex<T>>(new DynamicInMemIndex<T>(
-                     metric, dim, max_points, complexity, graph_degree, saturate_graph, max_occlusion_size, alpha,
-                     num_threads, filter_complexity, num_frozen_points, initial_search_complexity, search_threads,
-                     concurrent_consolidation, index_path));
+                     distance_metric, dimensions, max_vectors, complexity, graph_degree, saturate_graph,
+                     max_occlusion_size, alpha, num_threads, filter_complexity, num_frozen_points,
+                     initial_search_complexity, search_threads, concurrent_consolidation));
              }),
-             py::arg("metric"), py::arg("dim"), py::arg("max_points"), py::arg("complexity"), py::arg("graph_degree"),
-             py::arg("saturate_graph") = diskann::defaults::SATURATE_GRAPH,
+             py::arg("distance_metric"), py::arg("dimensions"), py::arg("max_vectors"), py::arg("complexity"),
+             py::arg("graph_degree"), py::arg("saturate_graph") = diskann::defaults::SATURATE_GRAPH,
              py::arg("max_occlusion_size") = diskann::defaults::MAX_OCCLUSION_SIZE,
              py::arg("alpha") = diskann::defaults::ALPHA, py::arg("num_threads") = diskann::defaults::NUM_THREADS,
              py::arg("filter_complexity") = diskann::defaults::FILTER_LIST_SIZE,
              py::arg("num_frozen_points") = diskann::defaults::NUM_FROZEN_POINTS_DYNAMIC,
              py::arg("initial_search_complexity") = 0, py::arg("search_threads") = 0,
-             py::arg("concurrent_consolidation") = true, py::arg("index_path") = "")
+             py::arg("concurrent_consolidation") = true)
         .def("search", &DynamicInMemIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"))
+        .def("load", &DynamicInMemIndex<T>::load, py::arg("index_path"))
         .def("batch_search", &DynamicInMemIndex<T>::batch_search, py::arg("queries"), py::arg("num_queries"),
              py::arg("knn"), py::arg("complexity"), py::arg("num_threads"))
         .def("batch_insert", &DynamicInMemIndex<T>::batch_insert, py::arg("vectors"), py::arg("ids"),
@@ -441,13 +442,13 @@ inline void add_variant(py::module_ &m, const std::string &build_name, const std
 
     const std::string disk_name = "Disk" + class_name + "Index";
     py::class_<DiskIndex<T>>(m, disk_name.c_str())
-        .def(py::init([](const diskann::Metric metric, const std::string &index_path_prefix, const uint32_t num_threads,
-                         const size_t num_nodes_to_cache, const uint32_t cache_mechanism) {
-                 return std::unique_ptr<DiskIndex<T>>(
-                     new DiskIndex<T>(metric, index_path_prefix, num_threads, num_nodes_to_cache, cache_mechanism));
+        .def(py::init([](const diskann::Metric distance_metric, const std::string &index_path_prefix,
+                         const uint32_t num_threads, const size_t num_nodes_to_cache, const uint32_t cache_mechanism) {
+                 return std::unique_ptr<DiskIndex<T>>(new DiskIndex<T>(distance_metric, index_path_prefix, num_threads,
+                                                                       num_nodes_to_cache, cache_mechanism));
              }),
-             py::arg("metric"), py::arg("index_path_prefix"), py::arg("num_threads"), py::arg("num_nodes_to_cache"),
-             py::arg("cache_mechanism") = 1)
+             py::arg("distance_metric"), py::arg("index_path_prefix"), py::arg("num_threads"),
+             py::arg("num_nodes_to_cache"), py::arg("cache_mechanism") = 1)
         .def("cache_bfs_levels", &DiskIndex<T>::cache_bfs_levels, py::arg("num_nodes_to_cache"))
         .def("search", &DiskIndex<T>::search, py::arg("query"), py::arg("knn"), py::arg("complexity"),
              py::arg("beam_width"))
@@ -492,5 +493,6 @@ PYBIND11_MODULE(_diskannpy, m)
     py::enum_<Metric>(m, "Metric")
         .value("L2", Metric::L2)
         .value("INNER_PRODUCT", Metric::INNER_PRODUCT)
+        .value("COSINE", Metric::COSINE)
         .export_values();
 }
