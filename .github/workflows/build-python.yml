@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v2
         with:
           fetch-depth: 1
-      - name: Checking code formatting...
+      - name: Building python wheel ${{matrix.cibw-identifier}}
         uses: ./.github/actions/python-wheel
         with:
           cibw-identifier: ${{matrix.cibw-identifier}}
@@ -36,7 +36,7 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
-      - name: Checking code formatting...
+      - name: Building python wheel ${{matrix.cibw-identifier}}
         uses: ./.github/actions/python-wheel
         with:
           cibw-identifier: ${{matrix.cibw-identifier}}
