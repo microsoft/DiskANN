@@ -31,23 +31,14 @@ struct Variant
     std::string static_disk_index_name;
 };
 
-const Variant FloatVariant{"build_disk_float_index",
-                           "build_memory_float_index",
-                           "DynamicMemoryFloatIndex",
-                           "StaticMemoryFloatIndex",
-                           "StaticDiskFloatIndex"};
+const Variant FloatVariant{"build_disk_float_index", "build_memory_float_index", "DynamicMemoryFloatIndex",
+                           "StaticMemoryFloatIndex", "StaticDiskFloatIndex"};
 
-const Variant UInt8Variant{"build_disk_uint8_index",
-                           "build_memory_uint8_index",
-                           "DynamicMemoryUInt8Index",
-                           "StaticMemoryUInt8Index",
-                           "StaticDiskUInt8Index"};
+const Variant UInt8Variant{"build_disk_uint8_index", "build_memory_uint8_index", "DynamicMemoryUInt8Index",
+                           "StaticMemoryUInt8Index", "StaticDiskUInt8Index"};
 
-const Variant Int8Variant{"build_disk_int8_index",
-                          "build_memory_int8_index",
-                          "DynamicMemoryInt8Index",
-                          "StaticMemoryInt8Index",
-                          "StaticDiskInt8Index"};
+const Variant Int8Variant{"build_disk_int8_index", "build_memory_int8_index", "DynamicMemoryInt8Index",
+                          "StaticMemoryInt8Index", "StaticDiskInt8Index"};
 
 template <typename T> inline void add_variant(py::module_ &m, const Variant &variant)
 {
