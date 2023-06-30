@@ -14,7 +14,7 @@ runs:
     - name: Building Python ${{inputs.cibw-identifier}} Wheel
       run: python -m cibuildwheel --output-dir dist
       env:
-        CIBW_BUILD: {{inputs.cibw-identifier}}
+        CIBW_BUILD: ${{inputs.cibw-identifier}}
       shell: bash
     - uses: actions/upload-artifact@v3
       with:
