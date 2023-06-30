@@ -1463,16 +1463,42 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         auto scratch = manager.scratch_space();
 
+        std::vector<uint32_t> filter_pruned_list;     // canidats for filtered connections
+        std::vector<uint32_t> unfiltered_pruned_list; // candidates considered solely based on distance.
+        if (_filtered_index)
+        {
+            search_for_point_and_prune(node, _indexingQueueSize, filter_pruned_list, scratch, _filtered_index,
+                                       _filterIndexingQueueSize);
+            scratch->clear();
+        }
+        search_for_point_and_prune(node, _indexingQueueSize, unfiltered_pruned_list, scratch);
+
         std::vector<uint32_t> pruned_list;
         if (_filtered_index)
         {
-            search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, _filtered_index,
-                                       _filterIndexingQueueSize);
+            pruned_list.reserve(_indexingRange);
+            auto max_filtered_candidates =
+                floor((_filterIndexingQueueSize / static_cast<float>(_filterIndexingQueueSize + _indexingQueueSize)) *
+                      _indexingRange);
+            size_t i = 0;
+            for (; i < filter_pruned_list.size() && i < max_filtered_candidates; i++)
+            {
+                pruned_list.emplace_back(filter_pruned_list[i]);
+            }
+
+            for (; i < _indexingRange && i < unfiltered_pruned_list.size(); i++)
+            {
+                pruned_list.emplace_back(unfiltered_pruned_list[i]);
+            }
+
+            pruned_list.shrink_to_fit();
         }
         else
         {
-            search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
+            pruned_list = unfiltered_pruned_list;
         }
+        assert(pruned_list.size() > 0);
+
         {
             LockGuard guard(_locks[node]);
             _final_graph[node].reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
@@ -3017,7 +3043,9 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
     // Find and add appropriate graph edges
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
-    std::vector<uint32_t> pruned_list;
+    // std::vector<uint32_t> filter_pruned_list;     // canidats for filtered connections
+    // std::vector<uint32_t> unfiltered_pruned_list; // candidates considered solely based on distance.
+    std::vector<uint32_t> pruned_list; // final combined pruned list
     if (_filtered_index)
     {
         search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
@@ -3026,6 +3054,22 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
     {
         search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch);
     }
+
+    /*if (_filtered_index)
+    {
+        pruned_list.reserve(_indexingRange);
+        auto lf_lr_ratio = _filterIndexingQueueSize / (_indexingQueueSize + _filterIndexingQueueSize);
+        auto it = std::copy_n(filter_pruned_list.begin(), static_cast<int>(std::floor(_indexingRange * lf_lr_ratio)),
+                              pruned_list.begin());
+        std::copy_n(unfiltered_pruned_list.begin(), static_cast<int>(std::ceil(_indexingRange * (1 - lf_lr_ratio))),
+                    it);
+        pruned_list.shrink_to_fit();
+    }
+    else
+    {
+        pruned_list = unfiltered_pruned_list;
+    }*/
+
     {
         std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock, std::defer_lock);
         if (_conc_consolidate)
