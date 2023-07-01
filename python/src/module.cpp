@@ -31,23 +31,23 @@ struct Variant
     std::string static_disk_index_name;
 };
 
-const Variant FloatVariant{.disk_builder_name = "build_disk_float_index",
-                           .memory_builder_name = "build_memory_float_index",
-                           .dynamic_memory_index_name = "DynamicMemoryFloatIndex",
-                           .static_memory_index_name = "StaticMemoryFloatIndex",
-                           .static_disk_index_name = "StaticDiskFloatIndex"};
+const Variant FloatVariant{"build_disk_float_index",
+                           "build_memory_float_index",
+                           "DynamicMemoryFloatIndex",
+                           "StaticMemoryFloatIndex",
+                           "StaticDiskFloatIndex"};
 
-const Variant UInt8Variant{.disk_builder_name = "build_disk_uint8_index",
-                           .memory_builder_name = "build_memory_uint8_index",
-                           .dynamic_memory_index_name = "DynamicMemoryUInt8Index",
-                           .static_memory_index_name = "StaticMemoryUInt8Index",
-                           .static_disk_index_name = "StaticDiskUInt8Index"};
+const Variant UInt8Variant{"build_disk_uint8_index",
+                           "build_memory_uint8_index",
+                           "DynamicMemoryUInt8Index",
+                           "StaticMemoryUInt8Index",
+                           "StaticDiskUInt8Index"};
 
-const Variant Int8Variant{.disk_builder_name = "build_disk_int8_index",
-                          .memory_builder_name = "build_memory_int8_index",
-                          .dynamic_memory_index_name = "DynamicMemoryInt8Index",
-                          .static_memory_index_name = "StaticMemoryInt8Index",
-                          .static_disk_index_name = "StaticDiskInt8Index"};
+const Variant Int8Variant{"build_disk_int8_index",
+                          "build_memory_int8_index",
+                          "DynamicMemoryInt8Index",
+                          "StaticMemoryInt8Index",
+                          "StaticDiskInt8Index"};
 
 template <typename T> inline void add_variant(py::module_ &m, const Variant &variant)
 {
