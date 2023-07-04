@@ -506,7 +506,7 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
 
     // REFACTOR TODO: Must figure out how to support aligned reader in a clean
     // manner.
-    copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _aligned_dim);
+    copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _data_store->get_aligned_dim());
 #else
     _data_store->load(filename); // offset == 0.
 #endif
