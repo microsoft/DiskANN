@@ -96,12 +96,7 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    bool use_filters = false;
-    if (label_file != "")
-    {
-        use_filters = true;
-    }
-
+    bool use_filters = (label_file != "") ? true : false;
     diskann::Metric metric;
     if (dist_fn == std::string("l2"))
         metric = diskann::Metric::L2;
