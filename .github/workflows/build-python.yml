@@ -1,14 +1,32 @@
 name: DiskANN Build Python Wheel
 on: [workflow_call]
 jobs:
-  build:
-    name: Build for ${{matrix.python-version}} on ${{matrix.os}}
+  linux-build:
+    name: Python - Ubuntu - ${{matrix.cibw-identifier}}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.7", "3.8", "3.9", "3.10", "3.11"]
-    runs-on: ${{matrix.os}}
+        cibw-identifier: ["cp38-manylinux_x86_64", "cp39-manylinux_x86_64", "cp310-manylinux_x86_64", "cp311-manylinux_x86_64"]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 1
+      - name: Building python wheel ${{matrix.cibw-identifier}}
+        uses: ./.github/actions/python-wheel
+        with:
+          cibw-identifier: ${{matrix.cibw-identifier}}
+  windows-build:
+    name: Python - Windows - ${{matrix.cibw-identifier}}
+    strategy:
+      fail-fast: false
+      matrix:
+        cibw-identifier: ["cp38-win_amd64", "cp39-win_amd64", "cp310-win_amd64", "cp311-win_amd64"]
+    runs-on: windows-latest
     defaults:
       run:
         shell: bash
@@ -17,14 +35,8 @@ jobs:
         uses: actions/checkout@v2
         with:
           submodules: true
-      - uses: actions/setup-python@v3
-      - name: Install cibuildwheel
-        run: python -m pip install cibuildwheel==2.11.3
-      - name: Building Wheel for Python ${{inputs.python-version}}
-        run: python -m cibuildwheel --output-dir dist
-        env:
-          CIBW_BUILD: ${{ inputs.python-version }}
-      - uses: actions/upload-artifact@v3
+          fetch-depth: 1
+      - name: Building python wheel ${{matrix.cibw-identifier}}
+        uses: ./.github/actions/python-wheel
         with:
-          name: wheels
-          path: ./dist/*.whl
+          cibw-identifier: ${{matrix.cibw-identifier}}
