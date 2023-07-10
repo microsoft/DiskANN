@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v3
         with:
-          name: dist
+          name: wheels
           path: dist/
       - name: Generate SHA256 files for each wheel
         run: |
