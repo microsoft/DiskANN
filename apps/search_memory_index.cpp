@@ -118,6 +118,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         cmp_stats = std::vector<uint32_t>(query_num, 0);
     }
+    if (filtered_search)
+    {
+        cmp_stats = std::vector<uint32_t>(query_num, 0);
+    }
 
     std::vector<TagT> query_result_tags;
     if (tags)
