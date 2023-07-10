@@ -258,11 +258,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     index.set_start_points_at_random(static_cast<T>(start_point_norm));
 
-    // TODO: Is this necessary?
-    if (!has_labels)
-    {
-        index.enable_delete();
-    }
+    index.enable_delete();
 
     T *data = nullptr;
     diskann::alloc_aligned((void **)&data, std::max(consolidate_interval, active_window) * aligned_dim * sizeof(T),
@@ -291,22 +287,15 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         });
         insert_task.wait();
 
-        if (!has_labels)
+        if (delete_tasks.size() > 0)
+            delete_tasks[delete_tasks.size() - 1].wait();
+        if (start >= active_window + consolidate_interval)
         {
-            if (delete_tasks.size() > 0)
-                delete_tasks[delete_tasks.size() - 1].wait();
-            if (start >= active_window + consolidate_interval)
-            {
-                auto start_del = start - active_window - consolidate_interval;
-                auto end_del = start - active_window;
+            auto start_del = start - active_window - consolidate_interval;
+            auto end_del = start - active_window;
 
-                delete_tasks.emplace_back(std::async(
-                    std::launch::async, [&]() { delete_and_consolidate(index, delete_params, start_del, end_del); }));
-            }
-        }
-        else
-        {
-            std::cout << "Warning: Deleting points is not yet supported for labeled data\n";
+            delete_tasks.emplace_back(std::async(
+                std::launch::async, [&]() { delete_and_consolidate(index, delete_params, start_del, end_del); }));
         }
     }
     if (delete_tasks.size() > 0)

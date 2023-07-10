@@ -2464,6 +2464,16 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         reposition_points((uint32_t)_max_points, (uint32_t)_nd, (uint32_t)_num_frozen_pts);
         _start = (uint32_t)_nd;
     }
+    if (_filtered_index && _dynamic_index)
+    {
+        // here fz points are the medoids -> so _label_to_medoid_id should be updated.
+        for (auto &[key, val] : _label_to_medoid_id)
+        {
+            if (key == 0)
+                continue;
+            _label_to_medoid_id[key] = (val - (uint32_t)_max_points) + (uint32_t)_nd;
+        }
+    }
 }
 
 // Should be called after acquiring _update_lock
@@ -2788,7 +2798,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 
         for (LabelT label : labels)
         {
-            if (_labels.find(label) == _labels.end())
+            if (label != 0 && _labels.find(label) == _labels.end())
             {
                 if (_labels.size() >= _num_frozen_pts)
                 {
