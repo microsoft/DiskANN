@@ -1150,7 +1150,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
             }
         }
 
-        scratch->pool().clear();
+        scratch->clear();
         std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
     }
 
@@ -2917,41 +2917,6 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     inter_insert(location, pruned_list, scratch);
 
     return 0;
-}
-
-template <typename T, typename TagT, typename LabelT>
-uint32_t Index<T, TagT, LabelT>::bfs_medoid_search(uint32_t start, LabelT label, uint32_t depth)
-{
-    tsl::robin_set<uint32_t> visited;
-    std::vector<std::vector<uint32_t>> q(1);
-    q[0].assign(_final_graph[start].begin(), _final_graph[start].end());
-    while (!q.empty() && depth > 0)
-    {
-        std::vector<uint32_t> curr_level = q[0];
-        q.erase(q.begin());
-
-        std::vector<uint32_t> curr_level_nbrs;
-
-        for (auto nbr : curr_level)
-        {
-            if (visited.find(nbr) != visited.end())
-            {
-                visited.insert(nbr);
-                if (auto it = std::find(_pts_to_labels[nbr].begin(), _pts_to_labels[nbr].end(), label);
-                    it != _pts_to_labels[nbr].end() && _delete_set->find(nbr) == _delete_set->end())
-                {
-                    return nbr;
-                }
-                else
-                {
-                    curr_level_nbrs.push_back(nbr);
-                }
-            }
-        }
-        q.emplace_back(curr_level_nbrs);
-        depth--;
-    }
-    throw ANNException("Error: unable to find any medoid with depth " + depth, -1);
 }
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagT &tag)
