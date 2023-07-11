@@ -26,7 +26,7 @@ const char* RESULT_PATH_DESCRIPTION = "Path prefix for saving results of the que
 const char* QUERY_FILE_DESCRIPTION ="Query file in binary format, e.g. '/mnt/data/query_file_X.bin'";
 const char* NUMBER_OF_RESULTS_DESCRIPTION ="Number of neighbors to be returned";
 const char* SEARCH_LIST_DESCRIPTION ="List of L values of search.  L value is the number of neighbor/distance pairs to keep in-memory at the same time during a query.  The higher the value the more accurate the results and the slower the search.  This value MUST be at least K (number of neighbors to return).";
-const char* INPUT_DATA_PATH="Input data file in bin format";
+const char* INPUT_DATA_PATH="Input data file in bin format.  This is the file you want to build the index over.";
 
 // Optional parameters
 const char* FILTER_LABEL_DESCRIPTION ="Filter to use when running a query.  'filter_label' and 'query_filters_file' are mutually exclusive.";
@@ -41,6 +41,13 @@ const char* BEAMWIDTH="Beamwidth for search. Set 0 to optimize internally.  Defa
 const char* MAX_BUILD_DEGREE="Maximum graph degree";
 const char* GRAPH_BUILD_COMPLEXITY="Build complexity, higher value results in better graphs";
 const char* GRAPH_BUILD_ALPHA= "alpha controls density and diameter of graph, set 1 for sparse graph, 1.2 or 1.4 for denser graphs with lower diameter";
+const char* BUIlD_GRAPH_PQ_BYTES="Number of PQ bytes to build the index; 0 for full precision build";
+const char* USE_OPQ="Use Optimized Product Quantization (OPQ).";
+const char* LABEL_FILE="Input label file in txt format for Filtered Index build. The file should contain comma separated filters for each node with each line corresponding to a graph node";
+const char* UNIVERSAL_LABEL="Universal label, Use only in conjunction with label file for filtered index build. If a "
+                            "graph node has all the labels against it, we can assign a special universal filter to the "
+                            "point instead of comma separated filters for that point";
+const char* FILTERED_LBUILD="Build complexity for filtered points, higher value results in better graphs";
 
 } // namespace program_options_utils
 
