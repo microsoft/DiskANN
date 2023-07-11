@@ -334,7 +334,7 @@ int main(int argc, char **argv)
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
-        
+
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
         if (vm.count("help"))
