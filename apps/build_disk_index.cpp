@@ -68,7 +68,7 @@ int main(int argc, char **argv)
                            program_options_utils::LABEL_FILE);
         optional_configs.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
                            program_options_utils::UNIVERSAL_LABEL);
-        optional_configs.add_options()("FilteredLbuild,Lf", po::value<uint32_t>(&Lf)->default_value(0),
+        optional_configs.add_options()("FilteredLbuild", po::value<uint32_t>(&Lf)->default_value(0),
                            program_options_utils::FILTERED_LBUILD);
         optional_configs.add_options()("filter_threshold,F", po::value<uint32_t>(&filter_threshold)->default_value(0),
                            "Threshold to break up the existing nodes to generate new graph "
@@ -98,12 +98,7 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    bool use_filters = false;
-    if (label_file != "")
-    {
-        use_filters = true;
-    }
-
+    bool use_filters = (label_file != "") ? true : false;
     diskann::Metric metric;
     if (dist_fn == std::string("l2"))
         metric = diskann::Metric::L2;

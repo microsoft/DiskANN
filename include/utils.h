@@ -27,6 +27,7 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
 #include "types.h"
+#include <any>
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
@@ -336,6 +337,26 @@ inline void get_bin_metadata(const std::string &bin_file, size_t &nrows, size_t 
     get_bin_metadata_impl(reader, nrows, ncols, offset);
 }
 // get_bin_metadata functions END
+
+#ifndef EXEC_ENV_OLS
+inline size_t get_graph_num_frozen_points(const std::string &graph_file)
+{
+    size_t expected_file_size;
+    uint32_t max_observed_degree, start;
+    size_t file_frozen_pts;
+
+    std::ifstream in;
+    in.exceptions(std::ios::badbit | std::ios::failbit);
+
+    in.open(graph_file, std::ios::binary);
+    in.read((char *)&expected_file_size, sizeof(size_t));
+    in.read((char *)&max_observed_degree, sizeof(uint32_t));
+    in.read((char *)&start, sizeof(uint32_t));
+    in.read((char *)&file_frozen_pts, sizeof(size_t));
+
+    return file_frozen_pts;
+}
+#endif
 
 template <typename T> inline std::string getValues(T *data, size_t num)
 {
@@ -1090,6 +1111,44 @@ inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::
     {
         diskann::cout << "Warning: Unable to clean all artifacts " << e.what() << std::endl;
     }
+}
+
+template <typename T> inline const char *diskann_type_to_name() = delete;
+template <> inline const char *diskann_type_to_name<float>()
+{
+    return "float";
+}
+template <> inline const char *diskann_type_to_name<uint8_t>()
+{
+    return "uint8";
+}
+template <> inline const char *diskann_type_to_name<int8_t>()
+{
+    return "int8";
+}
+template <> inline const char *diskann_type_to_name<uint16_t>()
+{
+    return "uint16";
+}
+template <> inline const char *diskann_type_to_name<int16_t>()
+{
+    return "int16";
+}
+template <> inline const char *diskann_type_to_name<uint32_t>()
+{
+    return "uint32";
+}
+template <> inline const char *diskann_type_to_name<int32_t>()
+{
+    return "int32";
+}
+template <> inline const char *diskann_type_to_name<uint64_t>()
+{
+    return "uint64";
+}
+template <> inline const char *diskann_type_to_name<int64_t>()
+{
+    return "int64";
 }
 
 #ifdef _WINDOWS

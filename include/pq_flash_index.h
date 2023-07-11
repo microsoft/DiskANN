@@ -106,6 +106,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file, size_t &num_pts_labels);
     DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file, uint32_t &num_pts, uint32_t &num_total_labels);
     DISKANN_DLLEXPORT inline int32_t get_filter_number(const LabelT &filter_label);
+    DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
+                                                  const uint32_t nthreads);
 
     // index info
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
@@ -187,7 +189,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint32_t *_pts_to_label_offsets = nullptr;
     uint32_t *_pts_to_labels = nullptr;
     tsl::robin_set<LabelT> _labels;
-    std::unordered_map<LabelT, uint32_t> _filter_to_medoid_id;
+    std::unordered_map<LabelT, std::vector<uint32_t>> _filter_to_medoid_ids;
     bool _use_universal_label;
     uint32_t _universal_filter_num;
     std::vector<LabelT> _filter_list;

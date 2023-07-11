@@ -26,7 +26,15 @@ execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy; print(numpy.get_
 # pybind11_add_module(diskannpy MODULE src/diskann_bindings.cpp)
 # the following is fairly synonymous with pybind11_add_module, but we need more target_link_libraries
 # see https://pybind11.readthedocs.io/en/latest/compiling.html#advanced-interface-library-targets for more details
-add_library(_diskannpy MODULE src/diskann_bindings.cpp)
+add_library(_diskannpy MODULE
+        src/module.cpp
+        src/builder.cpp
+        src/dynamic_memory_index.cpp
+        src/static_memory_index.cpp
+        src/static_disk_index.cpp
+)
+
+target_include_directories(_diskannpy AFTER PRIVATE include)
 
 if (MSVC)
     target_compile_options(_diskannpy PRIVATE /U_WINDLL)
