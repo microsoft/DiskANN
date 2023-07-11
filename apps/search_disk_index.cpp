@@ -320,7 +320,7 @@ int main(int argc, char **argv)
     float fail_if_recall_below = 0.0f;
 
     po::options_description desc{
-            program_options_utils::make_program_description("search_disk_index", "Searches on-disk DiskANN indexes")};
+        program_options_utils::make_program_description("search_disk_index", "Searches on-disk DiskANN indexes")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
@@ -348,18 +348,19 @@ int main(int argc, char **argv)
         optional_configs.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
                                        program_options_utils::GROUND_TRUTH_FILE_DESCRIPTION);
         optional_configs.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2),
-                           program_options_utils::BEAMWIDTH);
+                                       program_options_utils::BEAMWIDTH);
         optional_configs.add_options()("num_nodes_to_cache", po::value<uint32_t>(&num_nodes_to_cache)->default_value(0),
-                           program_options_utils::NUMBER_OF_NODES_TO_CACHE);
-        optional_configs.add_options()("search_io_limit",
-                           po::value<uint32_t>(&search_io_limit)->default_value(std::numeric_limits<uint32_t>::max()),
-                           "Max #IOs for search.  Default value: uint32::max()");
+                                       program_options_utils::NUMBER_OF_NODES_TO_CACHE);
+        optional_configs.add_options()(
+            "search_io_limit",
+            po::value<uint32_t>(&search_io_limit)->default_value(std::numeric_limits<uint32_t>::max()),
+            "Max #IOs for search.  Default value: uint32::max()");
         optional_configs.add_options()("num_threads,T",
                                        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                                        program_options_utils::NUMBER_THREADS_DESCRIPTION);
         optional_configs.add_options()("use_reorder_data", po::bool_switch()->default_value(false),
-                           "Include full precision data in the index. Use only in "
-                           "conjuction with compressed data on SSD.  Default value: false");
+                                       "Include full precision data in the index. Use only in "
+                                       "conjuction with compressed data on SSD.  Default value: false");
         optional_configs.add_options()("filter_label",
                                        po::value<std::string>(&filter_label)->default_value(std::string("")),
                                        program_options_utils::FILTER_LABEL_DESCRIPTION);

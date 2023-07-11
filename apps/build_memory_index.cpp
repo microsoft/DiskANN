@@ -74,7 +74,7 @@ int main(int argc, char **argv)
     bool use_pq_build, use_opq;
 
     po::options_description desc{
-            program_options_utils::make_program_description("build_memory_index", "Build a memory-based DiskANN index.")};
+        program_options_utils::make_program_description("build_memory_index", "Build a memory-based DiskANN index.")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
@@ -95,14 +95,16 @@ int main(int argc, char **argv)
         optional_configs.add_options()("num_threads,T",
                                        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                                        program_options_utils::NUMBER_THREADS_DESCRIPTION);
-        optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64), program_options_utils::MAX_BUILD_DEGREE);
+        optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64),
+                                       program_options_utils::MAX_BUILD_DEGREE);
         optional_configs.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
                                        program_options_utils::GRAPH_BUILD_COMPLEXITY);
         optional_configs.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           program_options_utils::GRAPH_BUILD_ALPHA);
+                                       program_options_utils::GRAPH_BUILD_ALPHA);
         optional_configs.add_options()("build_PQ_bytes", po::value<uint32_t>(&build_PQ_bytes)->default_value(0),
                                        program_options_utils::BUIlD_GRAPH_PQ_BYTES);
-        optional_configs.add_options()("use_opq", po::bool_switch()->default_value(false),program_options_utils::USE_OPQ);
+        optional_configs.add_options()("use_opq", po::bool_switch()->default_value(false),
+                                       program_options_utils::USE_OPQ);
         optional_configs.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
                                        program_options_utils::LABEL_FILE);
         optional_configs.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),

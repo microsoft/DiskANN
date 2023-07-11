@@ -337,8 +337,8 @@ int main(int argc, char **argv)
         points_to_delete_from_beginning, start_deletes_after;
     bool concurrent;
 
-    po::options_description desc{
-            program_options_utils::make_program_description("test_insert_deletes_consolidate", "Test insert deletes & consolidate")};
+    po::options_description desc{program_options_utils::make_program_description("test_insert_deletes_consolidate",
+                                                                                 "Test insert deletes & consolidate")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
@@ -346,15 +346,16 @@ int main(int argc, char **argv)
         // Required parameters
         po::options_description required_configs("Required");
         required_configs.add_options()("points_to_skip", po::value<uint64_t>(&points_to_skip)->required(),
-                           "Skip these first set of points from file");
+                                       "Skip these first set of points from file");
         required_configs.add_options()("beginning_index_size", po::value<uint64_t>(&beginning_index_size)->required(),
                                        "Batch build will be called on these set of points");
         required_configs.add_options()("points_per_checkpoint", po::value<uint64_t>(&points_per_checkpoint)->required(),
-                           "Insertions are done in batches of points_per_checkpoint");
-        required_configs.add_options()("checkpoints_per_snapshot", po::value<uint64_t>(&checkpoints_per_snapshot)->required(),
-                           "Save the index to disk every few checkpoints");
+                                       "Insertions are done in batches of points_per_checkpoint");
+        required_configs.add_options()("checkpoints_per_snapshot",
+                                       po::value<uint64_t>(&checkpoints_per_snapshot)->required(),
+                                       "Save the index to disk every few checkpoints");
         required_configs.add_options()("points_to_delete_from_beginning",
-                           po::value<uint64_t>(&points_to_delete_from_beginning)->required(), "");
+                                       po::value<uint64_t>(&points_to_delete_from_beginning)->required(), "");
 
         // Optional parameters
         po::options_description optional_configs("Optional");
@@ -362,18 +363,20 @@ int main(int argc, char **argv)
                                        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                                        program_options_utils::NUMBER_THREADS_DESCRIPTION);
         optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64),
-                program_options_utils::MAX_BUILD_DEGREE);
+                                       program_options_utils::MAX_BUILD_DEGREE);
         optional_configs.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
-                           program_options_utils::GRAPH_BUILD_COMPLEXITY);
+                                       program_options_utils::GRAPH_BUILD_COMPLEXITY);
         optional_configs.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           program_options_utils::GRAPH_BUILD_ALPHA);
-        optional_configs.add_options()("max_points_to_insert", po::value<uint64_t>(&max_points_to_insert)->default_value(0),
-                           "These number of points from the file are inserted after "
-                           "points_to_skip");
+                                       program_options_utils::GRAPH_BUILD_ALPHA);
+        optional_configs.add_options()("max_points_to_insert",
+                                       po::value<uint64_t>(&max_points_to_insert)->default_value(0),
+                                       "These number of points from the file are inserted after "
+                                       "points_to_skip");
         optional_configs.add_options()("do_concurrent", po::value<bool>(&concurrent)->default_value(false), "");
-        optional_configs.add_options()("start_deletes_after", po::value<uint64_t>(&start_deletes_after)->default_value(0), "");
+        optional_configs.add_options()("start_deletes_after",
+                                       po::value<uint64_t>(&start_deletes_after)->default_value(0), "");
         optional_configs.add_options()("start_point_norm", po::value<float>(&start_point_norm)->default_value(0),
-                           "Set the start point to a random point on a sphere of this radius");
+                                       "Set the start point to a random point on a sphere of this radius");
         optional_configs.add_options()(
             "num_start_points",
             po::value<uint32_t>(&num_start_pts)->default_value(diskann::defaults::NUM_FROZEN_POINTS_DYNAMIC),

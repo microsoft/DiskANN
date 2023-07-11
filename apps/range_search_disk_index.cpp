@@ -274,8 +274,8 @@ int main(int argc, char **argv)
     std::vector<uint32_t> Lvec;
     float range;
 
-    po::options_description desc{
-            program_options_utils::make_program_description("range_search_disk_index", "Searches disk DiskANN indexes using ranges")};
+    po::options_description desc{program_options_utils::make_program_description(
+        "range_search_disk_index", "Searches disk DiskANN indexes using ranges")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
@@ -294,7 +294,7 @@ int main(int argc, char **argv)
                                        po::value<std::vector<uint32_t>>(&Lvec)->multitoken()->required(),
                                        program_options_utils::SEARCH_LIST_DESCRIPTION);
         required_configs.add_options()("range_threshold,K", po::value<float>(&range)->required(),
-                           "Number of neighbors to be returned");
+                                       "Number of neighbors to be returned");
 
         // Optional parameters
         po::options_description optional_configs("Optional");

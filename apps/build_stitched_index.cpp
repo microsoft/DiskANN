@@ -56,7 +56,7 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
                  uint32_t &stitched_R, float &alpha)
 {
     po::options_description desc{
-            program_options_utils::make_program_description("build_stitched_index", "Build a stitched DiskANN index.")};
+        program_options_utils::make_program_description("build_stitched_index", "Build a stitched DiskANN index.")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
@@ -65,7 +65,8 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
         po::options_description required_configs("Required");
         required_configs.add_options()("data_type", po::value<std::string>(&data_type)->required(),
                                        program_options_utils::DATA_TYPE_DESCRIPTION);
-        required_configs.add_options()("index_path_prefix", po::value<std::string>(&final_index_path_prefix)->required(),
+        required_configs.add_options()("index_path_prefix",
+                                       po::value<std::string>(&final_index_path_prefix)->required(),
                                        program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
         required_configs.add_options()("data_path", po::value<std::string>(&input_data_path)->required(),
                                        program_options_utils::INPUT_DATA_PATH);
@@ -75,7 +76,8 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
         optional_configs.add_options()("num_threads,T",
                                        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                                        program_options_utils::NUMBER_THREADS_DESCRIPTION);
-        optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64), program_options_utils::MAX_BUILD_DEGREE);
+        optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64),
+                                       program_options_utils::MAX_BUILD_DEGREE);
         optional_configs.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
                                        program_options_utils::GRAPH_BUILD_COMPLEXITY);
         optional_configs.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
@@ -85,11 +87,11 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
         optional_configs.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
                                        program_options_utils::UNIVERSAL_LABEL);
         optional_configs.add_options()("stitched_R", po::value<uint32_t>(&stitched_R)->default_value(100),
-                           "Degree to prune final graph down to");
+                                       "Degree to prune final graph down to");
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
-        
+
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
         if (vm.count("help"))

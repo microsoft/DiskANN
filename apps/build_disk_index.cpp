@@ -23,7 +23,7 @@ int main(int argc, char **argv)
     bool use_opq = false;
 
     po::options_description desc{
-            program_options_utils::make_program_description("build_disk_index", "Build a disk-based index.")};
+        program_options_utils::make_program_description("build_disk_index", "Build a disk-based index.")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
@@ -37,44 +37,47 @@ int main(int argc, char **argv)
         required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
                                        program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
         required_configs.add_options()("data_path", po::value<std::string>(&data_path)->required(),
-                           program_options_utils::INPUT_DATA_PATH);
+                                       program_options_utils::INPUT_DATA_PATH);
         required_configs.add_options()("search_DRAM_budget,B", po::value<float>(&B)->required(),
-                           "DRAM budget in GB for searching the index to set the "
-                           "compressed level for data while search happens");
+                                       "DRAM budget in GB for searching the index to set the "
+                                       "compressed level for data while search happens");
         required_configs.add_options()("build_DRAM_budget,M", po::value<float>(&M)->required(),
-                           "DRAM budget in GB for building the index");
+                                       "DRAM budget in GB for building the index");
 
         // Optional parameters
         po::options_description optional_configs("Optional");
         optional_configs.add_options()("num_threads,T",
                                        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                                        program_options_utils::NUMBER_THREADS_DESCRIPTION);
-        optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64), program_options_utils::MAX_BUILD_DEGREE);
+        optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64),
+                                       program_options_utils::MAX_BUILD_DEGREE);
         optional_configs.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
                                        program_options_utils::GRAPH_BUILD_COMPLEXITY);
-        optional_configs.add_options()("QD", po::value<uint32_t>(&QD)->default_value(0), " Quantized Dimension for compression");
+        optional_configs.add_options()("QD", po::value<uint32_t>(&QD)->default_value(0),
+                                       " Quantized Dimension for compression");
         optional_configs.add_options()("codebook_prefix", po::value<std::string>(&codebook_prefix)->default_value(""),
-                           "Path prefix for pre-trained codebook");
+                                       "Path prefix for pre-trained codebook");
         optional_configs.add_options()("PQ_disk_bytes", po::value<uint32_t>(&disk_PQ)->default_value(0),
-                           "Number of bytes to which vectors should be compressed "
-                           "on SSD; 0 for no compression");
+                                       "Number of bytes to which vectors should be compressed "
+                                       "on SSD; 0 for no compression");
         optional_configs.add_options()("append_reorder_data", po::bool_switch()->default_value(false),
-                           "Include full precision data in the index. Use only in "
-                           "conjuction with compressed data on SSD.");
+                                       "Include full precision data in the index. Use only in "
+                                       "conjuction with compressed data on SSD.");
         optional_configs.add_options()("build_PQ_bytes", po::value<uint32_t>(&build_PQ)->default_value(0),
-                           program_options_utils::BUIlD_GRAPH_PQ_BYTES);
-        optional_configs.add_options()("use_opq", po::bool_switch()->default_value(false),program_options_utils::USE_OPQ);
+                                       program_options_utils::BUIlD_GRAPH_PQ_BYTES);
+        optional_configs.add_options()("use_opq", po::bool_switch()->default_value(false),
+                                       program_options_utils::USE_OPQ);
         optional_configs.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
-                           program_options_utils::LABEL_FILE);
+                                       program_options_utils::LABEL_FILE);
         optional_configs.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
-                           program_options_utils::UNIVERSAL_LABEL);
+                                       program_options_utils::UNIVERSAL_LABEL);
         optional_configs.add_options()("FilteredLbuild", po::value<uint32_t>(&Lf)->default_value(0),
-                           program_options_utils::FILTERED_LBUILD);
+                                       program_options_utils::FILTERED_LBUILD);
         optional_configs.add_options()("filter_threshold,F", po::value<uint32_t>(&filter_threshold)->default_value(0),
-                           "Threshold to break up the existing nodes to generate new graph "
-                           "internally where each node has a maximum F labels.");
+                                       "Threshold to break up the existing nodes to generate new graph "
+                                       "internally where each node has a maximum F labels.");
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
-                           program_options_utils::LABEL_TYPE_DESCRIPTION);
+                                       program_options_utils::LABEL_TYPE_DESCRIPTION);
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);

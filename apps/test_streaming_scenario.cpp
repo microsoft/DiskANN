@@ -300,8 +300,8 @@ int main(int argc, char **argv)
     float alpha, start_point_norm;
     size_t max_points_to_insert, active_window, consolidate_interval;
 
-    po::options_description desc{
-            program_options_utils::make_program_description("test_streaming_scenario", "Test insert deletes & consolidate")};
+    po::options_description desc{program_options_utils::make_program_description("test_streaming_scenario",
+                                                                                 "Test insert deletes & consolidate")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
@@ -335,16 +335,17 @@ int main(int argc, char **argv)
         optional_configs.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
                                        program_options_utils::GRAPH_BUILD_ALPHA);
         optional_configs.add_options()("insert_threads",
-                           po::value<uint32_t>(&insert_threads)->default_value(omp_get_num_procs() / 2),
-                           "Number of threads used for inserting into the index (defaults to "
-                           "omp_get_num_procs()/2)");
-        optional_configs.add_options()("consolidate_threads",
-                           po::value<uint32_t>(&consolidate_threads)->default_value(omp_get_num_procs() / 2),
-                           "Number of threads used for consolidating deletes to "
-                           "the index (defaults to omp_get_num_procs()/2)");
-        optional_configs.add_options()("max_points_to_insert", po::value<uint64_t>(&max_points_to_insert)->default_value(0),
-                           "The number of points from the file that the program streams "
-                           "over ");
+                                       po::value<uint32_t>(&insert_threads)->default_value(omp_get_num_procs() / 2),
+                                       "Number of threads used for inserting into the index (defaults to "
+                                       "omp_get_num_procs()/2)");
+        optional_configs.add_options()(
+            "consolidate_threads", po::value<uint32_t>(&consolidate_threads)->default_value(omp_get_num_procs() / 2),
+            "Number of threads used for consolidating deletes to "
+            "the index (defaults to omp_get_num_procs()/2)");
+        optional_configs.add_options()("max_points_to_insert",
+                                       po::value<uint64_t>(&max_points_to_insert)->default_value(0),
+                                       "The number of points from the file that the program streams "
+                                       "over ");
         optional_configs.add_options()(
             "num_start_points",
             po::value<uint32_t>(&num_start_pts)->default_value(diskann::defaults::NUM_FROZEN_POINTS_DYNAMIC),
