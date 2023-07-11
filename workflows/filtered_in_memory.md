@@ -64,8 +64,9 @@ Searching a filtered index uses the `apps/search_memory_index.cpp`:
 Example with SIFT10K:
 --------------------
 We demonstrate how to work through this pipeline using the SIFT10K dataset (http://corpus-texmex.irisa.fr/). Before starting, make sure you have compiled diskANN according to the instructions in the README and can see the following binaries (paths with respect to repository root):
-- `build/apps/utils/compute_groundtruth`
 - `build/apps/utils/fvecs_to_bin`
+- `build/apps/utils/compute_groundtruth_for_filters`
+- `build/apps/utils/stats_label_data`
 - `build/apps/build_memory_index`
 - `build/apps/build_stitched_index`
 - `build/apps/search_memory_index`
