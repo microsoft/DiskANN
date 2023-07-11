@@ -14,6 +14,7 @@
 #include "distance.h"
 #include "natural_number_map.h"
 #include "natural_number_set.h"
+#include "aligned_file_reader.h"
 
 namespace diskann
 {
@@ -50,7 +51,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 
     virtual location_t calculate_medoid() const override;
 
-    virtual Distance<data_t> *get_dist_fn();
+    virtual Distance<data_t> *get_dist_fn() override;
 
     virtual size_t get_alignment_factor() const override;
 

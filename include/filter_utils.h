@@ -78,11 +78,13 @@ DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<uint32_t>> generate_la
  * Each data file is saved under the following format:
  *    input_data_path + "_" + label
  */
+#ifndef _WINDOWS
 template <typename T>
 inline tsl::robin_map<std::string, std::vector<uint32_t>> generate_label_specific_vector_files(
     path input_data_path, tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
     std::vector<label_set> point_ids_to_labels, label_set all_labels)
 {
+#ifndef _WINDOWS
     auto file_writing_timer = std::chrono::high_resolution_clock::now();
     diskann::MemoryMapper input_data(input_data_path);
     char *input_start = input_data.getBuf();
@@ -182,7 +184,9 @@ inline tsl::robin_map<std::string, std::vector<uint32_t>> generate_label_specifi
               << std::endl;
 
     return label_id_to_orig_id;
+#endif
 }
+#endif
 
 inline std::vector<uint32_t> loadTags(const std::string &tags_file, const std::string &base_file)
 {

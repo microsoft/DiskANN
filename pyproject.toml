@@ -11,11 +11,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diskannpy"
-version = "0.5.0"
+version = "0.5.0.rc1"
 
 description = "DiskANN Python extension module"
 # readme = "../README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 license = {text = "MIT License"}
 dependencies = [
     "numpy"

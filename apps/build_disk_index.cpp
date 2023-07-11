@@ -67,7 +67,7 @@ int main(int argc, char **argv)
                            "can "
                            "assign a special universal filter to the point instead of comma "
                            "separated filters for that point");
-        desc.add_options()("FilteredLbuild,Lf", po::value<uint32_t>(&Lf)->default_value(0),
+        desc.add_options()("FilteredLbuild", po::value<uint32_t>(&Lf)->default_value(0),
                            "Build complexity for filtered points, higher value "
                            "results in better graphs");
         desc.add_options()("filter_threshold,F", po::value<uint32_t>(&filter_threshold)->default_value(0),
@@ -96,12 +96,7 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    bool use_filters = false;
-    if (label_file != "")
-    {
-        use_filters = true;
-    }
-
+    bool use_filters = (label_file != "") ? true : false;
     diskann::Metric metric;
     if (dist_fn == std::string("l2"))
         metric = diskann::Metric::L2;
