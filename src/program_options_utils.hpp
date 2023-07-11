@@ -26,6 +26,7 @@ const char* RESULT_PATH_DESCRIPTION = "Path prefix for saving results of the que
 const char* QUERY_FILE_DESCRIPTION ="Query file in binary format, e.g. '/mnt/data/query_file_X.bin'";
 const char* NUMBER_OF_RESULTS_DESCRIPTION ="Number of neighbors to be returned";
 const char* SEARCH_LIST_DESCRIPTION ="List of L values of search.  L value is the number of neighbor/distance pairs to keep in-memory at the same time during a query.  The higher the value the more accurate the results and the slower the search.  This value MUST be at least K (number of neighbors to return).";
+const char* INPUT_DATA_PATH="Input data file in bin format";
 
 // Optional parameters
 const char* FILTER_LABEL_DESCRIPTION ="Filter to use when running a query.  'filter_label' and 'query_filters_file' are mutually exclusive.";
@@ -37,6 +38,9 @@ const char* NUMBER_THREADS_DESCRIPTION="Number of threads used for building inde
 const char* FAIl_IF_RECALL_BELOW="If set to a value >0 and <100%, program returns -1 if best recall found is below this threshold. "; // does it continue running or die immediately?  Will I still get my results even if the return code is -1?
 const char* NUMBER_OF_NODES_TO_CACHE="Number of BFS nodes around medoid(s) to cache.  Default value: 0";
 const char* BEAMWIDTH="Beamwidth for search. Set 0 to optimize internally.  Default value: 2";
+const char* MAX_BUILD_DEGREE="Maximum graph degree";
+const char* GRAPH_BUILD_COMPLEXITY="Build complexity, higher value results in better graphs";
+const char* GRAPH_BUILD_ALPHA= "alpha controls density and diameter of graph, set 1 for sparse graph, 1.2 or 1.4 for denser graphs with lower diameter";
 
 } // namespace program_options_utils
 

@@ -79,7 +79,7 @@ int main(int argc, char **argv)
         desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
                            "distance function <l2/mips/cosine>");
         desc.add_options()("data_path", po::value<std::string>(&data_path)->required(),
-                           "Input data file in bin format");
+                           "nnput data file in bin format");
         desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
                            "Path prefix for saving index file components");
         desc.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64), "Maximum graph degree");
