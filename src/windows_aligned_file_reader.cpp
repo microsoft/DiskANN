@@ -35,7 +35,7 @@ void WindowsAlignedFileReader::register_thread()
     std::unique_lock<std::mutex> lk(this->ctx_mut);
     if (this->ctx_map.find(std::this_thread::get_id()) != ctx_map.end())
     {
-        diskann::cout << "Warning:: Duplicate registration for thread_id : " << std::this_thread::get_id() << std::endl;
+        std::cout << "Warning:: Duplicate registration for thread_id : " << std::this_thread::get_id() << std::endl;
     }
 
     IOContext ctx;
@@ -49,11 +49,11 @@ void WindowsAlignedFileReader::register_thread()
         char filePath[c_max_filepath_len];
         if (wcstombs_s(&actual_len, filePath, c_max_filepath_len, m_filename.c_str(), m_filename.length()) == 0)
         {
-            diskann::cout << "Error opening " << filePath << " -- error=" << GetLastError() << std::endl;
+            std::cout << "Error opening " << filePath << " -- error=" << GetLastError() << std::endl;
         }
         else
         {
-            diskann::cout << "Error converting wchar to char -- error=" << GetLastError() << std::endl;
+            std::cout << "Error converting wchar to char -- error=" << GetLastError() << std::endl;
         }
     }
 
@@ -102,7 +102,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, IOConte
 
             /*
               if (ResetEvent(os.hEvent) == 0) {
-                diskann::cerr << "ResetEvent failed" << std::endl;
+                std::cerr << "ResetEvent failed" << std::endl;
                 exit(-3);
               }
             */
@@ -135,12 +135,12 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, IOConte
                 auto error = GetLastError();
                 if (error != ERROR_IO_PENDING)
                 {
-                    diskann::cerr << "Error queuing IO -- " << error << "\n";
+                    std::cerr << "Error queuing IO -- " << error << "\n";
                 }
             }
             else
             {
-                diskann::cerr << "Error queueing IO -- ReadFile returned TRUE" << std::endl;
+                std::cerr << "Error queueing IO -- ReadFile returned TRUE" << std::endl;
             }
         }
         DWORD n_read = 0;
@@ -162,7 +162,7 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, IOConte
                     DWORD error = GetLastError();
                     if (error != WAIT_TIMEOUT)
                     {
-                        diskann::cerr << "GetQueuedCompletionStatus() failed "
+                        std::cerr << "GetQueuedCompletionStatus() failed "
                                          "with error = "
                                       << error << std::endl;
                         throw diskann::ANNException("GetQueuedCompletionStatus failed with error: ", error, __FUNCSIG__,

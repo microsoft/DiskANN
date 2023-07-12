@@ -35,18 +35,18 @@ namespace po = boost::program_options;
 
 void print_stats(std::string category, std::vector<float> percentiles, std::vector<float> results)
 {
-    diskann::cout << std::setw(20) << category << ": " << std::flush;
+    std::cout << std::setw(20) << category << ": " << std::flush;
     for (uint32_t s = 0; s < percentiles.size(); s++)
     {
-        diskann::cout << std::setw(8) << percentiles[s] << "%";
+        std::cout << std::setw(8) << percentiles[s] << "%";
     }
-    diskann::cout << std::endl;
-    diskann::cout << std::setw(22) << " " << std::flush;
+    std::cout << std::endl;
+    std::cout << std::setw(22) << " " << std::flush;
     for (uint32_t s = 0; s < percentiles.size(); s++)
     {
-        diskann::cout << std::setw(9) << results[s];
+        std::cout << std::setw(9) << results[s];
     }
-    diskann::cout << std::endl;
+    std::cout << std::endl;
 }
 
 template <typename T, typename LabelT = uint32_t>
@@ -58,11 +58,11 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     std::string disk_index_file = index_path_prefix + "_disk.index";
     std::string warmup_query_file = index_path_prefix + "_sample_data.bin";
 
-    diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
+    std::cout << "Search parameters: #threads: " << num_threads << ", ";
     if (beamwidth <= 0)
-        diskann::cout << "beamwidth to be optimized for each L value" << std::endl;
+        std::cout << "beamwidth to be optimized for each L value" << std::endl;
     else
-        diskann::cout << " beamwidth: " << beamwidth << std::endl;
+        std::cout << " beamwidth: " << beamwidth << std::endl;
 
     // load query bin
     T *query = nullptr;
@@ -79,7 +79,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         //    groundtruth_ids, gt_num); // use for traditional truthset
         if (gt_num != query_num)
         {
-            diskann::cout << "Error. Mismatch in number of queries and ground truth data" << std::endl;
+            std::cout << "Error. Mismatch in number of queries and ground truth data" << std::endl;
             return -1;
         }
         calc_recall_flag = true;
@@ -107,7 +107,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     }
     // cache bfs levels
     std::vector<uint32_t> node_list;
-    diskann::cout << "Caching " << num_nodes_to_cache << " BFS nodes around medoid(s)" << std::endl;
+    std::cout << "Caching " << num_nodes_to_cache << " BFS nodes around medoid(s)" << std::endl;
     _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
     //  _pFlashIndex->generate_cache_list_from_sample_queries(
     //      warmup_query_file, 15, 6, num_nodes_to_cache, num_threads,
@@ -146,7 +146,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                 }
             }
         }
-        diskann::cout << "Warming up index... " << std::flush;
+        std::cout << "Warming up index... " << std::flush;
         std::vector<uint64_t> warmup_result_ids_64(warmup_num, 0);
         std::vector<float> warmup_result_dists(warmup_num, 0);
 
@@ -157,23 +157,23 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                                              warmup_result_ids_64.data() + (i * 1),
                                              warmup_result_dists.data() + (i * 1), 4);
         }
-        diskann::cout << "..done" << std::endl;
+        std::cout << "..done" << std::endl;
     }
 
-    diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
-    diskann::cout.precision(2);
+    std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
+    std::cout.precision(2);
 
     std::string recall_string = "Recall@rng=" + std::to_string(search_range);
-    diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth" << std::setw(16) << "QPS" << std::setw(16)
+    std::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth" << std::setw(16) << "QPS" << std::setw(16)
                   << "Mean Latency" << std::setw(16) << "99.9 Latency" << std::setw(16) << "Mean IOs" << std::setw(16)
                   << "CPU (s)";
     if (calc_recall_flag)
     {
-        diskann::cout << std::setw(16) << recall_string << std::endl;
+        std::cout << std::setw(16) << recall_string << std::endl;
     }
     else
-        diskann::cout << std::endl;
-    diskann::cout << "==============================================================="
+        std::cout << std::endl;
+    std::cout << "==============================================================="
                      "==========================================="
                   << std::endl;
 
@@ -247,18 +247,18 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             ratio_of_sums = (1.0 * total_true_positive) / (1.0 * total_positive);
         }
 
-        diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth << std::setw(16) << qps
+        std::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth << std::setw(16) << qps
                       << std::setw(16) << mean_latency << std::setw(16) << latency_999 << std::setw(16) << mean_ios
                       << std::setw(16) << mean_cpuus;
         if (calc_recall_flag)
         {
-            diskann::cout << std::setw(16) << recall << "," << ratio_of_sums << std::endl;
+            std::cout << std::setw(16) << recall << "," << ratio_of_sums << std::endl;
         }
         else
-            diskann::cout << std::endl;
+            std::cout << std::endl;
     }
 
-    diskann::cout << "Done searching. " << std::endl;
+    std::cout << "Done searching. " << std::endl;
 
     diskann::aligned_free(query);
     if (warmup != nullptr)
@@ -359,7 +359,7 @@ int main(int argc, char **argv)
     catch (const std::exception &e)
     {
         std::cout << std::string(e.what()) << std::endl;
-        diskann::cerr << "Index search failed." << std::endl;
+        std::cerr << "Index search failed." << std::endl;
         return -1;
     }
 }

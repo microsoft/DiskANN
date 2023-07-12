@@ -132,13 +132,13 @@ void delete_and_consolidate(diskann::AbstractIndex &index, diskann::IndexWritePa
             int wait_time = 5;
             if (report._status == diskann::consolidation_report::status_code::LOCK_FAIL)
             {
-                diskann::cerr << "Unable to acquire consolidate delete lock after "
+                std::cerr << "Unable to acquire consolidate delete lock after "
                               << "deleting points " << start << " to " << end << ". Will retry in " << wait_time
                               << "seconds." << std::endl;
             }
             else if (report._status == diskann::consolidation_report::status_code::INCONSISTENT_COUNT_ERROR)
             {
-                diskann::cerr << "Inconsistent counts in data structure. "
+                std::cerr << "Inconsistent counts in data structure. "
                               << "Will retry in " << wait_time << "seconds." << std::endl;
             }
             else
@@ -196,7 +196,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     size_t num_points;
 
     diskann::get_bin_metadata(data_path, num_points, dim);
-    diskann::cout << "metadata: file " << data_path << " has " << num_points << " points in " << dim << " dims"
+    std::cout << "metadata: file " << data_path << " has " << num_points << " points in " << dim << " dims"
                   << std::endl;
     aligned_dim = ROUND_UP(dim, 8);
 

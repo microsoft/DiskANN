@@ -112,7 +112,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
             // This is safe because T is float inside the if block.
             this->_distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
             this->_normalize_vecs = true;
-            diskann::cout << "Normalizing vectors and using L2 for cosine "
+            std::cout << "Normalizing vectors and using L2 for cosine "
                              "AVXNormalizedCosineDistanceFloat()."
                           << std::endl;
         }
@@ -213,7 +213,7 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
 {
     if (!_enable_tags)
     {
-        diskann::cout << "Not saving tags as they are not enabled." << std::endl;
+        std::cout << "Not saving tags as they are not enabled." << std::endl;
         return 0;
     }
     size_t tag_bytes_written;
@@ -394,7 +394,7 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     }
     else
     {
-        diskann::cout << "Save index in a single file currently not supported. "
+        std::cout << "Save index in a single file currently not supported. "
                          "Not saving the index."
                       << std::endl;
     }
@@ -403,7 +403,7 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     // _max_points.
     reposition_frozen_point_to_end();
 
-    diskann::cout << "Time taken for save: " << timer.elapsed() / 1000000.0 << "s." << std::endl;
+    std::cout << "Time taken for save: " << timer.elapsed() / 1000000.0 << "s." << std::endl;
 }
 
 #ifdef EXEC_ENV_OLS
@@ -416,14 +416,14 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
 {
     if (_enable_tags && !file_exists(tag_filename))
     {
-        diskann::cerr << "Tag file " << tag_filename << " does not exist!" << std::endl;
+        std::cerr << "Tag file " << tag_filename << " does not exist!" << std::endl;
         throw diskann::ANNException("Tag file " + tag_filename + " does not exist!", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
     }
 #endif
     if (!_enable_tags)
     {
-        diskann::cout << "Tags not loaded as tags not enabled." << std::endl;
+        std::cout << "Tags not loaded as tags not enabled." << std::endl;
         return 0;
     }
 
@@ -440,7 +440,7 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
         std::stringstream stream;
         stream << "ERROR: Found " << file_dim << " dimensions for tags,"
                << "but tag file must have 1 dimension." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         delete[] tag_data;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
@@ -457,7 +457,7 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
             _tag_to_location[tag] = i;
         }
     }
-    diskann::cout << "Tags loaded." << std::endl;
+    std::cout << "Tags loaded." << std::endl;
     delete[] tag_data;
     return file_num_points;
 }
@@ -478,7 +478,7 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
     {
         std::stringstream stream;
         stream << "ERROR: data file " << filename << " does not exist." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
     diskann::get_bin_metadata(filename, file_num_points, file_dim);
@@ -492,7 +492,7 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
         std::stringstream stream;
         stream << "ERROR: Driver requests loading " << _dim << " dimension,"
                << "but file has " << file_dim << " dimension." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -583,7 +583,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     }
     else
     {
-        diskann::cout << "Single index file saving/loading support not yet "
+        std::cout << "Single index file saving/loading support not yet "
                          "enabled. Not loading the index."
                       << std::endl;
         return;
@@ -595,7 +595,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         stream << "ERROR: When loading index, loaded " << data_file_num_pts << " points from datafile, "
                << graph_num_pts << " from graph, and " << tags_file_num_pts
                << " tags, with num_frozen_pts being set to " << _num_frozen_pts << " in constructor." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 #ifndef EXEC_ENV_OLS
@@ -654,7 +654,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     }
 
     reposition_frozen_point_to_end();
-    diskann::cout << "Num frozen points:" << _num_frozen_pts << " _nd: " << _nd << " _start: " << _start
+    std::cout << "Num frozen points:" << _num_frozen_pts << " _nd: " << _nd << " _start: " << _start
                   << " size(_location_to_tag): " << _location_to_tag.size()
                   << " size(_tag_to_location):" << _tag_to_location.size() << " Max points: " << _max_points
                   << std::endl;
@@ -727,7 +727,7 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     size_t vamana_metadata_size = sizeof(size_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(size_t);
 
 #endif
-    diskann::cout << "From graph header, expected_file_size: " << expected_file_size
+    std::cout << "From graph header, expected_file_size: " << expected_file_size
                   << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << _start
                   << ", file_frozen_pts: " << file_frozen_pts << std::endl;
 
@@ -746,14 +746,14 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
                       "constructor asks for dynamic index. Exitting."
                    << std::endl;
         }
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
 #ifdef EXEC_ENV_OLS
-    diskann::cout << "Loading vamana graph from reader..." << std::flush;
+    std::cout << "Loading vamana graph from reader..." << std::flush;
 #else
-    diskann::cout << "Loading vamana graph " << filename << "..." << std::flush;
+    std::cout << "Loading vamana graph " << filename << "..." << std::flush;
 #endif
 
     const size_t expected_max_points = expected_num_points - file_frozen_pts;
@@ -762,7 +762,7 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     // resize the _final_graph to the larger size.
     if (_max_points < expected_max_points)
     {
-        diskann::cout << "Number of points in data: " << expected_max_points
+        std::cout << "Number of points in data: " << expected_max_points
                       << " is greater than max_points: " << _max_points
                       << " Setting max points to: " << expected_max_points << std::endl;
         _final_graph.resize(expected_max_points + _num_frozen_pts);
@@ -786,7 +786,7 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
         nodes_read++;
         if (nodes_read % 1000000 == 0)
         {
-            diskann::cout << "." << std::flush;
+            std::cout << "." << std::flush;
         }
         if (k > _max_range_of_loaded_graph)
         {
@@ -804,7 +804,7 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 
         if (k == 0)
         {
-            diskann::cerr << "ERROR: Point found with no out-neighbors, point#" << nodes_read << std::endl;
+            std::cerr << "ERROR: Point found with no out-neighbors, point#" << nodes_read << std::endl;
         }
 
         cc += k;
@@ -815,7 +815,7 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
         _final_graph[nodes_read - 1].swap(tmp);
         bytes_read += sizeof(uint32_t) * ((size_t)k + 1);
         if (nodes_read % 10000000 == 0)
-            diskann::cout << "." << std::flush;
+            std::cout << "." << std::flush;
         if (k > _max_range_of_loaded_graph)
         {
             _max_range_of_loaded_graph = k;
@@ -823,7 +823,7 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     }
 #endif
 
-    diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to "
+    std::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to "
                   << _start << std::endl;
     return nodes_read;
 }
@@ -852,7 +852,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
     if (_tag_to_location.find(tag) == _tag_to_location.end())
     {
-        diskann::cout << "Tag " << tag << " does not exist" << std::endl;
+        std::cout << "Tag " << tag << " does not exist" << std::endl;
         return -1;
     }
 
@@ -1015,7 +1015,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     {
         if (id >= _max_points + _num_frozen_pts)
         {
-            diskann::cerr << "Out of range loc found as an edge : " << id << std::endl;
+            std::cerr << "Out of range loc found as an edge : " << id << std::endl;
             throw diskann::ANNException(std::string("Wrong loc") + std::to_string(id), -1, __FUNCSIG__, __FILE__,
                                         __LINE__);
         }
@@ -1482,14 +1482,14 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
 
         if (node_ctr % 100000 == 0)
         {
-            diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed."
+            std::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed."
                           << std::flush;
         }
     }
 
     if (_nd > 0)
     {
-        diskann::cout << "Starting final cleanup.." << std::flush;
+        std::cout << "Starting final cleanup.." << std::flush;
     }
 #pragma omp parallel for schedule(dynamic, 2048)
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
@@ -1522,7 +1522,7 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
     }
     if (_nd > 0)
     {
-        diskann::cout << "done. Link time: " << ((double)link_timer.elapsed() / (double)1000000) << "s" << std::endl;
+        std::cout << "done. Link time: " << ((double)link_timer.elapsed() / (double)1000000) << "s" << std::endl;
     }
 }
 
@@ -1568,7 +1568,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
         }
     }
 
-    diskann::cout << "Prune time : " << timer.elapsed() / 1000 << "ms" << std::endl;
+    std::cout << "Prune time : " << timer.elapsed() / 1000 << "ms" << std::endl;
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
     for (size_t i = 0; i < _max_points + _num_frozen_pts; i++)
     {
@@ -1586,7 +1586,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
         min = max;
     if (_nd > 0)
     {
-        diskann::cout << "Index built with degree: max:" << max
+        std::cout << "Index built with degree: max:" << max
                       << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts) << "  min:" << min
                       << "  count(deg<2):" << cnt << std::endl;
     }
@@ -1611,7 +1611,7 @@ void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
         _data_store->set_vector((location_t)(i + _max_points), data + i * _dim);
     }
     _has_built = true;
-    diskann::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
+    std::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1665,7 +1665,7 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameters &parameters,
                                                        const std::vector<TagT> &tags)
 {
-    diskann::cout << "Starting index build with " << _nd << " points... " << std::endl;
+    std::cout << "Starting index build with " << _nd << " points... " << std::endl;
 
     if (_nd < 1)
         throw ANNException("Error: Trying to build an index with 0 points", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -1675,7 +1675,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
         std::stringstream stream;
         stream << "ERROR: Driver requests loading " << _nd << " points from file,"
                << "but tags vector is of size " << tags.size() << "." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
     if (_enable_tags)
@@ -1711,7 +1711,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
         if (pool.size() < 2)
             cnt++;
     }
-    diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
+    std::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
 
     _max_observed_degree = std::max((uint32_t)max, _max_observed_degree);
@@ -1787,7 +1787,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
     {
         std::stringstream stream;
         stream << "ERROR: Data file " << filename << " does not exist." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -1826,7 +1826,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         std::stringstream stream;
         stream << "ERROR: Driver requests loading " << _dim << " dimension,"
                << "but file has " << file_dim << " dimension." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
 
         if (_pq_dist)
             aligned_free(_pq_data);
@@ -1856,7 +1856,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
     }
 
     _data_store->populate_data(filename, 0U);
-    diskann::cout << "Using only first " << num_points_to_load << " from file.. " << std::endl;
+    std::cout << "Using only first " << num_points_to_load << " from file.. " << std::endl;
 
     {
         std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
@@ -1882,7 +1882,7 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         {
             if (file_exists(tag_filename))
             {
-                diskann::cout << "Loading tags from " << tag_filename << " for vamana index build" << std::endl;
+                std::cout << "Loading tags from " << tag_filename << " for vamana index build" << std::endl;
                 TagT *tag_data = nullptr;
                 size_t npts, ndim;
                 diskann::load_bin(tag_filename, tag_data, npts, ndim);
@@ -1974,7 +1974,7 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     }
     std::stringstream stream;
     stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
+    std::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 }
 
@@ -2018,7 +2018,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
         }
         if (lbls.size() <= 0)
         {
-            diskann::cout << "No label found";
+            std::cout << "No label found";
             exit(-1);
         }
         std::sort(lbls.begin(), lbls.end());
@@ -2026,7 +2026,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
         line_cnt++;
     }
     num_points = (size_t)line_cnt;
-    diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
+    std::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2153,10 +2153,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     if (L > scratch->get_L())
     {
-        diskann::cout << "Attempting to expand query scratch_space. Was created "
+        std::cout << "Attempting to expand query scratch_space. Was created "
                       << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
         scratch->resize_for_new_L(L);
-        diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
+        std::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
 
     const std::vector<LabelT> unused_filter_label;
@@ -2195,7 +2195,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     }
     if (pos < K)
     {
-        diskann::cerr << "Found pos: " << pos << "fewer than K elements " << K << " for query" << std::endl;
+        std::cerr << "Found pos: " << pos << "fewer than K elements " << K << " for query" << std::endl;
     }
 
     return retval;
@@ -2240,10 +2240,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     if (L > scratch->get_L())
     {
-        diskann::cout << "Attempting to expand query scratch_space. Was created "
+        std::cout << "Attempting to expand query scratch_space. Was created "
                       << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
         scratch->resize_for_new_L(L);
-        diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
+        std::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
 
     std::vector<LabelT> filter_vec;
@@ -2257,7 +2257,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     else
     {
-        diskann::cout << "No filtered medoid found. exitting "
+        std::cout << "No filtered medoid found. exitting "
                       << std::endl; // RKNOTE: If universal label found start there
         throw diskann::ANNException("No filtered medoid found. exitting ", -1);
     }
@@ -2296,7 +2296,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     if (pos < K)
     {
-        diskann::cerr << "Found fewer than K elements for query" << std::endl;
+        std::cerr << "Found fewer than K elements for query" << std::endl;
     }
 
     return retval;
@@ -2334,10 +2334,10 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
 
     if (L > scratch->get_L())
     {
-        diskann::cout << "Attempting to expand query scratch_space. Was created "
+        std::cout << "Attempting to expand query scratch_space. Was created "
                       << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
         scratch->resize_for_new_L(L);
-        diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
+        std::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
 
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
@@ -2434,7 +2434,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 
     if (!_enable_tags)
     {
-        diskann::cerr << "Tags must be instantiated for deletions" << std::endl;
+        std::cerr << "Tags must be instantiated for deletions" << std::endl;
         return -2;
     }
 
@@ -2539,13 +2539,13 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
         if (_empty_slots.size() + _nd != _max_points)
         {
             std::string err = "#empty slots + nd != max points";
-            diskann::cerr << err << std::endl;
+            std::cerr << err << std::endl;
             throw ANNException(err, -1, __FUNCSIG__, __FILE__, __LINE__);
         }
 
         if (_location_to_tag.size() + _delete_set->size() != _nd)
         {
-            diskann::cerr << "Error: _location_to_tag.size (" << _location_to_tag.size() << ")  + _delete_set->size ("
+            std::cerr << "Error: _location_to_tag.size (" << _location_to_tag.size() << ")  + _delete_set->size ("
                           << _delete_set->size() << ") != _nd(" << _nd << ") ";
             return consolidation_report(diskann::consolidation_report::status_code::INCONSISTENT_COUNT_ERROR, 0, 0, 0,
                                         0, 0, 0, 0);
@@ -2565,11 +2565,11 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
     std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock, std::defer_lock);
     if (!cl.try_lock())
     {
-        diskann::cerr << "Consildate delete function failed to acquire consolidate lock" << std::endl;
+        std::cerr << "Consildate delete function failed to acquire consolidate lock" << std::endl;
         return consolidation_report(diskann::consolidation_report::status_code::LOCK_FAIL, 0, 0, 0, 0, 0, 0, 0);
     }
 
-    diskann::cout << "Starting consolidate_deletes... ";
+    std::cout << "Starting consolidate_deletes... ";
 
     std::unique_ptr<tsl::robin_set<uint32_t>> old_delete_set(new tsl::robin_set<uint32_t>);
     {
@@ -2623,7 +2623,7 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
     }
 
     double duration = timer.elapsed() / 1000000.0;
-    diskann::cout << " done in " << duration << " seconds." << std::endl;
+    std::cout << " done in " << duration << " seconds." << std::endl;
     return consolidation_report(diskann::consolidation_report::status_code::SUCCESS, ret_nd, max_points,
                                 empty_slots_size, old_delete_set_size, delete_set_size, num_calls_to_process_delete,
                                 duration);
@@ -2646,7 +2646,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     if (_data_compacted)
     {
-        diskann::cerr << "Warning! Calling compact_data() when _data_compacted is true!" << std::endl;
+        std::cerr << "Warning! Calling compact_data() when _data_compacted is true!" << std::endl;
         return;
     }
 
@@ -2701,7 +2701,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                 if (empty_locations.find(ngh_iter) != empty_locations.end())
                 {
                     ++num_dangling;
-                    diskann::cerr << "Error in compact_data(). _final_graph[" << old << "] has neighbor " << ngh_iter
+                    std::cerr << "Error in compact_data(). _final_graph[" << old << "] has neighbor " << ngh_iter
                                   << " which is a location not associated with any tag." << std::endl;
                 }
                 else
@@ -2725,7 +2725,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             _final_graph[old].clear();
         }
     }
-    diskann::cerr << "#dangling references after data compaction: " << num_dangling << std::endl;
+    std::cerr << "#dangling references after data compaction: " << num_dangling << std::endl;
 
     _tag_to_location.clear();
     for (auto pos = _location_to_tag.find_first(); pos.is_valid(); pos = _location_to_tag.find_next(pos))
@@ -2749,7 +2749,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         _empty_slots.insert((uint32_t)i);
     }
     _data_compacted = true;
-    diskann::cout << "Time taken for compact_data: " << timer.elapsed() / 1000000. << "s." << std::endl;
+    std::cout << "Time taken for compact_data: " << timer.elapsed() / 1000000. << "s." << std::endl;
 }
 
 //
@@ -2886,7 +2886,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     if (_nd == _max_points)
     {
-        diskann::cout << "Not repositioning frozen point as it is already at the end." << std::endl;
+        std::cout << "Not repositioning frozen point as it is already at the end." << std::endl;
         return;
     }
 
@@ -2918,7 +2918,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
 
     auto stop = std::chrono::high_resolution_clock::now();
-    diskann::cout << "Resizing took: " << std::chrono::duration<double>(stop - start).count() << "s" << std::endl;
+    std::cout << "Resizing took: " << std::chrono::duration<double>(stop - start).count() << "s" << std::endl;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -3089,7 +3089,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 
     if (_tag_to_location.find(tag) == _tag_to_location.end())
     {
-        diskann::cerr << "Delete tag not found " << tag << std::endl;
+        std::cerr << "Delete tag not found " << tag << std::endl;
         return -1;
     }
     assert(_tag_to_location[tag] < _max_points);
@@ -3170,14 +3170,14 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
 
-    diskann::cout << "------------------- Index object: " << (uint64_t)this << " -------------------" << std::endl;
-    diskann::cout << "Number of points: " << _nd << std::endl;
-    diskann::cout << "Graph size: " << _final_graph.size() << std::endl;
-    diskann::cout << "Location to tag size: " << _location_to_tag.size() << std::endl;
-    diskann::cout << "Tag to location size: " << _tag_to_location.size() << std::endl;
-    diskann::cout << "Number of empty slots: " << _empty_slots.size() << std::endl;
-    diskann::cout << std::boolalpha << "Data compacted: " << this->_data_compacted << std::endl;
-    diskann::cout << "---------------------------------------------------------"
+    std::cout << "------------------- Index object: " << (uint64_t)this << " -------------------" << std::endl;
+    std::cout << "Number of points: " << _nd << std::endl;
+    std::cout << "Graph size: " << _final_graph.size() << std::endl;
+    std::cout << "Location to tag size: " << _location_to_tag.size() << std::endl;
+    std::cout << "Tag to location size: " << _tag_to_location.size() << std::endl;
+    std::cout << "Number of empty slots: " << _empty_slots.size() << std::endl;
+    std::cout << std::boolalpha << "Data compacted: " << this->_data_compacted << std::endl;
+    std::cout << "---------------------------------------------------------"
                      "------------"
                   << std::endl;
 }
@@ -3205,7 +3205,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     for (size_t l = 0; l < MAX_BFS_LEVELS - 1; ++l)
     {
-        diskann::cout << "Number of nodes at BFS level " << l << " is " << bfs_sets[l].size() << std::endl;
+        std::cout << "Number of nodes at BFS level " << l << " is " << bfs_sets[l].size() << std::endl;
         if (bfs_sets[l].size() == 0)
             break;
         for (auto node : bfs_sets[l])

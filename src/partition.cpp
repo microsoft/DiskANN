@@ -50,7 +50,7 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
 
     base_reader.read((char *)&npts_u32, sizeof(uint32_t));
     base_reader.read((char *)&nd_u32, sizeof(uint32_t));
-    diskann::cout << "Loading base " << base_file << ". #points: " << npts_u32 << ". #dim: " << nd_u32 << "."
+    std::cout << "Loading base " << base_file << ". #points: " << npts_u32 << ". #dim: " << nd_u32 << "."
                   << std::endl;
     sample_writer.write((char *)&num_sampled_pts_u32, sizeof(uint32_t));
     sample_writer.write((char *)&nd_u32, sizeof(uint32_t));
@@ -79,7 +79,7 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
     sample_id_writer.write((char *)&num_sampled_pts_u32, sizeof(uint32_t));
     sample_writer.close();
     sample_id_writer.close();
-    diskann::cout << "Wrote " << num_sampled_pts_u32 << " points to sample file: " << output_prefix + "_data.bin"
+    std::cout << "Wrote " << num_sampled_pts_u32 << " points to sample file: " << output_prefix + "_data.bin"
                   << std::endl;
 }
 
@@ -219,14 +219,14 @@ int estimate_cluster_sizes(float *test_data_float, size_t num_test, float *pivot
         }
     }
 
-    diskann::cout << "Estimated cluster sizes: ";
+    std::cout << "Estimated cluster sizes: ";
     for (size_t i = 0; i < num_centers; i++)
     {
         uint32_t cur_shard_count = (uint32_t)shard_counts[i];
         cluster_sizes.push_back((size_t)cur_shard_count);
-        diskann::cout << cur_shard_count << " ";
+        std::cout << cur_shard_count << " ";
     }
-    diskann::cout << std::endl;
+    std::cout << std::endl;
     delete[] shard_counts;
     delete[] block_closest_centers;
     return 0;
@@ -247,7 +247,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots, const s
     size_t num_points = npts32;
     if (basedim32 != dim)
     {
-        diskann::cout << "Error. dimensions dont match for train set and base set" << std::endl;
+        std::cout << "Error. dimensions dont match for train set and base set" << std::endl;
         return -1;
     }
 
@@ -303,12 +303,12 @@ int shard_data_into_clusters(const std::string data_file, float *pivots, const s
     }
 
     size_t total_count = 0;
-    diskann::cout << "Actual shard sizes: " << std::flush;
+    std::cout << "Actual shard sizes: " << std::flush;
     for (size_t i = 0; i < num_centers; i++)
     {
         uint32_t cur_shard_count = (uint32_t)shard_counts[i];
         total_count += cur_shard_count;
-        diskann::cout << cur_shard_count << " ";
+        std::cout << cur_shard_count << " ";
         shard_data_writer[i].seekp(0);
         shard_data_writer[i].write((char *)&cur_shard_count, sizeof(uint32_t));
         shard_data_writer[i].close();
@@ -317,7 +317,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots, const s
         shard_idmap_writer[i].close();
     }
 
-    diskann::cout << "\n Partitioned " << num_points << " with replication factor " << k_base << " to get "
+    std::cout << "\n Partitioned " << num_points << " with replication factor " << k_base << " to get "
                   << total_count << " points across " << num_centers << " shards " << std::endl;
     return 0;
 }
@@ -339,7 +339,7 @@ int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots
     size_t num_points = npts32;
     if (basedim32 != dim)
     {
-        diskann::cout << "Error. dimensions dont match for train set and base set" << std::endl;
+        std::cout << "Error. dimensions dont match for train set and base set" << std::endl;
         return -1;
     }
 
@@ -390,18 +390,18 @@ int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots
     }
 
     size_t total_count = 0;
-    diskann::cout << "Actual shard sizes: " << std::flush;
+    std::cout << "Actual shard sizes: " << std::flush;
     for (size_t i = 0; i < num_centers; i++)
     {
         uint32_t cur_shard_count = (uint32_t)shard_counts[i];
         total_count += cur_shard_count;
-        diskann::cout << cur_shard_count << " ";
+        std::cout << cur_shard_count << " ";
         shard_idmap_writer[i].seekp(0);
         shard_idmap_writer[i].write((char *)&cur_shard_count, sizeof(uint32_t));
         shard_idmap_writer[i].close();
     }
 
-    diskann::cout << "\n Partitioned " << num_points << " with replication factor " << k_base << " to get "
+    std::cout << "\n Partitioned " << num_points << " with replication factor " << k_base << " to get "
                   << total_count << " points across " << num_centers << " shards " << std::endl;
     return 0;
 }
@@ -463,7 +463,7 @@ int retrieve_shard_data_from_ids(const std::string data_file, std::string idmap_
             break;
     }
 
-    diskann::cout << "Written file with " << num_written << " points" << std::endl;
+    std::cout << "Written file with " << num_written << " points" << std::endl;
 
     shard_data_writer.seekp(0);
     shard_data_writer.write((char *)&num_written, sizeof(uint32_t));
@@ -502,12 +502,12 @@ int partition(const std::string data_file, const float sampling_rate, size_t num
     pivot_data = new float[num_parts * train_dim];
 
     // Process Global k-means for kmeans_partitioning Step
-    diskann::cout << "Processing global k-means (kmeans_partitioning Step)" << std::endl;
+    std::cout << "Processing global k-means (kmeans_partitioning Step)" << std::endl;
     kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim, pivot_data, num_parts);
 
     kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data, num_parts, max_k_means_reps, NULL, NULL);
 
-    diskann::cout << "Saving global k-center pivots" << std::endl;
+    std::cout << "Saving global k-center pivots" << std::endl;
     diskann::save_bin<float>(output_file.c_str(), pivot_data, (size_t)num_parts, train_dim);
 
     // now pivots are ready. need to stream base points and assign them to
@@ -559,7 +559,7 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
 
         pivot_data = new float[num_parts * train_dim];
         // Process Global k-means for kmeans_partitioning Step
-        diskann::cout << "Processing global k-means (kmeans_partitioning Step)" << std::endl;
+        std::cout << "Processing global k-means (kmeans_partitioning Step)" << std::endl;
         kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim, pivot_data, num_parts);
 
         kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data, num_parts, max_k_means_reps, NULL, NULL);
@@ -581,7 +581,7 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
             if (cur_shard_ram_estimate > max_ram_usage)
                 max_ram_usage = cur_shard_ram_estimate;
         }
-        diskann::cout << "With " << num_parts
+        std::cout << "With " << num_parts
                       << " parts, max estimated RAM usage: " << max_ram_usage / (1024 * 1024 * 1024)
                       << "GB, budget given is " << ram_budget << std::endl;
         if (max_ram_usage > 1024 * 1024 * 1024 * ram_budget)
@@ -591,7 +591,7 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
         }
     }
 
-    diskann::cout << "Saving global k-center pivots" << std::endl;
+    std::cout << "Saving global k-center pivots" << std::endl;
     diskann::save_bin<float>(output_file.c_str(), pivot_data, (size_t)num_parts, train_dim);
 
     shard_data_into_clusters_only_ids<T>(data_file, pivot_data, num_parts, train_dim, k_base, prefix_path);

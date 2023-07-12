@@ -154,7 +154,7 @@ void LinuxAlignedFileReader::register_thread()
     }
     else
     {
-        diskann::cout << "allocating ctx: " << ctx << " to thread-id:" << my_id << std::endl;
+        std::cout << "allocating ctx: " << ctx << " to thread-id:" << my_id << std::endl;
         ctx_map[my_id] = ctx;
     }
     lk.unlock();
@@ -217,7 +217,7 @@ void LinuxAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, io_contex
 {
     if (async == true)
     {
-        diskann::cout << "Async currently not supported in linux." << std::endl;
+        std::cout << "Async currently not supported in linux." << std::endl;
     }
     assert(this->file_desc != -1);
     execute_io(ctx, this->file_desc, read_reqs);

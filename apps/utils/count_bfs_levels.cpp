@@ -75,7 +75,7 @@ int main(int argc, char **argv)
     catch (std::exception &e)
     {
         std::cout << std::string(e.what()) << std::endl;
-        diskann::cerr << "Index BFS failed." << std::endl;
+        std::cerr << "Index BFS failed." << std::endl;
         return -1;
     }
 }

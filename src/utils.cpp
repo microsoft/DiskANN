@@ -108,12 +108,12 @@ void normalize_data_file(const std::string &inFileName, const std::string &outFi
 
     size_t npts = (size_t)npts_s32;
     size_t ndims = (size_t)ndims_s32;
-    diskann::cout << "Normalizing FLOAT vectors in file: " << inFileName << std::endl;
-    diskann::cout << "Dataset: #pts = " << npts << ", # dims = " << ndims << std::endl;
+    std::cout << "Normalizing FLOAT vectors in file: " << inFileName << std::endl;
+    std::cout << "Dataset: #pts = " << npts << ", # dims = " << ndims << std::endl;
 
     size_t blk_size = 131072;
     size_t nblks = ROUND_UP(npts, blk_size) / blk_size;
-    diskann::cout << "# blks: " << nblks << std::endl;
+    std::cout << "# blks: " << nblks << std::endl;
 
     float *read_buf = new float[npts * ndims];
     for (size_t i = 0; i < nblks; i++)
@@ -123,7 +123,7 @@ void normalize_data_file(const std::string &inFileName, const std::string &outFi
     }
     delete[] read_buf;
 
-    diskann::cout << "Wrote normalized points to file: " << outFileName << std::endl;
+    std::cout << "Wrote normalized points to file: " << outFileName << std::endl;
 }
 
 double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist, uint32_t dim_gs,
@@ -193,7 +193,7 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
 
         if ((active_points_count < recall_at && !active_tags.empty()) && !printed)
         {
-            diskann::cout << "Warning: Couldn't find enough closest neighbors " << active_points_count << "/"
+            std::cout << "Warning: Couldn't find enough closest neighbors " << active_points_count << "/"
                           << recall_at
                           << " from "
                              "truthset for query # "
@@ -270,7 +270,7 @@ void get_bin_metadata(AlignedFileReader &reader, size_t &npts, size_t &ndim, siz
     {
         npts = buf[0];
         ndim = buf[1];
-        diskann::cout << "File has: " << npts << " points, " << ndim << " dimensions at offset: " << offset
+        std::cout << "File has: " << npts << " points, " << ndim << " dimensions at offset: " << offset
                       << std::endl;
     }
     else
@@ -333,7 +333,7 @@ void copy_aligned_data_from_file(AlignedFileReader &reader, T *&data, size_t &np
 {
     if (data == nullptr)
     {
-        diskann::cerr << "Memory was not allocated for " << data << " before calling the load function. Exiting..."
+        std::cerr << "Memory was not allocated for " << data << " before calling the load function. Exiting..."
                       << std::endl;
         throw diskann::ANNException("Null pointer passed to copy_aligned_data_from_file()", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);

@@ -597,7 +597,7 @@ void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, s
 {
     size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
-    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..." << std::endl;
+    std::cout << "Reading truthset file " << bin_file.c_str() << " ..." << std::endl;
     size_t actual_file_size = reader.get_file_size();
 
     int npts_i32, dim_i32;
@@ -606,7 +606,7 @@ void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, s
     npts = (uint32_t)npts_i32;
     dim = (uint32_t)dim_i32;
 
-    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "... " << std::endl;
+    std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "... " << std::endl;
 
     int truthset_type = -1; // 1 means truthset has ids and distances, 2 means
                             // only ids, -1 is error
@@ -628,7 +628,7 @@ void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, s
                   "followed by npts*ngt distance values; actual size: "
                << actual_file_size << ", expected: " << expected_file_size_with_dists << " or "
                << expected_file_size_just_ids;
-        diskann::cout << stream.str();
+        std::cout << stream.str();
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -754,7 +754,7 @@ int main(int argc, char **argv)
         catch (const std::exception &e)
         {
             std::cout << std::string(e.what()) << std::endl;
-            diskann::cerr << "Compute GT failed." << std::endl;
+            std::cerr << "Compute GT failed." << std::endl;
             return -1;
         }
     }
@@ -837,7 +837,7 @@ int main(int argc, char **argv)
         }
         else
         {
-            diskann::cerr << "Invalid data type" << std::endl;
+            std::cerr << "Invalid data type" << std::endl;
             return -1;
         }
 
@@ -861,7 +861,7 @@ int main(int argc, char **argv)
         catch (const std::exception &e)
         {
             std::cout << std::string(e.what()) << std::endl;
-            diskann::cerr << "Compute GT failed." << std::endl;
+            std::cerr << "Compute GT failed." << std::endl;
             return -1;
         }
 

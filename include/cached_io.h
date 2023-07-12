@@ -7,7 +7,6 @@
 #include <iostream>
 #include <sstream>
 
-#include "logger.h"
 #include "ann_exception.h"
 
 // sequential cached reads
@@ -43,7 +42,7 @@ class cached_ifstream
             this->cache_size = cacheSize;
             cache_buf = new char[cacheSize];
             reader.read(cache_buf, cacheSize);
-            diskann::cout << "Opened: " << filename.c_str() << ", size: " << fsize << ", cache_size: " << cacheSize
+            std::cout << "Opened: " << filename.c_str() << ", size: " << fsize << ", cache_size: " << cacheSize
                           << std::endl;
         }
         catch (std::system_error &e)
@@ -78,7 +77,7 @@ class cached_ifstream
                 stream << "Reading beyond end of file" << std::endl;
                 stream << "n_bytes: " << n_bytes << " cached_bytes: " << cached_bytes << " fsize: " << fsize
                        << " current pos:" << reader.tellg() << std::endl;
-                diskann::cout << stream.str() << std::endl;
+                std::cout << stream.str() << std::endl;
                 throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
             }
             memcpy(read_buf, cache_buf + cur_off, cached_bytes);
@@ -126,7 +125,7 @@ class cached_ofstream
             assert(writer.is_open());
             assert(cache_size > 0);
             cache_buf = new char[cache_size];
-            diskann::cout << "Opened: " << filename.c_str() << ", cache_size: " << cache_size << std::endl;
+            std::cout << "Opened: " << filename.c_str() << ", cache_size: " << cache_size << std::endl;
         }
         catch (std::system_error &e)
         {
@@ -155,7 +154,7 @@ class cached_ofstream
 
         if (writer.is_open())
             writer.close();
-        diskann::cout << "Finished writing " << fsize << "B" << std::endl;
+        std::cout << "Finished writing " << fsize << "B" << std::endl;
     }
 
     size_t get_file_size()

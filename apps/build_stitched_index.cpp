@@ -270,7 +270,7 @@ void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, p
                     path label_data_path, uint32_t num_threads)
 {
     size_t dimension, number_of_label_points;
-    auto diskann_cout_buffer = diskann::cout.rdbuf(nullptr);
+    auto diskann_cout_buffer = std::cout.rdbuf(nullptr);
     auto std_cout_buffer = std::cout.rdbuf(nullptr);
     auto pruning_index_timer = std::chrono::high_resolution_clock::now();
 
@@ -285,7 +285,7 @@ void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, p
     index.prune_all_neighbors(stitched_R, 750, 1.2);
     index.save((final_index_path_prefix).c_str());
 
-    diskann::cout.rdbuf(diskann_cout_buffer);
+    std::cout.rdbuf(diskann_cout_buffer);
     std::cout.rdbuf(std_cout_buffer);
     std::chrono::duration<double> pruning_index_time = std::chrono::high_resolution_clock::now() - pruning_index_timer;
     std::cout << "pruning performed in " << pruning_index_time.count() << " seconds\n" << std::endl;

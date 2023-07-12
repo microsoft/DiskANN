@@ -16,7 +16,6 @@
 
 #include "distance.h"
 #include "utils.h"
-#include "logger.h"
 #include "ann_exception.h"
 
 namespace diskann
@@ -306,7 +305,7 @@ template <typename T> float DistanceInnerProduct<T>::inner_product(const T *a, c
 {
     if (!std::is_floating_point<T>::value)
     {
-        diskann::cerr << "ERROR: Inner Product only defined for float currently." << std::endl;
+        std::cerr << "ERROR: Inner Product only defined for float currently." << std::endl;
         throw diskann::ANNException("ERROR: Inner Product only defined for float currently.", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
     }
@@ -426,7 +425,7 @@ template <typename T> float DistanceFastL2<T>::norm(const T *a, uint32_t size) c
 {
     if (!std::is_floating_point<T>::value)
     {
-        diskann::cerr << "ERROR: FastL2 only defined for float currently." << std::endl;
+        std::cerr << "ERROR: FastL2 only defined for float currently." << std::endl;
         throw diskann::ANNException("ERROR: FastL2 only defined for float currently.", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
     }
@@ -606,35 +605,35 @@ template <> diskann::Distance<float> *get_distance_function(diskann::Metric m)
     {
         if (Avx2SupportedCPU)
         {
-            diskann::cout << "L2: Using AVX2 distance computation DistanceL2Float" << std::endl;
+            std::cout << "L2: Using AVX2 distance computation DistanceL2Float" << std::endl;
             return new diskann::DistanceL2Float();
         }
         else if (AvxSupportedCPU)
         {
-            diskann::cout << "L2: AVX2 not supported. Using AVX distance computation" << std::endl;
+            std::cout << "L2: AVX2 not supported. Using AVX distance computation" << std::endl;
             return new diskann::AVXDistanceL2Float();
         }
         else
         {
-            diskann::cout << "L2: Older CPU. Using slow distance computation" << std::endl;
+            std::cout << "L2: Older CPU. Using slow distance computation" << std::endl;
             return new diskann::SlowDistanceL2<float>();
         }
     }
     else if (m == diskann::Metric::COSINE)
     {
-        diskann::cout << "Cosine: Using either AVX or AVX2 implementation" << std::endl;
+        std::cout << "Cosine: Using either AVX or AVX2 implementation" << std::endl;
         return new diskann::DistanceCosineFloat();
     }
     else if (m == diskann::Metric::INNER_PRODUCT)
     {
-        diskann::cout << "Inner product: Using AVX2 implementation "
+        std::cout << "Inner product: Using AVX2 implementation "
                          "AVXDistanceInnerProductFloat"
                       << std::endl;
         return new diskann::AVXDistanceInnerProductFloat();
     }
     else if (m == diskann::Metric::FAST_L2)
     {
-        diskann::cout << "Fast_L2: Using AVX2 implementation with norm "
+        std::cout << "Fast_L2: Using AVX2 implementation with norm "
                          "memoization DistanceFastL2<float>"
                       << std::endl;
         return new diskann::DistanceFastL2<float>();
@@ -645,7 +644,7 @@ template <> diskann::Distance<float> *get_distance_function(diskann::Metric m)
         stream << "Only L2, cosine, and inner product supported for floating "
                   "point vectors as of now."
                << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 }
@@ -656,17 +655,17 @@ template <> diskann::Distance<int8_t> *get_distance_function(diskann::Metric m)
     {
         if (Avx2SupportedCPU)
         {
-            diskann::cout << "Using AVX2 distance computation DistanceL2Int8." << std::endl;
+            std::cout << "Using AVX2 distance computation DistanceL2Int8." << std::endl;
             return new diskann::DistanceL2Int8();
         }
         else if (AvxSupportedCPU)
         {
-            diskann::cout << "AVX2 not supported. Using AVX distance computation" << std::endl;
+            std::cout << "AVX2 not supported. Using AVX distance computation" << std::endl;
             return new diskann::AVXDistanceL2Int8();
         }
         else
         {
-            diskann::cout << "Older CPU. Using slow distance computation "
+            std::cout << "Older CPU. Using slow distance computation "
                              "SlowDistanceL2Int<int8_t>."
                           << std::endl;
             return new diskann::SlowDistanceL2<int8_t>();
@@ -674,7 +673,7 @@ template <> diskann::Distance<int8_t> *get_distance_function(diskann::Metric m)
     }
     else if (m == diskann::Metric::COSINE)
     {
-        diskann::cout << "Using either AVX or AVX2 for Cosine similarity "
+        std::cout << "Using either AVX or AVX2 for Cosine similarity "
                          "DistanceCosineInt8."
                       << std::endl;
         return new diskann::DistanceCosineInt8();
@@ -683,7 +682,7 @@ template <> diskann::Distance<int8_t> *get_distance_function(diskann::Metric m)
     {
         std::stringstream stream;
         stream << "Only L2 and cosine supported for signed byte vectors." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 }
@@ -693,7 +692,7 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
     if (m == diskann::Metric::L2)
     {
 #ifdef _WINDOWS
-        diskann::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. "
+        std::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. "
                          "Using "
                          "slow version. "
                          "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
@@ -703,7 +702,7 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
     }
     else if (m == diskann::Metric::COSINE)
     {
-        diskann::cout << "AVX/AVX2 distance function not defined for Uint8. Using "
+        std::cout << "AVX/AVX2 distance function not defined for Uint8. Using "
                          "slow version SlowDistanceCosineUint8() "
                          "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
                       << std::endl;
@@ -713,7 +712,7 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
     {
         std::stringstream stream;
         stream << "Only L2 and cosine supported for uint32_t byte vectors." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 }

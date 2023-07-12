@@ -51,7 +51,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
     else
     {
-        diskann::cout << " Truthset file " << truthset_file << " not found. Not computing recall." << std::endl;
+        std::cout << " Truthset file " << truthset_file << " not found. Not computing recall." << std::endl;
     }
 
     bool filtered_search = false;
@@ -147,7 +147,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         uint32_t L = Lvec[test_id];
         if (L < recall_at)
         {
-            diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
+            std::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
             continue;
         }
 
@@ -244,7 +244,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         if (L < recall_at)
         {
-            diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
+            std::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
             continue;
         }
         std::string cur_result_path_prefix = result_path_prefix + "_" + std::to_string(L);
@@ -441,7 +441,7 @@ int main(int argc, char **argv)
     catch (std::exception &e)
     {
         std::cout << std::string(e.what()) << std::endl;
-        diskann::cerr << "Index search failed." << std::endl;
+        std::cerr << "Index search failed." << std::endl;
         return -1;
     }
 }

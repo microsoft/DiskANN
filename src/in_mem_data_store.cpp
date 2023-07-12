@@ -54,7 +54,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(AlignedF
         std::stringstream stream;
         stream << "ERROR: Driver requests loading " << this->_dim << " dimension,"
                << "but file has " << file_dim << " dimension." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
@@ -76,7 +76,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
     {
         std::stringstream stream;
         stream << "ERROR: data file " << filename << " does not exist." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
@@ -87,7 +87,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
         std::stringstream stream;
         stream << "ERROR: Driver requests loading " << this->_dim << " dimension,"
                << "but file has " << file_dim << " dimension." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
+        std::cerr << stream.str() << std::endl;
         aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }

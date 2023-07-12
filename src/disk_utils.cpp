@@ -7,7 +7,6 @@
 #include "gperftools/malloc_extension.h"
 #endif
 
-#include "logger.h"
 #include "disk_utils.h"
 #include "cached_io.h"
 #include "index.h"
@@ -97,7 +96,7 @@ size_t calculate_num_pq_chunks(double final_index_ram_limit, size_t points_num, 
                                const std::vector<std::string> &param_list)
 {
     size_t num_pq_chunks = (size_t)(std::floor)(uint64_t(final_index_ram_limit / (double)points_num));
-    diskann::cout << "Calculated num_pq_chunks :" << num_pq_chunks << std::endl;
+    std::cout << "Calculated num_pq_chunks :" << num_pq_chunks << std::endl;
     if (param_list.size() >= 6)
     {
         float compress_ratio = (float)atof(param_list[5].c_str());
@@ -107,19 +106,19 @@ size_t calculate_num_pq_chunks(double final_index_ram_limit, size_t points_num, 
 
             if (chunks_by_cr > 0 && chunks_by_cr < num_pq_chunks)
             {
-                diskann::cout << "Compress ratio:" << compress_ratio << " new #pq_chunks:" << chunks_by_cr << std::endl;
+                std::cout << "Compress ratio:" << compress_ratio << " new #pq_chunks:" << chunks_by_cr << std::endl;
                 num_pq_chunks = chunks_by_cr;
             }
             else
             {
-                diskann::cout << "Compress ratio: " << compress_ratio << " #new pq_chunks: " << chunks_by_cr
+                std::cout << "Compress ratio: " << compress_ratio << " #new pq_chunks: " << chunks_by_cr
                               << " is either zero or greater than num_pq_chunks: " << num_pq_chunks
                               << ". num_pq_chunks is unchanged. " << std::endl;
             }
         }
         else
         {
-            diskann::cerr << "Compression ratio: " << compress_ratio << " should be in (0,1]" << std::endl;
+            std::cerr << "Compression ratio: " << compress_ratio << " should be in (0,1]" << std::endl;
         }
     }
 
@@ -127,7 +126,7 @@ size_t calculate_num_pq_chunks(double final_index_ram_limit, size_t points_num, 
     num_pq_chunks = num_pq_chunks > dim ? dim : num_pq_chunks;
     num_pq_chunks = num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
 
-    diskann::cout << "Compressing " << dim << "-dimensional data into " << num_pq_chunks << " bytes per vector."
+    std::cout << "Compressing " << dim << "-dimensional data into " << num_pq_chunks << " bytes per vector."
                   << std::endl;
     return num_pq_chunks;
 }
@@ -136,7 +135,7 @@ template <typename T> T *generateRandomWarmup(uint64_t warmup_num, uint64_t warm
 {
     T *warmup = nullptr;
     warmup_num = 100000;
-    diskann::cout << "Generating random warmup file with dim " << warmup_dim << " and aligned dim "
+    std::cout << "Generating random warmup file with dim " << warmup_dim << " and aligned dim "
                   << warmup_aligned_dim << std::flush;
     diskann::alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T), 8 * sizeof(T));
     std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
@@ -150,7 +149,7 @@ template <typename T> T *generateRandomWarmup(uint64_t warmup_num, uint64_t warm
             warmup[i * warmup_aligned_dim + d] = (T)dis(gen);
         }
     }
-    diskann::cout << "..done" << std::endl;
+    std::cout << "..done" << std::endl;
     return warmup;
 }
 
@@ -165,7 +164,7 @@ T *load_warmup(MemoryMappedFiles &files, const std::string &cache_warmup_file, u
     if (files.fileExists(cache_warmup_file))
     {
         diskann::load_aligned_bin<T>(files, cache_warmup_file, warmup, warmup_num, file_dim, file_aligned_dim);
-        diskann::cout << "In the warmup file: " << cache_warmup_file << " File dim: " << file_dim
+        std::cout << "In the warmup file: " << cache_warmup_file << " File dim: " << file_dim
                       << " File aligned dim: " << file_aligned_dim << " Expected dim: " << warmup_dim
                       << " Expected aligned dim: " << warmup_aligned_dim << std::endl;
 
@@ -175,7 +174,7 @@ T *load_warmup(MemoryMappedFiles &files, const std::string &cache_warmup_file, u
             stream << "Mismatched dimensions in sample file. file_dim = " << file_dim
                    << " file_aligned_dim: " << file_aligned_dim << " index_dim: " << warmup_dim
                    << " index_aligned_dim: " << warmup_aligned_dim << std::endl;
-            diskann::cerr << stream.str();
+            std::cerr << stream.str();
             throw diskann::ANNException(stream.str(), -1);
         }
     }
@@ -264,14 +263,14 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
         nelems += idmap.size();
     }
     nnodes++;
-    diskann::cout << "# nodes: " << nnodes << ", max. degree: " << max_degree << std::endl;
+    std::cout << "# nodes: " << nnodes << ", max. degree: " << max_degree << std::endl;
 
     // compute inverse map: node -> shards
     std::vector<std::pair<uint32_t, uint32_t>> node_shard;
     node_shard.reserve(nelems);
     for (size_t shard = 0; shard < nshards; shard++)
     {
-        diskann::cout << "Creating inverse map -- shard #" << shard << std::endl;
+        std::cout << "Creating inverse map -- shard #" << shard << std::endl;
         for (size_t idx = 0; idx < idmaps[shard].size(); idx++)
         {
             size_t node_id = idmaps[shard][idx];
@@ -281,7 +280,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
     std::sort(node_shard.begin(), node_shard.end(), [](const auto &left, const auto &right) {
         return left.first < right.first || (left.first == right.first && left.second < right.second);
     });
-    diskann::cout << "Finished computing node -> shards map" << std::endl;
+    std::cout << "Finished computing node -> shards map" << std::endl;
 
     // will merge all the labels to medoids files of each shard into one
     // combined file
@@ -370,7 +369,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
         max_input_width = input_width > max_input_width ? input_width : max_input_width;
     }
 
-    diskann::cout << "Max input width: " << max_input_width << ", output width: " << output_width << std::endl;
+    std::cout << "Max input width: " << max_input_width << ", output width: " << output_width << std::endl;
 
     merged_vamana_writer.write((char *)&output_width, sizeof(uint32_t));
     std::ofstream medoid_writer(medoids_file.c_str(), std::ios::binary);
@@ -400,7 +399,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
     merged_vamana_writer.write((char *)&merged_index_frozen, sizeof(uint64_t));
     medoid_writer.close();
 
-    diskann::cout << "Starting merge" << std::endl;
+    std::cout << "Starting merge" << std::endl;
 
     // Gopal. random_shuffle() is deprecated.
     std::random_device rng;
@@ -426,7 +425,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
             merged_index_size += (sizeof(uint32_t) + nnbrs * sizeof(uint32_t));
             if (cur_id % 499999 == 1)
             {
-                diskann::cout << "." << std::flush;
+                std::cout << "." << std::flush;
             }
             cur_id = node_id;
             nnbrs = 0;
@@ -439,7 +438,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
 
         if (shard_nnbrs == 0)
         {
-            diskann::cout << "WARNING: shard #" << shard_id << ", node_id " << node_id << " has 0 nbrs" << std::endl;
+            std::cout << "WARNING: shard #" << shard_id << ", node_id " << node_id << " has 0 nbrs" << std::endl;
         }
 
         std::vector<uint32_t> shard_nhood(shard_nnbrs);
@@ -470,12 +469,12 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
         nhood_set[p] = 0;
     final_nhood.clear();
 
-    diskann::cout << "Expected size: " << merged_index_size << std::endl;
+    std::cout << "Expected size: " << merged_index_size << std::endl;
 
     merged_vamana_writer.reset();
     merged_vamana_writer.write((char *)&merged_index_size, sizeof(uint64_t));
 
-    diskann::cout << "Finished merge" << std::endl;
+    std::cout << "Finished merge" << std::endl;
     return 0;
 }
 
@@ -535,12 +534,12 @@ void breakup_dense_points(const std::string data_file, const std::string labels_
             point_cnt++;
         }
     }
-    diskann::cout << "fraction of dense points with >= " << density << " labels = " << (float)dense_pts / (float)npts
+    std::cout << "fraction of dense points with >= " << density << " labels = " << (float)dense_pts / (float)npts
                   << std::endl;
 
     if (labels_per_point.size() != 0)
     {
-        diskann::cout << labels_per_point.size() << " is the new number of points" << std::endl;
+        std::cout << labels_per_point.size() << " is the new number of points" << std::endl;
         std::ofstream label_writer(out_labels_file);
         assert(label_writer.is_open());
         for (uint32_t i = 0; i < labels_per_point.size(); i++)
@@ -558,7 +557,7 @@ void breakup_dense_points(const std::string data_file, const std::string labels_
 
     if (dummy_pt_ids.size() != 0)
     {
-        diskann::cout << dummy_pt_ids.size() << " is the number of dummy points created" << std::endl;
+        std::cout << dummy_pt_ids.size() << " is the number of dummy points created" << std::endl;
         data = (T *)std::realloc((void *)data, labels_per_point.size() * ndims * sizeof(T));
         std::ofstream dummy_writer(out_metadata_file);
         assert(dummy_writer.is_open());
@@ -577,7 +576,7 @@ void extract_shard_labels(const std::string &in_label_file, const std::string &s
                           const std::string &shard_label_file)
 { // assumes ith row is for ith
   // point in labels file
-    diskann::cout << "Extracting labels for shard" << std::endl;
+    std::cout << "Extracting labels for shard" << std::endl;
 
     uint32_t *ids = nullptr;
     uint64_t num_ids, tmp_dim;
@@ -626,7 +625,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     // TODO: Make this honest when there is filter support
     if (full_index_ram < ram_budget * 1024 * 1024 * 1024)
     {
-        diskann::cout << "Full index fits in RAM budget, should consume at most "
+        std::cout << "Full index fits in RAM budget, should consume at most "
                       << full_index_ram / (1024 * 1024 * 1024) << "GiBs, so building in one shot" << std::endl;
 
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
@@ -673,7 +672,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     Timer timer;
     int num_parts =
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget, 2 * R / 3, merged_index_prefix, 2);
-    diskann::cout << timer.elapsed_seconds_for_step("partitioning data") << std::endl;
+    std::cout << timer.elapsed_seconds_for_step("partitioning data") << std::endl;
 
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
     std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
@@ -726,13 +725,13 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         std::remove(shard_base_file.c_str());
     }
-    diskann::cout << timer.elapsed_seconds_for_step("building indices on shards") << std::endl;
+    std::cout << timer.elapsed_seconds_for_step("building indices on shards") << std::endl;
 
     timer.reset();
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index", merged_index_prefix + "_subshard-",
                           "_ids_uint32.bin", num_parts, R, mem_index_path, medoids_file, use_filters,
                           labels_to_medoids_file);
-    diskann::cout << timer.elapsed_seconds_for_step("merging indices") << std::endl;
+    std::cout << timer.elapsed_seconds_for_step("merging indices") << std::endl;
 
     // delete tempFiles
     for (int p = 0; p < num_parts; p++)
@@ -865,7 +864,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
     // create cached reader + writer
     size_t actual_file_size = get_file_size(mem_index_file);
-    diskann::cout << "Vamana index file size=" << actual_file_size << std::endl;
+    std::cout << "Vamana index file size=" << actual_file_size << std::endl;
     std::ifstream vamana_reader(mem_index_file, std::ios::binary);
     cached_ofstream diskann_writer(output_file, write_blk_size);
 
@@ -897,9 +896,9 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     max_node_len = (((uint64_t)width_u32 + 1) * sizeof(uint32_t)) + (ndims_64 * sizeof(T));
     nnodes_per_sector = SECTOR_LEN / max_node_len;
 
-    diskann::cout << "medoid: " << medoid << "B" << std::endl;
-    diskann::cout << "max_node_len: " << max_node_len << "B" << std::endl;
-    diskann::cout << "nnodes_per_sector: " << nnodes_per_sector << "B" << std::endl;
+    std::cout << "medoid: " << medoid << "B" << std::endl;
+    std::cout << "max_node_len: " << max_node_len << "B" << std::endl;
+    std::cout << "nnodes_per_sector: " << nnodes_per_sector << "B" << std::endl;
 
     // SECTOR_LEN buffer for each sector
     std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
@@ -939,13 +938,13 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     diskann_writer.write(sector_buf.get(), SECTOR_LEN);
 
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
-    diskann::cout << "# sectors: " << n_sectors << std::endl;
+    std::cout << "# sectors: " << n_sectors << std::endl;
     uint64_t cur_node_id = 0;
     for (uint64_t sector = 0; sector < n_sectors; sector++)
     {
         if (sector % 100000 == 0)
         {
-            diskann::cout << "Sector #" << sector << "written" << std::endl;
+            std::cout << "Sector #" << sector << "written" << std::endl;
         }
         memset(sector_buf.get(), 0, SECTOR_LEN);
         for (uint64_t sector_node_id = 0; sector_node_id < nnodes_per_sector && cur_node_id < npts_64; sector_node_id++)
@@ -989,7 +988,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     }
     if (append_reorder_data)
     {
-        diskann::cout << "Index written. Appending reorder data..." << std::endl;
+        std::cout << "Index written. Appending reorder data..." << std::endl;
 
         auto vec_len = ndims_reorder_file * sizeof(float);
         std::unique_ptr<char[]> vec_buf = std::make_unique<char[]>(vec_len);
@@ -998,7 +997,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
         {
             if (sector % 100000 == 0)
             {
-                diskann::cout << "Reorder data Sector #" << sector << "written" << std::endl;
+                std::cout << "Reorder data Sector #" << sector << "written" << std::endl;
             }
 
             memset(sector_buf.get(), 0, SECTOR_LEN);
@@ -1018,7 +1017,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     }
     diskann_writer.close();
     diskann::save_bin<uint64_t>(output_file, output_file_meta.data(), output_file_meta.size(), 1, 0);
-    diskann::cout << "Output disk index file written to " << output_file << std::endl;
+    std::cout << "Output disk index file written to " << output_file << std::endl;
 }
 
 template <typename T, typename LabelT>
@@ -1037,7 +1036,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     }
     if (param_list.size() < 5 || param_list.size() > 9)
     {
-        diskann::cout << "Correct usage of parameters is R (max degree)\n"
+        std::cout << "Correct usage of parameters is R (max degree)\n"
                          "L (indexing list size, better if >= R)\n"
                          "B (RAM limit of final index in GB)\n"
                          "M (memory limit while indexing)\n"
@@ -1136,7 +1135,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         float max_norm_of_base = diskann::prepare_base_for_inner_products<T>(base_file, prepped_base);
         std::string norm_file = disk_index_path + "_max_base_norm.bin";
         diskann::save_bin<float>(norm_file, &max_norm_of_base, 1, 1);
-        diskann::cout << timer.elapsed_seconds_for_step("preprocessing data for inner product") << std::endl;
+        std::cout << timer.elapsed_seconds_for_step("preprocessing data for inner product") << std::endl;
     }
 
     uint32_t R = (uint32_t)atoi(param_list[0].c_str());
@@ -1164,7 +1163,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         mkl_set_num_threads(num_threads);
     }
 
-    diskann::cout << "Starting index build: R=" << R << " L=" << L << " Query RAM budget: " << final_index_ram_limit
+    std::cout << "Starting index build: R=" << R << " L=" << L << " Query RAM budget: " << final_index_ram_limit
                   << " Indexing ram budget: " << indexing_ram_budget << " T: " << num_threads << std::endl;
 
     auto s = std::chrono::high_resolution_clock::now();
@@ -1216,12 +1215,12 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         num_pq_chunks = atoi(param_list[8].c_str());
     }
 
-    diskann::cout << "Compressing " << dim << "-dimensional data into " << num_pq_chunks << " bytes per vector."
+    std::cout << "Compressing " << dim << "-dimensional data into " << num_pq_chunks << " bytes per vector."
                   << std::endl;
 
     generate_quantized_data<T>(data_file_to_use, pq_pivots_path, pq_compressed_vectors_path, compareMetric, p_val,
                                num_pq_chunks, use_opq, codebook_prefix);
-    diskann::cout << timer.elapsed_seconds_for_step("generating quantized data") << std::endl;
+    std::cout << timer.elapsed_seconds_for_step("generating quantized data") << std::endl;
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
@@ -1234,7 +1233,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
                                                   indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
                                                   build_pq_bytes, use_opq, num_threads, use_filters, labels_file_to_use,
                                                   labels_to_medoids_path, universal_label, Lf);
-    diskann::cout << timer.elapsed_seconds_for_step("building merged vamana index") << std::endl;
+    std::cout << timer.elapsed_seconds_for_step("building merged vamana index") << std::endl;
 
     timer.reset();
     if (!use_disk_pq)
@@ -1249,7 +1248,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
             diskann::create_disk_layout<uint8_t>(disk_pq_compressed_vectors_path, mem_index_path, disk_index_path,
                                                  data_file_to_use.c_str());
     }
-    diskann::cout << timer.elapsed_seconds_for_step("generating disk layout") << std::endl;
+    std::cout << timer.elapsed_seconds_for_step("generating disk layout") << std::endl;
 
     double ten_percent_points = std::ceil(points_num * 0.1);
     double num_sample_points =
@@ -1276,7 +1275,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
 
     auto e = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = e - s;
-    diskann::cout << "Indexing time: " << diff.count() << std::endl;
+    std::cout << "Indexing time: " << diff.count() << std::endl;
 
     return 0;
 }
