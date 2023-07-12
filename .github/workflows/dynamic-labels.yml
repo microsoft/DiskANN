@@ -33,15 +33,9 @@ jobs:
         run: |
           echo "Generating synthetic labels and computing ground truth for filtered search with universal label"
           dist/bin/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file data/rand_labels_50_10K.txt --distribution_type random
-          dist/bin/compute_groundtruth_for_filters  --data_type float --dist_fn l2 --universal_label 0 --filter_label 10 --base_file data/rand_float_10D_10K_norm50.0.bin --query_file data/rand_float_10D_1K_norm50.0.bin --label_file data/rand_labels_50_10K.txt --gt_file data/l2_rand_float_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_10 --K 100
-          dist/bin/compute_groundtruth_for_filters  --data_type float --dist_fn mips --universal_label 0 --filter_label 10 --base_file data/rand_float_10D_10K_norm50.0.bin --query_file data/rand_float_10D_1K_norm50.0.bin --label_file data/rand_labels_50_10K.txt --gt_file data/mips_rand_float_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_10 --K 100
-          dist/bin/compute_groundtruth_for_filters  --data_type float --dist_fn cosine --universal_label 0 --filter_label 10 --base_file data/rand_float_10D_10K_norm50.0.bin --query_file data/rand_float_10D_1K_norm50.0.bin --label_file data/rand_labels_50_10K.txt --gt_file data/cosine_rand_float_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_10 --K 100
 
           echo "Generating synthetic labels with a zipf distribution and computing ground truth for filtered search with universal label"
           dist/bin/generate_synthetic_labels  --num_labels 50 --num_points 10000  --output_file data/zipf_labels_50_10K.txt --distribution_type zipf
-          dist/bin/compute_groundtruth_for_filters  --data_type float --dist_fn l2 --universal_label 0 --filter_label 5 --base_file data/rand_float_10D_10K_norm50.0.bin --query_file data/rand_float_10D_1K_norm50.0.bin --label_file data/zipf_labels_50_10K.txt --gt_file data/l2_zipf_float_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_5 --K 100
-          dist/bin/compute_groundtruth_for_filters  --data_type float --dist_fn mips --universal_label 0 --filter_label 5 --base_file data/rand_float_10D_10K_norm50.0.bin --query_file data/rand_float_10D_1K_norm50.0.bin --label_file data/zipf_labels_50_10K.txt --gt_file data/mips_zipf_float_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_5 --K 100
-          dist/bin/compute_groundtruth_for_filters  --data_type float --dist_fn cosine --universal_label 0 --filter_label 5 --base_file data/rand_float_10D_10K_norm50.0.bin --query_file data/rand_float_10D_1K_norm50.0.bin --label_file data/zipf_labels_50_10K.txt --gt_file data/cosine_zipf_float_10D_10K_norm50.0_10D_1K_norm50.0_gt100_wlabel_5 --K 100
 
       - name: test a streaming index with labels (float)
         run: |
