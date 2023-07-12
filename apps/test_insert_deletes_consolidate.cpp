@@ -161,6 +161,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                                             .with_index_write_params(params)
                                             .with_search_threads(params.num_threads)
                                             .with_initial_search_list_size(params.search_list_size)
+                                            .with_num_frozen_pts(params.num_frozen_points)
                                             .with_data_type(data_type)
                                             .with_tag_type(tag_type)
                                             .with_data_load_store_strategy(diskann::MEMORY)

@@ -162,9 +162,14 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
         _indexingMaxC = index_config.index_write_params->max_occlusion_size;
         _indexingAlpha = index_config.index_write_params->alpha;
         _filterIndexingQueueSize = index_config.index_write_params->filter_list_size;
-
+        _filtered_index = index_config.index_write_params->has_labels;
         uint32_t num_threads_indx = index_config.index_write_params->num_threads;
         uint32_t num_scratch_spaces = index_config.search_threads + num_threads_indx;
+
+        if (_filtered_index)
+        {
+            _pts_to_labels.resize(_max_points);
+        }
 
         initialize_query_scratch(num_scratch_spaces, index_config.initial_search_list_size, _indexingQueueSize,
                                  _indexingRange, _indexingMaxC, _data_store->get_dims());
