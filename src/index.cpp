@@ -2969,11 +2969,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 }
 
 template <typename T, typename TagT, typename LabelT>
-int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType tag)
+int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType tag, Labelvector &labels)
 {
     try
     {
-        return this->insert_point(std::any_cast<const T *>(point), std::any_cast<const TagT>(tag));
+        return this->insert_point(std::any_cast<const T *>(point), std::any_cast<const TagT>(tag),
+                                  labels.get<const std::vector<LabelT>>());
     }
     catch (const std::bad_any_cast &anycast_e)
     {

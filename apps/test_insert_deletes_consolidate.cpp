@@ -90,16 +90,17 @@ std::string get_save_filename(const std::string &save_path, size_t points_to_ski
     return final_path;
 }
 
-template <typename T, typename TagT>
+template <typename T, typename TagT, typename LabelT>
 void insert_till_next_checkpoint(diskann::AbstractIndex &index, size_t start, size_t end, int32_t thread_count, T *data,
                                  size_t aligned_dim)
 {
     diskann::Timer insert_timer;
 
+    std::vector<LabelT> empty_labels;
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
     for (int64_t j = start; j < (int64_t)end; j++)
     {
-        index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j));
+        index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j), empty_labels);
     }
     const double elapsedSeconds = insert_timer.elapsed() / 1000000.0;
     std::cout << "Insertion time " << elapsedSeconds << " seconds (" << (end - start) / elapsedSeconds
@@ -149,6 +150,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
     bool enable_tags = true;
     using TagT = uint32_t;
+    using LabelT = uint32_t;
     auto data_type = diskann_type_to_name<T>();
     auto tag_type = diskann_type_to_name<TagT>();
     diskann::IndexConfig index_config = diskann::IndexConfigBuilder()
@@ -250,7 +252,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
             auto insert_task = std::async(std::launch::async, [&]() {
                 load_aligned_bin_part(data_path, data, start, end - start);
-                insert_till_next_checkpoint<T, TagT>(*index, start, end, sub_threads, data, aligned_dim);
+                insert_till_next_checkpoint<T, TagT, LabelT>(*index, start, end, sub_threads, data, aligned_dim);
             });
             insert_task.wait();
 
@@ -286,7 +288,8 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
             std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
             load_aligned_bin_part(data_path, data, start, end - start);
-            insert_till_next_checkpoint<T, TagT>(*index, start, end, (int32_t)params.num_threads, data, aligned_dim);
+            insert_till_next_checkpoint<T, TagT, LabelT>(*index, start, end, (int32_t)params.num_threads, data,
+                                                         aligned_dim);
 
             if (checkpoints_per_snapshot > 0 && --num_checkpoints_till_snapshot == 0)
             {

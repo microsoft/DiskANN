@@ -79,7 +79,8 @@ class AbstractIndex
                                                       const size_t K, const uint32_t L, IndexType *indices,
                                                       float *distances);
 
-    template <typename data_type, typename tag_type> int insert_point(const data_type *point, const tag_type tag);
+    template <typename data_type, typename tag_type, typename label_type>
+    int insert_point(const data_type *point, const tag_type tag, const std::vector<label_type> &labels = {});
 
     template <typename tag_type> int lazy_delete(const tag_type &tag);
 
@@ -105,7 +106,7 @@ class AbstractIndex
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::string &filter_label,
                                                                const size_t K, const uint32_t L, std::any &indices,
                                                                float *distances) = 0;
-    virtual int _insert_point(const DataType &data_point, const TagType tag) = 0;
+    virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) = 0;
     virtual int _lazy_delete(const TagType &tag) = 0;
     virtual void _lazy_delete(TagVector &tags, TagVector &failed_tags) = 0;
     virtual void _get_active_tags(TagRobinSet &active_tags) = 0;

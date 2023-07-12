@@ -85,8 +85,8 @@ std::string get_save_filename(const std::string &save_path, size_t active_window
 }
 
 template <typename T, typename TagT, typename LabelT>
-void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, size_t end, size_t insert_threads, T *data,
-                       size_t aligned_dim, std::vector<std::vector<LabelT>> &labels)
+void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, size_t insert_threads, T *data,
+                       size_t aligned_dim, std::vector<std::vector<LabelT>> &pts_to_labels)
 {
     try
     {
@@ -94,18 +94,20 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
         std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
         size_t num_failed = 0;
+        std::vector<LabelT> empty_labels;
 #pragma omp parallel for num_threads((int32_t)insert_threads) schedule(dynamic) reduction(+ : num_failed)
         for (int64_t j = start; j < (int64_t)end; j++)
         {
             int insert_result = -1;
-            if (labels.size() > 0)
+            if (pts_to_labels.size() > 0)
             {
-                insert_result =
-                    index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j), labels[j - start]);
+                insert_result = index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j),
+                                                   pts_to_labels[j - start]);
             }
             else
             {
-                insert_result = index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j));
+                insert_result =
+                    index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j), empty_labels);
             }
 
             if (insert_result != 0)
@@ -126,7 +128,6 @@ void insert_next_batch(diskann::Index<T, TagT, LabelT> &index, size_t start, siz
         std::cout << "Exiting after catching exception in insertion task: " << e.what() << std::endl;
     }
 }
-
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
 void delete_and_consolidate(diskann::AbstractIndex &index, diskann::IndexWriteParameters &delete_params, size_t start,
@@ -194,10 +195,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
     std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
 
-    using TagT = uint32_t;
-    using LabelT = uint32_t;
-
-
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(C)
                                                .with_alpha(alpha)
@@ -220,13 +217,13 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     size_t dim, aligned_dim;
     size_t num_points;
 
-    std::vector<std::vector<LabelT>> labels;
+    std::vector<std::vector<LabelT>> pts_to_labels;
 
     if (has_labels)
     {
         convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
         auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
-        labels = std::get<0>(parse_result);
+        pts_to_labels = std::get<0>(parse_result);
     }
 
     diskann::get_bin_metadata(data_path, num_points, dim);
@@ -288,7 +285,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     auto insert_task = std::async(std::launch::async, [&]() {
         load_aligned_bin_part(data_path, data, 0, active_window);
-        insert_next_batch(*index, (size_t)0, active_window, params.num_threads, data, aligned_dim, labels);
+        insert_next_batch<T, TagT, LabelT>(*index, (size_t)0, active_window, params.num_threads, data, aligned_dim,
+                                           pts_to_labels);
     });
     insert_task.wait();
 
@@ -298,7 +296,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         auto end = std::min(start + consolidate_interval, max_points_to_insert);
         auto insert_task = std::async(std::launch::async, [&]() {
             load_aligned_bin_part(data_path, data, start, end - start);
-            insert_next_batch(*index, start, end, params.num_threads, data, aligned_dim, labels);
+            insert_next_batch<T, TagT, LabelT>(*index, start, end, params.num_threads, data, aligned_dim,
+                                               pts_to_labels);
         });
         insert_task.wait();
 
