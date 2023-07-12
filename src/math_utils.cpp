@@ -208,8 +208,8 @@ void compute_closest_centers(float *data, size_t num_points, size_t dim, float *
 void process_residuals(float *data_load, size_t num_points, size_t dim, float *cur_pivot_data, size_t num_centers,
                        uint32_t *closest_centers, bool to_subtract)
 {
-    std::cout << "Processing residuals of " << num_points << " points in " << dim << " dimensions using "
-                  << num_centers << " centers " << std::endl;
+    std::cout << "Processing residuals of " << num_points << " points in " << dim << " dimensions using " << num_centers
+              << " centers " << std::endl;
 #pragma omp parallel for schedule(static, 8192)
     for (int64_t n_iter = 0; n_iter < (int64_t)num_points; n_iter++)
     {
@@ -339,8 +339,8 @@ float run_lloyds(float *data, size_t num_points, size_t dim, float *centers, con
         if (((i != 0) && ((old_residual - residual) / residual) < 0.00001) ||
             (residual < std::numeric_limits<float>::epsilon()))
         {
-            std::cout << "Residuals unchanged: " << old_residual << " becomes " << residual
-                          << ". Early termination." << std::endl;
+            std::cout << "Residuals unchanged: " << old_residual << " becomes " << residual << ". Early termination."
+                      << std::endl;
             break;
         }
     }
@@ -381,10 +381,10 @@ void kmeanspp_selecting_pivots(float *data, size_t num_points, size_t dim, float
     if (num_points > 1 << 23)
     {
         std::cout << "ERROR: n_pts " << num_points
-                      << " currently not supported for k-means++, maximum is "
-                         "8388608. Falling back to random pivot "
-                         "selection."
-                      << std::endl;
+                  << " currently not supported for k-means++, maximum is "
+                     "8388608. Falling back to random pivot "
+                     "selection."
+                  << std::endl;
         selecting_pivots(data, num_points, dim, pivot_data, num_centers);
         return;
     }

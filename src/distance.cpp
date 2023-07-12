@@ -627,15 +627,15 @@ template <> diskann::Distance<float> *get_distance_function(diskann::Metric m)
     else if (m == diskann::Metric::INNER_PRODUCT)
     {
         std::cout << "Inner product: Using AVX2 implementation "
-                         "AVXDistanceInnerProductFloat"
-                      << std::endl;
+                     "AVXDistanceInnerProductFloat"
+                  << std::endl;
         return new diskann::AVXDistanceInnerProductFloat();
     }
     else if (m == diskann::Metric::FAST_L2)
     {
         std::cout << "Fast_L2: Using AVX2 implementation with norm "
-                         "memoization DistanceFastL2<float>"
-                      << std::endl;
+                     "memoization DistanceFastL2<float>"
+                  << std::endl;
         return new diskann::DistanceFastL2<float>();
     }
     else
@@ -666,16 +666,16 @@ template <> diskann::Distance<int8_t> *get_distance_function(diskann::Metric m)
         else
         {
             std::cout << "Older CPU. Using slow distance computation "
-                             "SlowDistanceL2Int<int8_t>."
-                          << std::endl;
+                         "SlowDistanceL2Int<int8_t>."
+                      << std::endl;
             return new diskann::SlowDistanceL2<int8_t>();
         }
     }
     else if (m == diskann::Metric::COSINE)
     {
         std::cout << "Using either AVX or AVX2 for Cosine similarity "
-                         "DistanceCosineInt8."
-                      << std::endl;
+                     "DistanceCosineInt8."
+                  << std::endl;
         return new diskann::DistanceCosineInt8();
     }
     else
@@ -693,19 +693,19 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
     {
 #ifdef _WINDOWS
         std::cout << "WARNING: AVX/AVX2 distance function not defined for Uint8. "
-                         "Using "
-                         "slow version. "
-                         "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
-                      << std::endl;
+                     "Using "
+                     "slow version. "
+                     "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
+                  << std::endl;
 #endif
         return new diskann::DistanceL2UInt8();
     }
     else if (m == diskann::Metric::COSINE)
     {
         std::cout << "AVX/AVX2 distance function not defined for Uint8. Using "
-                         "slow version SlowDistanceCosineUint8() "
-                         "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
-                      << std::endl;
+                     "slow version SlowDistanceCosineUint8() "
+                     "Contact gopalsr@microsoft.com if you need AVX/AVX2 support."
+                  << std::endl;
         return new diskann::SlowDistanceCosineUInt8();
     }
     else

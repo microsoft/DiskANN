@@ -163,8 +163,8 @@ void WindowsAlignedFileReader::read(std::vector<AlignedRead> &read_reqs, IOConte
                     if (error != WAIT_TIMEOUT)
                     {
                         std::cerr << "GetQueuedCompletionStatus() failed "
-                                         "with error = "
-                                      << error << std::endl;
+                                     "with error = "
+                                  << error << std::endl;
                         throw diskann::ANNException("GetQueuedCompletionStatus failed with error: ", error, __FUNCSIG__,
                                                     __FILE__, __LINE__);
                     }

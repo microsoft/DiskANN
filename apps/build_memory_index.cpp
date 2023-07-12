@@ -155,7 +155,7 @@ int main(int argc, char **argv)
     try
     {
         std::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
-                      << "  #threads: " << num_threads << std::endl;
+                  << "  #threads: " << num_threads << std::endl;
 
         size_t data_num, data_dim;
         diskann::get_bin_metadata(data_path, data_num, data_dim);

@@ -43,7 +43,7 @@ class cached_ifstream
             cache_buf = new char[cacheSize];
             reader.read(cache_buf, cacheSize);
             std::cout << "Opened: " << filename.c_str() << ", size: " << fsize << ", cache_size: " << cacheSize
-                          << std::endl;
+                      << std::endl;
         }
         catch (std::system_error &e)
         {
