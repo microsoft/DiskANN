@@ -165,8 +165,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
     std::string recall_string = "Recall@rng=" + std::to_string(search_range);
     std::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth" << std::setw(16) << "QPS" << std::setw(16)
-              << "Mean Latency" << std::setw(16) << "99.9 Latency" << std::setw(16) << "Mean IOs" << std::setw(16)
-              << "CPU (s)";
+                  << "Mean Latency" << std::setw(16) << "99.9 Latency" << std::setw(16) << "Mean IOs" << std::setw(16)
+                  << "CPU (s)";
     if (calc_recall_flag)
     {
         std::cout << std::setw(16) << recall_string << std::endl;
@@ -174,8 +174,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     else
         std::cout << std::endl;
     std::cout << "==============================================================="
-                 "==========================================="
-              << std::endl;
+                     "==========================================="
+                  << std::endl;
 
     std::vector<std::vector<std::vector<uint32_t>>> query_result_ids(Lvec.size());
 
@@ -247,9 +247,9 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             ratio_of_sums = (1.0 * total_true_positive) / (1.0 * total_positive);
         }
 
-        std::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth << std::setw(16) << qps << std::setw(16)
-                  << mean_latency << std::setw(16) << latency_999 << std::setw(16) << mean_ios << std::setw(16)
-                  << mean_cpuus;
+        std::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth << std::setw(16) << qps
+                      << std::setw(16) << mean_latency << std::setw(16) << latency_999 << std::setw(16) << mean_ios
+                      << std::setw(16) << mean_cpuus;
         if (calc_recall_flag)
         {
             std::cout << std::setw(16) << recall << "," << ratio_of_sums << std::endl;

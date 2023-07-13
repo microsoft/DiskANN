@@ -50,7 +50,8 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
 
     base_reader.read((char *)&npts_u32, sizeof(uint32_t));
     base_reader.read((char *)&nd_u32, sizeof(uint32_t));
-    std::cout << "Loading base " << base_file << ". #points: " << npts_u32 << ". #dim: " << nd_u32 << "." << std::endl;
+    std::cout << "Loading base " << base_file << ". #points: " << npts_u32 << ". #dim: " << nd_u32 << "."
+                  << std::endl;
     sample_writer.write((char *)&num_sampled_pts_u32, sizeof(uint32_t));
     sample_writer.write((char *)&nd_u32, sizeof(uint32_t));
     sample_id_writer.write((char *)&num_sampled_pts_u32, sizeof(uint32_t));
@@ -79,7 +80,7 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
     sample_writer.close();
     sample_id_writer.close();
     std::cout << "Wrote " << num_sampled_pts_u32 << " points to sample file: " << output_prefix + "_data.bin"
-              << std::endl;
+                  << std::endl;
 }
 
 // streams data from the file, and samples each vector with probability p_val
@@ -316,8 +317,8 @@ int shard_data_into_clusters(const std::string data_file, float *pivots, const s
         shard_idmap_writer[i].close();
     }
 
-    std::cout << "\n Partitioned " << num_points << " with replication factor " << k_base << " to get " << total_count
-              << " points across " << num_centers << " shards " << std::endl;
+    std::cout << "\n Partitioned " << num_points << " with replication factor " << k_base << " to get "
+                  << total_count << " points across " << num_centers << " shards " << std::endl;
     return 0;
 }
 
@@ -400,8 +401,8 @@ int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots
         shard_idmap_writer[i].close();
     }
 
-    std::cout << "\n Partitioned " << num_points << " with replication factor " << k_base << " to get " << total_count
-              << " points across " << num_centers << " shards " << std::endl;
+    std::cout << "\n Partitioned " << num_points << " with replication factor " << k_base << " to get "
+                  << total_count << " points across " << num_centers << " shards " << std::endl;
     return 0;
 }
 
@@ -580,8 +581,9 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
             if (cur_shard_ram_estimate > max_ram_usage)
                 max_ram_usage = cur_shard_ram_estimate;
         }
-        std::cout << "With " << num_parts << " parts, max estimated RAM usage: " << max_ram_usage / (1024 * 1024 * 1024)
-                  << "GB, budget given is " << ram_budget << std::endl;
+        std::cout << "With " << num_parts
+                      << " parts, max estimated RAM usage: " << max_ram_usage / (1024 * 1024 * 1024)
+                      << "GB, budget given is " << ram_budget << std::endl;
         if (max_ram_usage > 1024 * 1024 * 1024 * ram_budget)
         {
             fit_in_ram = false;

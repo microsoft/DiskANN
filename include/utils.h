@@ -139,10 +139,10 @@ inline int delete_file(const std::string &fileName)
         if (rc != 0)
         {
             std::cerr << "Could not delete file: " << fileName
-                      << " even though it exists. This might indicate a permissions "
-                         "issue. "
-                         "If you see this message, please contact the diskann team."
-                      << std::endl;
+                          << " even though it exists. This might indicate a permissions "
+                             "issue. "
+                             "If you see this message, please contact the diskann team."
+                          << std::endl;
         }
         return rc;
     }
@@ -249,8 +249,8 @@ inline void realloc_aligned(void **ptr, size_t size, size_t align)
     *ptr = ::_aligned_realloc(*ptr, size, align);
 #else
     std::cerr << "No aligned realloc on GCC. Must malloc and mem_align, "
-                 "left it out for now."
-              << std::endl;
+                     "left it out for now."
+                  << std::endl;
 #endif
     if (*ptr == nullptr)
         report_memory_allocation_failure();
@@ -701,7 +701,8 @@ inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t
     size_t bytes_written = npts * ndims * sizeof(T) + 2 * sizeof(uint32_t);
     writer.write((char *)&npts_i32, sizeof(int));
     writer.write((char *)&ndims_i32, sizeof(int));
-    std::cout << "bin: #pts = " << npts << ", #dims = " << ndims << ", size = " << bytes_written << "B" << std::endl;
+    std::cout << "bin: #pts = " << npts << ", #dims = " << ndims << ", size = " << bytes_written << "B"
+                  << std::endl;
 
     writer.write((char *)data, npts * ndims * sizeof(T));
     writer.close();
@@ -742,7 +743,7 @@ inline void load_aligned_bin_impl(std::basic_istream<char> &reader, size_t actua
     }
     rounded_dim = ROUND_UP(dim, 8);
     std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << ", aligned_dim = " << rounded_dim << "... "
-              << std::flush;
+                  << std::flush;
     size_t allocSize = npts * rounded_dim * sizeof(T);
     std::cout << "allocating aligned memory of " << allocSize << " bytes... " << std::flush;
     alloc_aligned(((void **)&data), allocSize, 8 * sizeof(T));
@@ -938,7 +939,7 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
     if (data == nullptr)
     {
         std::cerr << "Memory was not allocated for " << data << " before calling the load function. Exiting..."
-                  << std::endl;
+                      << std::endl;
         throw diskann::ANNException("Null pointer passed to copy_aligned_data_from_file function", -1, __FUNCSIG__,
                                     __FILE__, __LINE__);
     }
@@ -1019,7 +1020,7 @@ inline bool validate_index_file_size(std::ifstream &in)
     if (actual_file_size != expected_file_size)
     {
         std::cerr << "Index file size error. Expected size (metadata): " << expected_file_size
-                  << ", actual file size : " << actual_file_size << "." << std::endl;
+                      << ", actual file size : " << actual_file_size << "." << std::endl;
         return false;
     }
     return true;
@@ -1188,9 +1189,10 @@ inline void printProcessMemory(const char *message)
     PROCESS_MEMORY_COUNTERS counters;
     HANDLE h = GetCurrentProcess();
     GetProcessMemoryInfo(h, &counters, sizeof(counters));
-    std::cout << message << " [Peaking Working Set size: " << counters.PeakWorkingSetSize * 1.0 / (1024.0 * 1024 * 1024)
-              << "GB Working set size: " << counters.WorkingSetSize * 1.0 / (1024.0 * 1024 * 1024)
-              << "GB Private bytes " << counters.PagefileUsage * 1.0 / (1024 * 1024 * 1024) << "GB]" << std::endl;
+    std::cout << message
+                  << " [Peaking Working Set size: " << counters.PeakWorkingSetSize * 1.0 / (1024.0 * 1024 * 1024)
+                  << "GB Working set size: " << counters.WorkingSetSize * 1.0 / (1024.0 * 1024 * 1024)
+                  << "GB Private bytes " << counters.PagefileUsage * 1.0 / (1024 * 1024 * 1024) << "GB]" << std::endl;
 }
 #else
 

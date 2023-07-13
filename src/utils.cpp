@@ -193,10 +193,11 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
 
         if ((active_points_count < recall_at && !active_tags.empty()) && !printed)
         {
-            std::cout << "Warning: Couldn't find enough closest neighbors " << active_points_count << "/" << recall_at
-                      << " from "
-                         "truthset for query # "
-                      << i << ". Will result in under-reported value of recall." << std::endl;
+            std::cout << "Warning: Couldn't find enough closest neighbors " << active_points_count << "/"
+                          << recall_at
+                          << " from "
+                             "truthset for query # "
+                          << i << ". Will result in under-reported value of recall." << std::endl;
             printed = true;
         }
         if (gs_dist != nullptr)
@@ -269,7 +270,8 @@ void get_bin_metadata(AlignedFileReader &reader, size_t &npts, size_t &ndim, siz
     {
         npts = buf[0];
         ndim = buf[1];
-        std::cout << "File has: " << npts << " points, " << ndim << " dimensions at offset: " << offset << std::endl;
+        std::cout << "File has: " << npts << " points, " << ndim << " dimensions at offset: " << offset
+                      << std::endl;
     }
     else
     {
@@ -332,7 +334,7 @@ void copy_aligned_data_from_file(AlignedFileReader &reader, T *&data, size_t &np
     if (data == nullptr)
     {
         std::cerr << "Memory was not allocated for " << data << " before calling the load function. Exiting..."
-                  << std::endl;
+                      << std::endl;
         throw diskann::ANNException("Null pointer passed to copy_aligned_data_from_file()", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
     }

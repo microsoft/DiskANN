@@ -48,15 +48,15 @@ PQFlashIndex<T, LabelT>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileRe
         if (std::is_floating_point<T>::value)
         {
             std::cout << "Cosine metric chosen for (normalized) float data."
-                         "Changing distance to L2 to boost accuracy."
-                      << std::endl;
+                             "Changing distance to L2 to boost accuracy."
+                          << std::endl;
             metric = diskann::Metric::L2;
         }
         else
         {
             std::cerr << "WARNING: Cannot normalize integral data types."
-                      << " This may result in erroneous results or poor recall."
-                      << " Consider using L2 distance with integral data types." << std::endl;
+                          << " This may result in erroneous results or poor recall."
+                          << " Consider using L2 distance with integral data types." << std::endl;
         }
     }
 
@@ -302,7 +302,7 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
     if (num_nodes_to_cache > tenp_nodes)
     {
         std::cout << "Reducing nodes to cache from: " << num_nodes_to_cache << " to: " << tenp_nodes
-                  << "(10 percent of total nodes:" << this->num_points << ")" << std::endl;
+                      << "(10 percent of total nodes:" << this->num_points << ")" << std::endl;
         num_nodes_to_cache = tenp_nodes == 0 ? 1 : tenp_nodes;
     }
     std::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
@@ -422,8 +422,8 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
             }
         }
 
-        std::cout << ". #nodes: " << node_set.size() - prev_node_set_size << ", #nodes thus far: " << node_set.size()
-                  << std::endl;
+        std::cout << ". #nodes: " << node_set.size() - prev_node_set_size
+                      << ", #nodes thus far: " << node_set.size() << std::endl;
         prev_node_set_size = node_set.size();
         lvl++;
     }
@@ -439,7 +439,7 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
 
     std::cout << "Level: " << lvl << std::flush;
     std::cout << ". #nodes: " << node_list.size() - prev_node_set_size << ", #nodes thus far: " << node_list.size()
-              << std::endl;
+                  << std::endl;
     std::cout << "done" << std::endl;
 }
 
@@ -595,7 +595,7 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::string map_file, uint
     }
 
     std::cout << "Labels file metadata: num_points: " << num_pts << ", #total_labels: " << num_total_labels
-              << std::endl;
+                  << std::endl;
     infile.close();
 }
 
@@ -856,7 +856,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #endif
 
     std::cout << "Loaded PQ centroids and in-memory compressed vectors. #points: " << num_points
-              << " #dim: " << data_dim << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks << std::endl;
+                  << " #dim: " << data_dim << " #aligned_dim: " << aligned_dim << " #chunks: " << n_chunks << std::endl;
 
     if (n_chunks > MAX_PQ_CHUNKS)
     {
@@ -884,7 +884,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         disk_bytes_per_point =
             disk_pq_n_chunks * sizeof(uint8_t); // revising disk_bytes_per_point since DISK PQ is used.
         std::cout << "Disk index uses PQ data compressed down to " << disk_pq_n_chunks << " bytes per point."
-                  << std::endl;
+                      << std::endl;
     }
 
 // read index metadata
@@ -918,8 +918,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     if (disk_nnodes != num_points)
     {
         std::cout << "Mismatch in #points for compressed data file and disk "
-                     "index file: "
-                  << disk_nnodes << " vs " << num_points << std::endl;
+                         "index file: "
+                      << disk_nnodes << " vs " << num_points << std::endl;
         return -1;
     }
 
@@ -947,7 +947,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     if (this->num_frozen_points == 1)
     {
         std::cout << " Detected frozen point in index at location " << this->frozen_location
-                  << ". Will not output it at search time." << std::endl;
+                      << ". Will not output it at search time." << std::endl;
     }
 
     READ_U64(index_metadata, this->reorder_data_exists);
@@ -1012,8 +1012,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         {
 #endif
             std::cout << "Centroid data file not found. Using corresponding vectors "
-                         "for the medoids "
-                      << std::endl;
+                             "for the medoids "
+                          << std::endl;
             use_medoids_data_as_centroids();
         }
         else

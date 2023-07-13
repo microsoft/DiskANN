@@ -113,8 +113,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
             this->_distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
             this->_normalize_vecs = true;
             std::cout << "Normalizing vectors and using L2 for cosine "
-                         "AVXNormalizedCosineDistanceFloat()."
-                      << std::endl;
+                             "AVXNormalizedCosineDistanceFloat()."
+                          << std::endl;
         }
         else
         {
@@ -395,8 +395,8 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     else
     {
         std::cout << "Save index in a single file currently not supported. "
-                     "Not saving the index."
-                  << std::endl;
+                         "Not saving the index."
+                      << std::endl;
     }
 
     // If frozen points were temporarily compacted to _nd, move back to
@@ -584,8 +584,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     else
     {
         std::cout << "Single index file saving/loading support not yet "
-                     "enabled. Not loading the index."
-                  << std::endl;
+                         "enabled. Not loading the index."
+                      << std::endl;
         return;
     }
 
@@ -655,8 +655,9 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     reposition_frozen_point_to_end();
     std::cout << "Num frozen points:" << _num_frozen_pts << " _nd: " << _nd << " _start: " << _start
-              << " size(_location_to_tag): " << _location_to_tag.size()
-              << " size(_tag_to_location):" << _tag_to_location.size() << " Max points: " << _max_points << std::endl;
+                  << " size(_location_to_tag): " << _location_to_tag.size()
+                  << " size(_tag_to_location):" << _tag_to_location.size() << " Max points: " << _max_points
+                  << std::endl;
 
     // For incremental index, _query_scratch is initialized in the constructor.
     // For the bulk index, the params required to initialize _query_scratch
@@ -727,8 +728,8 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 
 #endif
     std::cout << "From graph header, expected_file_size: " << expected_file_size
-              << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << _start
-              << ", file_frozen_pts: " << file_frozen_pts << std::endl;
+                  << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << _start
+                  << ", file_frozen_pts: " << file_frozen_pts << std::endl;
 
     if (file_frozen_pts != _num_frozen_pts)
     {
@@ -762,8 +763,8 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     if (_max_points < expected_max_points)
     {
         std::cout << "Number of points in data: " << expected_max_points
-                  << " is greater than max_points: " << _max_points << " Setting max points to: " << expected_max_points
-                  << std::endl;
+                      << " is greater than max_points: " << _max_points
+                      << " Setting max points to: " << expected_max_points << std::endl;
         _final_graph.resize(expected_max_points + _num_frozen_pts);
         _max_points = expected_max_points;
     }
@@ -822,8 +823,8 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     }
 #endif
 
-    std::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to " << _start
-              << std::endl;
+    std::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to "
+                  << _start << std::endl;
     return nodes_read;
 }
 
@@ -1482,7 +1483,7 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
         if (node_ctr % 100000 == 0)
         {
             std::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed."
-                      << std::flush;
+                          << std::flush;
         }
     }
 
@@ -1585,8 +1586,9 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
         min = max;
     if (_nd > 0)
     {
-        std::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
-                  << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+        std::cout << "Index built with degree: max:" << max
+                      << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts) << "  min:" << min
+                      << "  count(deg<2):" << cnt << std::endl;
     }
 }
 
@@ -1710,7 +1712,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
             cnt++;
     }
     std::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
-              << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+                  << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
 
     _max_observed_degree = std::max((uint32_t)max, _max_observed_degree);
     _has_built = true;
@@ -2152,7 +2154,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     if (L > scratch->get_L())
     {
         std::cout << "Attempting to expand query scratch_space. Was created "
-                  << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
+                      << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
         scratch->resize_for_new_L(L);
         std::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
@@ -2239,7 +2241,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     if (L > scratch->get_L())
     {
         std::cout << "Attempting to expand query scratch_space. Was created "
-                  << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
+                      << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
         scratch->resize_for_new_L(L);
         std::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
@@ -2255,7 +2257,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     else
     {
-        std::cout << "No filtered medoid found. exitting " << std::endl; // RKNOTE: If universal label found start there
+        std::cout << "No filtered medoid found. exitting "
+                      << std::endl; // RKNOTE: If universal label found start there
         throw diskann::ANNException("No filtered medoid found. exitting ", -1);
     }
     filter_vec.emplace_back(filter_label);
@@ -2332,7 +2335,7 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     if (L > scratch->get_L())
     {
         std::cout << "Attempting to expand query scratch_space. Was created "
-                  << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
+                      << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
         scratch->resize_for_new_L(L);
         std::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
@@ -2543,7 +2546,7 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
         if (_location_to_tag.size() + _delete_set->size() != _nd)
         {
             std::cerr << "Error: _location_to_tag.size (" << _location_to_tag.size() << ")  + _delete_set->size ("
-                      << _delete_set->size() << ") != _nd(" << _nd << ") ";
+                          << _delete_set->size() << ") != _nd(" << _nd << ") ";
             return consolidation_report(diskann::consolidation_report::status_code::INCONSISTENT_COUNT_ERROR, 0, 0, 0,
                                         0, 0, 0, 0);
         }
@@ -2699,7 +2702,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                 {
                     ++num_dangling;
                     std::cerr << "Error in compact_data(). _final_graph[" << old << "] has neighbor " << ngh_iter
-                              << " which is a location not associated with any tag." << std::endl;
+                                  << " which is a location not associated with any tag." << std::endl;
                 }
                 else
                 {
@@ -3175,8 +3178,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     std::cout << "Number of empty slots: " << _empty_slots.size() << std::endl;
     std::cout << std::boolalpha << "Data compacted: " << this->_data_compacted << std::endl;
     std::cout << "---------------------------------------------------------"
-                 "------------"
-              << std::endl;
+                     "------------"
+                  << std::endl;
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::count_nodes_at_bfs_levels()

@@ -112,8 +112,8 @@ size_t calculate_num_pq_chunks(double final_index_ram_limit, size_t points_num, 
             else
             {
                 std::cout << "Compress ratio: " << compress_ratio << " #new pq_chunks: " << chunks_by_cr
-                          << " is either zero or greater than num_pq_chunks: " << num_pq_chunks
-                          << ". num_pq_chunks is unchanged. " << std::endl;
+                              << " is either zero or greater than num_pq_chunks: " << num_pq_chunks
+                              << ". num_pq_chunks is unchanged. " << std::endl;
             }
         }
         else
@@ -127,7 +127,7 @@ size_t calculate_num_pq_chunks(double final_index_ram_limit, size_t points_num, 
     num_pq_chunks = num_pq_chunks > MAX_PQ_CHUNKS ? MAX_PQ_CHUNKS : num_pq_chunks;
 
     std::cout << "Compressing " << dim << "-dimensional data into " << num_pq_chunks << " bytes per vector."
-              << std::endl;
+                  << std::endl;
     return num_pq_chunks;
 }
 
@@ -135,8 +135,8 @@ template <typename T> T *generateRandomWarmup(uint64_t warmup_num, uint64_t warm
 {
     T *warmup = nullptr;
     warmup_num = 100000;
-    std::cout << "Generating random warmup file with dim " << warmup_dim << " and aligned dim " << warmup_aligned_dim
-              << std::flush;
+    std::cout << "Generating random warmup file with dim " << warmup_dim << " and aligned dim "
+                  << warmup_aligned_dim << std::flush;
     diskann::alloc_aligned(((void **)&warmup), warmup_num * warmup_aligned_dim * sizeof(T), 8 * sizeof(T));
     std::memset(warmup, 0, warmup_num * warmup_aligned_dim * sizeof(T));
     std::random_device rd;
@@ -165,8 +165,8 @@ T *load_warmup(MemoryMappedFiles &files, const std::string &cache_warmup_file, u
     {
         diskann::load_aligned_bin<T>(files, cache_warmup_file, warmup, warmup_num, file_dim, file_aligned_dim);
         std::cout << "In the warmup file: " << cache_warmup_file << " File dim: " << file_dim
-                  << " File aligned dim: " << file_aligned_dim << " Expected dim: " << warmup_dim
-                  << " Expected aligned dim: " << warmup_aligned_dim << std::endl;
+                      << " File aligned dim: " << file_aligned_dim << " Expected dim: " << warmup_dim
+                      << " Expected aligned dim: " << warmup_aligned_dim << std::endl;
 
         if (file_dim != warmup_dim || file_aligned_dim != warmup_aligned_dim)
         {
@@ -535,7 +535,7 @@ void breakup_dense_points(const std::string data_file, const std::string labels_
         }
     }
     std::cout << "fraction of dense points with >= " << density << " labels = " << (float)dense_pts / (float)npts
-              << std::endl;
+                  << std::endl;
 
     if (labels_per_point.size() != 0)
     {
@@ -625,8 +625,8 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     // TODO: Make this honest when there is filter support
     if (full_index_ram < ram_budget * 1024 * 1024 * 1024)
     {
-        std::cout << "Full index fits in RAM budget, should consume at most " << full_index_ram / (1024 * 1024 * 1024)
-                  << "GiBs, so building in one shot" << std::endl;
+        std::cout << "Full index fits in RAM budget, should consume at most "
+                      << full_index_ram / (1024 * 1024 * 1024) << "GiBs, so building in one shot" << std::endl;
 
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
                                                   .with_filter_list_size(Lf)
@@ -1037,18 +1037,18 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     if (param_list.size() < 5 || param_list.size() > 9)
     {
         std::cout << "Correct usage of parameters is R (max degree)\n"
-                     "L (indexing list size, better if >= R)\n"
-                     "B (RAM limit of final index in GB)\n"
-                     "M (memory limit while indexing)\n"
-                     "T (number of threads for indexing)\n"
-                     "B' (PQ bytes for disk index: optional parameter for "
-                     "very large dimensional data)\n"
-                     "reorder (set true to include full precision in data file"
-                     ": optional paramter, use only when using disk PQ\n"
-                     "build_PQ_byte (number of PQ bytes for inde build; set 0 to use "
-                     "full precision vectors)\n"
-                     "QD Quantized Dimension to overwrite the derived dim from B "
-                  << std::endl;
+                         "L (indexing list size, better if >= R)\n"
+                         "B (RAM limit of final index in GB)\n"
+                         "M (memory limit while indexing)\n"
+                         "T (number of threads for indexing)\n"
+                         "B' (PQ bytes for disk index: optional parameter for "
+                         "very large dimensional data)\n"
+                         "reorder (set true to include full precision in data file"
+                         ": optional paramter, use only when using disk PQ\n"
+                         "build_PQ_byte (number of PQ bytes for inde build; set 0 to use "
+                         "full precision vectors)\n"
+                         "QD Quantized Dimension to overwrite the derived dim from B "
+                      << std::endl;
         return -1;
     }
 
@@ -1164,7 +1164,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     }
 
     std::cout << "Starting index build: R=" << R << " L=" << L << " Query RAM budget: " << final_index_ram_limit
-              << " Indexing ram budget: " << indexing_ram_budget << " T: " << num_threads << std::endl;
+                  << " Indexing ram budget: " << indexing_ram_budget << " T: " << num_threads << std::endl;
 
     auto s = std::chrono::high_resolution_clock::now();
 
@@ -1216,7 +1216,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     }
 
     std::cout << "Compressing " << dim << "-dimensional data into " << num_pq_chunks << " bytes per vector."
-              << std::endl;
+                  << std::endl;
 
     generate_quantized_data<T>(data_file_to_use, pq_pivots_path, pq_compressed_vectors_path, compareMetric, p_val,
                                num_pq_chunks, use_opq, codebook_prefix);
