@@ -1187,32 +1187,33 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         for (auto &x : _pts_to_labels[location])
             filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
 
-        std::set<Neighbor> best_candidate_pool;
+        // std::set<Neighbor> best_candidate_pool;
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
                                _pts_to_labels[location], false);
-        for (auto filtered_neighbor : scratch->pool())
-        {
-            best_candidate_pool.insert(filtered_neighbor);
-        }
+        // for (auto filtered_neighbor : scratch->pool())
+        //{
+        //     best_candidate_pool.insert(filtered_neighbor);
+        // }
 
-        // clear scratch for finding unfiltered candidates
-        scratch->clear();
+        //// clear scratch for finding unfiltered candidates
+        // scratch->clear();
 
-        _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label, false);
+        //_data_store->get_vector(location, scratch->aligned_query());
+        // iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label,
+        // false);
 
-        for (auto unfiltered_neighbour : scratch->pool())
-        {
-            // insert if this neighbour is not already in best_candidate_pool
-            if (best_candidate_pool.find(unfiltered_neighbour) == best_candidate_pool.end())
-            {
-                best_candidate_pool.insert(unfiltered_neighbour);
-            }
-        }
+        // for (auto unfiltered_neighbour : scratch->pool())
+        //{
+        //     // insert if this neighbour is not already in best_candidate_pool
+        //     if (best_candidate_pool.find(unfiltered_neighbour) == best_candidate_pool.end())
+        //     {
+        //         best_candidate_pool.insert(unfiltered_neighbour);
+        //     }
+        // }
 
-        scratch->clear();
-        std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
+        // scratch->clear();
+        // std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
     }
 
     auto &pool = scratch->pool();
