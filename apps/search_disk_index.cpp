@@ -12,7 +12,7 @@
 #include "pq_flash_index.h"
 #include "timer.h"
 #include "percentile_stats.h"
-#include "../src/program_options_utils.hpp"
+#include "../include/program_options_utils.hpp"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
