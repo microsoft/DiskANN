@@ -150,7 +150,7 @@ int main(int argc, char **argv)
                     use_filters, label_file, universal_label, filter_threshold, Lf);
             else
             {
-                std::cerr << "Error. Unsupported data type" << std::endl;
+                diskann::cerr << "Error. Unsupported data type" << std::endl;
                 return -1;
             }
         }
@@ -170,7 +170,7 @@ int main(int argc, char **argv)
                                                         universal_label, filter_threshold, Lf);
             else
             {
-                std::cerr << "Error. Unsupported data type" << std::endl;
+                diskann::cerr << "Error. Unsupported data type" << std::endl;
                 return -1;
             }
         }
@@ -178,7 +178,7 @@ int main(int argc, char **argv)
     catch (const std::exception &e)
     {
         std::cout << std::string(e.what()) << std::endl;
-        std::cerr << "Index build failed." << std::endl;
+        diskann::cerr << "Index build failed." << std::endl;
         return -1;
     }
 }

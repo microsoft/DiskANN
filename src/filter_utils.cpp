@@ -37,7 +37,7 @@ void generate_label_indices(path input_data_path, path final_index_path_prefix, 
     // for each label, build an index on resp. points
     double total_indexing_time = 0.0, indexing_percentage = 0.0;
     std::cout.setstate(std::ios_base::failbit);
-    std::cout.setstate(std::ios_base::failbit);
+    diskann::cout.setstate(std::ios_base::failbit);
     for (const auto &lbl : all_labels)
     {
         path curr_label_input_data_path(input_data_path + "_" + lbl);
@@ -59,7 +59,7 @@ void generate_label_indices(path input_data_path, path final_index_path_prefix, 
         index.save(curr_label_index_path.c_str());
     }
     std::cout.clear();
-    std::cout.clear();
+    diskann::cout.clear();
 
     std::cout << "\nDone. Generated per-label indices in " << total_indexing_time << " seconds\n" << std::endl;
 }

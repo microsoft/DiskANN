@@ -5,6 +5,7 @@
 #include <malloc.h>
 #include <math_utils.h>
 #include <mkl.h>
+#include "logger.h"
 #include "utils.h"
 
 namespace math_utils
@@ -39,15 +40,15 @@ void rotate_data_randomly(float *data, size_t num_points, size_t dim, float *rot
     CBLAS_TRANSPOSE transpose = CblasNoTrans;
     if (transpose_rot)
     {
-        std::cout << "Transposing rotation matrix.." << std::flush;
+        diskann::cout << "Transposing rotation matrix.." << std::flush;
         transpose = CblasTrans;
     }
-    std::cout << "done Rotating data with random matrix.." << std::flush;
+    diskann::cout << "done Rotating data with random matrix.." << std::flush;
 
     cblas_sgemm(CblasRowMajor, CblasNoTrans, transpose, (MKL_INT)num_points, (MKL_INT)dim, (MKL_INT)dim, 1.0, data,
                 (MKL_INT)dim, rot_mat, (MKL_INT)dim, 0, new_mat, (MKL_INT)dim);
 
-    std::cout << "done." << std::endl;
+    diskann::cout << "done." << std::endl;
 }
 
 // calculate k closest centers to data of num_points * dim (row major)
@@ -67,7 +68,7 @@ void compute_closest_centers_in_block(const float *const data, const size_t num_
 {
     if (k > num_centers)
     {
-        std::cout << "ERROR: k (" << k << ") > num_center(" << num_centers << ")" << std::endl;
+        diskann::cout << "ERROR: k (" << k << ") > num_center(" << num_centers << ")" << std::endl;
         return;
     }
 
@@ -149,7 +150,7 @@ void compute_closest_centers(float *data, size_t num_points, size_t dim, float *
 {
     if (k > num_centers)
     {
-        std::cout << "ERROR: k (" << k << ") > num_center(" << num_centers << ")" << std::endl;
+        diskann::cout << "ERROR: k (" << k << ") > num_center(" << num_centers << ")" << std::endl;
         return;
     }
 
@@ -208,7 +209,7 @@ void compute_closest_centers(float *data, size_t num_points, size_t dim, float *
 void process_residuals(float *data_load, size_t num_points, size_t dim, float *cur_pivot_data, size_t num_centers,
                        uint32_t *closest_centers, bool to_subtract)
 {
-    std::cout << "Processing residuals of " << num_points << " points in " << dim << " dimensions using "
+    diskann::cout << "Processing residuals of " << num_points << " points in " << dim << " dimensions using "
                   << num_centers << " centers " << std::endl;
 #pragma omp parallel for schedule(static, 8192)
     for (int64_t n_iter = 0; n_iter < (int64_t)num_points; n_iter++)
@@ -339,7 +340,7 @@ float run_lloyds(float *data, size_t num_points, size_t dim, float *centers, con
         if (((i != 0) && ((old_residual - residual) / residual) < 0.00001) ||
             (residual < std::numeric_limits<float>::epsilon()))
         {
-            std::cout << "Residuals unchanged: " << old_residual << " becomes " << residual
+            diskann::cout << "Residuals unchanged: " << old_residual << " becomes " << residual
                           << ". Early termination." << std::endl;
             break;
         }
@@ -380,7 +381,7 @@ void kmeanspp_selecting_pivots(float *data, size_t num_points, size_t dim, float
 {
     if (num_points > 1 << 23)
     {
-        std::cout << "ERROR: n_pts " << num_points
+        diskann::cout << "ERROR: n_pts " << num_points
                       << " currently not supported for k-means++, maximum is "
                          "8388608. Falling back to random pivot "
                          "selection."

@@ -57,7 +57,7 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 
     if (nr != 4 && nr != 5)
     {
-        std::cout << "Error reading pq_pivots file " << pq_table_file
+        diskann::cout << "Error reading pq_pivots file " << pq_table_file
                       << ". Offsets dont contain correct metadata, # offsets = " << nr << ", but expecting " << 4
                       << " or " << 5;
         throw diskann::ANNException("Error reading pq_pivots file at offsets data.", -1, __FUNCSIG__, __FILE__,
@@ -66,13 +66,13 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 
     if (nr == 4)
     {
-        std::cout << "Offsets: " << file_offset_data[0] << " " << file_offset_data[1] << " " << file_offset_data[2]
+        diskann::cout << "Offsets: " << file_offset_data[0] << " " << file_offset_data[1] << " " << file_offset_data[2]
                       << " " << file_offset_data[3] << std::endl;
     }
     else if (nr == 5)
     {
         use_old_filetype = true;
-        std::cout << "Offsets: " << file_offset_data[0] << " " << file_offset_data[1] << " " << file_offset_data[2]
+        diskann::cout << "Offsets: " << file_offset_data[0] << " " << file_offset_data[1] << " " << file_offset_data[2]
                       << " " << file_offset_data[3] << file_offset_data[4] << std::endl;
     }
     else
@@ -89,7 +89,7 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 
     if ((nr != NUM_PQ_CENTROIDS))
     {
-        std::cout << "Error reading pq_pivots file " << pq_table_file << ". file_num_centers  = " << nr
+        diskann::cout << "Error reading pq_pivots file " << pq_table_file << ". file_num_centers  = " << nr
                       << " but expecting " << NUM_PQ_CENTROIDS << " centers";
         throw diskann::ANNException("Error reading pq_pivots file at pivots data.", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
@@ -105,7 +105,7 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 
     if ((nr != this->ndims) || (nc != 1))
     {
-        std::cerr << "Error reading centroids from pq_pivots file " << pq_table_file << ". file_dim  = " << nr
+        diskann::cerr << "Error reading centroids from pq_pivots file " << pq_table_file << ". file_dim  = " << nr
                       << ", file_cols = " << nc << " but expecting " << this->ndims << " entries in 1 dimension.";
         throw diskann::ANNException("Error reading pq_pivots file at centroid data.", -1, __FUNCSIG__, __FILE__,
                                     __LINE__);
@@ -124,13 +124,13 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 
     if (nc != 1 || (nr != num_chunks + 1 && num_chunks != 0))
     {
-        std::cerr << "Error loading chunk offsets file. numc: " << nc << " (should be 1). numr: " << nr
+        diskann::cerr << "Error loading chunk offsets file. numc: " << nc << " (should be 1). numr: " << nr
                       << " (should be " << num_chunks + 1 << " or 0 if we need to infer)" << std::endl;
         throw diskann::ANNException("Error loading chunk offsets file", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
     this->n_chunks = nr - 1;
-    std::cout << "Loaded PQ Pivots: #ctrs: " << NUM_PQ_CENTROIDS << ", #dims: " << this->ndims
+    diskann::cout << "Loaded PQ Pivots: #ctrs: " << NUM_PQ_CENTROIDS << ", #dims: " << this->ndims
                   << ", #chunks: " << this->n_chunks << std::endl;
 
     if (file_exists(rotmat_file))
@@ -142,7 +142,7 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 #endif
         if (nr != this->ndims || nc != this->ndims)
         {
-            std::cerr << "Error loading rotation matrix file" << std::endl;
+            diskann::cerr << "Error loading rotation matrix file" << std::endl;
             throw diskann::ANNException("Error loading rotation matrix file", -1, __FUNCSIG__, __FILE__, __LINE__);
         }
         use_rotation = true;
@@ -351,7 +351,7 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
 {
     if (num_pq_chunks > dim)
     {
-        std::cout << " Error: number of chunks more than dimension" << std::endl;
+        diskann::cout << " Error: number of chunks more than dimension" << std::endl;
         return -1;
     }
 
@@ -366,7 +366,7 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
         diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers, file_dim, METADATA_SIZE);
         if (file_dim == dim && file_num_centers == num_centers)
         {
-            std::cout << "PQ pivot file exists. Not generating again" << std::endl;
+            diskann::cout << "PQ pivot file exists. Not generating again" << std::endl;
             return -1;
         }
     }
@@ -459,7 +459,7 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
         std::unique_ptr<float[]> cur_data = std::make_unique<float[]>(num_train * cur_chunk_size);
         std::unique_ptr<uint32_t[]> closest_center = std::make_unique<uint32_t[]>(num_train);
 
-        std::cout << "Processing chunk " << i << " with dimensions [" << chunk_offsets[i] << ", "
+        diskann::cout << "Processing chunk " << i << " with dimensions [" << chunk_offsets[i] << ", "
                       << chunk_offsets[i + 1] << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, 65536)
@@ -491,7 +491,7 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
                                                                   chunk_offsets.size(), 1, cumul_bytes[2]);
     diskann::save_bin<size_t>(pq_pivots_path.c_str(), cumul_bytes.data(), cumul_bytes.size(), 1, 0);
 
-    std::cout << "Saved pq pivot data to " << pq_pivots_path << " of size " << cumul_bytes[cumul_bytes.size() - 1]
+    diskann::cout << "Saved pq pivot data to " << pq_pivots_path << " of size " << cumul_bytes[cumul_bytes.size() - 1]
                   << "B." << std::endl;
 
     return 0;
@@ -502,7 +502,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
 {
     if (num_pq_chunks > dim)
     {
-        std::cout << " Error: number of chunks more than dimension" << std::endl;
+        diskann::cout << " Error: number of chunks more than dimension" << std::endl;
         return -1;
     }
 
@@ -623,7 +623,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
             std::unique_ptr<float[]> cur_data = std::make_unique<float[]>(num_train * cur_chunk_size);
             std::unique_ptr<uint32_t[]> closest_center = std::make_unique<uint32_t[]>(num_train);
 
-            std::cout << "Processing chunk " << i << " with dimensions [" << chunk_offsets[i] << ", "
+            diskann::cout << "Processing chunk " << i << " with dimensions [" << chunk_offsets[i] << ", "
                           << chunk_offsets[i + 1] << ")" << std::endl;
 
 #pragma omp parallel for schedule(static, 65536)
@@ -699,7 +699,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
                                                                   chunk_offsets.size(), 1, cumul_bytes[2]);
     diskann::save_bin<size_t>(opq_pivots_path.c_str(), cumul_bytes.data(), cumul_bytes.size(), 1, 0);
 
-    std::cout << "Saved opq pivot data to " << opq_pivots_path << " of size " << cumul_bytes[cumul_bytes.size() - 1]
+    diskann::cout << "Saved opq pivot data to " << opq_pivots_path << " of size " << cumul_bytes[cumul_bytes.size() - 1]
                   << "B." << std::endl;
 
     std::string rotmat_path = opq_pivots_path + "_rotation_matrix.bin";
@@ -748,7 +748,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
 
         if (nr != 4)
         {
-            std::cout << "Error reading pq_pivots file " << pq_pivots_path
+            diskann::cout << "Error reading pq_pivots file " << pq_pivots_path
                           << ". Offsets dont contain correct metadata, # offsets = " << nr << ", but expecting 4.";
             throw diskann::ANNException("Error reading pq_pivots file at offsets data.", -1, __FUNCSIG__, __FILE__,
                                         __LINE__);
@@ -758,7 +758,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
 
         if ((nr != num_centers) || (nc != dim))
         {
-            std::cout << "Error reading pq_pivots file " << pq_pivots_path << ". file_num_centers  = " << nr
+            diskann::cout << "Error reading pq_pivots file " << pq_pivots_path << ". file_num_centers  = " << nr
                           << ", file_dim = " << nc << " but expecting " << num_centers << " centers in " << dim
                           << " dimensions.";
             throw diskann::ANNException("Error reading pq_pivots file at pivots data.", -1, __FUNCSIG__, __FILE__,
@@ -769,7 +769,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
 
         if ((nr != dim) || (nc != 1))
         {
-            std::cout << "Error reading pq_pivots file " << pq_pivots_path << ". file_dim  = " << nr
+            diskann::cout << "Error reading pq_pivots file " << pq_pivots_path << ". file_dim  = " << nr
                           << ", file_cols = " << nc << " but expecting " << dim << " entries in 1 dimension.";
             throw diskann::ANNException("Error reading pq_pivots file at centroid data.", -1, __FUNCSIG__, __FILE__,
                                         __LINE__);
@@ -779,7 +779,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
 
         if (nr != (uint64_t)num_pq_chunks + 1 || nc != 1)
         {
-            std::cout << "Error reading pq_pivots file at chunk offsets; file has nr=" << nr << ",nc=" << nc
+            diskann::cout << "Error reading pq_pivots file at chunk offsets; file has nr=" << nr << ",nc=" << nc
                           << ", expecting nr=" << num_pq_chunks + 1 << ", nc=1." << std::endl;
             throw diskann::ANNException("Error reading pq_pivots file at chunk offsets.", -1, __FUNCSIG__, __FILE__,
                                         __LINE__);
@@ -791,12 +791,12 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
             diskann::load_bin<float>(rotmat_path.c_str(), rotmat_tr, nr, nc);
             if (nr != (uint64_t)dim || nc != dim)
             {
-                std::cout << "Error reading rotation matrix file." << std::endl;
+                diskann::cout << "Error reading rotation matrix file." << std::endl;
                 throw diskann::ANNException("Error reading rotation matrix file.", -1, __FUNCSIG__, __FILE__, __LINE__);
             }
         }
 
-        std::cout << "Loaded PQ pivot information" << std::endl;
+        diskann::cout << "Loaded PQ pivot information" << std::endl;
     }
 
     std::ofstream compressed_file_writer(pq_compressed_vectors_path, std::ios::binary);
@@ -835,7 +835,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
         base_reader.read((char *)(block_data_T.get()), sizeof(T) * (cur_blk_size * dim));
         diskann::convert_types<T, float>(block_data_T.get(), block_data_tmp.get(), cur_blk_size, dim);
 
-        std::cout << "Processing points  [" << start_id << ", " << end_id << ").." << std::flush;
+        diskann::cout << "Processing points  [" << start_id << ", " << end_id << ").." << std::flush;
 
         for (size_t p = 0; p < cur_blk_size; p++)
         {
@@ -917,7 +917,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
 #ifdef SAVE_INFLATED_PQ
         inflated_file_writer.write((char *)(block_inflated_base.get()), cur_blk_size * dim * sizeof(float));
 #endif
-        std::cout << ".done." << std::endl;
+        diskann::cout << ".done." << std::endl;
     }
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
@@ -941,7 +941,7 @@ void generate_disk_quantized_data(const std::string &data_file_to_use, const std
 
     // instantiates train_data with random sample updates train_size
     gen_random_slice<T>(data_file_to_use.c_str(), p_val, train_data, train_size, train_dim);
-    std::cout << "Training data with " << train_size << " samples loaded." << std::endl;
+    diskann::cout << "Training data with " << train_size << " samples loaded." << std::endl;
 
     if (disk_pq_dims > train_dim)
         disk_pq_dims = train_dim;
@@ -971,7 +971,7 @@ void generate_quantized_data(const std::string &data_file_to_use, const std::str
     {
         // instantiates train_data with random sample updates train_size
         gen_random_slice<T>(data_file_to_use.c_str(), p_val, train_data, train_size, train_dim);
-        std::cout << "Training data with " << train_size << " samples loaded." << std::endl;
+        diskann::cout << "Training data with " << train_size << " samples loaded." << std::endl;
 
         bool make_zero_mean = true;
         if (compareMetric == diskann::Metric::INNER_PRODUCT)
@@ -993,7 +993,7 @@ void generate_quantized_data(const std::string &data_file_to_use, const std::str
     }
     else
     {
-        std::cout << "Skip Training with predefined pivots in: " << pq_pivots_path << std::endl;
+        diskann::cout << "Skip Training with predefined pivots in: " << pq_pivots_path << std::endl;
     }
     generate_pq_data_from_pivots<T>(data_file_to_use, NUM_PQ_CENTROIDS, (uint32_t)num_pq_chunks, pq_pivots_path,
                                     pq_compressed_vectors_path, use_opq);

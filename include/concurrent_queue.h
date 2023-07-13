@@ -88,7 +88,7 @@ template <typename T> class ConcurrentQueue
         {
             T ret = this->q.front();
             this->q.pop();
-            // std::cout << "thread_id: " << std::this_thread::get_id() <<
+            // diskann::cout << "thread_id: " << std::this_thread::get_id() <<
             // ", ctx: "
             // << ret.ctx << "\n";
             lk.unlock();

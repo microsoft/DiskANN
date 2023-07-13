@@ -154,7 +154,7 @@ int main(int argc, char **argv)
 
     try
     {
-        std::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
+        diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
                       << "  #threads: " << num_threads << std::endl;
 
         size_t data_num, data_dim;
@@ -196,7 +196,7 @@ int main(int argc, char **argv)
     catch (const std::exception &e)
     {
         std::cout << std::string(e.what()) << std::endl;
-        std::cerr << "Index build failed." << std::endl;
+        diskann::cerr << "Index build failed." << std::endl;
         return -1;
     }
 }
