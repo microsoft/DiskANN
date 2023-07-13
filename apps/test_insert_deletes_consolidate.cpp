@@ -345,6 +345,14 @@ int main(int argc, char **argv)
 
         // Required parameters
         po::options_description required_configs("Required");
+        required_configs.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                                       program_options_utils::DATA_TYPE_DESCRIPTION);
+        required_configs.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                                       program_options_utils::DISTANCE_FUNCTION_DESCRIPTION);
+        required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
+                                       program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
+        required_configs.add_options()("data_path", po::value<std::string>(&data_path)->required(),
+                                       program_options_utils::INPUT_DATA_PATH);
         required_configs.add_options()("points_to_skip", po::value<uint64_t>(&points_to_skip)->required(),
                                        "Skip these first set of points from file");
         required_configs.add_options()("beginning_index_size", po::value<uint64_t>(&beginning_index_size)->required(),
