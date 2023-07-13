@@ -45,9 +45,10 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     _filterIndexingQueueSize = indexParams.filter_list_size;
     _filtered_index = indexParams.has_labels;
 
+    const size_t total_internal_points = _max_points + _num_frozen_pts;
     if (dynamic_index && _filtered_index)
     {
-        _pts_to_labels.resize(_max_points);
+        _pts_to_labels.resize(total_internal_points);
     }
 
     uint32_t num_threads_indx = indexParams.num_threads;
@@ -166,9 +167,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
         uint32_t num_threads_indx = index_config.index_write_params->num_threads;
         uint32_t num_scratch_spaces = index_config.search_threads + num_threads_indx;
 
-        if (_filtered_index)
+        const size_t total_internal_points = _max_points + _num_frozen_pts;
+        if (_dynamic_index && _filtered_index)
         {
-            _pts_to_labels.resize(_max_points);
+            _pts_to_labels.resize(total_internal_points);
         }
 
         initialize_query_scratch(num_scratch_spaces, index_config.initial_search_list_size, _indexingQueueSize,
@@ -1187,33 +1189,32 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         for (auto &x : _pts_to_labels[location])
             filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
 
-        // std::set<Neighbor> best_candidate_pool;
+        std::set<Neighbor> best_candidate_pool;
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
                                _pts_to_labels[location], false);
-        // for (auto filtered_neighbor : scratch->pool())
-        //{
-        //     best_candidate_pool.insert(filtered_neighbor);
-        // }
+        for (auto filtered_neighbor : scratch->pool())
+        {
+            best_candidate_pool.insert(filtered_neighbor);
+        }
 
-        //// clear scratch for finding unfiltered candidates
-        // scratch->clear();
+        // clear scratch for finding unfiltered candidates
+        scratch->clear();
 
-        //_data_store->get_vector(location, scratch->aligned_query());
-        // iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label,
-        // false);
+        _data_store->get_vector(location, scratch->aligned_query());
+        iterate_to_fixed_point(scratch->aligned_query(), Lindex, init_ids, scratch, false, unused_filter_label, false);
 
-        // for (auto unfiltered_neighbour : scratch->pool())
-        //{
-        //     // insert if this neighbour is not already in best_candidate_pool
-        //     if (best_candidate_pool.find(unfiltered_neighbour) == best_candidate_pool.end())
-        //     {
-        //         best_candidate_pool.insert(unfiltered_neighbour);
-        //     }
-        // }
+        for (auto unfiltered_neighbour : scratch->pool())
+        {
+            // insert if this neighbour is not already in best_candidate_pool
+            if (best_candidate_pool.find(unfiltered_neighbour) == best_candidate_pool.end())
+            {
+                best_candidate_pool.insert(unfiltered_neighbour);
+            }
+        }
 
-        // scratch->clear();
-        // std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
+        scratch->pool().clear();
+        std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
     }
 
     auto &pool = scratch->pool();
@@ -3043,6 +3044,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                 auto fz_location = (int)(_max_points - 1) + (int)_labels.size(); // as first _fz_point
                 _label_to_medoid_id[label] = (uint32_t)fz_location;
                 _label_counts[label] = 1; // increment its count (not sure why we have this)
+                _pts_to_labels[fz_location] = {label};
 
                 _data_store->set_vector(fz_location, point); // copy the vector to fz_point for consistency.
             }
