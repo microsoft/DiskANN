@@ -2946,6 +2946,17 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     reposition_points((uint32_t)_nd, (uint32_t)_max_points, (uint32_t)_num_frozen_pts);
     _start = (uint32_t)_max_points;
+
+    if (_filtered_index && _dynamic_index)
+    {
+        // here fz points are the medoids -> so _label_to_medoid_id should be updated.
+        for (auto &[key, val] : _label_to_medoid_id)
+        {
+            if (key == 0)
+                continue;
+            _label_to_medoid_id[key] = (val - (uint32_t)_nd) + (uint32_t)_max_points;
+        }
+    }
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::resize(size_t new_max_points)
