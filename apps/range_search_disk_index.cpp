@@ -15,7 +15,7 @@
 #include "pq_flash_index.h"
 #include "partition.h"
 #include "timer.h"
-#include "../include/program_options_utils.hpp"
+#include "program_options_utils.hpp"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>

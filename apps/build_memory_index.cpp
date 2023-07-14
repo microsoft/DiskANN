@@ -7,7 +7,7 @@
 
 #include "index.h"
 #include "utils.h"
-#include "../include/program_options_utils.hpp"
+#include "program_options_utils.hpp"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>

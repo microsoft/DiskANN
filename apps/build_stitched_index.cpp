@@ -18,7 +18,7 @@
 #include "memory_mapper.h"
 #include "parameters.h"
 #include "utils.h"
-#include "../include/program_options_utils.hpp"
+#include "program_options_utils.hpp"
 
 namespace po = boost::program_options;
 typedef std::tuple<std::vector<std::vector<uint32_t>>, uint64_t> stitch_indices_return_values;

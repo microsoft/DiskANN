@@ -11,7 +11,7 @@
 #include <future>
 
 #include "utils.h"
-#include "../include/program_options_utils.hpp"
+#include "program_options_utils.hpp"
 #include "index_factory.h"
 
 #ifndef _WINDOWS

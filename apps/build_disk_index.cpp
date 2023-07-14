@@ -9,7 +9,7 @@
 #include "math_utils.h"
 #include "index.h"
 #include "partition.h"
-#include "../include/program_options_utils.hpp"
+#include "program_options_utils.hpp"
 
 namespace po = boost::program_options;
 
