@@ -42,7 +42,7 @@ jobs:
           dist/bin/test_streaming_scenario --data_type float --dist_fn l2 --data_path data/rand_float_10D_10K_norm1.0.bin --universal_label 0 --label_file data/zipf_labels_50_10K.txt --index_path_prefix data/index_stream -R 64 --FilteredLbuild 200 -L 50 --alpha 1.2 --insert_threads 1 --consolidate_threads 1 --max_points_to_insert 10000 --active_window 4000 --consolidate_interval 2000 --start_point_norm 3.2 --num_start_points 50
           
           echo "Computing groundtruth with filter"
-          dist/bin/compute_groundtruth_for_filters --data_type float --universal_label 0 --filter_label 2 --dist_fn l2 --base_file data/index_stream.after-streaming-act4000-cons2000-max10000.data --query_file data/rand_float_10D_1K_norm1.0.bin --K 100 --gt_file data/gt100_base-act4000-cons2000-max10000_2 --label_file data/zipf_labels_50_10K.txt --tags_file data/index_stream.after-streaming-act4000-cons2000-max10000.tags
+          dist/bin/compute_groundtruth_for_filters --data_type float --universal_label 0 --filter_label 2 --dist_fn l2 --base_file data/index_stream.after-streaming-act4000-cons2000-max10000.data --query_file data/rand_float_10D_1K_norm1.0.bin --K 100 --gt_file data/gt100_base-act4000-cons2000-max10000_2 --label_file data/zipf_labels_50_10K.txt
           
           echo "Searching with filter"
           dist/bin/search_memory_index --data_type float --dist_fn l2 --filter_label 2 --fail_if_recall_below 70 --index_path_prefix data/index_stream.after-streaming-act4000-cons2000-max10000 --result_path data/res_stream --query_file data/rand_float_10D_1K_norm1.0.bin --gt_file data/gt100_base-act4000-cons2000-max10000_2 -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
