@@ -371,7 +371,7 @@ int main(int argc, char **argv)
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);
         optional_configs.add_options()("fail_if_recall_below",
                                        po::value<float>(&fail_if_recall_below)->default_value(0.0f),
-                                       program_options_utils::FAIl_IF_RECALL_BELOW);
+                                       program_options_utils::FAIL_IF_RECALL_BELOW);
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);

@@ -318,7 +318,7 @@ int main(int argc, char **argv)
                                        "Whether to search with external identifiers (tags). Default false.");
         optional_configs.add_options()("fail_if_recall_below",
                                        po::value<float>(&fail_if_recall_below)->default_value(0.0f),
-                                       program_options_utils::FAIl_IF_RECALL_BELOW);
+                                       program_options_utils::FAIL_IF_RECALL_BELOW);
 
         // Output controls
         po::options_description output_controls("Output controls");
