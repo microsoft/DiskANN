@@ -1,8 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#ifndef DISKANN_PROGRAM_OPTIONS_UTILS_CPP
-#define DISKANN_PROGRAM_OPTIONS_UTILS_CPP
+#pragma once
 
 #include <string.h>
 
@@ -67,5 +66,3 @@ const char *UNIVERSAL_LABEL =
 const char *FILTERED_LBUILD = "Build complexity for filtered points, higher value results in better graphs";
 
 } // namespace program_options_utils
-
-#endif // DISKANN_PROGRAM_OPTIONS_UTILS_CPP
