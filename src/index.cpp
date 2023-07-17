@@ -2682,13 +2682,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
     if (_filtered_index && _dynamic_index)
     {
-        // here fz points are the medoids -> so _label_to_medoid_id should be updated.
-        for (auto &[key, val] : _label_to_medoid_id)
-        {
-            if (key == 0)
-                continue;
-            _label_to_medoid_id[key] = (val - (uint32_t)_max_points) + (uint32_t)_nd;
-        }
+        reposition_medoids((uint32_t)_max_points, (uint32_t)_nd);
     }
 }
 
@@ -2946,6 +2940,29 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     reposition_points((uint32_t)_nd, (uint32_t)_max_points, (uint32_t)_num_frozen_pts);
     _start = (uint32_t)_max_points;
+
+    if (_filtered_index && _dynamic_index)
+    {
+        reposition_medoids((uint32_t)_nd, (uint32_t)_max_points);
+    }
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::reposition_medoids(uint32_t old_location_start, uint32_t new_location_start)
+{
+    if (!_filtered_index || !_dynamic_index)
+    {
+        throw ANNException("Error: To reposition medoids, the index needs to be filtered and dynamic. because here the "
+                           "frozen points are treated as medoids.",
+                           -1);
+    }
+    // here fz points are the medoids -> so _label_to_medoid_id should be updated.
+    for (auto &[key, val] : _label_to_medoid_id)
+    {
+        if (key == 0)
+            continue;
+        _label_to_medoid_id[key] = new_location_start + (val - old_location_start);
+    }
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::resize(size_t new_max_points)
