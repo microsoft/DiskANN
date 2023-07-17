@@ -21,7 +21,7 @@ const std::string make_program_description(const char *executable_name, const ch
 const char *DATA_TYPE_DESCRIPTION = "data type, one of {int8, uint8, float} - float is single precision (32 bit)";
 const char *DISTANCE_FUNCTION_DESCRIPTION =
     "distance function <l2/mips/fast_l2/cosine>.  'fast l2' and 'mips' only support data_type float";
-const char *INDEX_PATH_PREFIX_DESCRIPTION = "Path prefix to the index, e.ge '/mnt/data/my_ann_index'";
+const char *INDEX_PATH_PREFIX_DESCRIPTION = "Path prefix to the index, e.g. '/mnt/data/my_ann_index'";
 const char *RESULT_PATH_DESCRIPTION =
     "Path prefix for saving results of the queries, e.g. '/mnt/data/query_file_X.bin'";
 const char *QUERY_FILE_DESCRIPTION = "Query file in binary format, e.g. '/mnt/data/query_file_X.bin'";
@@ -53,7 +53,7 @@ const char *NUMBER_OF_NODES_TO_CACHE = "Number of BFS nodes around medoid(s) to 
 const char *BEAMWIDTH = "Beamwidth for search. Set 0 to optimize internally.  Default value: 2";
 const char *MAX_BUILD_DEGREE = "Maximum graph degree";
 const char *GRAPH_BUILD_COMPLEXITY = "Build complexity, higher value results in better graphs";
-const char *GRAPH_BUILD_ALPHA = "alpha controls density and diameter of graph, set 1 for sparse graph, 1.2 or 1.4 for "
+const char *GRAPH_BUILD_ALPHA = "Alpha controls density and diameter of graph, set 1 for sparse graph, 1.2 or 1.4 for "
                                 "denser graphs with lower diameter";
 const char *BUIlD_GRAPH_PQ_BYTES = "Number of PQ bytes to build the index; 0 for full precision build";
 const char *USE_OPQ = "Use Optimized Product Quantization (OPQ).";
