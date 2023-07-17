@@ -2957,11 +2957,11 @@ void Index<T, TagT, LabelT>::reposition_medoids(uint32_t old_location_start, uin
                            -1);
     }
     // here fz points are the medoids -> so _label_to_medoid_id should be updated.
-    for (auto &[key, val] : _label_to_medoid_id)
+    for (auto &[label, medoid_id] : _label_to_medoid_id)
     {
-        if (key == 0)
+        if (label == 0)
             continue;
-        _label_to_medoid_id[key] = new_location_start + (val - old_location_start);
+        _label_to_medoid_id[label] = new_location_start + (medoid_id - old_location_start);
     }
 }
 
