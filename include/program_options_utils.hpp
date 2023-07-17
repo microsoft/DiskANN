@@ -46,9 +46,14 @@ const char *GROUND_TRUTH_FILE_DESCRIPTION =
                                           // this file
 const char *NUMBER_THREADS_DESCRIPTION = "Number of threads used for building index.  Defaults to number of logical "
                                          "processor cores on your this machine returned by omp_get_num_procs()";
-const char *FAIL_IF_RECALL_BELOW = "If set to a value >0 and <100%, program returns -1 if best recall found is below "
-                                   "this threshold. "; // does it continue running or die immediately?  Will I still get
-                                                       // my results even if the return code is -1?
+const char *FAIL_IF_RECALL_BELOW =
+    "Value between 0 (inclusive) and 100 (exclusive) indicating the recall tolerance percentage threshold before "
+    "program fails with a non-zero exit code.  The default value of 0 means that the program will complete "
+    "successfully with any recall value.  A non-zero value indicates the floor for acceptable recall values.  If the "
+    "calculated recall value is below this threshold then the program will write out the results but return a non-zero "
+    "exit code as a signal that the recall was not acceptable."; // does it continue running or die immediately?  Will I
+                                                                 // still get my results even if the return code is -1?
+
 const char *NUMBER_OF_NODES_TO_CACHE = "Number of BFS nodes around medoid(s) to cache.  Default value: 0";
 const char *BEAMWIDTH = "Beamwidth for search. Set 0 to optimize internally.  Default value: 2";
 const char *MAX_BUILD_DEGREE = "Maximum graph degree";
