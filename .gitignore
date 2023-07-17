@@ -375,3 +375,6 @@ venv*/**
 *.swp
 
 gperftools
+
+# Rust
+rust/target
