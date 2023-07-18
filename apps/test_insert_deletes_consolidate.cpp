@@ -148,7 +148,6 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
     bool enable_tags = true;
     using TagT = uint32_t;
-    using LabelT = uint32_t;
     auto data_type = diskann_type_to_name<T>();
     auto tag_type = diskann_type_to_name<TagT>();
     diskann::IndexConfig index_config = diskann::IndexConfigBuilder()
