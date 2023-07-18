@@ -24,3 +24,6 @@ jobs:
   dynamic:
     name: Dynamic
     uses: ./.github/workflows/dynamic.yml
+  python:
+    name: Python
+    uses: ./.github/workflows/build-python.yml
