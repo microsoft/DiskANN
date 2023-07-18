@@ -31,7 +31,8 @@ const char *SEARCH_LIST_DESCRIPTION =
     "time while performing a query.  This can also be described as the size of the working set at query time.  This "
     "must be greater than or equal to the number of results/neighbors to return (K in the white paper).  Corresponds "
     "to L in the DiskANN white paper.";
-const char *INPUT_DATA_PATH = "Input data file in bin format.  This is the file you want to build the index over.";
+const char *INPUT_DATA_PATH = "Input data file in bin format.  This is the file you want to build the index over.  "
+                              "File format:  Shape of the vector followed by the vector of embeddings as binary data.";
 
 // Optional parameters
 const char *FILTER_LABEL_DESCRIPTION =
