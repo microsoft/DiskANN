@@ -94,7 +94,6 @@ void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, 
         std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
         size_t num_failed = 0;
-        std::vector<LabelT> empty_labels;
 #pragma omp parallel for num_threads((int32_t)insert_threads) schedule(dynamic) reduction(+ : num_failed)
         for (int64_t j = start; j < (int64_t)end; j++)
         {
@@ -106,8 +105,7 @@ void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, 
             }
             else
             {
-                insert_result =
-                    index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j), empty_labels);
+                insert_result = index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j));
             }
 
             if (insert_result != 0)

@@ -212,6 +212,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                const uint32_t L, std::any &indices,
                                                                float *distances) override;
 
+    virtual int _insert_point(const DataType &data_point, const TagType tag) override;
     virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;
 
     virtual int _lazy_delete(const TagType &tag) override;
