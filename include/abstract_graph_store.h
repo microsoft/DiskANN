@@ -32,6 +32,11 @@ class AbstractGraphStore
     virtual uint32_t get_start() = 0;
     virtual void set_start(uint32_t start) = 0;
 
+    virtual size_t get_active_points() = 0;
+    virtual void set_active_points(size_t active_points) = 0;
+
+    virtual std::vector<std::vector<uint32_t>> &get_graph() = 0;
+
     size_t get_max_points()
     {
         return _capacity;

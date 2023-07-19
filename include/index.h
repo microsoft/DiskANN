@@ -19,6 +19,7 @@
 #include "windows_customizations.h"
 #include "scratch.h"
 #include "in_mem_data_store.h"
+#include "in_mem_graph_store.h"
 #include "abstract_index.h"
 
 #define OVERHEAD_FACTOR 1.1
@@ -55,7 +56,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const bool enable_tags = false, const bool concurrent_consolidate = false,
                             const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
                             const bool use_opq = false, const size_t num_frozen_pts = 0,
-                            const bool init_data_store = true);
+                            const bool init_injectables = true);
 
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
@@ -64,8 +65,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const bool concurrent_consolidate = false, const bool pq_dist_build = false,
                             const size_t num_pq_chunks = 0, const bool use_opq = false);
 
-    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store
-                            /* std::unique_ptr<AbstractGraphStore> graph_store*/);
+    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store,
+                            std::unique_ptr<AbstractGraphStore> graph_store);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -333,6 +334,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Data
     std::unique_ptr<AbstractDataStore<T>> _data_store;
+    // Graph
+    std::unique_ptr<AbstractGraphStore> _graph_store;
+
     char *_opt_graph = nullptr;
 
     // Graph related data structures

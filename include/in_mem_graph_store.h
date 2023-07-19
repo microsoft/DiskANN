@@ -11,7 +11,7 @@ namespace diskann
 class InMemGraphStore : public AbstractGraphStore
 {
   public:
-    InMemGraphStore(const size_t max_pts);
+    InMemGraphStore(const size_t max_pts, const size_t frozen_points);
 
     int load(const std::string &index_path_prefix);
     int store(const std::string &index_path_prefix);
@@ -26,6 +26,11 @@ class InMemGraphStore : public AbstractGraphStore
     virtual uint32_t get_start() override;
     virtual void set_start(uint32_t start) override;
 
+    virtual size_t get_active_points() override;
+    virtual void set_active_points(size_t active_points) override;
+
+    virtual std::vector<std::vector<uint32_t>> &get_graph() override;
+
   protected:
     virtual location_t load_impl(const std::string &filename, size_t expected_num_points);
 #ifdef EXEC_ENV_OLS
@@ -35,10 +40,11 @@ class InMemGraphStore : public AbstractGraphStore
     int save_graph(const std::string &index_path_prefix);
 
   private:
-    size_t _num_frozen_pts = 0;
     size_t _max_range_of_loaded_graph = 0;
     uint32_t _max_observed_degree = 0;
     uint32_t _start = 0;
+    size_t _active_points = 0; // _nd
+    size_t _num_frozen_pts;    // should be owned by this class
 
     // graph data structure
     std::vector<std::vector<uint32_t>> _final_graph;

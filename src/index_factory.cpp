@@ -75,9 +75,16 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStor
     return nullptr;
 }
 
-std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStoreStrategy, size_t size)
+std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStoreStrategy strategy, size_t size,
+                                                                       size_t frozen_points)
 {
-    return std::make_unique<InMemGraphStore>(size);
+    switch (strategy)
+    {
+    case MEMORY:
+        return std::make_unique<InMemGraphStore>(size, frozen_points);
+    default:
+        throw ANNException("Error : Current GraphStoreStratagy is not supported.", -1);
+    }
 }
 
 template <typename data_type, typename tag_type, typename label_type>
@@ -85,9 +92,10 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
 {
     size_t num_points = _config->max_points;
     size_t dim = _config->dimension;
-    // auto graph_store = construct_graphstore(_config->graph_strategy, num_points);
     auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim);
-    return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, std::move(data_store));
+    auto graph_store = construct_graphstore(_config->graph_strategy, num_points, _config->num_frozen_pts);
+    return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, std::move(data_store),
+                                                                             std::move(graph_store));
 }
 
 std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &data_type, const std::string &tag_type,

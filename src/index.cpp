@@ -55,7 +55,7 @@ template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
                               const bool enable_tags, const bool concurrent_consolidate, const bool pq_dist_build,
                               const size_t num_pq_chunks, const bool use_opq, const size_t num_frozen_pts,
-                              const bool init_data_store)
+                              const bool init_injectables)
     : _dist_metric(m), _dim(dim), _max_points(max_points), _num_frozen_pts(num_frozen_pts),
       _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
       _pq_dist(pq_dist_build), _use_opq(use_opq), _num_pq_chunks(num_pq_chunks),
@@ -99,11 +99,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
     }
 
-    _start = (uint32_t)_max_points;
-
-    _final_graph.resize(total_internal_points);
-
-    if (init_data_store)
+    if (init_injectables)
     {
         // Issue #374: data_store is injected from index factory. Keeping this for backward compatibility.
         // distance is owned by data_store
@@ -123,7 +119,16 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         // Note: moved this to factory, keeping this for backward compatibility.
         _data_store =
             std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
+
+        // init graph store
+        _graph_store = std::make_unique<diskann::InMemGraphStore>(_max_points, _num_frozen_pts);
     }
+
+    _start = (uint32_t)_max_points; // retire
+    _graph_store->set_start((uint32_t)_max_points);
+
+    _final_graph.resize(total_internal_points); // retire
+    _graph_store->get_graph().resize(total_internal_points);
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
 
@@ -135,7 +140,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
 }
 
 template <typename T, typename TagT, typename LabelT>
-Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store)
+Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store,
+                              std::unique_ptr<AbstractGraphStore> graph_store)
     : Index(index_config.metric, index_config.dimension, index_config.max_points, index_config.dynamic_index,
             index_config.enable_tags, index_config.concurrent_consolidate, index_config.pq_dist_build,
             index_config.num_pq_chunks, index_config.use_opq, index_config.num_frozen_pts, false)
@@ -143,6 +149,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
     _data_store = std::move(data_store);
     _distance.reset(_data_store->get_dist_fn());
+
+    _graph_store = std::move(graph_store);
 
     // enable delete by default for dynamic index
     if (_dynamic_index)
@@ -216,9 +224,14 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
         diskann::cout << "Not saving tags as they are not enabled." << std::endl;
         return 0;
     }
+
+    auto nd = _graph_store->get_active_points();
+    auto num_frozen_pts = _graph_store->get_num_frozen_points();
+    auto start = _graph_store->get_start();
+
     size_t tag_bytes_written;
-    TagT *tag_data = new TagT[_nd + _num_frozen_pts];
-    for (uint32_t i = 0; i < _nd; i++)
+    TagT *tag_data = new TagT[nd + num_frozen_pts];
+    for (uint32_t i = 0; i < nd; i++)
     {
         TagT tag;
         if (_location_to_tag.try_get(i, tag))
@@ -231,13 +244,13 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
             std::memset((char *)&tag_data[i], 0, sizeof(TagT));
         }
     }
-    if (_num_frozen_pts > 0)
+    if (num_frozen_pts > 0)
     {
-        std::memset((char *)&tag_data[_start], 0, sizeof(TagT) * _num_frozen_pts);
+        std::memset((char *)&tag_data[start], 0, sizeof(TagT) * num_frozen_pts);
     }
     try
     {
-        tag_bytes_written = save_bin<TagT>(tags_file, tag_data, _nd + _num_frozen_pts, 1);
+        tag_bytes_written = save_bin<TagT>(tags_file, tag_data, nd + num_frozen_pts, 1);
     }
     catch (std::system_error &e)
     {

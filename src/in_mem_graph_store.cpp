@@ -7,7 +7,8 @@
 namespace diskann
 {
 
-InMemGraphStore::InMemGraphStore(const size_t max_pts) : AbstractGraphStore(max_pts)
+InMemGraphStore::InMemGraphStore(const size_t max_pts, const size_t frozen_points)
+    : AbstractGraphStore(max_pts), _num_frozen_pts(frozen_points)
 {
 }
 
@@ -165,7 +166,7 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
                       << " is greater than max_points: " << max_points
                       << " Setting max points to: " << expected_max_points << std::endl;
         _final_graph.resize(expected_max_points + _num_frozen_pts);
-        // TODO: use a setter ? _max_points = expected_max_points;
+        // _max_points = expected_max_points;
     }
 
     size_t bytes_read = vamana_metadata_size;
@@ -211,14 +212,14 @@ int InMemGraphStore::save_graph(const std::string &index_path_prefix)
     size_t index_size = 24;
     uint32_t max_degree = 0;
     out.write((char *)&index_size, sizeof(uint64_t));
-    out.write((char *)&_max_observed_degree, sizeof(uint32_t)); // need it
-    uint32_t ep_u32 = _start;                                   // need it
+    out.write((char *)&_max_observed_degree, sizeof(uint32_t));
+    uint32_t ep_u32 = _start; // .................???????????
     out.write((char *)&ep_u32, sizeof(uint32_t));
     out.write((char *)&_num_frozen_pts, sizeof(size_t)); // need it
     // Note: at this point, either _nd == _max_points or any frozen points have
     // been temporarily moved to _nd, so _nd + _num_frozen_points is the valid
     // location limit.
-    for (uint32_t i = 0; i < _nd + _num_frozen_pts; i++) // find out how to pass nd_here
+    for (uint32_t i = 0; i < _active_points + _num_frozen_pts; i++)
     {
         uint32_t GK = (uint32_t)_final_graph[i].size();
         out.write((char *)&GK, sizeof(uint32_t));
@@ -259,5 +260,19 @@ void InMemGraphStore::set_start(uint32_t start)
 {
     this->_start = start;
 };
+
+size_t InMemGraphStore::get_active_points()
+{
+    return _active_points;
+};
+void InMemGraphStore::set_active_points(size_t active_points)
+{
+    _active_points = active_points;
+}
+
+std::vector<std::vector<uint32_t>> &InMemGraphStore::get_graph()
+{
+    return _final_graph;
+}
 
 } // namespace diskann
