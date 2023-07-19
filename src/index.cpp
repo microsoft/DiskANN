@@ -120,15 +120,14 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         // Note: moved this to factory, keeping this for backward compatibility.
         _data_store =
             std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
-
-        // init graph store
-        _graph_store = std::make_unique<diskann::InMemGraphStore>(_max_points, num_fz_points);
     }
+    // init graph store => TODO : graph store should be injected
+    _graph_store = std::make_unique<diskann::InMemGraphStore>(_max_points, num_fz_points);
 
-    //_start = (uint32_t)_max_points; // retire
+    //_start = (uint32_t)_max_points;
     _graph_store->set_start((uint32_t)_max_points);
 
-    //_final_graph.resize(total_internal_points); // retire
+    //_final_graph.resize(total_internal_points);
     _graph_store->get_graph().resize(total_internal_points);
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
@@ -151,7 +150,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
     _data_store = std::move(data_store);
     _distance.reset(_data_store->get_dist_fn());
 
-    _graph_store = std::move(graph_store);
+    // _graph_store = std::move(graph_store);
 
     // enable delete by default for dynamic index
     if (_dynamic_index)
