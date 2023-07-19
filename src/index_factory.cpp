@@ -80,7 +80,7 @@ std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStor
 {
     switch (strategy)
     {
-    case MEMORY:
+    case MEM:
         return std::make_unique<InMemGraphStore>(size, frozen_points);
     default:
         throw ANNException("Error : Current GraphStoreStratagy is not supported.", -1);

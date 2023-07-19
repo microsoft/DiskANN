@@ -5,12 +5,14 @@ namespace diskann
 {
 enum DataStoreStrategy
 {
-    MEMORY
+    MEMORY,
 };
 
 enum GraphStoreStrategy
 {
+    MEM,
 };
+
 struct IndexConfig
 {
     DataStoreStrategy data_strategy;
