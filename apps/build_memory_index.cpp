@@ -7,6 +7,7 @@
 
 #include "index.h"
 #include "utils.h"
+#include "program_options_utils.hpp"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -72,47 +73,50 @@ int main(int argc, char **argv)
     float alpha;
     bool use_pq_build, use_opq;
 
-    po::options_description desc{"Arguments"};
+    po::options_description desc{
+        program_options_utils::make_program_description("build_memory_index", "Build a memory-based DiskANN index.")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
-        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
-        desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
-                           "distance function <l2/mips/cosine>");
-        desc.add_options()("data_path", po::value<std::string>(&data_path)->required(),
-                           "Input data file in bin format");
-        desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
-                           "Path prefix for saving index file components");
-        desc.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64), "Maximum graph degree");
-        desc.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
-                           "Build complexity, higher value results in better graphs");
-        desc.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           "alpha controls density and diameter of graph, set "
-                           "1 for sparse graph, "
-                           "1.2 or 1.4 for denser graphs with lower diameter");
-        desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
-                           "Number of threads used for building index (defaults to "
-                           "omp_get_num_procs())");
-        desc.add_options()("build_PQ_bytes", po::value<uint32_t>(&build_PQ_bytes)->default_value(0),
-                           "Number of PQ bytes to build the index; 0 for full precision "
-                           "build");
-        desc.add_options()("use_opq", po::bool_switch()->default_value(false),
-                           "Set true for OPQ compression while using PQ "
-                           "distance comparisons for "
-                           "building the index, and false for PQ compression");
-        desc.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
-                           "Input label file in txt format for Filtered Index search. "
-                           "The file should contain comma separated filters for each node "
-                           "with each line corresponding to a graph node");
-        desc.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
-                           "Universal label, if using it, only in conjunction with "
-                           "labels_file");
-        desc.add_options()("FilteredLbuild", po::value<uint32_t>(&Lf)->default_value(0),
-                           "Build complexity for filtered points, higher value "
-                           "results in better graphs");
-        desc.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
-                           "Storage type of Labels <uint/ushort>, default value is uint which "
-                           "will consume memory 4 bytes per filter");
+
+        // Required parameters
+        po::options_description required_configs("Required");
+        required_configs.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                                       program_options_utils::DATA_TYPE_DESCRIPTION);
+        required_configs.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                                       program_options_utils::DISTANCE_FUNCTION_DESCRIPTION);
+        required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
+                                       program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
+        required_configs.add_options()("data_path", po::value<std::string>(&data_path)->required(),
+                                       program_options_utils::INPUT_DATA_PATH);
+
+        // Optional parameters
+        po::options_description optional_configs("Optional");
+        optional_configs.add_options()("num_threads,T",
+                                       po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
+                                       program_options_utils::NUMBER_THREADS_DESCRIPTION);
+        optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64),
+                                       program_options_utils::MAX_BUILD_DEGREE);
+        optional_configs.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
+                                       program_options_utils::GRAPH_BUILD_COMPLEXITY);
+        optional_configs.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
+                                       program_options_utils::GRAPH_BUILD_ALPHA);
+        optional_configs.add_options()("build_PQ_bytes", po::value<uint32_t>(&build_PQ_bytes)->default_value(0),
+                                       program_options_utils::BUIlD_GRAPH_PQ_BYTES);
+        optional_configs.add_options()("use_opq", po::bool_switch()->default_value(false),
+                                       program_options_utils::USE_OPQ);
+        optional_configs.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
+                                       program_options_utils::LABEL_FILE);
+        optional_configs.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
+                                       program_options_utils::UNIVERSAL_LABEL);
+
+        optional_configs.add_options()("FilteredLbuild", po::value<uint32_t>(&Lf)->default_value(0),
+                                       program_options_utils::FILTERED_LBUILD);
+        optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
+                                       program_options_utils::LABEL_TYPE_DESCRIPTION);
+
+        // Merge required and optional parameters
+        desc.add(required_configs).add(optional_configs);
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
