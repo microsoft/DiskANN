@@ -382,6 +382,19 @@ int main(int argc, char **argv)
             "Set the number of random start (frozen) points to use when "
             "inserting and searching");
 
+        optional_configs.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
+                                       "Input label file in txt format for Filtered Index search. "
+                                       "The file should contain comma separated filters for each node "
+                                       "with each line corresponding to a graph node");
+        optional_configs.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
+                                       "Universal label, if using it, only in conjunction with labels_file");
+        optional_configs.add_options()("FilteredLbuild,Lf", po::value<uint32_t>(&Lf)->default_value(0),
+                                       "Build complexity for filtered points, higher value "
+                                       "results in better graphs");
+        optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
+                                       "Storage type of Labels <uint/ushort>, default value is uint which "
+                                       "will consume memory 4 bytes per filter");
+
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
 
