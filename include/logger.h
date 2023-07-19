@@ -14,8 +14,13 @@
 
 namespace diskann
 {
+#ifdef ENABLE_CUSTOM_LOGGER
 DISKANN_DLLEXPORT extern std::basic_ostream<char> cout;
 DISKANN_DLLEXPORT extern std::basic_ostream<char> cerr;
+#else
+using std::cerr;
+using std::cout;
+#endif
 
 enum class DISKANN_DLLEXPORT LogLevel
 {

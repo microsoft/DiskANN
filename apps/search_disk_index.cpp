@@ -12,6 +12,7 @@
 #include "pq_flash_index.h"
 #include "timer.h"
 #include "percentile_stats.h"
+#include "program_options_utils.hpp"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -318,48 +319,62 @@ int main(int argc, char **argv)
     bool use_reorder_data = false;
     float fail_if_recall_below = 0.0f;
 
-    po::options_description desc{"Arguments"};
+    po::options_description desc{
+        program_options_utils::make_program_description("search_disk_index", "Searches on-disk DiskANN indexes")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
-        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
-        desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
-                           "distance function <l2/mips/fast_l2>");
-        desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
-                           "Path prefix to the index");
-        desc.add_options()("result_path", po::value<std::string>(&result_path_prefix)->required(),
-                           "Path prefix for saving results of the queries");
-        desc.add_options()("query_file", po::value<std::string>(&query_file)->required(),
-                           "Query file in binary format");
-        desc.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
-                           "ground truth file for the queryset");
-        desc.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(), "Number of neighbors to be returned");
-        desc.add_options()("search_list,L", po::value<std::vector<uint32_t>>(&Lvec)->multitoken(),
-                           "List of L values of search");
-        desc.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2),
-                           "Beamwidth for search. Set 0 to optimize internally.");
-        desc.add_options()("num_nodes_to_cache", po::value<uint32_t>(&num_nodes_to_cache)->default_value(0),
-                           "Beamwidth for search");
-        desc.add_options()("search_io_limit",
-                           po::value<uint32_t>(&search_io_limit)->default_value(std::numeric_limits<uint32_t>::max()),
-                           "Max #IOs for search");
-        desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
-                           "Number of threads used for building index (defaults to "
-                           "omp_get_num_procs())");
-        desc.add_options()("use_reorder_data", po::bool_switch()->default_value(false),
-                           "Include full precision data in the index. Use only in "
-                           "conjuction with compressed data on SSD.");
-        desc.add_options()("filter_label", po::value<std::string>(&filter_label)->default_value(std::string("")),
-                           "Filter Label for Filtered Search");
-        desc.add_options()("query_filters_file",
-                           po::value<std::string>(&query_filters_file)->default_value(std::string("")),
-                           "Filter file for Queries for Filtered Search ");
-        desc.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
-                           "Storage type of Labels <uint/ushort>, default value is uint which "
-                           "will consume memory 4 bytes per filter");
-        desc.add_options()("fail_if_recall_below", po::value<float>(&fail_if_recall_below)->default_value(0.0f),
-                           "If set to a value >0 and <100%, program returns -1 if best recall "
-                           "found is below this threshold. ");
+
+        // Required parameters
+        po::options_description required_configs("Required");
+        required_configs.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                                       program_options_utils::DATA_TYPE_DESCRIPTION);
+        required_configs.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                                       program_options_utils::DISTANCE_FUNCTION_DESCRIPTION);
+        required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
+                                       program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
+        required_configs.add_options()("result_path", po::value<std::string>(&result_path_prefix)->required(),
+                                       program_options_utils::RESULT_PATH_DESCRIPTION);
+        required_configs.add_options()("query_file", po::value<std::string>(&query_file)->required(),
+                                       program_options_utils::QUERY_FILE_DESCRIPTION);
+        required_configs.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(),
+                                       program_options_utils::NUMBER_OF_RESULTS_DESCRIPTION);
+        required_configs.add_options()("search_list,L",
+                                       po::value<std::vector<uint32_t>>(&Lvec)->multitoken()->required(),
+                                       program_options_utils::SEARCH_LIST_DESCRIPTION);
+
+        // Optional parameters
+        po::options_description optional_configs("Optional");
+        optional_configs.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
+                                       program_options_utils::GROUND_TRUTH_FILE_DESCRIPTION);
+        optional_configs.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2),
+                                       program_options_utils::BEAMWIDTH);
+        optional_configs.add_options()("num_nodes_to_cache", po::value<uint32_t>(&num_nodes_to_cache)->default_value(0),
+                                       program_options_utils::NUMBER_OF_NODES_TO_CACHE);
+        optional_configs.add_options()(
+            "search_io_limit",
+            po::value<uint32_t>(&search_io_limit)->default_value(std::numeric_limits<uint32_t>::max()),
+            "Max #IOs for search.  Default value: uint32::max()");
+        optional_configs.add_options()("num_threads,T",
+                                       po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
+                                       program_options_utils::NUMBER_THREADS_DESCRIPTION);
+        optional_configs.add_options()("use_reorder_data", po::bool_switch()->default_value(false),
+                                       "Include full precision data in the index. Use only in "
+                                       "conjuction with compressed data on SSD.  Default value: false");
+        optional_configs.add_options()("filter_label",
+                                       po::value<std::string>(&filter_label)->default_value(std::string("")),
+                                       program_options_utils::FILTER_LABEL_DESCRIPTION);
+        optional_configs.add_options()("query_filters_file",
+                                       po::value<std::string>(&query_filters_file)->default_value(std::string("")),
+                                       program_options_utils::FILTERS_FILE_DESCRIPTION);
+        optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
+                                       program_options_utils::LABEL_TYPE_DESCRIPTION);
+        optional_configs.add_options()("fail_if_recall_below",
+                                       po::value<float>(&fail_if_recall_below)->default_value(0.0f),
+                                       program_options_utils::FAIL_IF_RECALL_BELOW);
+
+        // Merge required and optional parameters
+        desc.add(required_configs).add(optional_configs);
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

@@ -122,8 +122,8 @@ class DynamicMemoryIndex:
         :param dimensions: The vector dimensionality of this index. All new vectors inserted must be the same
             dimensionality.
         :type dimensions: int
-        :param max_points: Capacity of the data store for future insertions
-        :type max_points: int
+        :param max_vectors: Capacity of the data store including space for future insertions
+        :type max_vectors: int
         :param graph_degree: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
             result in larger indices and longer indexing times, but better search quality.
         :type graph_degree: int

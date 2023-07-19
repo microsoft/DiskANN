@@ -11,6 +11,7 @@
 
 namespace diskann
 {
+#ifdef ENABLE_CUSTOM_LOGGER
 class ANNStreamBuf : public std::basic_streambuf<char>
 {
   public:
@@ -36,30 +37,25 @@ class ANNStreamBuf : public std::basic_streambuf<char>
     int flush();
     void logImpl(char *str, int numchars);
 
-// Why the two buffer-sizes? If we are running normally, we are basically
-// interacting with a character output system, so we short-circuit the
-// output process by keeping an empty buffer and writing each character
-// to stdout/stderr. But if we are running in OLS, we have to take all
-// the text that is written to diskann::cout/diskann:cerr, consolidate it
-// and push it out in one-shot, because the OLS infra does not give us
-// character based output. Therefore, we use a larger buffer that is large
-// enough to store the longest message, and continuously add characters
-// to it. When the calling code outputs a std::endl or std::flush, sync()
-// will be called and will output a log level, component name, and the text
-// that has been collected. (sync() is also called if the buffer is full, so
-// overflows/missing text are not a concern).
-// This implies calling code _must_ either print std::endl or std::flush
-// to ensure that the message is written immediately.
-#ifdef ENABLE_CUSTOM_LOGGER
+    // Why the two buffer-sizes? If we are running normally, we are basically
+    // interacting with a character output system, so we short-circuit the
+    // output process by keeping an empty buffer and writing each character
+    // to stdout/stderr. But if we are running in OLS, we have to take all
+    // the text that is written to diskann::cout/diskann:cerr, consolidate it
+    // and push it out in one-shot, because the OLS infra does not give us
+    // character based output. Therefore, we use a larger buffer that is large
+    // enough to store the longest message, and continuously add characters
+    // to it. When the calling code outputs a std::endl or std::flush, sync()
+    // will be called and will output a log level, component name, and the text
+    // that has been collected. (sync() is also called if the buffer is full, so
+    // overflows/missing text are not a concern).
+    // This implies calling code _must_ either print std::endl or std::flush
+    // to ensure that the message is written immediately.
+
     static const int BUFFER_SIZE = 1024;
-#else
-    // Allocating an arbitrarily small buffer here because the overflow() and
-    // other function implementations push the BUFFER_SIZE chars into the
-    // buffer before flushing to fwrite.
-    static const int BUFFER_SIZE = 4;
-#endif
 
     ANNStreamBuf(const ANNStreamBuf &);
     ANNStreamBuf &operator=(const ANNStreamBuf &);
 };
+#endif
 } // namespace diskann
