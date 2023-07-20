@@ -15,7 +15,7 @@ version = "0.5.0.rc4"
 
 description = "DiskANN Python extension module"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = {text = "MIT License"}
 dependencies = [
     "numpy==1.25"
