@@ -148,6 +148,7 @@ if __name__ == "__main__":
 
     if args.json_timings_output is not None:
         import json
+        timings['log_file'] = args.json_timings_output
         with open(args.json_timings_output, "w") as f:
             json.dump(timings, f)
 
