@@ -3,14 +3,14 @@
 
 namespace diskann
 {
-enum DataStoreStrategy
+enum class DataStoreStrategy
 {
-    MEMORY,
+    MEMORY
 };
 
-enum GraphStoreStrategy
+enum class GraphStoreStrategy
 {
-    MEM,
+    MEMORY
 };
 
 struct IndexConfig

@@ -163,7 +163,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                                             .with_data_type(data_type)
                                             .with_tag_type(tag_type)
                                             .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
-                                            .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEM)
+                                            .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
                                             .is_enable_tags(enable_tags)
                                             .is_concurrent_consolidate(concurrent)
                                             .build();

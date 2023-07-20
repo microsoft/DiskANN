@@ -75,7 +75,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       .with_dimension(query_dim)
                       .with_max_points(0)
                       .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
-                      .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEM)
+                      .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
                       .with_data_type(diskann_type_to_name<T>())
                       .with_label_type(diskann_type_to_name<LabelT>())
                       .with_tag_type(diskann_type_to_name<TagT>())

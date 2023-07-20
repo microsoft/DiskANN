@@ -57,7 +57,7 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStor
     std::shared_ptr<Distance<T>> distance;
     switch (strategy)
     {
-    case MEMORY:
+    case DataStoreStrategy::MEMORY:
         if (_config->metric == diskann::Metric::COSINE && std::is_same<T, float>::value)
         {
             distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
@@ -80,7 +80,7 @@ std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStor
 {
     switch (strategy)
     {
-    case MEM:
+    case GraphStoreStrategy::MEMORY:
         return std::make_unique<InMemGraphStore>(size, frozen_points);
     default:
         throw ANNException("Error : Current GraphStoreStratagy is not supported.", -1);
