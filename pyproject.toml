@@ -14,7 +14,7 @@ name = "diskannpy"
 version = "0.5.0.rc4"
 
 description = "DiskANN Python extension module"
-readme = "README.md"
+readme = "python/README.md"
 requires-python = ">=3.9"
 license = {text = "MIT License"}
 dependencies = [
