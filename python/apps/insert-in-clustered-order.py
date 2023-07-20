@@ -49,7 +49,7 @@ def insert_and_search(
     )
 
     i = 0
-    timer = utils.timer()
+    timer = utils.Timer()
     for c in range(num_clusters):
         cluster_index_range = range(offsets[c], offsets[c + 1])
         cluster_indices = np.array(permutation[cluster_index_range], dtype=np.uintc)

@@ -18,7 +18,23 @@ def insert_and_search(
     num_insert_threads,
     num_search_threads,
     gt_file,
-):
+) -> dict[str, float]:
+    """
+
+    :param dtype_str:
+    :param indexdata_file:
+    :param querydata_file:
+    :param Lb:
+    :param graph_degree:
+    :param K:
+    :param Ls:
+    :param num_insert_threads:
+    :param num_search_threads:
+    :param gt_file:
+    :return: Dictionary of timings.  Key is the event and value is the number of seconds the event took
+    """
+    timer_results: dict[str, float] = {}
+
     npts, ndims = utils.get_bin_metadata(indexdata_file)
 
     if dtype_str == "float":
@@ -43,20 +59,26 @@ def insert_and_search(
         raise ValueError("data_type must be float, int8 or uint8")
 
     tags = np.zeros(npts, dtype=np.uintc)
-    timer = utils.timer()
+    timer = utils.Timer()
     for i in range(npts):
         tags[i] = i + 1
     index.batch_insert(data, tags, num_insert_threads)
-    print('batch_insert complete in', timer.elapsed(), 's')
+    compute_seconds = timer.elapsed()
+    print('batch_insert complete in', compute_seconds, 's')
+    timer_results["batch_insert_seconds"] = compute_seconds
 
     delete_tags = np.random.choice(
         np.array(range(1, npts + 1, 1), dtype=np.uintc),
         size=int(0.5 * npts),
         replace=False
     )
+
+    timer.reset()
     for tag in delete_tags:
         index.mark_deleted(tag)
-    print('mark deletion completed in', timer.elapsed(), 's')
+    compute_seconds = timer.elapsed()
+    timer_results['mark_deletion_seconds', compute_seconds]
+    print('mark deletion completed in', compute_seconds, 's')
 
     index.consolidate_delete()
     print('consolidation completed in', timer.elapsed(), 's')
