@@ -35,6 +35,8 @@ def insert_and_search(
     """
     timer_results: dict[str, float] = {}
 
+    method_timer: utils.Timer = utils.Timer()
+
     npts, ndims = utils.get_bin_metadata(indexdata_file)
 
     if dtype_str == "float":
@@ -77,24 +79,39 @@ def insert_and_search(
     for tag in delete_tags:
         index.mark_deleted(tag)
     compute_seconds = timer.elapsed()
-    timer_results['mark_deletion_seconds', compute_seconds]
+    timer_results['mark_deletion_seconds'] = compute_seconds
     print('mark deletion completed in', compute_seconds, 's')
 
+    timer.reset()
     index.consolidate_delete()
-    print('consolidation completed in', timer.elapsed(), 's')
+    compute_seconds = timer.elapsed()
+    print('consolidation completed in', compute_seconds, 's')
+    timer_results['consolidation_completed_seconds'] = compute_seconds
 
     deleted_data = data[delete_tags - 1, :]
 
+    timer.reset()
     index.batch_insert(deleted_data, delete_tags, num_insert_threads)
-    print('re-insertion completed in', timer.elapsed(), 's')
+    compute_seconds = timer.elapsed()
+    print('re-insertion completed in', compute_seconds, 's')
+    timer_results['re-insertion_seconds'] = compute_seconds
 
+    timer.reset()
     tags, dists = index.batch_search(queries, K, Ls, num_search_threads)
-    print('Batch searched', queries.shape[0], ' queries in ', timer.elapsed(), 's')
+    compute_seconds = timer.elapsed()
+    print('Batch searched', queries.shape[0], ' queries in ', compute_seconds, 's')
+    timer_results['batch_searched_seconds'] = compute_seconds
 
     res_ids = tags - 1
     if gt_file != "":
+        timer.reset()
         recall = utils.calculate_recall_from_gt_file(K, res_ids, gt_file)
         print(f"recall@{K} is {recall}")
+        timer_results['recall_computed_seconds'] = timer.elapsed()
+
+    timer_results['total_time_seconds'] = method_timer.elapsed()
+
+    return timer_results
 
 
 if __name__ == "__main__":
@@ -113,9 +130,10 @@ if __name__ == "__main__":
     parser.add_argument("-TS", "--num_search_threads", default=8, type=int)
     parser.add_argument("-K", default=10, type=int)
     parser.add_argument("--gt_file", default="")
+    parser.add_argument("--json_timings_output", required=False, default=None, help="File to write out timings to as JSON.  If not specified, timings will not be written out.")
     args = parser.parse_args()
 
-    insert_and_search(
+    timings = insert_and_search(
         args.data_type,
         args.indexdata_file,
         args.querydata_file,
@@ -127,6 +145,11 @@ if __name__ == "__main__":
         args.num_search_threads,  # search args
         args.gt_file,
     )
+
+    if args.json_timings_output is not None:
+        import json
+        with open(args.json_timings_output, "w") as f:
+            json.dump(timings, f)
 
 """
 An ingest optimized example with SIFT1M

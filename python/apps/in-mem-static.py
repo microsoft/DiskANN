@@ -43,6 +43,8 @@ def build_and_search(
     """
     timer_results: dict[str, float] = {}
 
+    method_timer: utils.Timer = utils.Timer()
+
     if dtype_str == "float":
         dtype = np.single
     elif dtype_str == "int8":
@@ -97,6 +99,8 @@ def build_and_search(
         recall = utils.calculate_recall_from_gt_file(K, ids, gt_file)
         print(f"recall@{K} is {recall}")
         timer_results["recall_seconds"] = recall_timer.elapsed()
+
+    timer_results['total_time_seconds'] = method_timer.elapsed()
 
     return timer_results
 
