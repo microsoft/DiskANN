@@ -122,13 +122,9 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
             std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
     }
     // init graph store => TODO : graph store should be injected
-    _graph_store = std::make_unique<diskann::InMemGraphStore>(_max_points, num_fz_points);
-
-    //_start = (uint32_t)_max_points;
+    _graph_store = std::make_unique<diskann::InMemGraphStore>(total_internal_points, num_fz_points);
     _graph_store->set_start((uint32_t)_max_points);
-
-    //_final_graph.resize(total_internal_points);
-    _graph_store->get_graph().resize(total_internal_points);
+    _graph_store->resize_graph(total_internal_points);
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
 
@@ -951,7 +947,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             if (_dynamic_index)
                 _locks[n].lock();
-            for (auto id : _graph_store->get_graph()[n])
+            for (auto id : _graph_store->get_neighbours(n))
             {
                 assert(id < _max_points + _graph_store->get_num_frozen_points());
 
@@ -1225,7 +1221,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
         bool prune_needed = false;
         {
             LockGuard guard(_locks[des]);
-            auto &des_pool = _graph_store->get_graph()[des];
+            auto &des_pool = _graph_store->get_neighbours(des);
             if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end())
             {
                 if (des_pool.size() < (uint64_t)(GRAPH_SLACK_FACTOR * range))
@@ -1266,7 +1262,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
             {
                 LockGuard guard(_locks[des]);
 
-                _graph_store->get_graph()[des] = new_out_neighbors;
+                _graph_store->set_neighbours(des, new_out_neighbors);
             }
         }
     }
@@ -1318,7 +1314,8 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
 
     for (size_t p = 0; p < _graph_store->get_active_points(); p++)
     {
-        _graph_store->get_graph()[p].reserve((size_t)(std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));
+        _graph_store->get_neighbours((location_t)p)
+            .reserve((size_t)(std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));
     }
 
     diskann::Timer link_timer;
@@ -1343,9 +1340,10 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
         }
         {
             LockGuard guard(_locks[node]);
-            _graph_store->get_graph()[node].reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
-            _graph_store->get_graph()[node] = pruned_list;
-            assert(_graph_store->get_graph()[node].size() <= _indexingRange);
+            _graph_store->get_neighbours((location_t)node)
+                .reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+            _graph_store->set_neighbours(node, pruned_list);
+            assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
         }
 
         inter_insert(node, pruned_list, scratch);
@@ -1365,7 +1363,7 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
         auto node = visit_order[node_ctr];
-        if (_graph_store->get_graph()[node].size() > _indexingRange)
+        if (_graph_store->get_neighbours((location_t)node).size() > _indexingRange)
         {
             ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
             auto scratch = manager.scratch_space();
@@ -1374,7 +1372,7 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
             std::vector<Neighbor> dummy_pool(0);
             std::vector<uint32_t> new_out_neighbors;
 
-            for (auto cur_nbr : _graph_store->get_graph()[node])
+            for (auto cur_nbr : _graph_store->get_neighbours((location_t)node))
             {
                 if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != node)
                 {
@@ -1385,9 +1383,9 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
             }
             prune_neighbors(node, dummy_pool, new_out_neighbors, scratch);
 
-            _graph_store->get_graph()[node].clear();
+            _graph_store->get_neighbours((location_t)node).clear();
             for (auto id : new_out_neighbors)
-                _graph_store->get_graph()[node].emplace_back(id);
+                _graph_store->get_neighbours((location_t)node).emplace_back(id);
         }
     }
     if (_graph_store->get_active_points() > 0)
@@ -1411,7 +1409,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
     {
         if ((size_t)node < _graph_store->get_active_points() || (size_t)node >= _max_points)
         {
-            if (_graph_store->get_graph()[node].size() > range)
+            if (_graph_store->get_neighbours((location_t)node).size() > range)
             {
                 tsl::robin_set<uint32_t> dummy_visited(0);
                 std::vector<Neighbor> dummy_pool(0);
@@ -1420,7 +1418,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
                 ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
                 auto scratch = manager.scratch_space();
 
-                for (auto cur_nbr : _graph_store->get_graph()[node])
+                for (auto cur_nbr : _graph_store->get_neighbours((location_t)node))
                 {
                     if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != node)
                     {
@@ -1431,9 +1429,9 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
                 }
 
                 prune_neighbors((uint32_t)node, dummy_pool, range, maxc, alpha, new_out_neighbors, scratch);
-                _graph_store->get_graph()[node].clear();
+                _graph_store->get_neighbours((location_t)node).clear();
                 for (auto id : new_out_neighbors)
-                    _graph_store->get_graph()[node].emplace_back(id);
+                    _graph_store->get_neighbours((location_t)node).emplace_back(id);
             }
         }
     }
@@ -1444,7 +1442,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
     {
         if (i < _graph_store->get_active_points() || i >= _max_points)
         {
-            const std::vector<uint32_t> &pool = _graph_store->get_graph()[i];
+            const std::vector<uint32_t> &pool = _graph_store->get_neighbours((location_t)i);
             max = (std::max)(max, pool.size());
             min = (std::min)(min, pool.size());
             total += pool.size();
@@ -1575,7 +1573,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
     size_t max = 0, min = SIZE_MAX, total = 0, cnt = 0;
     for (size_t i = 0; i < _graph_store->get_active_points(); i++)
     {
-        auto &pool = _graph_store->get_graph()[i];
+        auto &pool = _graph_store->get_neighbours((location_t)i);
         max = std::max(max, pool.size());
         min = std::min(min, pool.size());
         total += pool.size();
@@ -2346,7 +2344,7 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
         std::unique_lock<non_recursive_mutex> adj_list_lock;
         if (_conc_consolidate)
             adj_list_lock = std::unique_lock<non_recursive_mutex>(_locks[loc]);
-        adj_list = _graph_store->get_graph()[loc];
+        adj_list = _graph_store->get_neighbours((location_t)loc);
     }
 
     bool modify = false;
@@ -2363,7 +2361,7 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
             std::unique_lock<non_recursive_mutex> ngh_lock;
             if (_conc_consolidate)
                 ngh_lock = std::unique_lock<non_recursive_mutex>(_locks[ngh]);
-            for (auto j : _graph_store->get_graph()[ngh])
+            for (auto j : _graph_store->get_neighbours((location_t)ngh))
                 if (j != loc && old_delete_set.find(j) == old_delete_set.end())
                     expanded_nodes_set.insert(j);
         }
@@ -2374,9 +2372,9 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
         if (expanded_nodes_set.size() <= range)
         {
             std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
-            _graph_store->get_graph()[loc].clear();
+            _graph_store->get_neighbours((location_t)loc).clear();
             for (auto &ngh : expanded_nodes_set)
-                _graph_store->get_graph()[loc].push_back(ngh);
+                _graph_store->get_neighbours((location_t)loc).push_back(ngh);
         }
         else
         {
@@ -2391,7 +2389,7 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
             occlude_list((uint32_t)loc, expanded_nghrs_vec, alpha, range, maxc, occlude_list_output, scratch,
                          &old_delete_set);
             std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
-            _graph_store->get_graph()[loc] = occlude_list_output;
+            _graph_store->set_neighbours((location_t)loc, occlude_list_output);
         }
     }
 }
@@ -2569,8 +2567,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         if ((new_location[old] < _max_points) // If point continues to exist
             || (old >= _max_points && old < _max_points + _graph_store->get_num_frozen_points()))
         {
-            new_adj_list.reserve(_graph_store->get_graph()[old].size());
-            for (auto ngh_iter : _graph_store->get_graph()[old])
+            new_adj_list.reserve(_graph_store->get_neighbours((location_t)old).size());
+            for (auto ngh_iter : _graph_store->get_neighbours((location_t)old))
             {
                 if (empty_locations.find(ngh_iter) != empty_locations.end())
                 {
@@ -2583,20 +2581,20 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                     new_adj_list.push_back(new_location[ngh_iter]);
                 }
             }
-            _graph_store->get_graph()[old].swap(new_adj_list);
+            _graph_store->get_neighbours((location_t)old).swap(new_adj_list);
 
             // Move the data and adj list to the correct position
             if (new_location[old] != old)
             {
                 assert(new_location[old] < old);
-                _graph_store->get_graph()[new_location[old]].swap(_graph_store->get_graph()[old]);
+                _graph_store->get_neighbours(new_location[old]).swap(_graph_store->get_neighbours((location_t)old));
 
                 _data_store->copy_vectors(old, new_location[old], 1);
             }
         }
         else
         {
-            _graph_store->get_graph()[old].clear();
+            _graph_store->get_neighbours((location_t)old).clear();
         }
     }
     diskann::cerr << "#dangling references after data compaction: " << num_dangling << std::endl;
@@ -2615,7 +2613,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     for (size_t old = _graph_store->get_active_points(); old < _max_points; ++old)
     {
-        _graph_store->get_graph()[old].clear();
+        _graph_store->get_neighbours((location_t)old).clear();
     }
     _empty_slots.clear();
     for (auto i = _graph_store->get_active_points(); i < _max_points; i++)
@@ -2706,7 +2704,7 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
     const uint32_t location_delta = new_location_start - old_location_start;
 
     for (uint32_t i = 0; i < _max_points + _graph_store->get_num_frozen_points(); i++)
-        for (auto &loc : _graph_store->get_graph()[i])
+        for (auto &loc : _graph_store->get_neighbours((location_t)i))
             if (loc >= old_location_start && loc < old_location_start + num_locations)
                 loc += location_delta;
 
@@ -2723,9 +2721,9 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
         // to avoid modifying locations that are yet to be copied.
         for (uint32_t loc_offset = 0; loc_offset < num_locations; loc_offset++)
         {
-            assert(_graph_store->get_graph()[new_location_start + loc_offset].empty());
-            _graph_store->get_graph()[new_location_start + loc_offset].swap(
-                _graph_store->get_graph()[old_location_start + loc_offset]);
+            assert(_graph_store->get_neighbours(new_location_start + loc_offset).empty());
+            _graph_store->get_neighbours(new_location_start + loc_offset)
+                .swap(_graph_store->get_neighbours(old_location_start + loc_offset));
         }
 
         // If ranges are overlapping, make sure not to clear the newly copied
@@ -2742,9 +2740,9 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
         // to avoid modifying locations that are yet to be copied.
         for (uint32_t loc_offset = num_locations; loc_offset > 0; loc_offset--)
         {
-            assert(_graph_store->get_graph()[new_location_start + loc_offset - 1u].empty());
-            _graph_store->get_graph()[new_location_start + loc_offset - 1u].swap(
-                _graph_store->get_graph()[old_location_start + loc_offset - 1u]);
+            assert(_graph_store->get_neighbours(new_location_start + loc_offset - 1u).empty());
+            _graph_store->get_neighbours(new_location_start + loc_offset - 1u)
+                .swap(_graph_store->get_neighbours(old_location_start + loc_offset - 1u));
         }
 
         // If ranges are overlapping, make sure not to clear the newly copied
@@ -2781,7 +2779,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     assert(_empty_slots.size() == 0); // should not resize if there are empty slots.
 
     _data_store->resize((location_t)new_internal_points);
-    _graph_store->get_graph().resize(new_internal_points);
+    _graph_store->resize_graph(new_internal_points);
     _locks = std::vector<non_recursive_mutex>(new_internal_points);
 
     if (_graph_store->get_num_frozen_points() != 0)
@@ -2911,17 +2909,17 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
             tlock.lock();
 
         LockGuard guard(_locks[location]);
-        _graph_store->get_graph()[location].clear();
-        _graph_store->get_graph()[location].reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
+        _graph_store->get_neighbours(location).clear();
+        _graph_store->get_neighbours(location).reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
 
         for (auto link : pruned_list)
         {
             if (_conc_consolidate)
                 if (!_location_to_tag.contains(link))
                     continue;
-            _graph_store->get_graph()[location].emplace_back(link);
+            _graph_store->get_neighbours(location).emplace_back(link);
         }
-        assert(_graph_store->get_graph()[location].size() <= _indexingRange);
+        assert(_graph_store->get_neighbours(location).size() <= _indexingRange);
 
         if (_conc_consolidate)
             tlock.unlock();
@@ -3053,7 +3051,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     diskann::cout << "------------------- Index object: " << (uint64_t)this << " -------------------" << std::endl;
     diskann::cout << "Number of points: " << _graph_store->get_active_points() << std::endl;
-    diskann::cout << "Graph size: " << _graph_store->get_graph().size() << std::endl;
+    diskann::cout << "Graph size: " << _graph_store->get_total_points() << std::endl;
     diskann::cout << "Location to tag size: " << _location_to_tag.size() << std::endl;
     diskann::cout << "Tag to location size: " << _tag_to_location.size() << std::endl;
     diskann::cout << "Number of empty slots: " << _empty_slots.size() << std::endl;
@@ -3091,7 +3089,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             break;
         for (auto node : bfs_sets[l])
         {
-            for (auto nghbr : _graph_store->get_graph()[node])
+            for (auto nghbr : _graph_store->get_neighbours((location_t)node))
             {
                 if (!visited.test(nghbr))
                 {
@@ -3136,13 +3134,13 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         std::memcpy(cur_node_offset + sizeof(float), cur_vec, _data_len - sizeof(float));
 
         cur_node_offset += _data_len;
-        uint32_t k = (uint32_t)_graph_store->get_graph()[i].size();
+        uint32_t k = (uint32_t)_graph_store->get_neighbours(i).size();
         std::memcpy(cur_node_offset, &k, sizeof(uint32_t));
-        std::memcpy(cur_node_offset + sizeof(uint32_t), _graph_store->get_graph()[i].data(), k * sizeof(uint32_t));
-        std::vector<uint32_t>().swap(_graph_store->get_graph()[i]);
+        std::memcpy(cur_node_offset + sizeof(uint32_t), _graph_store->get_neighbours(i).data(), k * sizeof(uint32_t));
+        std::vector<uint32_t>().swap(_graph_store->get_neighbours(i));
     }
-    _graph_store->get_graph().clear();
-    _graph_store->get_graph().shrink_to_fit();
+    _graph_store->clear_graph();
+    _graph_store->shrink_to_fit();
     delete[] cur_vec;
 }
 

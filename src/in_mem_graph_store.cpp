@@ -14,20 +14,33 @@ InMemGraphStore::InMemGraphStore(const size_t max_pts, const size_t frozen_point
 
 int InMemGraphStore::load(const std::string &index_path_prefix)
 {
-    return load_impl(index_path_prefix, get_max_points());
+    return load_impl(index_path_prefix, get_total_points() - _num_frozen_pts);
 }
 int InMemGraphStore::store(const std::string &index_path_prefix)
 {
     return save_graph(index_path_prefix);
 }
-void InMemGraphStore::get_adj_list(const location_t i, std::vector<location_t> &neighbors)
+std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t i)
 {
-    neighbors.assign(_final_graph[i].begin(), _final_graph[i].end());
+    return _final_graph[i];
 }
-void InMemGraphStore::set_adj_list(const location_t i, std::vector<location_t> &neighbors)
+
+void InMemGraphStore::set_neighbours(const location_t i, std::vector<location_t> &neighbors)
 {
     _final_graph[i].clear();
     _final_graph[i].assign(neighbors.begin(), neighbors.end());
+}
+
+size_t InMemGraphStore::resize_graph(const size_t new_size)
+{
+    _final_graph.resize(new_size);
+    set_total_points(new_size);
+    return _final_graph.size();
+}
+
+void InMemGraphStore::clear_graph()
+{
+    _final_graph.clear();
 }
 
 #ifdef EXEC_ENV_OLS
@@ -118,8 +131,8 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
 {
     size_t expected_file_size;
     size_t file_frozen_pts;
-    size_t file_offset = 0;             // will need this for single file format support
-    auto max_points = get_max_points(); // from parent class holding max_pts
+    size_t file_offset = 0;               // will need this for single file format support
+    auto max_points = get_total_points(); // from parent class holding max_pts
 
     std::ifstream in;
     in.exceptions(std::ios::badbit | std::ios::failbit);
@@ -270,9 +283,10 @@ void InMemGraphStore::set_active_points(size_t active_points)
     _active_points = active_points;
 }
 
-std::vector<std::vector<uint32_t>> &InMemGraphStore::get_graph()
+size_t InMemGraphStore::shrink_to_fit()
 {
-    return _final_graph;
+    _final_graph.shrink_to_fit();
+    return _final_graph.size();
 }
 
 } // namespace diskann
