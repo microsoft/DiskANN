@@ -65,7 +65,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(AlignedF
     }
     copy_aligned_data_from_file<data_t>(reader, _data, file_num_points, file_dim, _aligned_dim);
 
-    return file_num_points;
+    return (location_t)file_num_points;
 }
 #endif
 
