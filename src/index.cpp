@@ -1193,6 +1193,8 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
                                _pts_to_labels[location], false);
+
+        // combine candidate pools obtained with filter and unfiltered criteria.
         for (auto filtered_neighbor : scratch->pool())
         {
             best_candidate_pool.insert(filtered_neighbor);
@@ -3077,14 +3079,9 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                 _labels.insert(label);
                 auto fz_location = (int)(_max_points - 1) + (int)_labels.size(); // as first _fz_point
                 _label_to_medoid_id[label] = (uint32_t)fz_location;
-                _label_counts[label] = 1; // increment its count (not sure why we have this)
                 _pts_to_labels[fz_location] = {label};
-
-                _data_store->set_vector(fz_location, point); // copy the vector to fz_point for consistency.
-            }
-            else
-            {
-                _label_counts[label]++;
+                // copy the vector to fz_point for consistency.
+                _data_store->set_vector(fz_location, point);
             }
         }
     }

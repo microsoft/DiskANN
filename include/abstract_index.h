@@ -40,7 +40,7 @@ class AbstractIndex
   public:
     AbstractIndex() = default;
     virtual ~AbstractIndex() = default;
-
+ 
     virtual void build(const std::string &data_file, const size_t num_points_to_load,
                        IndexBuildParams &build_params) = 0;
 
@@ -79,13 +79,17 @@ class AbstractIndex
                                                       const size_t K, const uint32_t L, IndexType *indices,
                                                       float *distances);
 
+    // insert points with labels, labels should be present for filtered index
     template <typename data_type, typename tag_type, typename label_type>
-    int insert_point(const data_type *point, const tag_type tag, const std::vector<label_type> &labels = {});
+    int insert_point(const data_type *point, const tag_type tag, const std::vector<label_type> &labels);
 
+    // insert point for unfiltered index build. do not use with filtered index
     template <typename data_type, typename tag_type> int insert_point(const data_type *point, const tag_type tag);
 
+    // delete point with tag, or return -1 if point can not be deleted
     template <typename tag_type> int lazy_delete(const tag_type &tag);
 
+    // batch delete tags and populates failed tags if unabke to delete given tags.
     template <typename tag_type>
     void lazy_delete(const std::vector<tag_type> &tags, std::vector<tag_type> &failed_tags);
 
