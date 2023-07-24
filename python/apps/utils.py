@@ -16,8 +16,13 @@ def bin_to_numpy(dtype, bin_file) -> np.ndarray:
     npts, ndims = get_bin_metadata(bin_file)
     return np.fromfile(file=bin_file, dtype=dtype, offset=8).reshape(npts, ndims)
 
-class timer:
+
+class Timer:
     last = perf_counter()
+
+    def reset(self):
+        new = perf_counter()
+        self.last = new
 
     def elapsed(self, round_digit:int = 3):
         new = perf_counter()
