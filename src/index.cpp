@@ -2949,6 +2949,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
 }
 
+/* updates medoid id's in case of filtered dynamic index as frozen_points acts as medoids.
+ * is called  after reposition_frozen_points().
+ */
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::reposition_medoids(uint32_t old_location_start, uint32_t new_location_start)
 {
