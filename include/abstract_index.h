@@ -40,7 +40,7 @@ class AbstractIndex
   public:
     AbstractIndex() = default;
     virtual ~AbstractIndex() = default;
- 
+
     virtual void build(const std::string &data_file, const size_t num_points_to_load,
                        IndexBuildParams &build_params) = 0;
 
