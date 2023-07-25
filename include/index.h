@@ -287,9 +287,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Acquire exclusive _tag_lock and _delete_lock before calling
     int reserve_location();
 
-    // reposition medoids/frozen points for dynamic filtered index.
-    void reposition_medoids(uint32_t old_location_start, uint32_t new_location_start);
-
     // Acquire exclusive _tag_lock before calling
     size_t release_location(int location);
     size_t release_locations(const tsl::robin_set<uint32_t> &locations);
