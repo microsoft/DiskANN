@@ -345,7 +345,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     T *_data = nullptr; // coordinates of all base points
     // Dimensions
     size_t _dim = 0;
-    // size_t _nd = 0;         // number of active points i.e. existing in the graph
+    size_t _nd = 0;         // number of active points i.e. existing in the graph
     size_t _max_points = 0; // total number of points in given data set
 
     // _num_frozen_pts is the number of points which are used as initial

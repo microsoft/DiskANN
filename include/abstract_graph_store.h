@@ -18,7 +18,7 @@ class AbstractGraphStore
     }
 
     virtual int load(const std::string &index_path_prefix) = 0;
-    virtual int store(const std::string &index_path_prefix) = 0;
+    virtual int store(const std::string &index_path_prefix, const size_t active_points) = 0;
 
     virtual std::vector<location_t> &get_neighbours(const location_t i) = 0;
     virtual void set_neighbours(const location_t i, std::vector<location_t> &neighbors) = 0;
@@ -36,8 +36,8 @@ class AbstractGraphStore
     virtual void set_start(uint32_t start) = 0;
 
     // Active points in graph, it is different then total_points capacity
-    virtual size_t get_active_points() = 0;
-    virtual void set_active_points(size_t active_points) = 0;
+    /*virtual size_t get_active_points() = 0;
+    virtual void set_active_points(size_t active_points) = 0;*/
 
     // returns new size after shrinking graph
     virtual size_t shrink_to_fit() = 0;

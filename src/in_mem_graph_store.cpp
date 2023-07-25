@@ -16,9 +16,9 @@ int InMemGraphStore::load(const std::string &index_path_prefix)
 {
     return load_impl(index_path_prefix, get_total_points() - _num_frozen_pts);
 }
-int InMemGraphStore::store(const std::string &index_path_prefix)
+int InMemGraphStore::store(const std::string &index_path_prefix, const size_t active_points)
 {
-    return save_graph(index_path_prefix);
+    return save_graph(index_path_prefix, active_points);
 }
 std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t i)
 {
@@ -215,24 +215,24 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
     return nodes_read;
 }
 
-int InMemGraphStore::save_graph(const std::string &index_path_prefix)
+int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size_t active_points)
 {
     std::ofstream out;
     open_file_to_write(out, index_path_prefix);
 
-    size_t file_offset = 0; // we will use this if we want
+    size_t file_offset = 0;
     out.seekp(file_offset, out.beg);
     size_t index_size = 24;
     uint32_t max_degree = 0;
     out.write((char *)&index_size, sizeof(uint64_t));
     out.write((char *)&_max_observed_degree, sizeof(uint32_t));
-    uint32_t ep_u32 = _start; // .................???????????
+    uint32_t ep_u32 = _start;
     out.write((char *)&ep_u32, sizeof(uint32_t));
-    out.write((char *)&_num_frozen_pts, sizeof(size_t)); // need it
+    out.write((char *)&_num_frozen_pts, sizeof(size_t));
     // Note: at this point, either _nd == _max_points or any frozen points have
     // been temporarily moved to _nd, so _nd + _num_frozen_points is the valid
     // location limit.
-    for (uint32_t i = 0; i < _active_points + _num_frozen_pts; i++)
+    for (uint32_t i = 0; i < active_points + _num_frozen_pts; i++)
     {
         uint32_t GK = (uint32_t)_final_graph[i].size();
         out.write((char *)&GK, sizeof(uint32_t));
@@ -274,14 +274,14 @@ void InMemGraphStore::set_start(uint32_t start)
     this->_start = start;
 };
 
-size_t InMemGraphStore::get_active_points()
-{
-    return _active_points;
-};
-void InMemGraphStore::set_active_points(size_t active_points)
-{
-    _active_points = active_points;
-}
+// size_t InMemGraphStore::get_active_points()
+//{
+//     return _active_points;
+// };
+// void InMemGraphStore::set_active_points(size_t active_points)
+//{
+//     _active_points = active_points;
+// }
 
 size_t InMemGraphStore::shrink_to_fit()
 {

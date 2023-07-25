@@ -14,7 +14,7 @@ class InMemGraphStore : public AbstractGraphStore
     InMemGraphStore(const size_t max_pts, const size_t frozen_points);
 
     int load(const std::string &index_path_prefix);
-    int store(const std::string &index_path_prefix);
+    int store(const std::string &index_path_prefix, const size_t active_points);
 
     virtual std::vector<location_t> &get_neighbours(const location_t i) override;
     virtual void set_neighbours(const location_t i, std::vector<location_t> &neighbors) override;
@@ -29,8 +29,8 @@ class InMemGraphStore : public AbstractGraphStore
     virtual uint32_t get_start() override;
     virtual void set_start(uint32_t start) override;
 
-    virtual size_t get_active_points() override;
-    virtual void set_active_points(size_t active_points) override;
+    /*virtual size_t get_active_points() override;
+    virtual void set_active_points(size_t active_points) override;*/
 
     virtual size_t shrink_to_fit() override;
 
@@ -40,7 +40,7 @@ class InMemGraphStore : public AbstractGraphStore
     virtual location_t load_impl(AlignedFileReader &reader, size_t expected_num_points);
 #endif
 
-    int save_graph(const std::string &index_path_prefix);
+    int save_graph(const std::string &index_path_prefix, const size_t active_points);
 
   private:
     size_t _max_range_of_loaded_graph = 0;
