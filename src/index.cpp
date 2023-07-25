@@ -315,7 +315,8 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
-
+    _data_compacted = false;
+    
     if (compact_before_save)
     {
         compact_data();
