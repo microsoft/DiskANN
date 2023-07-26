@@ -1189,12 +1189,12 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         for (auto &x : _pts_to_labels[location])
             filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
 
-        std::set<Neighbor> best_candidate_pool;
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
                                _pts_to_labels[location], false);
 
         // combine candidate pools obtained with filter and unfiltered criteria.
+        std::set<Neighbor> best_candidate_pool;
         for (auto filtered_neighbor : scratch->pool())
         {
             best_candidate_pool.insert(filtered_neighbor);
