@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+import os
 import warnings
 
 import numpy as np
@@ -21,12 +22,14 @@ from ._common import (
     _assert,
     _assert_2d,
     _assert_dtype,
+    _assert_existing_directory,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
     _ensure_index_metadata,
     _valid_metric,
     _valid_index_prefix,
+    _write_index_metadata
 )
 from ._diskannpy import defaults
 
@@ -158,6 +161,7 @@ class DynamicMemoryIndex:
         """
 
         dap_metric = _valid_metric(distance_metric)
+        self._dap_metric = dap_metric
         _assert_dtype(vector_dtype)
         _assert_is_positive_uint32(dimensions, "dimensions")
 
@@ -199,6 +203,7 @@ class DynamicMemoryIndex:
             search_threads=search_threads,
             concurrent_consolidation=concurrent_consolidation
         )
+        self._points_deleted = False
 
     def search(
         self, query: VectorLike, k_neighbors: int, complexity: int
@@ -293,16 +298,31 @@ class DynamicMemoryIndex:
             num_threads=num_threads,
         )
 
-    def save(self, save_path: str, compact_before_save: bool = True):
+    def save(self, save_path: str, index_prefix: str = "ann"):
         """
         Saves this index to file.
         :param save_path: The path to save these index files to.
         :type save_path: str
-        :param compact_before_save:
+        :param index_prefix: The prefix to use for the index files. Default is "ann".
+        :type index_prefix: str
         """
         if save_path == "":
             raise ValueError("save_path cannot be empty")
-        self._index.save(save_path=save_path, compact_before_save=compact_before_save)
+        if index_prefix == "":
+            raise ValueError("index_prefix cannot be empty")
+        _assert_existing_directory(save_path, "save_path")
+        save_path = os.path.join(save_path, index_prefix)
+        if self._points_deleted is True:
+            warnings.warn(
+                "DynamicMemoryIndex.save() currently requires DynamicMemoryIndex.consolidate_delete() to be called "
+                "prior to save when items have been marked for deletion. This is being done automatically now, though"
+                "it will increase the time it takes to save; on large sets of data it can take a substantial amount of "
+                "time. In the future, we will implement a faster save with unconsolidated deletes, but for now this is "
+                "required."
+            )
+            self._index.consolidate_delete()
+        self._index.save(save_path=save_path, compact_before_save=True)  # we do not yet support uncompacted saves
+        _write_index_metadata(save_path, self._vector_dtype, self._dap_metric, self._index.num_points(), self._dimensions)
 
     def insert(self, vector: VectorLike, vector_id: VectorIdentifier):
         """
@@ -349,6 +369,7 @@ class DynamicMemoryIndex:
         :type vector_id: int
         """
         _assert_is_positive_uint32(vector_id, "vector_id")
+        self._points_deleted = True
         self._index.mark_deleted(np.uintc(vector_id))
 
     def consolidate_delete(self):
@@ -356,3 +377,4 @@ class DynamicMemoryIndex:
         This method actually restructures the DiskANN index to remove the items that have been marked for deletion.
         """
         self._index.consolidate_delete()
+        self._points_deleted = False

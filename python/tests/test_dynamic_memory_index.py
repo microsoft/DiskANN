@@ -1,8 +1,8 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-import os
 import shutil
+import tempfile
 import unittest
 
 import diskannpy as dap
@@ -296,3 +296,46 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                     index.batch_search(
                         queries=np.array([[]], dtype=np.single), **kwargs
                     )
+
+    # Issue #400
+    def test_issue400(self):
+        _, _, _, index_vectors, ann_dir, _, generated_tags = self._test_matrix[0]
+
+        deletion_tag = generated_tags[10]  # arbitrary choice
+        deletion_vector = index_vectors[10]
+
+        index = dap.DynamicMemoryIndex.from_file(
+            index_directory=ann_dir,
+            num_threads=16,
+            initial_search_complexity=32,
+            max_vectors=10100,
+            complexity=64,
+            graph_degree=32
+        )
+        index.insert(np.array([1.0] * 10, dtype=np.single), 10099)
+        index.insert(np.array([2.0] * 10, dtype=np.single), 10050)
+        index.insert(np.array([3.0] * 10, dtype=np.single), 10053)
+        tags, distances = index.search(np.array([3.0] * 10, dtype=np.single), k_neighbors=5, complexity=64)
+        self.assertIn(10053, tags)
+        tags, distances = index.search(deletion_vector, k_neighbors=5, complexity=64)
+        self.assertIn(deletion_tag, tags, "deletion_tag should exist, as we have not deleted yet")
+        index.mark_deleted(deletion_tag)
+        tags, distances = index.search(deletion_vector, k_neighbors=5, complexity=64)
+        self.assertNotIn(deletion_tag, tags, "deletion_tag should not exist, as we have marked it for deletion")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            index.save(tmpdir)
+
+            index2 = dap.DynamicMemoryIndex.from_file(
+                index_directory=tmpdir,
+                num_threads=16,
+                initial_search_complexity=32,
+                max_vectors=10100,
+                complexity=64,
+                graph_degree=32
+            )
+            tags, distances = index2.search(deletion_vector, k_neighbors=5, complexity=64)
+            self.assertNotIn(
+                deletion_tag,
+                tags,
+                "deletion_tag should not exist, as we saved and reloaded the index without it"
+            )
