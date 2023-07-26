@@ -1122,8 +1122,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  QueryStats *stats)
 {
     LabelT dummy_filter = 0;
-    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter,
-                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
+                       use_reorder_data, stats);
 }
 
 template <typename T, typename LabelT>
