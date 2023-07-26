@@ -298,12 +298,13 @@ class DynamicMemoryIndex:
             num_threads=num_threads,
         )
 
-    def save(self, save_path: str, index_prefix: str = "ann", compact_before_save: bool = True):
+    def save(self, save_path: str, index_prefix: str = "ann"):
         """
         Saves this index to file.
         :param save_path: The path to save these index files to.
         :type save_path: str
-        :param compact_before_save:
+        :param index_prefix: The prefix to use for the index files. Default is "ann".
+        :type index_prefix: str
         """
         if save_path == "":
             raise ValueError("save_path cannot be empty")
@@ -320,7 +321,7 @@ class DynamicMemoryIndex:
                 "required."
             )
             self._index.consolidate_delete()
-        self._index.save(save_path=_save_path, compact_before_save=compact_before_save)
+        self._index.save(save_path=_save_path, compact_before_save=True)  # we do not yet support uncompacted saves
         _write_index_metadata(_save_path, self._vector_dtype, self._dap_metric, self._index.num_points(), self._dimensions)
 
     def insert(self, vector: VectorLike, vector_id: VectorIdentifier):
