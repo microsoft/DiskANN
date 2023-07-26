@@ -333,7 +333,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                 complexity=64,
                 graph_degree=32
             )
-            tags, distances = index.search(deletion_vector, k_neighbors=5, complexity=64)
+            tags, distances = index2.search(deletion_vector, k_neighbors=5, complexity=64)
             self.assertNotIn(
                 deletion_tag,
                 tags,
