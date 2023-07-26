@@ -311,7 +311,7 @@ class DynamicMemoryIndex:
         if index_prefix == "":
             raise ValueError("index_prefix cannot be empty")
         _assert_existing_directory(save_path, "save_path")
-        _save_path = os.path.join(save_path, index_prefix)
+        save_path = os.path.join(save_path, index_prefix)
         if self._points_deleted is True:
             warnings.warn(
                 "DynamicMemoryIndex.save() currently requires DynamicMemoryIndex.consolidate_delete() to be called "
@@ -321,8 +321,8 @@ class DynamicMemoryIndex:
                 "required."
             )
             self._index.consolidate_delete()
-        self._index.save(save_path=_save_path, compact_before_save=True)  # we do not yet support uncompacted saves
-        _write_index_metadata(_save_path, self._vector_dtype, self._dap_metric, self._index.num_points(), self._dimensions)
+        self._index.save(save_path=save_path, compact_before_save=True)  # we do not yet support uncompacted saves
+        _write_index_metadata(save_path, self._vector_dtype, self._dap_metric, self._index.num_points(), self._dimensions)
 
     def insert(self, vector: VectorLike, vector_id: VectorIdentifier):
         """
