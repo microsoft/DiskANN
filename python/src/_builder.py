@@ -90,49 +90,38 @@ def build_disk_index(
     index_prefix: str = "ann",
 ):
     """
-    This function will construct a DiskANN Disk Index and save it to disk.
+    This function will construct a DiskANN disk index. Disk indices are ideal for very large datasets that
+    are too large to fit in memory. Memory is still used, but it is primarily used to provide precise disk
+    locations for fast retrieval of smaller subsets of the index without compromising much on recall.
 
     If you provide a numpy array, it will save this array to disk in a temp location
     in the format DiskANN's PQ Flash Index builder requires. This temp folder is deleted upon index creation completion
     or error.
 
-    :param data: Either a ``str`` representing a path to a DiskANN vector bin file, or a numpy.ndarray,
-        of a supported dtype, in 2 dimensions. Note that vector_dtype must be provided if vector_path_or_np_array is a
-        ``str``
-    :type data: Union[str, numpy.ndarray]
-    :param distance_metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
-        available for single point floating numbers (numpy.single)
-    :type distance_metric: str
-    :param index_directory: The path on disk that the index will be created in.
-    :type index_directory: str
-    :param complexity: The size of queue to use when building the index for search. Values between 75 and 200 are
-        typical. Larger values will take more time to build but result in indices that provide higher recall for
-        the same search complexity. Use a value that is at least as large as R unless you are prepared to
-        somewhat compromise on quality
-    :type complexity: int
-    :param graph_degree: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
-        result in larger indices and longer indexing times, but better search quality.
-    :type graph_degree int
-    :param search_memory_maximum: Build index with the expectation that the search will use at most
-        ``search_memory_maximum``
-    :type search_memory_maximum: float
-    :param build_memory_maximum: Build index using at most ``build_memory_maximum``
-    :type build_memory_maximum: float
-    :param num_threads: Number of threads to use when creating this index.0 indicates we should use all available
-        system threads.
-    :type num_threads: int
-    :param pq_disk_bytes:  Use 0 to store uncompressed data on SSD. This allows the index to asymptote to 100%
-        recall. If your vectors are too large to store in SSD, this parameter provides the option to compress the
-        vectors using PQ for storing on SSD. This will trade off recall. You would also want this to be greater
-        than the number of bytes used for the PQ compressed data stored in-memory. Default is ``0``.
-    :type pq_disk_bytes: int (default = 0)
-    :param vector_dtype: Required if the provided ``vector_path_or_np_array`` is of type ``str``, else we use the
-        ``vector_path_or_np_array.dtype`` if np array.
-    :type vector_dtype: Optional[VectorDType], default is ``None``.
-    :param index_prefix: The prefix to give your index files. Defaults to ``ann``.
-    :type index_prefix: str, default="ann"
-    :raises ValueError: If vectors are not 2d numpy array or are not a supported dtype
-    :raises ValueError: If any numeric value is in an invalid range
+    ### Parameters
+    - **data**: Either a `str` representing a path to a DiskANN vector bin file, or a numpy.ndarray,
+      of a supported dtype, in 2 dimensions. Note that `vector_dtype` must be provided if data is a `str`
+    - **distance_metric**: A `str`, strictly one of {"l2", "mips", "cosine"}. `l2` and `cosine` are supported for all 3
+      vector dtypes, but `mips` is only available for single precision floats.
+    - **index_directory**: The index files will be saved to this **existing** directory path
+    - **complexity**: The size of the candidate nearest neighbor list to use when building the index. Values between 75
+      and 200 are typical. Larger values will take more time to build but result in indices that provide higher recall
+      for the same search complexity. Use a value that is at least as large as `graph_degree` unless you are prepared
+      to compromise on quality
+    - **graph_degree**: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
+      result in larger indices and longer indexing times, but better search quality.
+    - **search_memory_maximum**: Build index with the expectation that the search will use at most
+      `search_memory_maximum`, in gb.
+    - **build_memory_maximum**: Build index using at most `build_memory_maximum` in gb. Building processes typically
+      require more memory, while search memory can be reduced.
+    - **num_threads**: Number of threads to use when creating this index. `0` is used to indicate all available
+      logical processors should be used.
+    - **pq_disk_bytes**: Use `0` to store uncompressed data on SSD. This allows the index to asymptote to 100%
+      recall. If your vectors are too large to store in SSD, this parameter provides the option to compress the
+      vectors using PQ for storing on SSD. This will trade off recall. You would also want this to be greater
+      than the number of bytes used for the PQ compressed data stored in-memory. Default is `0`.
+    - **vector_dtype**: Required if the provided `data` is of type `str`, else we use the `data.dtype` if np array.
+    - **index_prefix**: The prefix to give your index files. Defaults to `ann`.
     """
 
     _assert(
@@ -201,43 +190,47 @@ def build_memory_index(
     index_prefix: str = "ann"
 ):
     """
-    Builds a memory index and saves it to disk to be loaded into ``StaticMemoryIndex``.
+    This function will construct a DiskANN memory index. Memory indices are ideal for smaller datasets whose
+    indices can fit into memory. Memory indices are faster than disk indices, but usually cannot scale to massive
+    sizes in an individual index on an individual machine.
 
-    :param data: Either a ``str`` representing a path to a DiskANN vector bin file, or a numpy.ndarray,
-        of a supported dtype, in 2 dimensions. Note that vector_dtype must be provided if vector_path_or_np_array is a
-        ``str``
-    :type data: Union[str, numpy.ndarray]
-    :param distance_metric: One of {"l2", "mips"}. L2 is supported for all 3 vector dtypes, but MIPS is only
-        available for single point floating numbers (numpy.single)
-    :type distance_metric: str
-    :param index_directory: The path on disk that the index will be created in.
-    :type index_directory: str
-    :param complexity: The size of queue to use when building the index for search. Values between 75 and 200 are
-        typical. Larger values will take more time to build but result in indices that provide higher recall for
-        the same search complexity. Use a value that is at least as large as R unless you are prepared to
-        somewhat compromise on quality
-    :type complexity: int
-    :param graph_degree: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
-        result in larger indices and longer indexing times, but better search quality.
-    :type graph_degree int
-    :param num_threads: Number of threads to use when creating this index. 0 indicates we should use all available
-        system threads.
-    :type num_threads: int
-    :param alpha:
-    :param use_pq_build:
-    :param num_pq_bytes:
-    :param use_opq:
-    :param vector_dtype: Required if the provided ``vector_path_or_np_array`` is of type ``str``, else we use the
-        ``vector_path_or_np_array.dtype`` if np array.
-    :type vector_dtype: Optional[VectorDType], default is ``None``.
-    :param filter_complexity: Complexity to use when using filters. Default is 0.
-    :type filter_complexity: int
-    :param tags: uint32 ids corresponding to the ordinal position of the vectors provided to build the index.
-        Defaults to "".
-    :type tags: Union[str, VectorIdentifierBatch]
-    :param index_prefix: The prefix to give your index files. Defaults to ``ann``.
-    :type index_prefix: str, default="ann"
-    :return:
+    `diskannpy`'s memory indices take two forms: a `diskannpy.StaticMemoryIndex`, which will not be mutated, only
+    searched upon, and a `diskannpy.DynamicMemoryIndex`, which can be mutated AND searched upon in the same process.
+
+    ## Important Note:
+    You **must** determine the type of index you are building for. If you are building for a
+    `diskannpy.DynamicMemoryIndex`, you **must** supply a valid value for the `tags` parameter. **Do not supply
+    tags if the index is intended to be `diskannpy.StaticMemoryIndex`**!
+
+    ### Parameters
+
+    - **data**: Either a `str` representing a path to an existing DiskANN vector bin file, or a numpy.ndarray of a
+      supported dtype in 2 dimensions. Note that `vector_dtype` must be provided if `data` is a `str`.
+    - **distance_metric**: A `str`, strictly one of {"l2", "mips", "cosine"}. `l2` and `cosine` are supported for all 3
+      vector dtypes, but `mips` is only available for single precision floats.
+    - **index_directory**: The index files will be saved to this **existing** directory path
+    - **complexity**: The size of the candidate nearest neighbor list to use when building the index. Values between 75
+      and 200 are typical. Larger values will take more time to build but result in indices that provide higher recall
+      for the same search complexity. Use a value that is at least as large as `graph_degree` unless you are prepared
+      to compromise on quality
+    - **graph_degree**: The degree of the graph index, typically between 60 and 150. A larger maximum degree will
+      result in larger indices and longer indexing times, but better search quality.
+    - **num_threads**: Number of threads to use when creating this index. `0` is used to indicate all available
+      logical processors should be used.
+    - **alpha**: The alpha parameter (>=1) is used to control the nature and number of points that are added to the
+      graph. A higher alpha value (e.g., 1.4) will result in fewer hops (and IOs) to convergence, but probably more
+      distance comparisons.
+    - **use_pq_build**: Use product quantization during build. Product quantization is a lossy compression technique
+      that can reduce the size of the index on disk. This will trade off recall. Default is `True`.
+    - **num_pq_bytes**: The number of bytes used to store the PQ compressed data in memory. This will trade off recall.
+      Default is `0`.
+    - **use_opq**: Use optimized product quantization during build.
+    - **vector_dtype**: Required if the provided `data` is of type `str`, else we use the `data.dtype` if np array.
+    - **filter_complexity**: Complexity to use when using filters. Default is 0.
+    - **tags**: A `str` representing a path to a pre-built tags file on disk, or a `numpy.ndarray` of uint32 ids
+      corresponding to the ordinal position of the vectors provided to build the index. Defaults to "". **This value
+      must be provided if you want to build a memory index intended for use with `diskannpy.DynamicMemoryIndex`**.
+    - **index_prefix**: The prefix to give your index files. Defaults to `ann`.
     """
     _assert(
         (isinstance(data, str) and vector_dtype is not None)

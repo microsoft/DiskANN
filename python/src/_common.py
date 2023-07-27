@@ -27,32 +27,48 @@ __ALL__ = [
 _VALID_DTYPES = [np.float32, np.int8, np.uint8]
 
 DistanceMetric = Literal["l2", "mips", "cosine"]
+""" Type alias for one of {"l2", "mips", "cosine"} """
 VectorDType = Union[Type[np.float32], Type[np.int8], Type[np.uint8]]
+""" Type alias for one of {`numpy.float32`, `numpy.int8`, `numpy.uint8`} """
 VectorLike = Union[List[int], List[float], npt.NDArray[VectorDType]]
+""" Type alias for something that can be treated as a vector, whether it be a `List[int]`, `List[float]`, or `numpy.typing.NDArray[VectorDType]` """
 VectorLikeBatch = Union[List[List[int]], List[List[float]], npt.NDArray[VectorDType]]
+""" Type alias for a batch of VectorLikes """
 VectorIdentifier = Union[int, np.uintc]
+""" Type alias for a vector identifier, whether it be an implicit array index identifier from StaticMemoryIndex or StaticDiskIndex, or an explicit tag identifier from DynamicMemoryIndex """
 VectorIdentifierBatch = Union[List[int], List[np.uintc], npt.NDArray[np.uintc]]
+""" Type alias for a batch of VectorIdentifiers """
 
 
 class QueryResponse(NamedTuple):
     """
-    Tuple with two values, distances and indices. Both are 1d arrays and positionally correspond
+    Tuple with two values, identifiers and distances. Both are 1d arrays, positionally correspond, and will contain the nearest neighbors from [0..k_neighbors)
     """
-    distances: np.ndarray
-    indices: np.ndarray
+    identifiers: npt.NDArray[VectorIdentifier]
+    """ A `numpy.typing.NDArray[VectorIdentifier]` array of vector identifiers, 1 dimensional """
+    distances: npt.NDArray[np.single]
+    """ A `numpy.typing.NDAarray[numpy.float32]` of distances as calculated by the distance metric function, 1 dimensional """
 
 
 class QueryResponseBatch(NamedTuple):
     """
-    Tuple with two values, distances and indices. Both are 2d arrays, with dimensionality determined by the
+    Tuple with two values, identifiers and distances. Both are 2d arrays, with dimensionality determined by the
     rows corresponding to the number of queries made, and the columns corresponding to the k neighbors
     requested. The two 2d arrays have an implicit, position-based relationship
     """
-    distances: np.ndarray
-    indices: np.ndarray
+    identifiers: npt.NDArray[VectorIdentifier]
+    """ A `numpy.typing.NDArray[VectorIdentifier]` array of vector identifiers, 2 dimensional. The row corresponds to 
+     index of the query, and the column corresponds to the k neighbors requested """
+    distances: np.ndarray[np.single]
+    """  A `numpy.typing.NDAarray[numpy.float32]` of distances as calculated by the distance metric function, 2 
+    dimensional. The row corresponds to the index of the query, and the column corresponds to the distance of the query 
+    to the *k-th* neighbor """
 
 
 def valid_dtype(dtype: Type) -> VectorDType:
+    """
+    Utility method to determine whether the provided dtype is supported by `diskannpy`
+    """
     _assert_dtype(dtype)
     if np.can_cast(dtype, np.uint8):
         return np.uint8
