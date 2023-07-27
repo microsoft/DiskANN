@@ -144,6 +144,12 @@ gt_file=data/sift/gt100_learn-conc-${deletes}-${inserts}
 are inserted, start deleting the first 10000 points while inserting points 40000--50000.  Then delete points 10000--20000 while inserting
 points 50000--60000 and so until the index is left with points 60000-100000.
 
+
+Generate labels for filtered build like this. Generating 50 unique labels zipf's distributed for 100K point dataset.
+```
+~/DiskANN/build/apps/utils/generate_synthetic_labels  --num_labels 50 --num_points 100000  --output_file data/zipf_labels_50_100K.txt --distribution_type zipf
+```
+
 ```bash
 type='float'
 data='data/sift/sift_learn.fbin'
