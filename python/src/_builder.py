@@ -5,73 +5,46 @@ import os
 import shutil
 
 from pathlib import Path
-from typing import BinaryIO, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 
 from . import _diskannpy as _native_dap
 from ._common import (
+    valid_dtype,
     DistanceMetric,
     VectorDType,
     VectorLikeBatch,
     VectorIdentifierBatch,
     _assert,
-    _assert_2d,
-    _assert_dtype,
-    _castable_dtype_or_raise,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
+    _castable_dtype_or_raise,
     _valid_metric,
     _write_index_metadata
 )
-from ._files import vector_file_metadata
+from ._files import tags_to_file, vectors_metadata_from_file, vectors_to_file
 from ._diskannpy import defaults
 
 
-def _write_bin(data: np.ndarray, file_handler: BinaryIO):
-    if len(data.shape) == 1:
-        _ = file_handler.write(np.array([data.shape[0], 1], dtype=np.int32).tobytes())
-    else:
-        _ = file_handler.write(np.array(data.shape, dtype=np.int32).tobytes())
-    _ = file_handler.write(data.tobytes())
-
-
-def numpy_to_diskann_file(vectors: VectorLikeBatch, dtype: VectorDType, file_handler: BinaryIO):
-    """
-    Utility function that writes a DiskANN binary vector formatted file to the location of your choosing.
-
-    :param vectors: A 2d array of dtype ``numpy.single``, ``numpy.ubyte``, or ``numpy.byte``
-    :type vectors: numpy.ndarray, dtype in set {numpy.single, numpy.ubyte, numpy.byte}
-    :param file_handler: An open binary file handler (typing.BinaryIO).
-    :type file_handler: io.BinaryIO
-    :raises ValueError: If vectors are the wrong shape or an unsupported dtype
-    :raises ValueError: If output_path is not a str or ``io.BinaryIO``
-    """
-    _assert_dtype(dtype)
-    _vectors = _castable_dtype_or_raise(vectors, expected=dtype, message=f"Unable to cast vectors to numpy array of type {dtype}")
-    _assert_2d(vectors, "vectors")
-    _write_bin(_vectors, file_handler)
-
-
 def _valid_path_and_dtype(
-    data: Union[str, VectorLikeBatch], vector_dtype: VectorDType, index_path: str
+    data: Union[str, VectorLikeBatch], vector_dtype: VectorDType, index_path: str, index_prefix: str
 ) -> Tuple[str, VectorDType]:
     if isinstance(data, str):
         vector_bin_path = data
         _assert(
             Path(data).exists() and Path(data).is_file(),
             "if data is of type `str`, it must both exist and be a file",
-            )
-        vector_dtype_actual = vector_dtype
+        )
+        vector_dtype_actual = valid_dtype(vector_dtype)
     else:
-        vector_bin_path = os.path.join(index_path, "vectors.bin")
+        vector_bin_path = os.path.join(index_path, f"{index_prefix}_vectors.bin")
         if Path(vector_bin_path).exists():
             raise ValueError(
                 f"The path {vector_bin_path} already exists. Remove it and try again."
             )
-        with open(vector_bin_path, "wb") as temp_vector_bin:
-            numpy_to_diskann_file(vectors=data, dtype=data.dtype, file_handler=temp_vector_bin)
-        vector_dtype_actual = data.dtype
+        vector_dtype_actual = valid_dtype(data.dtype)
+        vectors_to_file(vector_file=vector_bin_path, vectors=data)
 
     return vector_bin_path, vector_dtype_actual
 
@@ -88,7 +61,7 @@ def build_disk_index(
     pq_disk_bytes: int = defaults.PQ_DISK_BYTES,
     vector_dtype: Optional[VectorDType] = None,
     index_prefix: str = "ann",
-):
+) -> None:
     """
     This function will construct a DiskANN disk index. Disk indices are ideal for very large datasets that
     are too large to fit in memory. Memory is still used, but it is primarily used to provide precise disk
@@ -145,17 +118,20 @@ def build_disk_index(
     )
 
     vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
-        data, vector_dtype, index_directory
+        data, vector_dtype, index_directory, index_prefix
     )
 
-    num_points, dimensions = vector_file_metadata(vector_bin_path)
+    num_points, dimensions = vectors_metadata_from_file(vector_bin_path)
+    import sys
 
-    if vector_dtype_actual == np.single:
-        _builder = _native_dap.build_disk_float_index
-    elif vector_dtype_actual == np.ubyte:
+    print(f"\n\n{vector_dtype} - {vector_dtype_actual}: {(num_points, dimensions)}\n", file=sys.stderr)
+
+    if vector_dtype_actual == np.uint8:
         _builder = _native_dap.build_disk_uint8_index
-    else:
+    elif vector_dtype_actual == np.int8:
         _builder = _native_dap.build_disk_int8_index
+    else:
+        _builder = _native_dap.build_disk_float_index
 
     index_prefix_path = os.path.join(index_directory, index_prefix)
 
@@ -188,7 +164,7 @@ def build_memory_index(
     filter_complexity: int = defaults.FILTER_COMPLEXITY,
     tags: Union[str, VectorIdentifierBatch] = "",
     index_prefix: str = "ann"
-):
+) -> None:
     """
     This function will construct a DiskANN memory index. Memory indices are ideal for smaller datasets whose
     indices can fit into memory. Memory indices are faster than disk indices, but usually cannot scale to massive
@@ -253,17 +229,17 @@ def build_memory_index(
     )
 
     vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
-        data, vector_dtype, index_directory
+        data, vector_dtype, index_directory, index_prefix
     )
 
-    num_points, dimensions = vector_file_metadata(vector_bin_path)
+    num_points, dimensions = vectors_metadata_from_file(vector_bin_path)
 
-    if vector_dtype_actual == np.single:
-        _builder = _native_dap.build_memory_float_index
-    elif vector_dtype_actual == np.ubyte:
+    if vector_dtype_actual == np.uint8:
         _builder = _native_dap.build_memory_uint8_index
-    else:
+    elif vector_dtype_actual == np.int8:
         _builder = _native_dap.build_memory_int8_index
+    else:
+        _builder = _native_dap.build_memory_float_index
 
     index_prefix_path = os.path.join(index_directory, index_prefix)
 
@@ -274,8 +250,7 @@ def build_memory_index(
         use_tags = True
         tags_as_array = _castable_dtype_or_raise(
             tags,
-            expected=np.uint32,
-            message="tags must be a numpy array of dtype np.uint32"
+            expected=np.uint32
         )
         _assert(len(tags_as_array.shape) == 1, "Provided tags must be 1 dimensional")
         _assert(
@@ -283,8 +258,7 @@ def build_memory_index(
             "Provided tags must contain an identical population to the number of points, "
             f"{tags_as_array.shape[0]=}, {num_points=}"
         )
-        with open(index_prefix_path + ".tags", "wb") as tags_out:
-            _write_bin(tags, tags_out)
+        tags_to_file(index_prefix_path + ".tags", tags_as_array)
     else:
         use_tags = False
 

@@ -6,7 +6,7 @@ import warnings
 
 from enum import Enum
 from pathlib import Path
-from typing import List, Literal, NamedTuple, Optional, Tuple, Type, Union
+from typing import Literal, NamedTuple, Optional, Tuple, Type, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -21,7 +21,8 @@ __ALL__ = [
     "VectorLike",
     "VectorLikeBatch",
     "VectorIdentifier",
-    "VectorIdentifierBatch"
+    "VectorIdentifierBatch",
+    "Metadata"
 ]
 
 _VALID_DTYPES = [np.float32, np.int8, np.uint8]
@@ -30,24 +31,30 @@ DistanceMetric = Literal["l2", "mips", "cosine"]
 """ Type alias for one of {"l2", "mips", "cosine"} """
 VectorDType = Union[Type[np.float32], Type[np.int8], Type[np.uint8]]
 """ Type alias for one of {`numpy.float32`, `numpy.int8`, `numpy.uint8`} """
-VectorLike = Union[List[int], List[float], npt.NDArray[VectorDType]]
-""" Type alias for something that can be treated as a vector, whether it be a `List[int]`, `List[float]`, or `numpy.typing.NDArray[VectorDType]` """
-VectorLikeBatch = Union[List[List[int]], List[List[float]], npt.NDArray[VectorDType]]
+VectorLike = npt.NDArray[VectorDType]
+""" Type alias for something that can be treated as a vector """
+VectorLikeBatch = npt.NDArray[VectorDType]
 """ Type alias for a batch of VectorLikes """
-VectorIdentifier = Union[int, np.uintc]
-""" Type alias for a vector identifier, whether it be an implicit array index identifier from StaticMemoryIndex or StaticDiskIndex, or an explicit tag identifier from DynamicMemoryIndex """
-VectorIdentifierBatch = Union[List[int], List[np.uintc], npt.NDArray[np.uintc]]
+VectorIdentifier = Union[int, np.uint32]
+""" 
+Type alias for a vector identifier, whether it be an implicit array index identifier from StaticMemoryIndex or 
+StaticDiskIndex, or an explicit tag identifier from DynamicMemoryIndex 
+"""
+VectorIdentifierBatch = npt.NDArray[np.uint32]
 """ Type alias for a batch of VectorIdentifiers """
 
 
 class QueryResponse(NamedTuple):
     """
-    Tuple with two values, identifiers and distances. Both are 1d arrays, positionally correspond, and will contain the nearest neighbors from [0..k_neighbors)
+    Tuple with two values, identifiers and distances. Both are 1d arrays, positionally correspond, and will contain the
+    nearest neighbors from [0..k_neighbors)
     """
     identifiers: npt.NDArray[VectorIdentifier]
     """ A `numpy.typing.NDArray[VectorIdentifier]` array of vector identifiers, 1 dimensional """
-    distances: npt.NDArray[np.single]
-    """ A `numpy.typing.NDAarray[numpy.float32]` of distances as calculated by the distance metric function, 1 dimensional """
+    distances: npt.NDArray[np.float32]
+    """
+    A `numpy.typing.NDAarray[numpy.float32]` of distances as calculated by the distance metric function,  1 dimensional
+    """
 
 
 class QueryResponseBatch(NamedTuple):
@@ -57,12 +64,16 @@ class QueryResponseBatch(NamedTuple):
     requested. The two 2d arrays have an implicit, position-based relationship
     """
     identifiers: npt.NDArray[VectorIdentifier]
-    """ A `numpy.typing.NDArray[VectorIdentifier]` array of vector identifiers, 2 dimensional. The row corresponds to 
-     index of the query, and the column corresponds to the k neighbors requested """
-    distances: np.ndarray[np.single]
-    """  A `numpy.typing.NDAarray[numpy.float32]` of distances as calculated by the distance metric function, 2 
-    dimensional. The row corresponds to the index of the query, and the column corresponds to the distance of the query 
-    to the *k-th* neighbor """
+    """ 
+    A `numpy.typing.NDArray[VectorIdentifier]` array of vector identifiers, 2 dimensional. The row corresponds to index 
+    of the query, and the column corresponds to the k neighbors requested 
+    """
+    distances: np.ndarray[np.float32]
+    """  
+    A `numpy.typing.NDAarray[numpy.float32]` of distances as calculated by the distance metric function, 2 dimensional. 
+    The row corresponds to the index of the query, and the column corresponds to the distance of the query to the 
+    *k-th* neighbor 
+    """
 
 
 def valid_dtype(dtype: Type) -> VectorDType:
@@ -70,11 +81,11 @@ def valid_dtype(dtype: Type) -> VectorDType:
     Utility method to determine whether the provided dtype is supported by `diskannpy`
     """
     _assert_dtype(dtype)
-    if np.can_cast(dtype, np.uint8):
+    if dtype == np.uint8:
         return np.uint8
-    if np.can_cast(dtype, np.int8):
+    if dtype == np.int8:
         return np.int8
-    if np.can_cast(dtype, np.float32):
+    if dtype == np.float32:
         return np.float32
 
 
@@ -105,20 +116,12 @@ def _assert_dtype(dtype: Type):
 
 def _castable_dtype_or_raise(
     data: Union[VectorLike, VectorLikeBatch, VectorIdentifierBatch],
-    expected: np.dtype,
-    message: str
+    expected: np.dtype
 ) -> np.ndarray:
-    if isinstance(data, list):
-        return np.array(data, dtype=expected)  # may result in an overflow and invalid data, but at least warns
-    elif isinstance(data, np.ndarray):
-        try:
-            _vectors = data.astype(dtype=expected, casting="safe", copy=False)  # we would prefer no copy
-        except TypeError as e:
-            e.args = (message, *e.args)
-            raise
-        return _vectors
+    if isinstance(data, np.ndarray) and np.can_cast(data.dtype, expected):
+        return data.astype(expected, casting="safe")
     else:
-        raise TypeError(f"expecting a VectorLike, VectorLikeBatch, or VectorIdentifierBatch, not a {type(data)}")
+        raise TypeError(f"expecting a numpy ndarray of dtype {expected}, not a {type(data)}")
 
 
 def _assert_2d(vectors: np.ndarray, name: str):
@@ -168,11 +171,11 @@ class _DataType(Enum):
 
     @classmethod
     def from_type(cls, vector_dtype: VectorDType) -> "DataType":
-        if vector_dtype == np.single:
+        if vector_dtype == np.float32:
             return cls.FLOAT32
-        if vector_dtype == np.byte:
+        if vector_dtype == np.int8:
             return cls.INT8
-        if vector_dtype == np.ubyte:
+        if vector_dtype == np.uint8:
             return cls.UINT8
 
     def to_type(self) -> VectorDType:

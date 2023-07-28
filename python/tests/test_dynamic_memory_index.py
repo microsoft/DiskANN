@@ -32,12 +32,12 @@ class TestDynamicMemoryIndex(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._test_matrix = [
-            build_random_vectors_and_memory_index(np.single, "l2", with_tags=True),
-            build_random_vectors_and_memory_index(np.ubyte, "l2", with_tags=True),
-            build_random_vectors_and_memory_index(np.byte, "l2", with_tags=True),
-            build_random_vectors_and_memory_index(np.single, "cosine", with_tags=True),
-            build_random_vectors_and_memory_index(np.ubyte, "cosine", with_tags=True),
-            build_random_vectors_and_memory_index(np.byte, "cosine", with_tags=True),
+            build_random_vectors_and_memory_index(np.float32, "l2", with_tags=True),
+            build_random_vectors_and_memory_index(np.uint8, "l2", with_tags=True),
+            build_random_vectors_and_memory_index(np.int8, "l2", with_tags=True),
+            build_random_vectors_and_memory_index(np.float32, "cosine", with_tags=True),
+            build_random_vectors_and_memory_index(np.uint8, "cosine", with_tags=True),
+            build_random_vectors_and_memory_index(np.int8, "cosine", with_tags=True),
         ]
         cls._example_ann_dir = cls._test_matrix[0][4]
 
@@ -60,7 +60,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             vector_bin_file,
             generated_tags
         ) in self._test_matrix:
-            with self.subTest():
+            with self.subTest(msg=f"Testing dtype {dtype}"):
                 index = dap.DynamicMemoryIndex.from_file(
                     index_directory=ann_dir,
                     max_vectors=11_000,
@@ -98,7 +98,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             vector_bin_file,
             generated_tags
         ) in self._test_matrix:
-            with self.subTest():
+            with self.subTest(msg=f"Testing dtype {dtype}"):
                 index = dap.DynamicMemoryIndex(
                     distance_metric="l2",
                     vector_dtype=dtype,
@@ -112,9 +112,6 @@ class TestDynamicMemoryIndex(unittest.TestCase):
 
                 k = 5
                 ids, dists = index.search(query_vectors[0], k_neighbors=k, complexity=5)
-                self.assertEqual(ids.shape[0], k)
-                self.assertEqual(dists.shape[0], k)
-                ids, dists = index.search(query_vectors[0].tolist(), k_neighbors=k, complexity=5)
                 self.assertEqual(ids.shape[0], k)
                 self.assertEqual(dists.shape[0], k)
 

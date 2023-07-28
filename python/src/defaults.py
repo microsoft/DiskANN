@@ -8,7 +8,11 @@ These parameter defaults are re-exported from the C++ extension module, and used
 from ._diskannpy import defaults as _defaults
 
 ALPHA = _defaults.ALPHA
-""" Alpha is <help>. Note that, as ALPHA is a `float32` (single precision float) in C++, when converted into Python it becomes a `float64` (double precision float). The actual value is 1.2f. """
+""" Note that, as ALPHA is a `float32` (single precision float) in C++, when converted into Python it becomes a `float64` (double precision float). The actual value is 1.2f. 
+The alpha parameter (>=1) is used to control the nature and number of points that are added to the
+graph. A higher alpha value (e.g., 1.4) will result in fewer hops (and IOs) to convergence, but probably more
+distance comparisons.
+"""
 NUM_THREADS = _defaults.NUM_THREADS
 """ Number of threads to use. `0` will use all available detected logical processors """
 MAX_OCCLUSION_SIZE = _defaults.MAX_OCCLUSION_SIZE
@@ -18,9 +22,9 @@ point, it will not be added to the graph. This is a tradeoff between index build
 FILTER_COMPLEXITY = _defaults.FILTER_COMPLEXITY
 """ Complexity (a.k.a. `L`) references the size of the list we store candidate approximate neighbors in while doing a filtered search. This value must be larger than `k_neighbors`, and larger values tend toward higher recall in the resultant ANN search at the cost of more time. """
 NUM_FROZEN_POINTS_STATIC = _defaults.NUM_FROZEN_POINTS_STATIC
-""" Num Frozen Points Static """
+""" Number of points frozen by default in a StaticMemoryIndex """
 NUM_FROZEN_POINTS_DYNAMIC = _defaults.NUM_FROZEN_POINTS_DYNAMIC
-""" Num Frozen Points Dynamic """
+""" Number of points frozen by default in a DynamicMemoryIndex """
 SATURATE_GRAPH = _defaults.SATURATE_GRAPH
 """ Whether to saturate the graph or not. Default is `True` """
 GRAPH_DEGREE = _defaults.GRAPH_DEGREE

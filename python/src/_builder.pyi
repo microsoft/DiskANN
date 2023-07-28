@@ -21,7 +21,7 @@ def build_disk_index(
     pq_disk_bytes: int,
     vector_dtype: VectorDType,
     index_prefix: str,
-): ...
+) -> None: ...
 @overload
 def build_disk_index(
     data: VectorLikeBatch,
@@ -34,7 +34,7 @@ def build_disk_index(
     num_threads: int,
     pq_disk_bytes: int,
     index_prefix: str,
-): ...
+) -> None: ...
 @overload
 def build_memory_index(
     data: VectorLikeBatch,
@@ -52,7 +52,7 @@ def build_memory_index(
     filter_complexity: int,
     tags: Optional[VectorIdentifierBatch],
     index_prefix: str,
-): ...
+) -> None: ...
 @overload
 def build_memory_index(
     data: str,
@@ -71,5 +71,5 @@ def build_memory_index(
     filter_complexity: int,
     tags: Optional[str],
     index_prefix: str,
-): ...
+) -> None: ...
 

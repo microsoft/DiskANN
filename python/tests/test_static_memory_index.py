@@ -42,7 +42,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             vector_bin_file,
             _
         ) in self._test_matrix:
-            with self.subTest():
+            with self.subTest(msg=f"Testing dtype {dtype}"):
                 index = dap.StaticMemoryIndex(
                     index_directory=ann_dir,
                     num_threads=16,
@@ -78,7 +78,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             vector_bin_file,
             _
         ) in self._test_matrix:
-            with self.subTest():
+            with self.subTest(msg=f"Testing dtype {dtype}"):
                 index = dap.StaticMemoryIndex(
                     index_directory=ann_dir,
                     num_threads=16,

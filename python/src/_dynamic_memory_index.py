@@ -81,9 +81,12 @@ class DynamicMemoryIndex:
         - **index_directory**: The directory containing the index files. This directory must contain the following
             files:
             - `{index_prefix}.data`
-            - `vectors.bin`: `diskannpy` builder functions create or copy this file to the `index_directory`
             - `{index_prefix}.tags`
             - `{index_prefix}`
+
+          It may also include the following optional files:
+            - `{index_prefix}_vectors.bin`: Optional. `diskannpy` builder functions may create this file in the
+              `index_directory` if the index was created from a numpy array
             - `{index_prefix}_metadata.bin`: Optional. `diskannpy` builder functions create this file to store metadata
             about the index, such as vector dtype, distance metric, number of vectors and vector dimensionality.
             If an index is built from the `diskann` cli tools, this file will not exist.
@@ -244,12 +247,13 @@ class DynamicMemoryIndex:
         )
         _assert_is_nonnegative_uint32(search_threads, "search_threads")
 
-        if vector_dtype == np.single:
-            _index = _native_dap.DynamicMemoryFloatIndex
-        elif vector_dtype == np.ubyte:
+        if vector_dtype == np.uint8:
             _index = _native_dap.DynamicMemoryUInt8Index
-        else:
+        elif vector_dtype == np.int8:
             _index = _native_dap.DynamicMemoryInt8Index
+        else:
+            _index = _native_dap.DynamicMemoryFloatIndex
+
         self._index = _index(
             distance_metric=dap_metric,
             dimensions=dimensions,
@@ -283,8 +287,7 @@ class DynamicMemoryIndex:
         """
         _query = _castable_dtype_or_raise(
             query,
-            expected=self._vector_dtype,
-            message=f"StaticMemoryIndex expected a query vector of dtype of {self._vector_dtype}"
+            expected=self._vector_dtype
         )
         _assert(len(_query.shape) == 1, "query vector must be 1-d")
         _assert(
@@ -319,7 +322,7 @@ class DynamicMemoryIndex:
           increases accuracy at the cost of latency. Must be at least k_neighbors in size.
         - **num_threads**: Number of threads to use when searching this index. (>= 0), 0 = num_threads in system
         """
-        _queries = _castable_dtype_or_raise(queries, expected=self._vector_dtype, message=f"DynamicMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
+        _queries = _castable_dtype_or_raise(queries, expected=self._vector_dtype)
         _assert_2d(_queries, "queries")
         _assert(
             _queries.shape[1] == self._dimensions,
@@ -380,7 +383,7 @@ class DynamicMemoryIndex:
         - **vector**: The vector to insert. Note that dtype must match.
         - **vector_id**: The vector_id to use for this vector.
         """
-        _vector = _castable_dtype_or_raise(vector, expected=self._vector_dtype, message=f"DynamicMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
+        _vector = _castable_dtype_or_raise(vector, expected=self._vector_dtype)
         _assert(len(vector.shape) == 1, "insert vector must be 1-d")
         _assert_is_positive_uint32(vector_id, "vector_id")
         return self._index.insert(_vector, np.uintc(vector_id))
@@ -397,7 +400,7 @@ class DynamicMemoryIndex:
             the vectors array has rows. The dtype of vector_ids must be `np.uint32`
         - **num_threads**: Number of threads to use when inserting into this index. (>= 0), 0 = num_threads in system
         """
-        _query = _castable_dtype_or_raise(vectors, expected=self._vector_dtype, message=f"DynamicMemoryIndex expected a query vector of dtype of {self._vector_dtype}")
+        _query = _castable_dtype_or_raise(vectors, expected=self._vector_dtype)
         _assert(len(vectors.shape) == 2, "vectors must be a 2-d array")
         _assert(
             vectors.shape[0] == vector_ids.shape[0], "Number of vectors must be equal to number of ids"

@@ -3,12 +3,12 @@
 
 """
 # Documentation Overview
-`diskannpy` is mostly structured around 2 distinct processes: [Building Functions](#index-builders) and [Search Classes](#search-classes)
+`diskannpy` is mostly structured around 2 distinct processes: [Index Builder Functions](#index-builders) and [Search Classes](#search-classes)
 
 It also includes a few nascent [utilities](#utilities).
 
 And lastly, it makes substantial use of type hints, with various shorthand [type aliases](#parameter-and-response-type-aliases) documented. 
-When reading the `diskannpy` code we refer to the type aliases, though `pydoc` helpfully expands them. 
+When reading the `diskannpy` code we refer to the type aliases, though `pdoc` helpfully expands them.
 
 ## Index Builders
 - `build_disk_index` - To build an index that cannot fully fit into memory when searching
@@ -31,17 +31,20 @@ When reading the `diskannpy` code we refer to the type aliases, though `pydoc` h
 - `VectorIdentifierBatch` - A batch of identifiers of the exact same type. The type can change, but they must **all** change.
 - `VectorLike` - How does a vector look to `diskannpy`, to be inserted or searched with.
 - `VectorLikeBatch` - A batch of those vectors, to be inserted or searched with.
+- `Metadata` - DiskANN vector binary file metadata (num_points, vector_dim)
 
 ## Utilities
-- `numpy_to_diskann_file` - Turns a 2 dimensional `numpy.typing.NDArray[VectorDType]` with shape `(number_of_points, vector_dim)`
-- `vectors_from_binary` - Reads a `diskann` bin file representing stored vectors into a numpy ndarray.
-- `vector_file_metadata` - Reads a `diskannpy` metadata file, containing the index's distance metric, vector dtype, number of points, and vector dimensionality and returns them. Useful for inspecting what an index was saved with without loading the whole index. 
+- `vectors_to_file` - Turns a 2 dimensional `numpy.typing.NDArray[VectorDType]` with shape `(number_of_points, vector_dim)` into a DiskANN vector bin file.
+- `vectors_from_file` - Reads a DiskANN vector bin file representing stored vectors into a numpy ndarray.
+- `vectors_metadata_from_file` - Reads metadata stored in a DiskANN vector bin file without reading the entire file
+- `tags_to_file` - Turns a 1 dimensional `numpy.typing.NDArray[VectorIdentifier]` into a DiskANN tags bin file.
+- `tags_from_file` - Reads a DiskANN tags bin file representing stored tags into a numpy ndarray.
+- `valid_dtype` - Checks if a given vector dtype is supported by `diskannpy`
 """
 
 from ._builder import (
     build_disk_index,
     build_memory_index,
-    numpy_to_diskann_file,
 )
 from ._common import (
     DistanceMetric,
@@ -56,7 +59,7 @@ from ._common import (
 )
 from . import defaults
 from ._dynamic_memory_index import DynamicMemoryIndex
-from ._files import vectors_from_binary, vector_file_metadata
+from ._files import vectors_from_file, vectors_metadata_from_file, Metadata, vectors_to_file, tags_from_file, tags_to_file
 from ._static_disk_index import StaticDiskIndex
 from ._static_memory_index import StaticMemoryIndex
 
@@ -76,9 +79,12 @@ __all__ = [
     "VectorIdentifierBatch",
     "VectorLike",
     "VectorLikeBatch",
-    "numpy_to_diskann_file", 
+    "Metadata",
+    "vectors_metadata_from_file",
+    "vectors_to_file",
+    "vectors_from_file",
+    "tags_to_file",
+    "tags_from_file",
     "valid_dtype",
-    "vectors_from_binary",
-    "vector_file_metadata",
 ]
 
