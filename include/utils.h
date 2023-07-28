@@ -228,7 +228,7 @@ inline void report_misalignment_of_requested_size(size_t align)
     print_error_and_terminate(stream);
 }
 
-inline void alloc_aligned(void **ptr, size_t size, size_t align)
+inline uint64_t alloc_aligned(void **ptr, size_t size, size_t align)
 {
     *ptr = nullptr;
     if (IS_ALIGNED(size, align) == 0)
@@ -239,7 +239,14 @@ inline void alloc_aligned(void **ptr, size_t size, size_t align)
     *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
 #endif
     if (*ptr == nullptr)
+    {
         report_memory_allocation_failure();
+        return 0;
+    }
+    else
+    {
+        return size;
+    }
 }
 
 inline void realloc_aligned(void **ptr, size_t size, size_t align)
@@ -373,7 +380,8 @@ template <typename T> inline std::string getValues(T *data, size_t num)
 
 // load_bin functions START
 template <typename T>
-inline void load_bin_impl(std::basic_istream<char> &reader, T *&data, size_t &npts, size_t &dim, size_t file_offset = 0)
+inline uint64_t load_bin_impl(std::basic_istream<char> &reader, T *&data, size_t &npts, size_t &dim,
+                              size_t file_offset = 0)
 {
     int npts_i32, dim_i32;
 
@@ -385,8 +393,10 @@ inline void load_bin_impl(std::basic_istream<char> &reader, T *&data, size_t &np
 
     std::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "..." << std::endl;
 
-    data = new T[npts * dim];
-    reader.read((char *)data, npts * dim * sizeof(T));
+    auto size = npts * dim;
+    data = new T[size];
+    reader.read((char *)data, size * sizeof(T));
+    return size * sizeof(T);
 }
 
 #ifdef EXEC_ENV_OLS
@@ -427,7 +437,7 @@ template <typename T> DISKANN_DLLEXPORT void read_value(AlignedFileReader &reade
 #endif
 
 template <typename T>
-inline void load_bin(const std::string &bin_file, T *&data, size_t &npts, size_t &dim, size_t offset = 0)
+inline uint64_t load_bin(const std::string &bin_file, T *&data, size_t &npts, size_t &dim, size_t offset = 0)
 {
     diskann::cout << "Reading bin file " << bin_file.c_str() << " ..." << std::endl;
     std::ifstream reader;
@@ -438,7 +448,7 @@ inline void load_bin(const std::string &bin_file, T *&data, size_t &npts, size_t
         diskann::cout << "Opening bin file " << bin_file.c_str() << "... " << std::endl;
         reader.open(bin_file, std::ios::binary | std::ios::ate);
         reader.seekg(0);
-        load_bin_impl<T>(reader, data, npts, dim, offset);
+        return load_bin_impl<T>(reader, data, npts, dim, offset);
     }
     catch (std::system_error &e)
     {

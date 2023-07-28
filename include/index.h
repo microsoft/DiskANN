@@ -85,6 +85,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // get some private variables
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
+    DISKANN_DLLEXPORT uint64_t get_memory_in_bytes();
 
     DISKANN_DLLEXPORT bool detect_common_filters(uint32_t point_id, bool search_invocation,
                                                  const std::vector<LabelT> &incoming_labels);
@@ -418,6 +419,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _data_compacted = true;    // true if data has been compacted
     bool _is_saved = false;         // Checking if the index is already saved.
     bool _conc_consolidate = false; // use _lock while searching
+
+    uint64_t _memory_in_bytes;
 
     // Acquire locks in the order below when acquiring multiple locks
     std::shared_timed_mutex // RW mutex between save/load (exclusive lock) and
