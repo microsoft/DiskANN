@@ -385,7 +385,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
-    uint32_t _filterIndexingQueueSize;  
+    uint32_t _filterIndexingQueueSize;
     std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
