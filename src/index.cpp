@@ -2679,9 +2679,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         reposition_points((uint32_t)_max_points, (uint32_t)_nd, (uint32_t)_num_frozen_pts);
         _start = (uint32_t)_nd;
 
-        // update medoid id's as frozen points are treated as medoid
         if (_filtered_index && _dynamic_index)
         {
+            //  update medoid id's as frozen points are treated as medoid
             for (auto &[label, medoid_id] : _label_to_medoid_id)
             {
                 if (label == _universal_label)
@@ -2804,7 +2804,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
     if (_filtered_index)
     {
-        for (size_t old = _nd + _frozen_pts_used; old < _max_points + _num_frozen_pts; old++)
+        for (size_t old = _nd; old < _max_points; old++)
         {
             _pts_to_labels[old].clear();
         }
