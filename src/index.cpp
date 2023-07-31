@@ -2770,7 +2770,10 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             {
                 assert(new_location[old] < old);
                 _final_graph[new_location[old]].swap(_final_graph[old]);
-                _pts_to_labels[new_location[old]].swap(_pts_to_labels[old]);
+                if (_filtered_index)
+                {
+                    _pts_to_labels[new_location[old]].swap(_pts_to_labels[old]);
+                }
 
                 _data_store->copy_vectors(old, new_location[old], 1);
             }
@@ -2798,10 +2801,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         _final_graph[old].clear();
     }
-
-    for (size_t old = _nd + _frozen_pts_used; old < _max_points + _num_frozen_pts; old++)
+    if (_filtered_index)
     {
-        _pts_to_labels[old].clear();
+        for (size_t old = _nd + _frozen_pts_used; old < _max_points + _num_frozen_pts; old++)
+        {
+            _pts_to_labels[old].clear();
+        }
     }
 
     _empty_slots.clear();
@@ -2910,7 +2915,10 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
         {
             assert(_final_graph[new_location_start + loc_offset].empty());
             _final_graph[new_location_start + loc_offset].swap(_final_graph[old_location_start + loc_offset]);
-            _pts_to_labels[new_location_start + loc_offset].swap(_pts_to_labels[old_location_start + loc_offset]);
+            if (_dynamic_index && _filtered_index)
+            {
+                _pts_to_labels[new_location_start + loc_offset].swap(_pts_to_labels[old_location_start + loc_offset]);
+            }
         }
 
         // If ranges are overlapping, make sure not to clear the newly copied
@@ -2929,8 +2937,11 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
         {
             assert(_final_graph[new_location_start + loc_offset - 1u].empty());
             _final_graph[new_location_start + loc_offset - 1u].swap(_final_graph[old_location_start + loc_offset - 1u]);
-            _pts_to_labels[new_location_start + loc_offset - 1u].swap(
-                _pts_to_labels[old_location_start + loc_offset - 1u]);
+            if (_dynamic_index && _filtered_index)
+            {
+                _pts_to_labels[new_location_start + loc_offset - 1u].swap(
+                    _pts_to_labels[old_location_start + loc_offset - 1u]);
+            }
         }
 
         // If ranges are overlapping, make sure not to clear the newly copied
