@@ -3,32 +3,31 @@
 
 import os
 import shutil
-
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
 import numpy as np
 
+from . import DistanceMetric, VectorDType, VectorIdentifierBatch, VectorLikeBatch
 from . import _diskannpy as _native_dap
 from ._common import (
-    valid_dtype,
-    DistanceMetric,
-    VectorDType,
-    VectorLikeBatch,
-    VectorIdentifierBatch,
     _assert,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
     _valid_metric,
-    _write_index_metadata
+    _write_index_metadata,
+    valid_dtype,
 )
-from ._files import tags_to_file, vectors_metadata_from_file, vectors_to_file
 from ._diskannpy import defaults
+from ._files import tags_to_file, vectors_metadata_from_file, vectors_to_file
 
 
 def _valid_path_and_dtype(
-    data: Union[str, VectorLikeBatch], vector_dtype: VectorDType, index_path: str, index_prefix: str
+    data: Union[str, VectorLikeBatch],
+    vector_dtype: VectorDType,
+    index_path: str,
+    index_prefix: str,
 ) -> Tuple[str, VectorDType]:
     if isinstance(data, str):
         vector_bin_path = data
@@ -122,9 +121,6 @@ def build_disk_index(
     )
 
     num_points, dimensions = vectors_metadata_from_file(vector_bin_path)
-    import sys
-
-    print(f"\n\n{vector_dtype} - {vector_dtype_actual}: {(num_points, dimensions)}\n", file=sys.stderr)
 
     if vector_dtype_actual == np.uint8:
         _builder = _native_dap.build_disk_uint8_index
@@ -146,7 +142,9 @@ def build_disk_index(
         num_threads=num_threads,
         pq_disk_bytes=pq_disk_bytes,
     )
-    _write_index_metadata(index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions)
+    _write_index_metadata(
+        index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions
+    )
 
 
 def build_memory_index(
@@ -163,7 +161,7 @@ def build_memory_index(
     vector_dtype: Optional[VectorDType] = None,
     filter_complexity: int = defaults.FILTER_COMPLEXITY,
     tags: Union[str, VectorIdentifierBatch] = "",
-    index_prefix: str = "ann"
+    index_prefix: str = "ann",
 ) -> None:
     """
     This function will construct a DiskANN memory index. Memory indices are ideal for smaller datasets whose
@@ -216,7 +214,10 @@ def build_memory_index(
     dap_metric = _valid_metric(distance_metric)
     _assert_is_positive_uint32(complexity, "complexity")
     _assert_is_positive_uint32(graph_degree, "graph_degree")
-    _assert(alpha >= 1, "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)")
+    _assert(
+        alpha >= 1,
+        "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)",
+    )
     _assert_is_nonnegative_uint32(num_threads, "num_threads")
     _assert_is_nonnegative_uint32(num_pq_bytes, "num_pq_bytes")
     _assert_is_nonnegative_uint32(filter_complexity, "filter_complexity")
@@ -248,15 +249,12 @@ def build_memory_index(
         shutil.copy(tags, index_prefix_path + ".tags")
     elif not isinstance(tags, str):
         use_tags = True
-        tags_as_array = _castable_dtype_or_raise(
-            tags,
-            expected=np.uint32
-        )
+        tags_as_array = _castable_dtype_or_raise(tags, expected=np.uint32)
         _assert(len(tags_as_array.shape) == 1, "Provided tags must be 1 dimensional")
         _assert(
             tags_as_array.shape[0] == num_points,
             "Provided tags must contain an identical population to the number of points, "
-            f"{tags_as_array.shape[0]=}, {num_points=}"
+            f"{tags_as_array.shape[0]=}, {num_points=}",
         )
         tags_to_file(index_prefix_path + ".tags", tags_as_array)
     else:
@@ -274,7 +272,9 @@ def build_memory_index(
         num_pq_bytes=num_pq_bytes,
         use_opq=use_opq,
         filter_complexity=filter_complexity,
-        use_tags=use_tags
+        use_tags=use_tags,
     )
 
-    _write_index_metadata(index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions)
+    _write_index_metadata(
+        index_prefix_path, vector_dtype_actual, dap_metric, num_points, dimensions
+    )

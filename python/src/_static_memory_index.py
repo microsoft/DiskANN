@@ -3,26 +3,27 @@
 
 import os
 import warnings
+from typing import Optional
 
 import numpy as np
 
-from typing import Optional
-
-from . import _diskannpy as _native_dap
-from ._common import (
+from . import (
     DistanceMetric,
     QueryResponse,
     QueryResponseBatch,
     VectorDType,
     VectorLike,
     VectorLikeBatch,
+)
+from . import _diskannpy as _native_dap
+from ._common import (
     _assert,
     _assert_is_nonnegative_uint32,
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
     _ensure_index_metadata,
     _valid_index_prefix,
-    _valid_metric
+    _valid_metric,
 )
 
 __ALL__ = ["StaticMemoryIndex"]
@@ -32,6 +33,7 @@ class StaticMemoryIndex:
     """
     A StaticMemoryIndex is an immutable in-memory DiskANN index.
     """
+
     def __init__(
         self,
         index_directory: str,
@@ -78,7 +80,7 @@ class StaticMemoryIndex:
             vector_dtype,
             distance_metric,
             1,  # it doesn't matter because we don't need it in this context anyway
-            dimensions
+            dimensions,
         )
         dap_metric = _valid_metric(metric)
 
@@ -106,7 +108,9 @@ class StaticMemoryIndex:
             initial_search_complexity=initial_search_complexity,
         )
 
-    def search(self, query: VectorLike, k_neighbors: int, complexity: int) -> QueryResponse:
+    def search(
+        self, query: VectorLike, k_neighbors: int, complexity: int
+    ) -> QueryResponse:
         """
         Searches the index by a single query vector.
 
@@ -117,15 +121,12 @@ class StaticMemoryIndex:
         - **complexity**: Size of distance ordered list of candidate neighbors to use while searching. List size
           increases accuracy at the cost of latency. Must be at least k_neighbors in size.
         """
-        _query = _castable_dtype_or_raise(
-            query,
-            expected=self._vector_dtype
-        )
+        _query = _castable_dtype_or_raise(query, expected=self._vector_dtype)
         _assert(len(_query.shape) == 1, "query vector must be 1-d")
         _assert(
             _query.shape[0] == self._dimensions,
             f"query vector must have the same dimensionality as the index; index dimensionality: {self._dimensions}, "
-            f"query dimensionality: {_query.shape[0]}"
+            f"query dimensionality: {_query.shape[0]}",
         )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_nonnegative_uint32(complexity, "complexity")
@@ -138,7 +139,11 @@ class StaticMemoryIndex:
         return self._index.search(query=_query, knn=k_neighbors, complexity=complexity)
 
     def batch_search(
-        self, queries: VectorLikeBatch, k_neighbors: int, complexity: int, num_threads: int
+        self,
+        queries: VectorLikeBatch,
+        k_neighbors: int,
+        complexity: int,
+        num_threads: int,
     ) -> QueryResponseBatch:
         """
         Searches the index by a batch of query vectors.
@@ -160,7 +165,7 @@ class StaticMemoryIndex:
         _assert(
             _queries.shape[1] == self._dimensions,
             f"query vectors must have the same dimensionality as the index; index dimensionality: {self._dimensions}, "
-            f"query dimensionality: {_queries.shape[1]}"
+            f"query dimensionality: {_queries.shape[1]}",
         )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(complexity, "complexity")

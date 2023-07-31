@@ -2,25 +2,18 @@
 # Licensed under the MIT license.
 
 import warnings
+from typing import BinaryIO, NamedTuple
 
 import numpy as np
 import numpy.typing as npt
 
-from typing import BinaryIO, NamedTuple
-
-from ._common import (
-    VectorDType,
-    VectorIdentifierBatch,
-    VectorLikeBatch,
-    _assert,
-    _assert_2d,
-    _assert_dtype,
-    _assert_existing_file
-)
+from . import VectorDType, VectorIdentifierBatch, VectorLikeBatch
+from ._common import _assert, _assert_2d, _assert_dtype, _assert_existing_file
 
 
 class Metadata(NamedTuple):
-    """ DiskANN binary vector files contain a small stanza containing some metadata about them. """
+    """DiskANN binary vector files contain a small stanza containing some metadata about them."""
+
     num_vectors: int
     """ The number of vectors in the file. """
     dimensions: int
@@ -90,10 +83,15 @@ def tags_to_file(tags_file: str, tags: VectorIdentifierBatch) -> None:
 
     """
     _assert(np.can_cast(tags.dtype, np.uint32), "valid tags must be uint32")
-    _assert(len(tags.shape) == 1 or tags.shape[1] == 1, "tags must be 1d or 2d with 1 column")
+    _assert(
+        len(tags.shape) == 1 or tags.shape[1] == 1,
+        "tags must be 1d or 2d with 1 column",
+    )
     if len(tags.shape) == 2:
-        warnings.warn("Tags in 2d with one column will be reshaped and copied to a new array. "
-                      "It is more efficient for you to reshape without copying first.")
+        warnings.warn(
+            "Tags in 2d with one column will be reshaped and copied to a new array. "
+            "It is more efficient for you to reshape without copying first."
+        )
         tags = tags.reshape(tags.shape[0], copy=True)
     with open(tags_file, "wb") as fh:
         _write_bin(tags.astype(np.uint32), fh)
@@ -107,7 +105,7 @@ def tags_from_file(tags_file: str) -> VectorIdentifierBatch:
     - **tags_file**: The path to the tag file to read the tags from.
     """
     _assert_existing_file(tags_file, "tags_file")
-    points, dims = vectors_metadata_from_file(tags_file)  # tag files contain the same metadata stanza
+    points, dims = vectors_metadata_from_file(
+        tags_file
+    )  # tag files contain the same metadata stanza
     return np.fromfile(file=tags_file, dtype=np.uint32, offset=8).reshape(points)
-
-

@@ -3,82 +3,30 @@
 
 import os
 import warnings
-
 from enum import Enum
 from pathlib import Path
 from typing import Literal, NamedTuple, Optional, Tuple, Type, Union
 
 import numpy as np
-import numpy.typing as npt
 
+from . import (
+    DistanceMetric,
+    VectorDType,
+    VectorIdentifierBatch,
+    VectorLike,
+    VectorLikeBatch,
+)
 from . import _diskannpy as _native_dap
 
-__ALL__ = [
-    "DistanceMetric",
-    "QueryResponse",
-    "QueryResponseBatch",
-    "VectorDType",
-    "VectorLike",
-    "VectorLikeBatch",
-    "VectorIdentifier",
-    "VectorIdentifierBatch",
-    "Metadata"
-]
+__ALL__ = ["valid_dtype"]
 
 _VALID_DTYPES = [np.float32, np.int8, np.uint8]
-
-DistanceMetric = Literal["l2", "mips", "cosine"]
-""" Type alias for one of {"l2", "mips", "cosine"} """
-VectorDType = Union[Type[np.float32], Type[np.int8], Type[np.uint8]]
-""" Type alias for one of {`numpy.float32`, `numpy.int8`, `numpy.uint8`} """
-VectorLike = npt.NDArray[VectorDType]
-""" Type alias for something that can be treated as a vector """
-VectorLikeBatch = npt.NDArray[VectorDType]
-""" Type alias for a batch of VectorLikes """
-VectorIdentifier = Union[int, np.uint32]
-""" 
-Type alias for a vector identifier, whether it be an implicit array index identifier from StaticMemoryIndex or 
-StaticDiskIndex, or an explicit tag identifier from DynamicMemoryIndex 
-"""
-VectorIdentifierBatch = npt.NDArray[np.uint32]
-""" Type alias for a batch of VectorIdentifiers """
-
-
-class QueryResponse(NamedTuple):
-    """
-    Tuple with two values, identifiers and distances. Both are 1d arrays, positionally correspond, and will contain the
-    nearest neighbors from [0..k_neighbors)
-    """
-    identifiers: npt.NDArray[VectorIdentifier]
-    """ A `numpy.typing.NDArray[VectorIdentifier]` array of vector identifiers, 1 dimensional """
-    distances: npt.NDArray[np.float32]
-    """
-    A `numpy.typing.NDAarray[numpy.float32]` of distances as calculated by the distance metric function,  1 dimensional
-    """
-
-
-class QueryResponseBatch(NamedTuple):
-    """
-    Tuple with two values, identifiers and distances. Both are 2d arrays, with dimensionality determined by the
-    rows corresponding to the number of queries made, and the columns corresponding to the k neighbors
-    requested. The two 2d arrays have an implicit, position-based relationship
-    """
-    identifiers: npt.NDArray[VectorIdentifier]
-    """ 
-    A `numpy.typing.NDArray[VectorIdentifier]` array of vector identifiers, 2 dimensional. The row corresponds to index 
-    of the query, and the column corresponds to the k neighbors requested 
-    """
-    distances: np.ndarray[np.float32]
-    """  
-    A `numpy.typing.NDAarray[numpy.float32]` of distances as calculated by the distance metric function, 2 dimensional. 
-    The row corresponds to the index of the query, and the column corresponds to the distance of the query to the 
-    *k-th* neighbor 
-    """
 
 
 def valid_dtype(dtype: Type) -> VectorDType:
     """
-    Utility method to determine whether the provided dtype is supported by `diskannpy`
+    Utility method to determine whether the provided dtype is supported by `diskannpy`, and if so, the canonical
+    dtype we will use internally (e.g. np.single -> np.float32)
     """
     _assert_dtype(dtype)
     if dtype == np.uint8:
@@ -115,13 +63,14 @@ def _assert_dtype(dtype: Type):
 
 
 def _castable_dtype_or_raise(
-    data: Union[VectorLike, VectorLikeBatch, VectorIdentifierBatch],
-    expected: np.dtype
+    data: Union[VectorLike, VectorLikeBatch, VectorIdentifierBatch], expected: np.dtype
 ) -> np.ndarray:
     if isinstance(data, np.ndarray) and np.can_cast(data.dtype, expected):
         return data.astype(expected, casting="safe")
     else:
-        raise TypeError(f"expecting a numpy ndarray of dtype {expected}, not a {type(data)}")
+        raise TypeError(
+            f"expecting a numpy ndarray of dtype {expected}, not a {type(data)}"
+        )
 
 
 def _assert_2d(vectors: np.ndarray, name: str):
@@ -223,25 +172,37 @@ def _build_metadata_path(index_path_and_prefix: str) -> str:
 
 
 def _write_index_metadata(
-        index_path_and_prefix: str,
-        dtype: VectorDType,
-        metric: _native_dap.Metric,
-        num_points: int,
-        dimensions: int
+    index_path_and_prefix: str,
+    dtype: VectorDType,
+    metric: _native_dap.Metric,
+    num_points: int,
+    dimensions: int,
 ):
     np.array(
-        [_DataType.from_type(dtype).value, _Metric.from_native(metric).value, num_points, dimensions],
-        dtype=np.uint64
+        [
+            _DataType.from_type(dtype).value,
+            _Metric.from_native(metric).value,
+            num_points,
+            dimensions,
+        ],
+        dtype=np.uint64,
     ).tofile(_build_metadata_path(index_path_and_prefix))
 
 
-def _read_index_metadata(index_path_and_prefix: str) -> Optional[Tuple[VectorDType, str, np.uint64, np.uint64]]:
+def _read_index_metadata(
+    index_path_and_prefix: str,
+) -> Optional[Tuple[VectorDType, str, np.uint64, np.uint64]]:
     path = _build_metadata_path(index_path_and_prefix)
     if not Path(path).exists():
         return None
     else:
         metadata = np.fromfile(path, dtype=np.uint64, count=-1)
-        return _DataType(int(metadata[0])).to_type(), _Metric(int(metadata[1])).to_str(), metadata[2], metadata[3]
+        return (
+            _DataType(int(metadata[0])).to_type(),
+            _Metric(int(metadata[1])).to_str(),
+            metadata[2],
+            metadata[3],
+        )
 
 
 def _ensure_index_metadata(
@@ -257,7 +218,7 @@ def _ensure_index_metadata(
             all([vector_dtype, distance_metric, dimensions]),
             "distance_metric, vector_dtype, and dimensions must provided if a corresponding metadata file has not "
             "been built for this index, such as when an index was built via the CLI tools or prior to the addition "
-            "of a metadata file"
+            "of a metadata file",
         )
         _assert_dtype(vector_dtype)
         _assert_is_positive_uint32(max_vectors, "max_vectors")
@@ -279,7 +240,10 @@ def _ensure_index_metadata(
 
 
 def _valid_index_prefix(index_directory: str, index_prefix: str) -> str:
-    _assert(index_directory is not None and index_directory != "", "index_directory cannot be None or empty")
+    _assert(
+        index_directory is not None and index_directory != "",
+        "index_directory cannot be None or empty",
+    )
     _assert_existing_directory(index_directory, "index_directory")
     _assert(index_prefix != "", "index_prefix cannot be an empty string")
     return os.path.join(index_directory, index_prefix)

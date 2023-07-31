@@ -12,18 +12,19 @@ from sklearn.neighbors import NearestNeighbors
 
 
 def _calculate_recall(
-        result_set_tags: np.ndarray,
-        original_indices_to_tags: np.ndarray,
-        truth_set_indices: np.ndarray,
-        recall_at: int = 5
+    result_set_tags: np.ndarray,
+    original_indices_to_tags: np.ndarray,
+    truth_set_indices: np.ndarray,
+    recall_at: int = 5,
 ) -> float:
-
     found = 0
     for i in range(0, result_set_tags.shape[0]):
         result_set_set = set(result_set_tags[i][0:recall_at])
         truth_set_set = set()
         for knn_index in truth_set_indices[i][0:recall_at]:
-            truth_set_set.add(original_indices_to_tags[knn_index])  # mapped into our tag number instead
+            truth_set_set.add(
+                original_indices_to_tags[knn_index]
+            )  # mapped into our tag number instead
         found += len(result_set_set.intersection(truth_set_set))
     return found / (result_set_tags.shape[0] * recall_at)
 
@@ -58,7 +59,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
-            generated_tags
+            generated_tags,
         ) in self._test_matrix:
             with self.subTest(msg=f"Testing dtype {dtype}"):
                 index = dap.DynamicMemoryIndex.from_file(
@@ -82,7 +83,9 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                     )
                     knn.fit(index_vectors)
                     knn_distances, knn_indices = knn.kneighbors(query_vectors)
-                    recall = _calculate_recall(diskann_neighbors, generated_tags, knn_indices, k)
+                    recall = _calculate_recall(
+                        diskann_neighbors, generated_tags, knn_indices, k
+                    )
                     self.assertTrue(
                         recall > 0.70,
                         f"Recall [{recall}] was not over 0.7",
@@ -96,7 +99,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
-            generated_tags
+            generated_tags,
         ) in self._test_matrix:
             with self.subTest(msg=f"Testing dtype {dtype}"):
                 index = dap.DynamicMemoryIndex(
@@ -173,7 +176,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
-            generated_tags
+            generated_tags,
         ) in self._test_matrix:
             with self.subTest():
                 index = dap.DynamicMemoryIndex(
@@ -208,8 +211,10 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
-            generated_tags
-        ) = build_random_vectors_and_memory_index(np.single, "l2", with_tags=True, index_prefix="not_ann")
+            generated_tags,
+        ) = build_random_vectors_and_memory_index(
+            np.single, "l2", with_tags=True, index_prefix="not_ann"
+        )
         good_ranges = {
             "distance_metric": "l2",
             "vector_dtype": np.single,
@@ -223,7 +228,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             "filter_complexity": 10,
             "num_frozen_points": 10,
             "initial_search_complexity": 32,
-            "search_threads": 0
+            "search_threads": 0,
         }
 
         bad_ranges = {
@@ -245,7 +250,10 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             kwargs = good_ranges.copy()
             kwargs[bad_value_key] = bad_ranges[bad_value_key]
             with self.subTest():
-                with self.assertRaises(ValueError, msg=f"expected to fail with parameter {bad_value_key}={bad_ranges[bad_value_key]}"):
+                with self.assertRaises(
+                    ValueError,
+                    msg=f"expected to fail with parameter {bad_value_key}={bad_ranges[bad_value_key]}",
+                ):
                     index = dap.DynamicMemoryIndex(saturate_graph=False, **kwargs)
 
     def test_value_ranges_search(self):
@@ -262,7 +270,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                         initial_search_complexity=32,
                         max_vectors=10001,
                         complexity=64,
-                        graph_degree=32
+                        graph_degree=32,
                     )
                     index.search(query=np.array([], dtype=np.single), **kwargs)
 
@@ -288,7 +296,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                         initial_search_complexity=32,
                         max_vectors=10001,
                         complexity=64,
-                        graph_degree=32
+                        graph_degree=32,
                     )
                     index.batch_search(
                         queries=np.array([[]], dtype=np.single), **kwargs
@@ -307,18 +315,26 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             initial_search_complexity=32,
             max_vectors=10100,
             complexity=64,
-            graph_degree=32
+            graph_degree=32,
         )
         index.insert(np.array([1.0] * 10, dtype=np.single), 10099)
         index.insert(np.array([2.0] * 10, dtype=np.single), 10050)
         index.insert(np.array([3.0] * 10, dtype=np.single), 10053)
-        tags, distances = index.search(np.array([3.0] * 10, dtype=np.single), k_neighbors=5, complexity=64)
+        tags, distances = index.search(
+            np.array([3.0] * 10, dtype=np.single), k_neighbors=5, complexity=64
+        )
         self.assertIn(10053, tags)
         tags, distances = index.search(deletion_vector, k_neighbors=5, complexity=64)
-        self.assertIn(deletion_tag, tags, "deletion_tag should exist, as we have not deleted yet")
+        self.assertIn(
+            deletion_tag, tags, "deletion_tag should exist, as we have not deleted yet"
+        )
         index.mark_deleted(deletion_tag)
         tags, distances = index.search(deletion_vector, k_neighbors=5, complexity=64)
-        self.assertNotIn(deletion_tag, tags, "deletion_tag should not exist, as we have marked it for deletion")
+        self.assertNotIn(
+            deletion_tag,
+            tags,
+            "deletion_tag should not exist, as we have marked it for deletion",
+        )
         with tempfile.TemporaryDirectory() as tmpdir:
             index.save(tmpdir)
 
@@ -328,11 +344,13 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                 initial_search_complexity=32,
                 max_vectors=10100,
                 complexity=64,
-                graph_degree=32
+                graph_degree=32,
             )
-            tags, distances = index2.search(deletion_vector, k_neighbors=5, complexity=64)
+            tags, distances = index2.search(
+                deletion_vector, k_neighbors=5, complexity=64
+            )
             self.assertNotIn(
                 deletion_tag,
                 tags,
-                "deletion_tag should not exist, as we saved and reloaded the index without it"
+                "deletion_tag should not exist, as we saved and reloaded the index without it",
             )

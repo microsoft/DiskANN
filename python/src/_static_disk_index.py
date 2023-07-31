@@ -7,14 +7,16 @@ from typing import Optional
 
 import numpy as np
 
-from . import _diskannpy as _native_dap
-from ._common import (
+from . import (
     DistanceMetric,
     QueryResponse,
     QueryResponseBatch,
     VectorDType,
     VectorLike,
     VectorLikeBatch,
+)
+from . import _diskannpy as _native_dap
+from ._common import (
     _assert,
     _assert_2d,
     _assert_is_nonnegative_uint32,
@@ -32,6 +34,7 @@ class StaticDiskIndex:
     """
     A StaticDiskIndex is a disk-backed index that is not mutable.
     """
+
     def __init__(
         self,
         index_directory: str,
@@ -82,7 +85,7 @@ class StaticDiskIndex:
             vector_dtype,
             distance_metric,
             1,  # it doesn't matter because we don't need it in this context anyway
-            dimensions
+            dimensions,
         )
         dap_metric = _valid_metric(metric)
 
@@ -123,10 +126,7 @@ class StaticDiskIndex:
           Specifying 0 will optimize the beamwidth depending on the number of threads performing search, but will
           involve some tuning overhead.
         """
-        _query = _castable_dtype_or_raise(
-            query,
-            expected=self._vector_dtype
-        )
+        _query = _castable_dtype_or_raise(query, expected=self._vector_dtype)
         _assert(len(_query.shape) == 1, "query vector must be 1-d")
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(complexity, "complexity")
@@ -154,29 +154,26 @@ class StaticDiskIndex:
         beam_width: int = 2,
     ) -> QueryResponseBatch:
         """
-       Searches the index by a batch of query vectors.
+        Searches the index by a batch of query vectors.
 
-       This search is parallelized and far more efficient than searching for each vector individually.
+        This search is parallelized and far more efficient than searching for each vector individually.
 
-       ### Parameters
-       - **queries**: 2d numpy array, with column dimensionality matching the index and row dimensionality being the
-         number of queries intended to search for in parallel. Dtype must match dtype of the index.
-       - **k_neighbors**: Number of neighbors to be returned. If query vector exists in index, it almost definitely
-         will be returned as well, so adjust your ``k_neighbors`` as appropriate. Must be > 0.
-       - **complexity**: Size of distance ordered list of candidate neighbors to use while searching. List size
-         increases accuracy at the cost of latency. Must be at least k_neighbors in size.
-       - **num_threads**: Number of threads to use when searching this index. (>= 0), 0 = num_threads in system
-       - **beam_width**: The beamwidth to be used for search. This is the maximum number of IO requests each query
-         will issue per iteration of search code. Larger beamwidth will result in fewer IO round-trips per query,
-         but might result in slightly higher total number of IO requests to SSD per query. For the highest query
-         throughput with a fixed SSD IOps rating, use W=1. For best latency, use W=4,8 or higher complexity search.
-         Specifying 0 will optimize the beamwidth depending on the number of threads performing search, but will
-         involve some tuning overhead.
-       """
-        _queries = _castable_dtype_or_raise(
-            queries,
-            expected=self._vector_dtype
-        )
+        ### Parameters
+        - **queries**: 2d numpy array, with column dimensionality matching the index and row dimensionality being the
+          number of queries intended to search for in parallel. Dtype must match dtype of the index.
+        - **k_neighbors**: Number of neighbors to be returned. If query vector exists in index, it almost definitely
+          will be returned as well, so adjust your ``k_neighbors`` as appropriate. Must be > 0.
+        - **complexity**: Size of distance ordered list of candidate neighbors to use while searching. List size
+          increases accuracy at the cost of latency. Must be at least k_neighbors in size.
+        - **num_threads**: Number of threads to use when searching this index. (>= 0), 0 = num_threads in system
+        - **beam_width**: The beamwidth to be used for search. This is the maximum number of IO requests each query
+          will issue per iteration of search code. Larger beamwidth will result in fewer IO round-trips per query,
+          but might result in slightly higher total number of IO requests to SSD per query. For the highest query
+          throughput with a fixed SSD IOps rating, use W=1. For best latency, use W=4,8 or higher complexity search.
+          Specifying 0 will optimize the beamwidth depending on the number of threads performing search, but will
+          involve some tuning overhead.
+        """
+        _queries = _castable_dtype_or_raise(queries, expected=self._vector_dtype)
         _assert_2d(_queries, "queries")
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_positive_uint32(complexity, "complexity")

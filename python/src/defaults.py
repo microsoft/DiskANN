@@ -45,4 +45,3 @@ NUM_PQ_BYTES = _defaults.NUM_PQ_BYTES
 """ The number of product quantization bytes to use. More bytes requires more resources in both memory and time, but is like to result in better approximations. """
 USE_OPQ = _defaults.USE_OPQ
 """ Whether to use Optimized Product Quantization or not. """
-

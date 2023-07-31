@@ -1,11 +1,11 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-from typing import BinaryIO, overload, Optional
+from typing import BinaryIO, Optional, overload
 
 import numpy as np
 
-from ._common import DistanceMetric, VectorDType, VectorLikeBatch, VectorIdentifierBatch
+from . import DistanceMetric, VectorDType, VectorIdentifierBatch, VectorLikeBatch
 
 def numpy_to_diskann_file(vectors: np.ndarray, file_handler: BinaryIO): ...
 @overload
@@ -72,4 +72,3 @@ def build_memory_index(
     tags: Optional[str],
     index_prefix: str,
 ) -> None: ...
-

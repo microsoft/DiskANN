@@ -3,14 +3,12 @@
 
 import os
 import warnings
-
-import numpy as np
-
 from pathlib import Path
 from typing import Optional
 
-from . import _diskannpy as _native_dap
-from ._common import (
+import numpy as np
+
+from . import (
     DistanceMetric,
     QueryResponse,
     QueryResponseBatch,
@@ -19,6 +17,9 @@ from ._common import (
     VectorIdentifierBatch,
     VectorLike,
     VectorLikeBatch,
+)
+from . import _diskannpy as _native_dap
+from ._common import (
     _assert,
     _assert_2d,
     _assert_dtype,
@@ -27,9 +28,9 @@ from ._common import (
     _assert_is_positive_uint32,
     _castable_dtype_or_raise,
     _ensure_index_metadata,
-    _valid_metric,
     _valid_index_prefix,
-    _write_index_metadata
+    _valid_metric,
+    _write_index_metadata,
 )
 from ._diskannpy import defaults
 
@@ -138,13 +139,12 @@ class DynamicMemoryIndex:
 
         # do tags exist?
         tags_file = index_prefix_path + ".tags"
-        _assert(Path(tags_file).exists(), f"The file {tags_file} does not exist in {index_directory}")
+        _assert(
+            Path(tags_file).exists(),
+            f"The file {tags_file} does not exist in {index_directory}",
+        )
         vector_dtype, dap_metric, num_vectors, dimensions = _ensure_index_metadata(
-            index_prefix_path,
-            vector_dtype,
-            distance_metric,
-            max_vectors,
-            dimensions
+            index_prefix_path, vector_dtype, distance_metric, max_vectors, dimensions
         )
 
         index = cls(
@@ -162,7 +162,7 @@ class DynamicMemoryIndex:
             num_frozen_points=num_frozen_points,
             initial_search_complexity=initial_search_complexity,
             search_threads=search_threads,
-            concurrent_consolidation=concurrent_consolidation
+            concurrent_consolidation=concurrent_consolidation,
         )
         index._index.load(index_prefix_path)
         return index
@@ -183,7 +183,7 @@ class DynamicMemoryIndex:
         num_frozen_points: int = defaults.NUM_FROZEN_POINTS_DYNAMIC,
         initial_search_complexity: int = 0,
         search_threads: int = 0,
-        concurrent_consolidation: bool = True
+        concurrent_consolidation: bool = True,
     ):
         """
         The `diskannpy.DynamicMemoryIndex` represents our python API into a mutable DiskANN memory index.
@@ -237,7 +237,10 @@ class DynamicMemoryIndex:
         _assert_is_positive_uint32(max_vectors, "max_vectors")
         _assert_is_positive_uint32(complexity, "complexity")
         _assert_is_positive_uint32(graph_degree, "graph_degree")
-        _assert(alpha >= 1, "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)")
+        _assert(
+            alpha >= 1,
+            "alpha must be >= 1, and realistically should be kept between [1.0, 2.0)",
+        )
         _assert_is_nonnegative_uint32(max_occlusion_size, "max_occlusion_size")
         _assert_is_nonnegative_uint32(num_threads, "num_threads")
         _assert_is_nonnegative_uint32(filter_complexity, "filter_complexity")
@@ -268,7 +271,7 @@ class DynamicMemoryIndex:
             num_frozen_points=num_frozen_points,
             initial_search_complexity=initial_search_complexity,
             search_threads=search_threads,
-            concurrent_consolidation=concurrent_consolidation
+            concurrent_consolidation=concurrent_consolidation,
         )
         self._points_deleted = False
 
@@ -285,15 +288,12 @@ class DynamicMemoryIndex:
         - **complexity**: Size of distance ordered list of candidate neighbors to use while searching. List size
           increases accuracy at the cost of latency. Must be at least k_neighbors in size.
         """
-        _query = _castable_dtype_or_raise(
-            query,
-            expected=self._vector_dtype
-        )
+        _query = _castable_dtype_or_raise(query, expected=self._vector_dtype)
         _assert(len(_query.shape) == 1, "query vector must be 1-d")
         _assert(
             _query.shape[0] == self._dimensions,
             f"query vector must have the same dimensionality as the index; index dimensionality: {self._dimensions}, "
-            f"query dimensionality: {_query.shape[0]}"
+            f"query dimensionality: {_query.shape[0]}",
         )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_nonnegative_uint32(complexity, "complexity")
@@ -306,7 +306,11 @@ class DynamicMemoryIndex:
         return self._index.search(query=_query, knn=k_neighbors, complexity=complexity)
 
     def batch_search(
-        self, queries: VectorLikeBatch, k_neighbors: int, complexity: int, num_threads: int
+        self,
+        queries: VectorLikeBatch,
+        k_neighbors: int,
+        complexity: int,
+        num_threads: int,
     ) -> QueryResponseBatch:
         """
         Searches the index by a batch of query vectors.
@@ -327,7 +331,7 @@ class DynamicMemoryIndex:
         _assert(
             _queries.shape[1] == self._dimensions,
             f"query vectors must have the same dimensionality as the index; index dimensionality: {self._dimensions}, "
-            f"query dimensionality: {_queries.shape[1]}"
+            f"query dimensionality: {_queries.shape[1]}",
         )
 
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
@@ -372,8 +376,16 @@ class DynamicMemoryIndex:
                 "required."
             )
             self._index.consolidate_delete()
-        self._index.save(save_path=save_path, compact_before_save=True)  # we do not yet support uncompacted saves
-        _write_index_metadata(save_path, self._vector_dtype, self._dap_metric, self._index.num_points(), self._dimensions)
+        self._index.save(
+            save_path=save_path, compact_before_save=True
+        )  # we do not yet support uncompacted saves
+        _write_index_metadata(
+            save_path,
+            self._vector_dtype,
+            self._dap_metric,
+            self._index.num_points(),
+            self._dimensions,
+        )
 
     def insert(self, vector: VectorLike, vector_id: VectorIdentifier):
         """
@@ -389,7 +401,10 @@ class DynamicMemoryIndex:
         return self._index.insert(_vector, np.uintc(vector_id))
 
     def batch_insert(
-        self, vectors: VectorLikeBatch, vector_ids: VectorIdentifierBatch, num_threads: int = 0
+        self,
+        vectors: VectorLikeBatch,
+        vector_ids: VectorIdentifierBatch,
+        num_threads: int = 0,
     ):
         """
         Inserts a batch of vectors into the index with the provided vector_ids.
@@ -403,7 +418,8 @@ class DynamicMemoryIndex:
         _query = _castable_dtype_or_raise(vectors, expected=self._vector_dtype)
         _assert(len(vectors.shape) == 2, "vectors must be a 2-d array")
         _assert(
-            vectors.shape[0] == vector_ids.shape[0], "Number of vectors must be equal to number of ids"
+            vectors.shape[0] == vector_ids.shape[0],
+            "Number of vectors must be equal to number of ids",
         )
         _vectors = vectors.astype(dtype=self._vector_dtype, casting="safe", copy=False)
         _vector_ids = vector_ids.astype(dtype=np.uintc, casting="safe", copy=False)
