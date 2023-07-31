@@ -38,6 +38,34 @@ void compute_centroid(const size_t dim, const T* points,
 }
 
 template<typename T>
+void pick_random_points(const size_t dim, const T* points,
+                        const std::vector<uint32_t>& point_ids,
+                        float* subcentroids, const float* centroid, const unsigned num_subcentroids) {
+  if (point_ids.empty()) {
+    for (int i = 0; i < num_subcentroids; ++i) {
+      assign_junk(dim, subcentroids + i * dim);
+    }
+  } else {
+    // the first subcentroid is the centroid
+    for (int j = 0; j < dim; ++j) {
+	  subcentroids[j] = centroid[j];
+	}
+
+    // pick the other subcentroids as random points
+    std::random_device                    rd;
+    auto                                  x = rd();
+    std::mt19937                          generator(x);
+    std::uniform_int_distribution<uint32_t> int_dist(0, point_ids.size() - 1);
+    for (int i = 1; i < num_subcentroids; ++i) {
+      uint32_t random_point_id = point_ids[int_dist(generator)];
+      for (int j = 0; j < dim; ++j) {
+        subcentroids[i * dim + j] = points[random_point_id * dim + j];
+      }
+    }
+  }
+}
+
+template<typename T>
 void compute_subcentroids(const size_t dim, const T* points,
                           const std::vector<uint32_t>& point_ids,
                           float* subcentroids, uint32_t* subcluster_counts,
@@ -64,7 +92,7 @@ void compute_subcentroids(const size_t dim, const T* points,
     kmeans::kmeanspp_selecting_pivots(train_data_float.get(), point_ids.size(),
                                       dim, subcentroids, num_subcentroids);
 
-    constexpr size_t max_reps = 49;
+    constexpr size_t max_reps = 15;
     kmeans::run_lloyds(train_data_float.get(), point_ids.size(), dim,
                        subcentroids, num_subcentroids, max_reps, NULL, NULL);
 
@@ -294,7 +322,7 @@ int aux_main(const std::string &input_file,
                                points_routed_to_shard[shard_id],
                                centroids.get() + shard_id * dim);
         } else {
-          // mode can be from_ground_truth or centroid; in both cases we save centroids
+          // mode can be from_ground_truth, subcentroids, or centroid; in both cases we save centroids
           compute_centroid<T>(dim, points.get(),
                               points_routed_to_shard[shard_id],
                               centroids.get() + shard_id * dim);
@@ -303,7 +331,7 @@ int aux_main(const std::string &input_file,
       if (mode == "geomedian") {
         diskann::cout << "Saving geomedians (as _centroids.bin)" << std::endl;
       } else {
-        // mode can be from_ground_truth or centroid; in both cases we save
+        // mode can be from_ground_truth, subcentroids, or centroid; in both cases we save
         // centroids
         diskann::cout << "Saving centroids" << std::endl;
       }
@@ -321,6 +349,7 @@ int aux_main(const std::string &input_file,
         subcluster_counts =
             std::make_unique<uint32_t[]>(num_shards * num_subcentroids);
         for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
+          // compute subcentroids by running k-means inside each shard
           compute_subcentroids<T>(
               dim, points.get(), points_routed_to_shard[shard_id],
               subcentroids.get() + shard_id * num_subcentroids * dim,
@@ -328,6 +357,55 @@ int aux_main(const std::string &input_file,
               num_subcentroids);
         }
         diskann::cout << "computed subcentroids" << std::endl;
+      } else if (mode == "multicentroids-random") {
+        subcentroids =
+            std::make_unique<float[]>(num_shards * num_subcentroids * dim);
+        for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
+          // compute subcentroids by picking some random points in each shard,
+          // and also the cluster center
+          pick_random_points<T>(
+              dim, points.get(), points_routed_to_shard[shard_id],
+              subcentroids.get() + shard_id * num_subcentroids * dim,
+              centroids.get() + shard_id * dim, num_subcentroids);
+          // (subcluster_counts does not get filled in this case)
+        }
+      } else if (mode == "multicentroids-neighbors") {
+        if (num_subcentroids > num_shards) {
+          diskann::cout << "Error: num_subcentroids > num_shards" << std::endl;
+		  return -1;
+        }
+        subcentroids =
+            std::make_unique<float[]>(num_shards * num_subcentroids * dim);
+        std::unique_ptr<uint32_t[]> closest_centers_ivf =
+            std::make_unique<uint32_t[]>(num_shards * num_subcentroids);
+        // for each shard centers, find the `num_subcentroids` many closest shard centers
+        // (including itself, which will be the closest)
+        math_utils::compute_closest_centers(
+            centroids.get(), num_shards, dim, centroids.get(), num_shards,
+            num_subcentroids, closest_centers_ivf.get());
+        // now, for each shard, pick its k-th subcentroid
+        // to be 2/3 * shard_center + 1/3 * (k-th closest shard center)
+        for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
+          if (points_routed_to_shard[shard_id].empty()) {
+            for (size_t k = 0; k < num_subcentroids; ++k) {
+              assign_junk(dim, subcentroids.get() +
+                                 shard_id * num_subcentroids * dim + k * dim);
+            }
+            continue;
+          }
+          for (size_t k = 0; k < num_subcentroids; ++k) {
+            const uint32_t kth_closest_center =
+              closest_centers_ivf[shard_id * num_subcentroids + k];
+            if (k == 0 && kth_closest_center != shard_id) {
+              diskann::cout << "implementation error?" << std::endl;
+            }
+            for (int i = 0; i < dim; ++i) {
+              subcentroids[shard_id * num_subcentroids * dim + k * dim + i] =
+                  0.67 * centroids[shard_id * dim + i] +
+                  0.33 * centroids[kth_closest_center * dim + i];
+            }
+          }
+        }
       }
       // subcentroids do not get saved to a file
 
@@ -412,7 +490,8 @@ int aux_main(const std::string &input_file,
         diskann::cout << "Computed the query -> shard assignment using "
                          "approximation by centroids"
                       << std::endl;
-      } else if (mode == "multicentroids") {
+      } else if (mode == "multicentroids" || mode == "multicentroids-random" ||
+                 mode == "multicentroids-neighbors") {
 
         constexpr int submode = 1;
 
@@ -637,7 +716,8 @@ int main(int argc, char** argv) {
                          po::value<std::string>(&mode)->default_value(
                              std::string("centroids")),
                          "How to route queries to shards (from_ground_truth / "
-                         "centroids / multicentroids / geomedian)");
+                         "centroids / multicentroids / multicentroids-random / "
+                         "multicentroids-neighbors / geomedian)");
       desc.add_options()("K,recall_at", po::value<unsigned>(&K)->default_value(0),
                          "Number of points returned per query");
       desc.add_options()(
@@ -654,7 +734,7 @@ int main(int argc, char** argv) {
                          "The fanout of each query");
       desc.add_options()("num_subcentroids",
                          po::value<unsigned>(&num_subcentroids)->default_value(0),
-                         "The number of subcentroids (for multicentroids mode)");
+                         "The number of subcentroids (for multicentroids modes)");
     
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -676,10 +756,13 @@ int main(int argc, char** argv) {
   }
 
   if (mode != "centroids" && mode != "multicentroids" && mode != "geomedian" &&
-      mode != "from_ground_truth") {
-    diskann::cout << "mode must be centroids, multicentroids, geomedian or "
-                     "from_ground_truth"
-                  << std::endl;
+      mode != "from_ground_truth" && mode != "multicentroids-random" &&
+      mode != "multicentroids-neighbors") {
+    diskann::cout
+        << "mode must be centroids, multicentroids, multicentroids-random, "
+           "multicentroids-neighbors, geomedian or "
+           "from_ground_truth"
+        << std::endl;
     return -1;
   }
 
@@ -695,7 +778,9 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  if (mode == "multicentroids" && num_subcentroids == 0) {
+  if ((mode == "multicentroids" || mode == "multicentroids-random" ||
+       mode == "multicentroids-neighbors") &&
+      num_subcentroids == 0) {
     diskann::cout << "if multicentroids mode, must specify num_subcentroids"
                   << std::endl;
 	return -1;
