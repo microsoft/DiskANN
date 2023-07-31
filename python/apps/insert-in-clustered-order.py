@@ -24,25 +24,24 @@ def insert_and_search(
     npts, ndims = utils.get_bin_metadata(indexdata_file)
 
     if dtype_str == "float":
-        index = diskannpy.DynamicMemoryIndex(
-            "l2", np.float32, ndims, npts, Lb, graph_degree, False
-        )
-        queries = utils.bin_to_numpy(np.float32, querydata_file)
-        data = utils.bin_to_numpy(np.float32, indexdata_file)
+        dtype = np.float32
     elif dtype_str == "int8":
-        index = diskannpy.DynamicMemoryIndex(
-            "l2", np.int8, ndims, npts, Lb, graph_degree
-        )
-        queries = utils.bin_to_numpy(np.int8, querydata_file)
-        data = utils.bin_to_numpy(np.int8, indexdata_file)
+        dtype = np.int8
     elif dtype_str == "uint8":
-        index = diskannpy.DynamicMemoryIndex(
-            "l2", np.uint8, ndims, npts, Lb, graph_degree
-        )
-        queries = utils.bin_to_numpy(np.uint8, querydata_file)
-        data = utils.bin_to_numpy(np.uint8, indexdata_file)
+        dtype = np.uint8
     else:
         raise ValueError("data_type must be float, int8 or uint8")
+
+    index = diskannpy.DynamicMemoryIndex(
+        distance_metric="l2",
+        vector_dtype=dtype,
+        dimensions=ndims,
+        max_vectors=npts,
+        complexity=Lb,
+        graph_degree=graph_degree
+    )
+    queries = diskannpy.vectors_from_file(querydata_file, dtype)
+    data = diskannpy.vectors_from_file(indexdata_file, dtype)
 
     offsets, permutation = utils.cluster_and_permute(
         dtype_str, npts, ndims, data, num_clusters
@@ -52,7 +51,7 @@ def insert_and_search(
     timer = utils.Timer()
     for c in range(num_clusters):
         cluster_index_range = range(offsets[c], offsets[c + 1])
-        cluster_indices = np.array(permutation[cluster_index_range], dtype=np.uintc)
+        cluster_indices = np.array(permutation[cluster_index_range], dtype=np.uint32)
         cluster_data = data[cluster_indices, :]
         index.batch_insert(cluster_data, cluster_indices + 1, num_insert_threads)
         print('Inserted cluster', c, 'in', timer.elapsed(), 's')
