@@ -45,10 +45,9 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     _filterIndexingQueueSize = indexParams.filter_list_size;
     _filtered_index = indexParams.has_labels;
 
-    const size_t total_internal_points = _max_points + _num_frozen_pts;
     if (dynamic_index && _filtered_index)
     {
-        _pts_to_labels.resize(total_internal_points);
+        _pts_to_labels.resize(_max_points + _num_frozen_pts);
     }
 
     uint32_t num_threads_indx = indexParams.num_threads;
@@ -375,11 +374,7 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                 assert(label_writer.is_open());
                 for (uint32_t i = 0; i < _pts_to_labels.size(); i++)
                 {
-                    if (_pts_to_labels[i].empty())
-                    {
-                        continue;
-                    }
-                    for (uint32_t j = 0; j < (_pts_to_labels[i].size() - 1); j++)
+                    for (uint32_t j = 0; j + 1 < _pts_to_labels[i].size(); j++)
                     {
                         label_writer << _pts_to_labels[i][j] << ",";
                     }
@@ -2472,6 +2467,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         _data_store->copy_vectors((location_t)res, (location_t)_max_points, 1);
     }
+    _frozen_pts_used++;
 }
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::enable_delete()
@@ -2681,6 +2677,17 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         reposition_points((uint32_t)_max_points, (uint32_t)_nd, (uint32_t)_num_frozen_pts);
         _start = (uint32_t)_nd;
+
+        // update medoid id's as frozen points are treated as medoid
+        if (_filtered_index && _dynamic_index)
+        {
+            for (auto &[label, medoid_id] : _label_to_medoid_id)
+            {
+                if (label == _universal_label)
+                    continue;
+                _label_to_medoid_id[label] = (uint32_t)_nd + (medoid_id - (uint32_t)_max_points);
+            }
+        }
     }
 }
 
@@ -2736,6 +2743,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     size_t num_dangling = 0;
     for (uint32_t old = 0; old < _max_points + _num_frozen_pts; ++old)
     {
+        // compact _final_graph
         std::vector<uint32_t> new_adj_list;
 
         if ((new_location[old] < _max_points) // If point continues to exist
@@ -2762,6 +2770,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             {
                 assert(new_location[old] < old);
                 _final_graph[new_location[old]].swap(_final_graph[old]);
+                _pts_to_labels[new_location[old]].swap(_pts_to_labels[old]);
 
                 _data_store->copy_vectors(old, new_location[old], 1);
             }
@@ -2784,12 +2793,19 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         _location_to_tag.set(iter.second, iter.first);
     }
-
+    // remove all cleared up old
     for (size_t old = _nd; old < _max_points; ++old)
     {
         _final_graph[old].clear();
     }
+
+    for (size_t old = _nd + _frozen_pts_used; old < _max_points + _num_frozen_pts; old++)
+    {
+        _pts_to_labels[old].clear();
+    }
+
     _empty_slots.clear();
+    // mark all slots after _nd as empty
     for (auto i = _nd; i < _max_points; i++)
     {
         _empty_slots.insert((uint32_t)i);
@@ -2894,6 +2910,7 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
         {
             assert(_final_graph[new_location_start + loc_offset].empty());
             _final_graph[new_location_start + loc_offset].swap(_final_graph[old_location_start + loc_offset]);
+            _pts_to_labels[new_location_start + loc_offset].swap(_pts_to_labels[old_location_start + loc_offset]);
         }
 
         // If ranges are overlapping, make sure not to clear the newly copied
@@ -2912,6 +2929,8 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
         {
             assert(_final_graph[new_location_start + loc_offset - 1u].empty());
             _final_graph[new_location_start + loc_offset - 1u].swap(_final_graph[old_location_start + loc_offset - 1u]);
+            _pts_to_labels[new_location_start + loc_offset - 1u].swap(
+                _pts_to_labels[old_location_start + loc_offset - 1u]);
         }
 
         // If ranges are overlapping, make sure not to clear the newly copied
@@ -2923,17 +2942,6 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
         }
     }
     _data_store->move_vectors(old_location_start, new_location_start, num_locations);
-
-    // update medoid id's as frozen points are treated as medoid
-    if (_filtered_index && _dynamic_index)
-    {
-        for (auto &[label, medoid_id] : _label_to_medoid_id)
-        {
-            if (label == 0)
-                continue;
-            _label_to_medoid_id[label] = new_location_start + (medoid_id - old_location_start);
-        }
-    }
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::reposition_frozen_point_to_end()
@@ -2949,6 +2957,17 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     reposition_points((uint32_t)_nd, (uint32_t)_max_points, (uint32_t)_num_frozen_pts);
     _start = (uint32_t)_max_points;
+
+    // update medoid id's as frozen points are treated as medoid
+    if (_filtered_index && _dynamic_index)
+    {
+        for (auto &[label, medoid_id] : _label_to_medoid_id)
+        {
+            if (label == _universal_label)
+                continue;
+            _label_to_medoid_id[label] = (uint32_t)_max_points + (medoid_id - (uint32_t)_nd);
+        }
+    }
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::resize(size_t new_max_points)
@@ -3052,20 +3071,22 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 
         for (LabelT label : labels)
         {
-            if (label != 0 && _labels.find(label) == _labels.end())
+            if (label != _universal_label && _labels.find(label) == _labels.end())
             {
-                if (_labels.size() >= _num_frozen_pts)
+                if (_frozen_pts_used >= _num_frozen_pts)
                 {
-                    throw ANNException("Error: For dynamic filtered index, the number of frozen points should be equal "
-                                       "to number of unique labels.",
-                                       -1);
+                    throw ANNException(
+                        "Error: For dynamic filtered index, the number of frozen points should be atleast equal "
+                        "to number of unique labels.",
+                        -1);
                 }
+
+                auto fz_location = (int)(_max_points) + _frozen_pts_used; // as first _fz_point
                 _labels.insert(label);
-                auto fz_location = (int)(_max_points - 1) + (int)_labels.size(); // as first _fz_point
                 _label_to_medoid_id[label] = (uint32_t)fz_location;
                 _pts_to_labels[fz_location] = {label};
-                // copy the vector to fz_point for consistency.
-                _data_store->set_vector(fz_location, point);
+                _data_store->set_vector((location_t)fz_location, point);
+                _frozen_pts_used++;
             }
         }
     }
