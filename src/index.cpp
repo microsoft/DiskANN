@@ -151,7 +151,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
     _graph_store = std::move(graph_store);
     _graph_store->set_start((uint32_t)_max_points);
-    auto total_internal_points = _dynamic_index && index_config.num_frozen_pts == 0 ? 1 : index_config.num_frozen_pts;
+    auto total_internal_points =
+        _max_points + (_dynamic_index && index_config.num_frozen_pts == 0 ? 1 : index_config.num_frozen_pts);
     _graph_store->resize_graph(total_internal_points);
 
     // enable delete by default for dynamic index
