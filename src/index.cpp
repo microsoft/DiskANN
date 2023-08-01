@@ -1955,8 +1955,6 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t num_points_to_load,
                                    IndexBuildParams &build_params)
 {
-    std::string labels_file_to_use = build_params.save_path_prefix + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = build_params.save_path_prefix + "_labels_map.txt";
 
     size_t points_to_load = num_points_to_load == 0 ? _max_points : num_points_to_load;
 
@@ -1968,6 +1966,8 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     else
     {
         // TODO: this should ideally happen in save()
+        std::string labels_file_to_use = build_params.save_path_prefix + "_label_formatted.txt";
+        std::string mem_labels_int_map_file = build_params.save_path_prefix + "_labels_map.txt";
         convert_labels_string_to_int(build_params.label_file, labels_file_to_use, mem_labels_int_map_file,
                                      build_params.universal_label);
         if (build_params.universal_label != "")

@@ -189,10 +189,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     const uint32_t C = 500;
     const bool saturate_graph = false;
     bool has_labels = label_file != "";
-    const auto save_path_inc =
-        get_save_filename(save_path + ".after-streaming-", active_window, consolidate_interval, max_points_to_insert);
-    std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
 
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(C)
@@ -218,6 +214,10 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     std::vector<std::vector<LabelT>> pts_to_labels;
 
+    const auto save_path_inc =
+        get_save_filename(save_path + ".after-streaming-", active_window, consolidate_interval, max_points_to_insert);
+    std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
+    std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
     if (has_labels)
     {
         convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);

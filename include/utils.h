@@ -153,6 +153,7 @@ inline int delete_file(const std::string &fileName)
     }
 }
 
+// generates formatted_label and _labels_map file.
 inline void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
                                          const std::string &mapFileName, const std::string &unv_label)
 {

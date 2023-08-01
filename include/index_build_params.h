@@ -9,14 +9,16 @@ struct IndexBuildParams
     diskann::IndexWriteParameters index_write_params;
     std::string save_path_prefix;
     std::string label_file;
+    std::string tags_file;
     std::string universal_label;
     uint32_t filter_threshold = 0;
 
   private:
     IndexBuildParams(const IndexWriteParameters &index_write_params, const std::string &save_path_prefix,
-                     const std::string &label_file, const std::string &universal_label, uint32_t filter_threshold)
+                     const std::string &label_file, const std::string &tags_file, const std::string &universal_label,
+                     uint32_t filter_threshold)
         : index_write_params(index_write_params), save_path_prefix(save_path_prefix), label_file(label_file),
-          universal_label(universal_label), filter_threshold(filter_threshold)
+          tags_file(tags_file), universal_label(universal_label), filter_threshold(filter_threshold)
     {
     }
 
@@ -53,9 +55,15 @@ class IndexBuildParamsBuilder
         return *this;
     }
 
+    IndexBuildParamsBuilder &with_tags_file(const std::string &tags_file)
+    {
+        this->_tags_file = tags_file;
+        return *this;
+    }
+
     IndexBuildParams build()
     {
-        return IndexBuildParams(_index_write_params, _save_path_prefix, _label_file, _universal_label,
+        return IndexBuildParams(_index_write_params, _save_path_prefix, _label_file, _tags_file, _universal_label,
                                 _filter_threshold);
     }
 
@@ -66,6 +74,7 @@ class IndexBuildParamsBuilder
     diskann::IndexWriteParameters _index_write_params;
     std::string _save_path_prefix;
     std::string _label_file;
+    std::string _tags_file;
     std::string _universal_label;
     uint32_t _filter_threshold = 0;
 };
