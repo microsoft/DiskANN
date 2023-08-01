@@ -100,6 +100,9 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
     }
 
+    // when using new Index Constructor via factory data_store and graph store are injected
+    // keeping this for backward compatibility, init_injectables = true by default. Passed as false from New Index
+    // Constructor.
     if (init_injectables)
     {
         // Issue #374: data_store is injected from index factory. Keeping this for backward compatibility.
@@ -120,11 +123,11 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         // Note: moved this to factory, keeping this for backward compatibility.
         _data_store =
             std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
+        // init graph store => TODO : graph store should be injected
+        _graph_store = std::make_unique<diskann::InMemGraphStore>(total_internal_points, num_fz_points);
+        _graph_store->set_start((uint32_t)_max_points);
+        _graph_store->resize_graph(total_internal_points);
     }
-    // init graph store => TODO : graph store should be injected
-    _graph_store = std::make_unique<diskann::InMemGraphStore>(total_internal_points, num_fz_points);
-    _graph_store->set_start((uint32_t)_max_points);
-    _graph_store->resize_graph(total_internal_points);
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
 
@@ -146,7 +149,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
     _data_store = std::move(data_store);
     _distance.reset(_data_store->get_dist_fn());
 
-    // _graph_store = std::move(graph_store);
+    _graph_store = std::move(graph_store);
+    _graph_store->set_start((uint32_t)_max_points);
+    auto total_internal_points = _dynamic_index && index_config.num_frozen_pts == 0 ? 1 : index_config.num_frozen_pts;
+    _graph_store->resize_graph(total_internal_points);
 
     // enable delete by default for dynamic index
     if (_dynamic_index)

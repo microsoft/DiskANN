@@ -22,25 +22,24 @@ int InMemGraphStore::store(const std::string &index_path_prefix, const size_t ac
 }
 std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t i)
 {
-    return _final_graph[i];
+    return _graph[i];
 }
 
 void InMemGraphStore::set_neighbours(const location_t i, std::vector<location_t> &neighbors)
 {
-    _final_graph[i].clear();
-    _final_graph[i].assign(neighbors.begin(), neighbors.end());
+    _graph[i].assign(neighbors.begin(), neighbors.end());
 }
 
 size_t InMemGraphStore::resize_graph(const size_t new_size)
 {
-    _final_graph.resize(new_size);
+    _graph.resize(new_size);
     set_total_points(new_size);
-    return _final_graph.size();
+    return _graph.size();
 }
 
 void InMemGraphStore::clear_graph()
 {
-    _final_graph.clear();
+    _graph.clear();
 }
 
 #ifdef EXEC_ENV_OLS
@@ -86,13 +85,13 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
     const size_t expected_max_points = expected_num_points - file_frozen_pts;
 
     // If user provides more points than max_points
-    // resize the _final_graph to the larger size.
+    // resize the _graph to the larger size.
     if (max_points < expected_max_points)
     {
         diskann::cout << "Number of points in data: " << expected_max_points
                       << " is greater than max_points: " << max_points
                       << " Setting max points to: " << expected_max_points << std::endl;
-        _final_graph.resize(expected_max_points + _num_frozen_pts);
+        _graph.resize(expected_max_points + _num_frozen_pts);
         //_max_points = expected_max_points;
     }
 
@@ -109,7 +108,7 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
         read_array(reader, tmp.data(), k, graph_offset);
         graph_offset += k * sizeof(uint32_t);
         cc += k;
-        _final_graph[nodes_read].swap(tmp);
+        _graph[nodes_read].swap(tmp);
         nodes_read++;
         if (nodes_read % 1000000 == 0)
         {
@@ -172,13 +171,13 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
     const size_t expected_max_points = expected_num_points - file_frozen_pts;
 
     // If user provides more points than max_points
-    // resize the _final_graph to the larger size.
+    // resize the _graph to the larger size.
     if (max_points < expected_max_points)
     {
         diskann::cout << "Number of points in data: " << expected_max_points
                       << " is greater than max_points: " << max_points
                       << " Setting max points to: " << expected_max_points << std::endl;
-        _final_graph.resize(expected_max_points + _num_frozen_pts);
+        _graph.resize(expected_max_points + _num_frozen_pts);
         // _max_points = expected_max_points;
     }
 
@@ -200,7 +199,7 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
         std::vector<uint32_t> tmp(k);
         tmp.reserve(k);
         in.read((char *)tmp.data(), k * sizeof(uint32_t));
-        _final_graph[nodes_read - 1].swap(tmp);
+        _graph[nodes_read - 1].swap(tmp);
         bytes_read += sizeof(uint32_t) * ((size_t)k + 1);
         if (nodes_read % 10000000 == 0)
             diskann::cout << "." << std::flush;
@@ -229,15 +228,15 @@ int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size
     uint32_t ep_u32 = _start;
     out.write((char *)&ep_u32, sizeof(uint32_t));
     out.write((char *)&_num_frozen_pts, sizeof(size_t));
-    // Note: at this point, either _nd == _max_points or any frozen points have
-    // been temporarily moved to _nd, so _nd + _num_frozen_points is the valid
-    // location limit.
+    // Note: at this point, either active_points == _max_points or any frozen points have
+    // been temporarily moved to active_points, so active_points + _num_frozen_points is the valid
+    // location limit(active_points corresponds to _nd in index.h).
     for (uint32_t i = 0; i < active_points + _num_frozen_pts; i++)
     {
-        uint32_t GK = (uint32_t)_final_graph[i].size();
+        uint32_t GK = (uint32_t)_graph[i].size();
         out.write((char *)&GK, sizeof(uint32_t));
-        out.write((char *)_final_graph[i].data(), GK * sizeof(uint32_t));
-        max_degree = _final_graph[i].size() > max_degree ? (uint32_t)_final_graph[i].size() : max_degree;
+        out.write((char *)_graph[i].data(), GK * sizeof(uint32_t));
+        max_degree = _graph[i].size() > max_degree ? (uint32_t)_graph[i].size() : max_degree;
         index_size += (size_t)(sizeof(uint32_t) * (GK + 1));
     }
     out.seekp(file_offset, out.beg);
@@ -274,19 +273,10 @@ void InMemGraphStore::set_start(uint32_t start)
     this->_start = start;
 };
 
-// size_t InMemGraphStore::get_active_points()
-//{
-//     return _active_points;
-// };
-// void InMemGraphStore::set_active_points(size_t active_points)
-//{
-//     _active_points = active_points;
-// }
-
 size_t InMemGraphStore::shrink_to_fit()
 {
-    _final_graph.shrink_to_fit();
-    return _final_graph.size();
+    _graph.shrink_to_fit();
+    return _graph.size();
 }
 
 } // namespace diskann

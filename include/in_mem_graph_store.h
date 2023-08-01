@@ -29,9 +29,6 @@ class InMemGraphStore : public AbstractGraphStore
     virtual uint32_t get_start() override;
     virtual void set_start(uint32_t start) override;
 
-    /*virtual size_t get_active_points() override;
-    virtual void set_active_points(size_t active_points) override;*/
-
     virtual size_t shrink_to_fit() override;
 
   protected:
@@ -47,11 +44,7 @@ class InMemGraphStore : public AbstractGraphStore
     uint32_t _max_observed_degree = 0;
     uint32_t _start = 0;
     size_t _num_frozen_pts;
-
-    size_t _active_points = 0; // _nd
-
-    // graph data structure
-    std::vector<std::vector<uint32_t>> _final_graph;
+    std::vector<std::vector<uint32_t>> _graph;
 };
 
 } // namespace diskann
