@@ -738,7 +738,16 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
-    get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim, METADATA_SIZE);
+    try
+    {
+        get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim, METADATA_SIZE);
+    }
+    catch (ANNException &exp)
+    {
+        diskann::cout << "Exception when getting metadata from " << pq_table_bin << ":" << exp.what()
+                      << std::endl;
+        return -1;
+    }
 #else
     get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim, METADATA_SIZE);
 #endif
