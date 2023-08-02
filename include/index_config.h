@@ -188,6 +188,12 @@ class IndexConfigBuilder
                 throw ANNException("Error: please pass initial_search_list_size for building dynamic index.", -1);
         }
 
+        // sanity check
+        if (_dynamic_index && _num_frozen_pts == 0)
+        {
+            _num_frozen_pts = 1;
+        }
+
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
                            _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build, _concurrent_consolidate,
                            _use_opq, _data_type, _tag_type, _label_type, _index_write_params, _search_threads,
