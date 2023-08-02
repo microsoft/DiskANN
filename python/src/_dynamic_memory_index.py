@@ -165,6 +165,7 @@ class DynamicMemoryIndex:
             concurrent_consolidation=concurrent_consolidation,
         )
         index._index.load(index_prefix_path)
+        index._num_vectors = num_vectors  # current number of vectors loaded
         return index
 
     def __init__(
@@ -208,7 +209,7 @@ class DynamicMemoryIndex:
         - **max_occlusion_size**: The maximum number of points that can be considered by occlude_list function.
         - **alpha**: The alpha parameter (>=1) is used to control the nature and number of points that are added to the
           graph. A higher alpha value (e.g., 1.4) will result in fewer hops (and IOs) to convergence, but probably
-          more distance comparisons.
+          more distance comparisons compared to a lower alpha value.
         - **num_threads**: Number of threads to use when creating this index. `0` indicates we should use all available
           logical processors.
         - **filter_complexity**: Complexity to use when using filters. Default is 0.
@@ -221,11 +222,12 @@ class DynamicMemoryIndex:
           life of this `diskannpy.DynamicMemoryIndex` object. The working scratch memory allocated is based off of
           `initial_search_complexity` * `search_threads`. Note that it may be resized if a `batch_search`
           operation requests a space larger than can be accommodated by these values.
-        - **concurrent_consolidation**: If True, the consolidation process will be parallelized. This will result in
-          faster consolidation times, but will also result in higher memory usage during the consolidation process.
+        - **concurrent_consolidation**: This flag dictates whether consolidation can be run alongside inserts and
+          deletes, or whether the index is locked down to changes while consolidation is ongoing.
 
         """
-
+        self._num_vectors = 0
+        self._removed_num_vectors = 0
         dap_metric = _valid_metric(distance_metric)
         self._dap_metric = dap_metric
         _assert_dtype(vector_dtype)
@@ -249,6 +251,10 @@ class DynamicMemoryIndex:
             initial_search_complexity, "initial_search_complexity"
         )
         _assert_is_nonnegative_uint32(search_threads, "search_threads")
+
+        self._max_vectors = max_vectors
+        self._complexity = complexity
+        self._graph_degree = graph_degree
 
         if vector_dtype == np.uint8:
             _index = _native_dap.DynamicMemoryUInt8Index
@@ -359,12 +365,14 @@ class DynamicMemoryIndex:
 
         ### Parameters
         - **save_path**: The path to save these index files to.
-        - **index_prefix**: The prefix to use for the index files. Default is "ann".
+        - **index_prefix**: The prefix of the index files. Defaults to "ann".
         """
         if save_path == "":
             raise ValueError("save_path cannot be empty")
         if index_prefix == "":
             raise ValueError("index_prefix cannot be empty")
+
+        index_prefix = index_prefix.format(complexity=self._complexity, graph_degree=self._graph_degree)
         _assert_existing_directory(save_path, "save_path")
         save_path = os.path.join(save_path, index_prefix)
         if self._points_deleted is True:
@@ -391,6 +399,9 @@ class DynamicMemoryIndex:
         """
         Inserts a single vector into the index with the provided vector_id.
 
+        If this insertion will overrun the `max_vectors` count boundaries of this index, `consolidate_delete()` will
+        be executed automatically.
+
         ### Parameters
         - **vector**: The vector to insert. Note that dtype must match.
         - **vector_id**: The vector_id to use for this vector.
@@ -398,7 +409,23 @@ class DynamicMemoryIndex:
         _vector = _castable_dtype_or_raise(vector, expected=self._vector_dtype)
         _assert(len(vector.shape) == 1, "insert vector must be 1-d")
         _assert_is_positive_uint32(vector_id, "vector_id")
-        return self._index.insert(_vector, np.uintc(vector_id))
+        if self._num_vectors + 1 > self._max_vectors:
+            if self._removed_num_vectors > 0:
+                warnings.warn(f"Inserting this vector would overrun the max_vectors={self._max_vectors} specified at index "
+                              f"construction. We are attempting to consolidate_delete() to make space.")
+                self.consolidate_delete()
+            else:
+                raise RuntimeError(f"Inserting this vector would overrun the max_vectors={self._max_vectors} specified "
+                                   f"at index construction. Unable to make space by consolidating deletions. The insert"
+                                   f"operation has failed.")
+        status = self._index.insert(_vector, np.uint32(vector_id))
+        if status == 0:
+            self._num_vectors += 1
+        else:
+            raise RuntimeError(
+                f"Insert was unable to complete successfully; error code returned from diskann C++ lib: {status}"
+            )
+
 
     def batch_insert(
         self,
@@ -408,6 +435,9 @@ class DynamicMemoryIndex:
     ):
         """
         Inserts a batch of vectors into the index with the provided vector_ids.
+
+        If this batch insertion will overrun the `max_vectors` count boundaries of this index, `consolidate_delete()`
+        will be executed automatically.
 
         ### Parameters
         - **vectors**: The 2d numpy array of vectors to insert.
@@ -422,11 +452,38 @@ class DynamicMemoryIndex:
             "Number of vectors must be equal to number of ids",
         )
         _vectors = vectors.astype(dtype=self._vector_dtype, casting="safe", copy=False)
-        _vector_ids = vector_ids.astype(dtype=np.uintc, casting="safe", copy=False)
+        _vector_ids = vector_ids.astype(dtype=np.uint32, casting="safe", copy=False)
 
-        return self._index.batch_insert(
+        if self._num_vectors + _vector_ids.shape[0] > self._max_vectors:
+            if self._max_vectors + self._removed_num_vectors >= _vector_ids.shape[0]:
+                warnings.warn(f"Inserting these vectors, count={_vector_ids.shape[0]} would overrun the "
+                              f"max_vectors={self._max_vectors} specified at index construction. We are attempting to "
+                              f"consolidate_delete() to make space.")
+                self.consolidate_delete()
+            else:
+                raise RuntimeError(f"Inserting these vectors count={_vector_ids.shape[0]} would overrun the "
+                                   f"max_vectors={self._max_vectors} specified at index construction. Unable to make "
+                                   f"space by consolidating deletions. The batch insert operation has failed.")
+
+        statuses = self._index.batch_insert(
             _vectors, _vector_ids, _vector_ids.shape[0], num_threads
         )
+        successes = []
+        failures = []
+        for i in range(0, len(statuses)):
+            if statuses[i] == 0:
+                successes.append(i)
+            else:
+                failures.append(i)
+        self._num_vectors += len(successes)
+        if len(failures) == 0:
+            return
+        failed_ids = vector_ids[failures]
+        raise RuntimeError(
+            f"During batch insert, the following vector_ids were unable to be inserted into the index: {failed_ids}. "
+            f"{len(successes)} were successfully inserted"
+        )
+
 
     def mark_deleted(self, vector_id: VectorIdentifier):
         """
@@ -438,7 +495,9 @@ class DynamicMemoryIndex:
         """
         _assert_is_positive_uint32(vector_id, "vector_id")
         self._points_deleted = True
-        self._index.mark_deleted(np.uintc(vector_id))
+        self._removed_num_vectors += 1
+        # we do not decrement self._num_vectors until consolidate_delete
+        self._index.mark_deleted(np.uint32(vector_id))
 
     def consolidate_delete(self):
         """
@@ -446,3 +505,5 @@ class DynamicMemoryIndex:
         """
         self._index.consolidate_delete()
         self._points_deleted = False
+        self._num_vectors -= self._removed_num_vectors
+        self._removed_num_vectors = 0

@@ -93,7 +93,7 @@ def build_disk_index(
       vectors using PQ for storing on SSD. This will trade off recall. You would also want this to be greater
       than the number of bytes used for the PQ compressed data stored in-memory. Default is `0`.
     - **vector_dtype**: Required if the provided `data` is of type `str`, else we use the `data.dtype` if np array.
-    - **index_prefix**: The prefix to give your index files. Defaults to `ann`.
+    - **index_prefix**: The prefix of the index files. Defaults to "ann".
     """
 
     _assert(
@@ -193,7 +193,7 @@ def build_memory_index(
       logical processors should be used.
     - **alpha**: The alpha parameter (>=1) is used to control the nature and number of points that are added to the
       graph. A higher alpha value (e.g., 1.4) will result in fewer hops (and IOs) to convergence, but probably more
-      distance comparisons.
+      distance comparisons compared to a lower alpha value.
     - **use_pq_build**: Use product quantization during build. Product quantization is a lossy compression technique
       that can reduce the size of the index on disk. This will trade off recall. Default is `True`.
     - **num_pq_bytes**: The number of bytes used to store the PQ compressed data in memory. This will trade off recall.
@@ -204,7 +204,7 @@ def build_memory_index(
     - **tags**: A `str` representing a path to a pre-built tags file on disk, or a `numpy.ndarray` of uint32 ids
       corresponding to the ordinal position of the vectors provided to build the index. Defaults to "". **This value
       must be provided if you want to build a memory index intended for use with `diskannpy.DynamicMemoryIndex`**.
-    - **index_prefix**: The prefix to give your index files. Defaults to `ann`.
+    - **index_prefix**: The prefix of the index files. Defaults to "ann".
     """
     _assert(
         (isinstance(data, str) and vector_dtype is not None)

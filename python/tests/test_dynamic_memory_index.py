@@ -4,6 +4,7 @@
 import shutil
 import tempfile
 import unittest
+import warnings
 
 import diskannpy as dap
 import numpy as np
@@ -354,3 +355,86 @@ class TestDynamicMemoryIndex(unittest.TestCase):
                 tags,
                 "deletion_tag should not exist, as we saved and reloaded the index without it",
             )
+
+    def test_inserts_past_max_vectors(self):
+        def _tiny_index():
+            return dap.DynamicMemoryIndex(
+                distance_metric="l2",
+                vector_dtype=np.float32,
+                dimensions=10,
+                max_vectors=2,
+                complexity=64,
+                graph_degree=32,
+                num_threads=16,
+            )
+
+
+        rng = np.random.default_rng(12345)
+
+        # insert 3 vectors and look for an exception
+        index = _tiny_index()
+        index.insert(rng.random(10, dtype=np.float32), 1)
+        index.insert(rng.random(10, dtype=np.float32), 2)
+        with self.assertRaises(RuntimeError):
+            index.insert(rng.random(10, dtype=np.float32), 3)
+
+        # insert 2 vectors, delete 1, and insert another and expect a warning
+        index = _tiny_index()
+        index.insert(rng.random(10, dtype=np.float32), 1)
+        index.insert(rng.random(10, dtype=np.float32), 2)
+        index.mark_deleted(2)
+        with self.assertWarns(UserWarning):
+            self.assertEqual(index._removed_num_vectors, 1)
+            self.assertEqual(index._num_vectors, 2)
+            index.insert(rng.random(10, dtype=np.float32), 3)
+            self.assertEqual(index._removed_num_vectors, 0)
+            self.assertEqual(index._num_vectors, 2)
+
+        # insert 3 batch and look for an exception
+        index = _tiny_index()
+        with self.assertRaises(RuntimeError):
+            index.batch_insert(
+                rng.random((3, 10), dtype=np.float32),
+                np.array([1,2,3], dtype=np.uint32)
+            )
+
+
+        # insert 2 batch, remove 1, add 1 and expect a warning, remove 1, insert 2 batch and look for an exception
+        index = _tiny_index()
+        index.batch_insert(
+            rng.random((2, 10), dtype=np.float32),
+            np.array([1,2], dtype=np.uint32)
+        )
+        index.mark_deleted(1)
+        with self.assertWarns(UserWarning):
+            index.insert(rng.random(10, dtype=np.float32), 3)
+        index.mark_deleted(2)
+        with self.assertRaises(RuntimeError):
+            index.batch_insert(rng.random((2,10), dtype=np.float32), np.array([4, 5], dtype=np.uint32))
+
+        # insert 1, remove it, add 2 batch, and expect a warning
+        index = _tiny_index()
+        index.insert(rng.random(10, dtype=np.float32), 1)
+        index.mark_deleted(1)
+        with self.assertWarns(UserWarning):
+            index.batch_insert(rng.random((2, 10), dtype=np.float32), np.array([10, 20], dtype=np.uint32))
+
+        # insert 2 batch, remove both, add 2 batch, and expect a warning
+        index = _tiny_index()
+        index.batch_insert(rng.random((2,10), dtype=np.float32), np.array([10, 20], dtype=np.uint32))
+        index.mark_deleted(10)
+        index.mark_deleted(20)
+        with self.assertWarns(UserWarning):
+            index.batch_insert(rng.random((2, 10), dtype=np.float32), np.array([15, 25], dtype=np.uint32))
+
+        # insert 2 batch, remove both, consolidate_delete, add 2 batch and do not expect warning
+        index = _tiny_index()
+        index.batch_insert(rng.random((2,10), dtype=np.float32), np.array([10, 20], dtype=np.uint32))
+        index.mark_deleted(10)
+        index.mark_deleted(20)
+        index.consolidate_delete()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # turns warnings into raised exceptions
+            index.batch_insert(rng.random((2, 10), dtype=np.float32), np.array([15, 25], dtype=np.uint32))
+
+

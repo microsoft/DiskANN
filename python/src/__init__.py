@@ -55,7 +55,7 @@ VectorLike = npt.NDArray[VectorDType]
 """ Type alias for something that can be treated as a vector """
 VectorLikeBatch = npt.NDArray[VectorDType]
 """ Type alias for a batch of VectorLikes """
-VectorIdentifier = Union[int, np.uint32]
+VectorIdentifier = np.uint32
 """ 
 Type alias for a vector identifier, whether it be an implicit array index identifier from StaticMemoryIndex or 
 StaticDiskIndex, or an explicit tag identifier from DynamicMemoryIndex 
