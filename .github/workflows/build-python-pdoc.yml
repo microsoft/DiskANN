@@ -1,0 +1,29 @@
+name: DiskANN Build PDoc Documentation
+on: [workflow_call]
+jobs:
+  build-reference-documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
+      - name: "Run Reference Documentation Generation"
+        run: |
+          pip install pdoc pipdeptree
+          echo "documentation" > dependencies_documentation.txt
+          pipdeptree >> dependencies_documentation.txt
+          pdoc -o docs/python/html diskannpy
+      - name: Archive documentation version artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: dependencies
+          path: |
+            dependencies_documentation.txt
+      - name: Archive documentation artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: documentation-site
+          path: |
+            docs/python/html
