@@ -20,7 +20,7 @@ jobs:
           echo "DISKANN_VERSION=`$(python <<EOF
             from importlib.metadata import version
             v = version('diskannpy')
-            print(f"$v")
+            print(v)
             EOF
             )`" >> $GITHUB_ENV
       - name: Archive documentation version artifact
