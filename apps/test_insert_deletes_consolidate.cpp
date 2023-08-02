@@ -162,18 +162,6 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     size_t current_point_offset = points_to_skip;
     const size_t last_point_threshold = points_to_skip + max_points_to_insert;
 
-    std::vector<std::vector<LabelT>> pts_to_labels;
-    const auto save_path_final = get_save_filename(save_path + ".after-delete-", points_to_skip,
-                                                   points_to_delete_from_beginning, last_point_threshold);
-    std::string labels_file_to_use = save_path_final + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = save_path_final + "_labels_map.txt";
-    if (has_labels)
-    {
-        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
-        auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
-        pts_to_labels = std::get<0>(parse_result);
-    }
-
     bool enable_tags = true;
     diskann::IndexConfig index_config = diskann::IndexConfigBuilder()
                                             .with_metric(diskann::L2)
@@ -257,8 +245,21 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                   << " points since the data file has only that many" << std::endl;
     }
 
+    std::vector<std::vector<LabelT>> pts_to_labels;
     if (concurrent)
     {
+        // handle labels
+        const auto save_path_inc = get_save_filename(save_path + ".after-concurrent-delete-", points_to_skip,
+                                                     points_to_delete_from_beginning, last_point_threshold);
+        std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
+        std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
+        if (has_labels)
+        {
+            convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
+            auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
+            pts_to_labels = std::get<0>(parse_result);
+        }
+
         int32_t sub_threads = (params.num_threads + 1) / 2;
         bool delete_launched = false;
         std::future<void> delete_task;
@@ -294,12 +295,21 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
         delete_task.wait();
 
         std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
-        const auto save_path_inc = get_save_filename(save_path + ".after-concurrent-delete-", points_to_skip,
-                                                     points_to_delete_from_beginning, last_point_threshold);
         index->save(save_path_inc.c_str(), true);
     }
     else
     {
+        const auto save_path_inc = get_save_filename(save_path + ".after-delete-", points_to_skip,
+                                                     points_to_delete_from_beginning, last_point_threshold);
+        std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
+        std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
+        if (has_labels)
+        {
+            convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
+            auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
+            pts_to_labels = std::get<0>(parse_result);
+        }
+
         size_t last_snapshot_points_threshold = 0;
         size_t num_checkpoints_till_snapshot = checkpoints_per_snapshot;
 
@@ -344,8 +354,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
         {
             delete_from_beginning<T, TagT>(*index, params, points_to_skip, points_to_delete_from_beginning);
         }
-        const auto save_path_inc = get_save_filename(save_path + ".after-delete-", points_to_skip,
-                                                     points_to_delete_from_beginning, last_point_threshold);
+
         index->save(save_path_inc.c_str(), true);
     }
 
@@ -363,7 +372,7 @@ int main(int argc, char **argv)
 
     // label options
     std::string label_file, label_type, universal_label;
-    std::uint32_t Lf;
+    std::uint32_t Lf, unique_labels_supported;
 
     po::options_description desc{program_options_utils::make_program_description("test_insert_deletes_consolidate",
                                                                                  "Test insert deletes & consolidate")};
@@ -427,6 +436,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        "Storage type of Labels <uint/ushort>, default value is uint which "
                                        "will consume memory 4 bytes per filter");
+        optional_configs.add_options()("unique_labels_supported",
+                                       po::value<uint32_t>(&unique_labels_supported)->default_value(0),
+                                       "Number of unique labels supported by the dynamic index.");
 
         optional_configs.add_options()(
             "num_start_points",
@@ -467,6 +479,11 @@ int main(int argc, char **argv)
         has_labels = true;
     }
 
+    if (num_start_pts < unique_labels_supported)
+    {
+        num_start_pts = unique_labels_supported;
+    }
+
     try
     {
         diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
@@ -475,6 +492,7 @@ int main(int argc, char **argv)
                                                    .with_num_threads(num_threads)
                                                    .with_num_frozen_points(num_start_pts)
                                                    .with_labels(has_labels)
+                                                   .with_filter_list_size(Lf)
                                                    .build();
 
         if (data_type == std::string("int8"))

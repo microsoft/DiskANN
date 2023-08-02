@@ -326,7 +326,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
-    uint32_t insert_threads, consolidate_threads, R, L, num_start_pts, Lf;
+    uint32_t insert_threads, consolidate_threads, R, L, num_start_pts, Lf, unique_labels_supported;
     float alpha, start_point_norm;
     size_t max_points_to_insert, active_window, consolidate_interval;
 
@@ -394,6 +394,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        "Storage type of Labels <uint/ushort>, default value is uint which "
                                        "will consume memory 4 bytes per filter");
+        optional_configs.add_options()("unique_labels_supported",
+                                       po::value<uint32_t>(&unique_labels_supported)->default_value(0),
+                                       "Number of unique labels supported by the dynamic index.");
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
@@ -439,6 +442,11 @@ int main(int argc, char **argv)
     {
         std::cerr << "Invalid distance function. Supported functions are l2 and mips" << std::endl;
         return -1;
+    }
+
+    if (num_start_pts < unique_labels_supported)
+    {
+        num_start_pts = unique_labels_supported;
     }
 
     try
