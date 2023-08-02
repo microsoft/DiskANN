@@ -104,7 +104,7 @@ class DynamicMemoryIndex:
         - **max_occlusion_size**: The maximum number of points that can be considered by occlude_list function.
         - **alpha**: The alpha parameter (>=1) is used to control the nature and number of points that are added to the
           graph. A higher alpha value (e.g., 1.4) will result in fewer hops (and IOs) to convergence, but probably
-          more distance comparisons.
+          more distance comparisons compared to a lower alpha value.
         - **num_threads**: Number of threads to use when creating this index. `0` indicates we should use all available
           logical processors.
         - **filter_complexity**: Complexity to use when using filters. Default is 0.
@@ -117,8 +117,8 @@ class DynamicMemoryIndex:
           life of this `diskannpy.DynamicMemoryIndex` object. The working scratch memory allocated is based off of
           `initial_search_complexity` * `search_threads`. Note that it may be resized if a `batch_search`
           operation requests a space larger than can be accommodated by these values.
-        - **concurrent_consolidation**: If True, the consolidation process will be parallelized. This will result in
-          faster consolidation times, but will also result in higher memory usage during the consolidation process.
+        - **concurrent_consolidation**: This flag dictates whether consolidation can be run alongside inserts and
+          deletes, or whether the index is locked down to changes while consolidation is ongoing.
         - **index_prefix**: The prefix of the index files. Defaults to "ann".
         - **distance_metric**: A `str`, strictly one of {"l2", "mips", "cosine"}. `l2` and `cosine` are supported for all 3
           vector dtypes, but `mips` is only available for single precision floats. Default is `None`. **This
