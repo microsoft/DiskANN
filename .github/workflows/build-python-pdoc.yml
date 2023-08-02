@@ -17,12 +17,12 @@ jobs:
           pdoc -o docs/python/html diskannpy
       - name: Create version environment variable
         run: |
-          echo "DISKANN_VERSION=`$(python <<EOF
-            from importlib.metadata import version
-            v = version('diskannpy')
-            print(v)
-            EOF
-            )`" >> $GITHUB_ENV
+          echo "DISKANN_VERSION=$(python <<EOF
+          from importlib.metadata import version
+          v = version('diskannpy')
+          print(v)
+          EOF
+          )" >> $GITHUB_ENV
       - name: Archive documentation version artifact
         uses: actions/upload-artifact@v2
         with:
