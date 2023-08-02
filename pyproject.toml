@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diskannpy"
-version = "0.5.0.rc5"
+version = "0.6.0"
 
 description = "DiskANN Python extension module"
 readme = "python/README.md"
@@ -25,8 +25,18 @@ authors = [
     {name = "Dax Pryce", email = "daxpryce@microsoft.com"}
 ]
 
+[project.optional-dependencies]
+dev = ["black", "isort", "mypy"]
+
 [tool.setuptools]
 package-dir = {"" = "python/src"}
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.mypy]
+plugins = "numpy.typing.mypy_plugin"
 
 [tool.cibuildwheel]
 manylinux-x86_64-image = "manylinux_2_28"
@@ -34,7 +44,6 @@ test-requires = ["scikit-learn~=1.2"]
 build-frontend = "build"
 skip = ["pp*", "*-win32", "*-manylinux_i686", "*-musllinux*"]
 test-command = "python -m unittest discover {project}/python/tests"
-
 
 [tool.cibuildwheel.linux]
 before-build = [
