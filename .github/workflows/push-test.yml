@@ -41,11 +41,6 @@ jobs:
             dependencies_${{ matrix.os }}.txt
       - name: DiskANN Build CLI Applications
         uses: ./.github/actions/build
-  build-documentation:
-      strategy:
-        fail-fast: true
-      name: DiskANN Build Documentation
-      uses: ./.github/workflows/build-python-pdoc.yml
 #  python:
 #    name: DiskANN Build Python Wheel
 #    uses: ./.github/workflows/build-python.yml
