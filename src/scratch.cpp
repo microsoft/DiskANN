@@ -13,7 +13,7 @@ namespace diskann
 //
 template <typename T>
 InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
-                                        bool init_pq_scratch, size_t bitmask_size)
+                                        size_t aligned_dim, size_t alignment_factor, bool init_pq_scratch, size_t bitmask_size)
     : _L(0), _R(r), _maxc(maxc)
 {
     if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0)
@@ -24,8 +24,7 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
         throw diskann::ANNException(ss.str(), -1);
     }
 
-    auto aligned_dim = ROUND_UP(dim, 8);
-    alloc_aligned(((void **)&_aligned_query), aligned_dim * sizeof(T), 8 * sizeof(T));
+    alloc_aligned(((void **)&_aligned_query), aligned_dim * sizeof(T), alignment_factor * sizeof(T));
     memset(_aligned_query, 0, aligned_dim * sizeof(T));
 
     if (init_pq_scratch)
@@ -35,8 +34,8 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
 
     _occlude_factor.reserve(maxc);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
-    _id_scratch.reserve(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
-    _dist_scratch.reserve(std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
+    _id_scratch.reserve((size_t)std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
+    _dist_scratch.reserve((size_t)std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
 
     resize_for_new_L(std::max(search_l, indexing_l));
 
@@ -92,7 +91,6 @@ template <typename T> InMemQueryScratch<T>::~InMemQueryScratch()
 //
 template <typename T> void SSDQueryScratch<T>::reset()
 {
-    coord_idx = 0;
     sector_idx = 0;
     visited.clear();
     retset.clear();
@@ -101,15 +99,15 @@ template <typename T> void SSDQueryScratch<T>::reset()
 
 template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve)
 {
-    _u64 coord_alloc_size = ROUND_UP(MAX_N_CMPS * aligned_dim, 256);
+    size_t coord_alloc_size = ROUND_UP(sizeof(T) * aligned_dim, 256);
 
     diskann::alloc_aligned((void **)&coord_scratch, coord_alloc_size, 256);
-    diskann::alloc_aligned((void **)&sector_scratch, (_u64)MAX_N_SECTOR_READS * (_u64)SECTOR_LEN, SECTOR_LEN);
+    diskann::alloc_aligned((void **)&sector_scratch, (size_t)MAX_N_SECTOR_READS * (size_t)SECTOR_LEN, SECTOR_LEN);
     diskann::alloc_aligned((void **)&aligned_query_T, aligned_dim * sizeof(T), 8 * sizeof(T));
 
     _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
 
-    memset(coord_scratch, 0, MAX_N_CMPS * aligned_dim);
+    memset(coord_scratch, 0, coord_alloc_size);
     memset(aligned_query_T, 0, aligned_dim * sizeof(T));
 
     visited.reserve(visited_reserve);
@@ -120,6 +118,7 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
 {
     diskann::aligned_free((void *)coord_scratch);
     diskann::aligned_free((void *)sector_scratch);
+    diskann::aligned_free((void *)aligned_query_T);
 
     delete[] _pq_scratch;
 }
@@ -138,11 +137,11 @@ template DISKANN_DLLEXPORT class InMemQueryScratch<int8_t>;
 template DISKANN_DLLEXPORT class InMemQueryScratch<uint8_t>;
 template DISKANN_DLLEXPORT class InMemQueryScratch<float>;
 
-template DISKANN_DLLEXPORT class SSDQueryScratch<_u8>;
-template DISKANN_DLLEXPORT class SSDQueryScratch<_s8>;
+template DISKANN_DLLEXPORT class SSDQueryScratch<int8_t>;
+template DISKANN_DLLEXPORT class SSDQueryScratch<uint8_t>;
 template DISKANN_DLLEXPORT class SSDQueryScratch<float>;
 
-template DISKANN_DLLEXPORT class SSDThreadData<_u8>;
-template DISKANN_DLLEXPORT class SSDThreadData<_s8>;
+template DISKANN_DLLEXPORT class SSDThreadData<int8_t>;
+template DISKANN_DLLEXPORT class SSDThreadData<uint8_t>;
 template DISKANN_DLLEXPORT class SSDThreadData<float>;
 } // namespace diskann

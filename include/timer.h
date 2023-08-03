@@ -27,7 +27,7 @@ class Timer
 
     float elapsed_seconds() const
     {
-        return (float)elapsed() / 1000000.0;
+        return (float)elapsed() / 1000000.0f;
     }
 
     std::string elapsed_seconds_for_step(const std::string &step) const

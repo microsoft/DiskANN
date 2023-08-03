@@ -15,15 +15,18 @@
 #   Contact for this feature: gopalrs.
 
 # Some variables like MSVC are defined only after project(), so put that first.
+cmake_minimum_required(VERSION 3.15)
 project(diskann)
 
-cmake_minimum_required(VERSION 3.15)
-
-set(CMAKE_STANDARD 14)
+set(CMAKE_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if(NOT MSVC)
 	set(CMAKE_CXX_COMPILER g++)
 endif()
+
+set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake;${CMAKE_MODULE_PATH}")
 
 # Install nuget packages for dependencies.
 if (MSVC)
@@ -42,7 +45,7 @@ if (MSVC)
     if (RESTAPI)
 	    set(DISKANN_MSVC_RESTAPI_PACKAGES_CONFIG ${CMAKE_BINARY_DIR}/restapi/packages.config)
 	    configure_file(${PROJECT_SOURCE_DIR}/windows/packages_restapi.config.in ${DISKANN_MSVC_RESTAPI_PACKAGES_CONFIG})
-	    exec_program(${NUGET_EXE} ARGS install \"${DISKANN_MSVC_RESTAPI_PACKAGES_CONFIG}\" -ExcludeVersion -OutputDirectory \"${DISKANN_MSVC_PACKAGES}\")
+        exec_program(${NUGET_EXE} ARGS install \"${DISKANN_MSVC_RESTAPI_PACKAGES_CONFIG}\" -ExcludeVersion -OutputDirectory \"${DISKANN_MSVC_PACKAGES}\")
     endif()
     message(STATUS "Finished setting up nuget dependencies")
 endif()
@@ -136,18 +139,63 @@ if (MSVC)
         "${DISKANN_MKL_LIB_PATH}/mkl_intel_thread.lib")
 else()
     # expected path for manual intel mkl installs
-    set(OMP_PATH /opt/intel/oneapi/compiler/2022.0.2/linux/compiler/lib/intel64_lin/ CACHE PATH "Intel OneAPI OpenMP library implementation path")
-    set(MKL_ROOT /opt/intel/oneapi/mkl/latest CACHE PATH "Intel OneAPI MKL library implementation path")
-    link_directories(${OMP_PATH} ${MKL_ROOT}/lib/intel64)
-    include_directories(${MKL_ROOT}/include)
+    set(POSSIBLE_OMP_PATHS "/opt/intel/oneapi/compiler/latest/linux/compiler/lib/intel64_lin/libiomp5.so;/usr/lib/x86_64-linux-gnu/libiomp5.so;/opt/intel/lib/intel64_lin/libiomp5.so")
+    foreach(POSSIBLE_OMP_PATH ${POSSIBLE_OMP_PATHS})
+        if (EXISTS ${POSSIBLE_OMP_PATH})
+            get_filename_component(OMP_PATH ${POSSIBLE_OMP_PATH} DIRECTORY)
+        endif()
+    endforeach()
 
-    # expected path for apt packaged intel mkl installs
-    link_directories(/usr/lib/x86_64-linux-gnu/mkl)
-    include_directories(/usr/include/mkl)
+    if(NOT OMP_PATH)
+        message(FATAL_ERROR "Could not find Intel OMP in standard locations; use -DOMP_PATH to specify the install location for your environment")
+    endif()
+    link_directories(${OMP_PATH})
+
+    set(POSSIBLE_MKL_LIB_PATHS "/opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_core.so;/usr/lib/x86_64-linux-gnu/libmkl_core.so;/opt/intel/mkl/lib/intel64/libmkl_core.so")
+    foreach(POSSIBLE_MKL_LIB_PATH ${POSSIBLE_MKL_LIB_PATHS})
+        if (EXISTS ${POSSIBLE_MKL_LIB_PATH})
+            get_filename_component(MKL_PATH ${POSSIBLE_MKL_LIB_PATH} DIRECTORY)
+        endif()
+    endforeach()
+
+    set(POSSIBLE_MKL_INCLUDE_PATHS "/opt/intel/oneapi/mkl/latest/include;/usr/include/mkl;/opt/intel/mkl/include/;")
+    foreach(POSSIBLE_MKL_INCLUDE_PATH ${POSSIBLE_MKL_INCLUDE_PATHS})
+        if (EXISTS ${POSSIBLE_MKL_INCLUDE_PATH})
+            set(MKL_INCLUDE_PATH ${POSSIBLE_MKL_INCLUDE_PATH})
+        endif()
+    endforeach()
+    if(NOT MKL_PATH)
+        message(FATAL_ERROR "Could not find Intel MKL in standard locations; use -DMKL_PATH to specify the install location for your environment")
+    elseif(NOT MKL_INCLUDE_PATH)
+        message(FATAL_ERROR "Could not find Intel MKL in standard locations; use -DMKL_INCLUDE_PATH to specify the install location for headers for your environment")
+    endif()
+    if (EXISTS ${MKL_PATH}/libmkl_def.so.2)
+        set(MKL_DEF_SO ${MKL_PATH}/libmkl_def.so.2)
+    elseif(EXISTS ${MKL_PATH}/libmkl_def.so)
+        set(MKL_DEF_SO ${MKL_PATH}/libmkl_def.so)
+    else()
+        message(FATAL_ERROR "Despite finding MKL, libmkl_def.so was not found in expected locations.")
+    endif()
+    link_directories(${MKL_PATH})
+    include_directories(${MKL_INCLUDE_PATH})
 
     # compile flags and link libraries
     add_compile_options(-m64 -Wl,--no-as-needed)
-    link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
+    if (NOT PYBIND)
+        link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
+    else()
+        # static linking for python so as to minimize customer dependency issues
+        link_libraries(
+                ${MKL_PATH}/libmkl_intel_ilp64.a
+                ${MKL_PATH}/libmkl_intel_thread.a
+                ${MKL_PATH}/libmkl_core.a
+                ${MKL_DEF_SO}
+                iomp5
+                pthread
+                m
+                dl
+        )
+    endif()
 endif()
 
 add_definitions(-DMKL_ILP64)
@@ -193,7 +241,7 @@ if (MSVC)
     add_dependencies(libtcmalloc_minimal_for_exe build_libtcmalloc_minimal)
 
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS libtcmalloc_minimal_for_exe)
-else()
+elseif(NOT PYBIND)
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-ltcmalloc")
 endif()
 
@@ -212,7 +260,7 @@ endif()
 #Main compiler/linker settings 
 if(MSVC)
 	#language options
-	add_compile_options(/permissive- /openmp:experimental /Zc:twoPhase- /Zc:inline /WX- /std:c++14 /Gd /W3 /MP /Zi /FC /nologo)
+	add_compile_options(/permissive- /openmp:experimental /Zc:twoPhase- /Zc:inline /WX- /std:c++17 /Gd /W3 /MP /Zi /FC /nologo)
 	#code generation options
 	add_compile_options(/arch:AVX2 /fp:fast /fp:except- /EHsc /GS- /Gy)
 	#optimization options
@@ -231,19 +279,30 @@ if(MSVC)
 	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
 	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
 else()
-	set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
-    #	set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -O0 -fsanitize=address -fsanitize=leak -fsanitize=undefined")
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG -Wall -Wextra")
-	set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast -DNDEBUG -march=native -mtune=native -ftree-vectorize")
-	add_compile_options(-march=native -Wall -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2)
-    if (PYBIND)
-        add_compile_options(-fPIC)
+    set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -msse2 -ftree-vectorize -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG")
+    if (NOT PYBIND)
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG -Ofast")
+        if (NOT PORTABLE)
+            set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -march=native -mtune=native")
+        endif()
+    else()
+        # -Ofast is not supported in a python extension module
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG -fPIC")
     endif()
 endif()
 
 add_subdirectory(src)
-add_subdirectory(tests)
-add_subdirectory(tests/utils)
+if (NOT PYBIND)
+    add_subdirectory(apps)
+    add_subdirectory(apps/utils)
+endif()
+
+if (UNIT_TEST)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 if (MSVC)
     message(STATUS "The ${PROJECT_NAME}.sln has been created, opened it from VisualStudio to build Release or Debug configurations.\n"
@@ -258,11 +317,10 @@ if (RESTAPI)
         link_libraries("${DISKANN_CPPRESTSDK}/x64/lib/cpprest142_2_10.lib")
         include_directories("${DISKANN_CPPRESTSDK}/include")
     endif()
-    add_subdirectory(tests/restapi)
+    add_subdirectory(apps/restapi)
 endif()
 
 include(clang-format.cmake)
-
 
 if(PYBIND)
     add_subdirectory(python)
