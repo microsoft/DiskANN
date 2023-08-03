@@ -191,6 +191,7 @@ class IndexConfigBuilder
         // sanity check
         if (_dynamic_index && _num_frozen_pts == 0)
         {
+            diskann::cout << "_num_frozen_pts passed as 0 for dynamic_index. Setting it to 1 for safety." << std::endl;
             _num_frozen_pts = 1;
         }
 

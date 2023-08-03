@@ -46,6 +46,7 @@ void InMemGraphStore::clear_graph()
 location_t InMemGraphStore::load_impl(const std::string &filename, size_t expected_num_points)
 {
     size_t expected_file_size;
+    size_t file_frozen_pts;
 
     auto max_points = get_max_points();
     int header_size = 2 * sizeof(size_t) + 2 * sizeof(uint32_t);
@@ -61,38 +62,14 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
                   << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << _start
                   << ", file_frozen_pts: " << file_frozen_pts << std::endl;
 
-    if (file_frozen_pts != _num_frozen_pts)
-    {
-        std::stringstream stream;
-        if (file_frozen_pts == 1)
-        {
-            stream << "ERROR: When loading index, detected dynamic index, but "
-                      "constructor asks for static index. Exitting."
-                   << std::endl;
-        }
-        else
-        {
-            stream << "ERROR: When loading index, detected static index, but "
-                      "constructor asks for dynamic index. Exitting."
-                   << std::endl;
-        }
-        diskann::cerr << stream.str() << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
     diskann::cout << "Loading vamana graph from reader..." << std::flush;
-
-    const size_t expected_max_points = expected_num_points - file_frozen_pts;
 
     // If user provides more points than max_points
     // resize the _graph to the larger size.
-    if (max_points < expected_max_points)
+    if (get_total_points() < expected_num_points)
     {
-        diskann::cout << "Number of points in data: " << expected_max_points
-                      << " is greater than max_points: " << max_points
-                      << " Setting max points to: " << expected_max_points << std::endl;
-        _graph.resize(expected_max_points + _num_frozen_pts);
-        //_max_points = expected_max_points;
+        diskann::cout << "resizing graph to " << expected_num_points << std::endl;
+        _graph.resize(expected_num_points);
     }
 
     uint32_t nodes_read = 0;
