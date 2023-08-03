@@ -13,6 +13,7 @@
 #include <index_factory.h>
 
 #include "utils.h"
+#include "program_options_utils.hpp"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -299,49 +300,60 @@ int main(int argc, char **argv)
     float alpha, start_point_norm;
     size_t max_points_to_insert, active_window, consolidate_interval;
 
-    po::options_description desc{"Arguments"};
+    po::options_description desc{program_options_utils::make_program_description("test_streaming_scenario",
+                                                                                 "Test insert deletes & consolidate")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
-        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
-        desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(), "distance function <l2/mips>");
-        desc.add_options()("data_path", po::value<std::string>(&data_path)->required(),
-                           "Input data file in bin format");
-        desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
-                           "Path prefix for saving index file components");
-        desc.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64), "Maximum graph degree");
-        desc.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
-                           "Build complexity, higher value results in better graphs");
-        desc.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           "alpha controls density and diameter of graph, set "
-                           "1 for sparse graph, "
-                           "1.2 or 1.4 for denser graphs with lower diameter");
-        desc.add_options()("insert_threads",
-                           po::value<uint32_t>(&insert_threads)->default_value(omp_get_num_procs() / 2),
-                           "Number of threads used for inserting into the index (defaults to "
-                           "omp_get_num_procs()/2)");
-        desc.add_options()("consolidate_threads",
-                           po::value<uint32_t>(&consolidate_threads)->default_value(omp_get_num_procs() / 2),
-                           "Number of threads used for consolidating deletes to "
-                           "the index (defaults to omp_get_num_procs()/2)");
 
-        desc.add_options()("max_points_to_insert", po::value<uint64_t>(&max_points_to_insert)->default_value(0),
-                           "The number of points from the file that the program streams "
-                           "over ");
-        desc.add_options()("active_window", po::value<uint64_t>(&active_window)->required(),
-                           "Program maintains an index over an active window of "
-                           "this size that slides through the data");
-        desc.add_options()("consolidate_interval", po::value<uint64_t>(&consolidate_interval)->required(),
-                           "The program simultaneously adds this number of points to the "
-                           "right of "
-                           "the window while deleting the same number from the left");
-        desc.add_options()("start_point_norm", po::value<float>(&start_point_norm)->required(),
-                           "Set the start point to a random point on a sphere of this radius");
-        desc.add_options()(
+        // Required parameters
+        po::options_description required_configs("Required");
+        required_configs.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                                       program_options_utils::DATA_TYPE_DESCRIPTION);
+        required_configs.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                                       program_options_utils::DISTANCE_FUNCTION_DESCRIPTION);
+        required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
+                                       program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
+        required_configs.add_options()("data_path", po::value<std::string>(&data_path)->required(),
+                                       program_options_utils::INPUT_DATA_PATH);
+        required_configs.add_options()("active_window", po::value<uint64_t>(&active_window)->required(),
+                                       "Program maintains an index over an active window of "
+                                       "this size that slides through the data");
+        required_configs.add_options()("consolidate_interval", po::value<uint64_t>(&consolidate_interval)->required(),
+                                       "The program simultaneously adds this number of points to the "
+                                       "right of "
+                                       "the window while deleting the same number from the left");
+        required_configs.add_options()("start_point_norm", po::value<float>(&start_point_norm)->required(),
+                                       "Set the start point to a random point on a sphere of this radius");
+
+        // Optional parameters
+        po::options_description optional_configs("Optional");
+        optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64),
+                                       program_options_utils::MAX_BUILD_DEGREE);
+        optional_configs.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
+                                       program_options_utils::GRAPH_BUILD_COMPLEXITY);
+        optional_configs.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
+                                       program_options_utils::GRAPH_BUILD_ALPHA);
+        optional_configs.add_options()("insert_threads",
+                                       po::value<uint32_t>(&insert_threads)->default_value(omp_get_num_procs() / 2),
+                                       "Number of threads used for inserting into the index (defaults to "
+                                       "omp_get_num_procs()/2)");
+        optional_configs.add_options()(
+            "consolidate_threads", po::value<uint32_t>(&consolidate_threads)->default_value(omp_get_num_procs() / 2),
+            "Number of threads used for consolidating deletes to "
+            "the index (defaults to omp_get_num_procs()/2)");
+        optional_configs.add_options()("max_points_to_insert",
+                                       po::value<uint64_t>(&max_points_to_insert)->default_value(0),
+                                       "The number of points from the file that the program streams "
+                                       "over ");
+        optional_configs.add_options()(
             "num_start_points",
             po::value<uint32_t>(&num_start_pts)->default_value(diskann::defaults::NUM_FROZEN_POINTS_DYNAMIC),
             "Set the number of random start (frozen) points to use when "
             "inserting and searching");
+
+        // Merge required and optional parameters
+        desc.add(required_configs).add(optional_configs);
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

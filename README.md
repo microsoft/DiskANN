@@ -1,6 +1,12 @@
 # DiskANN
 
-[![DiskANN Pull Request Build and Test](https://github.com/microsoft/DiskANN/actions/workflows/pr-test.yml/badge.svg)](https://github.com/microsoft/DiskANN/actions/workflows/pr-test.yml)
+[![DiskANN Paper](https://img.shields.io/badge/Paper-NeurIPS%3A_DiskANN-blue)](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf)
+[![DiskANN Paper](https://img.shields.io/badge/Paper-Arxiv%3A_Fresh--DiskANN-blue)](https://arxiv.org/abs/2105.09613)
+[![DiskANN Paper](https://img.shields.io/badge/Paper-Filtered--DiskANN-blue)](https://harsha-simhadri.org/pubs/Filtered-DiskANN23.pdf)
+[![DiskANN Main](https://github.com/microsoft/DiskANN/actions/workflows/push-test.yml/badge.svg?branch=main)](https://github.com/microsoft/DiskANN/actions/workflows/push-test.yml)
+[![PyPI version](https://img.shields.io/pypi/v/diskannpy.svg)](https://pypi.org/project/diskannpy/)
+[![Downloads shield](https://pepy.tech/badge/diskannpy)](https://pepy.tech/project/diskannpy)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 DiskANN is a suite of scalable, accurate and cost-effective approximate nearest neighbor search algorithms for large-scale vector search that support real-time changes and simple filters.
 This code is based on ideas from the [DiskANN](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf), [Fresh-DiskANN](https://arxiv.org/abs/2105.09613) and the [Filtered-DiskANN](https://harsha-simhadri.org/pubs/Filtered-DiskANN23.pdf) papers with further improvements. 
@@ -11,8 +17,6 @@ For more information see the [Code of Conduct FAQ](https://opensource.microsoft.
 contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
 See [guidelines](CONTRIBUTING.md) for contributing to this project.
-
-
 
 ## Linux build:
 
@@ -71,12 +75,16 @@ OR for Visual Studio 2017 and earlier:
 ```
 <full-path-to-installed-cmake>\cmake ..
 ```
-* This will create a diskann.sln solution. Open it from VisualStudio and build either Release or Debug configuration.
-    * Alternatively, use MSBuild:
+**This will create a diskann.sln solution**. Now you can:
+
+- Open it from VisualStudio and build either Release or Debug configuration.
+- `<full-path-to-installed-cmake>\cmake --build build`
+- Use MSBuild:
 ```
 msbuild.exe diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64"
 ```
-    * This will also build gperftools submodule for libtcmalloc_minimal dependency.
+
+* This will also build gperftools submodule for libtcmalloc_minimal dependency.
 * Generated binaries are stored in the x64/Release or x64/Debug directories.
 
 ## Usage:
@@ -88,16 +96,16 @@ Please see the following pages on using the compiled code:
 - [Commandline examples for using in-memory streaming indices](workflows/dynamic_index.md)
 - [Commandline interface for building and search in memory indices with label data and filters](workflows/filtered_in_memory.md)
 - [Commandline interface for building and search SSD based indices with label data and filters](workflows/filtered_ssd_index.md)
-- To be added: Python interfaces and docker files
+- [diskannpy - DiskANN as a python extension module](python/README.md)
 
 Please cite this software in your work as:
 
 ```
 @misc{diskann-github,
-   author = {Simhadri, Harsha Vardhan and Krishnaswamy, Ravishankar and Srinivasa, Gopal and Subramanya, Suhas Jayaram and Antonijevic, Andrija and Pryce, Dax and Kaczynski, David and Williams, Shane and Gollapudi, Siddarth and Sivashankar, Varun and Karia, Neel and Singh, Aditi and Jaiswal, Shikhar and Mahapatro, Neelam and Adams, Philip and Tower, Bryan}},
+   author = {Simhadri, Harsha Vardhan and Krishnaswamy, Ravishankar and Srinivasa, Gopal and Subramanya, Suhas Jayaram and Antonijevic, Andrija and Pryce, Dax and Kaczynski, David and Williams, Shane and Gollapudi, Siddarth and Sivashankar, Varun and Karia, Neel and Singh, Aditi and Jaiswal, Shikhar and Mahapatro, Neelam and Adams, Philip and Tower, Bryan and Patel, Yash}},
    title = {{DiskANN: Graph-structured Indices for Scalable, Fast, Fresh and Filtered Approximate Nearest Neighbor Search}},
    url = {https://github.com/Microsoft/DiskANN},
-   version = {0.5},
+   version = {0.6.0},
    year = {2023}
 }
 ```

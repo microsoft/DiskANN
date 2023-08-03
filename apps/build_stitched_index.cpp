@@ -18,6 +18,7 @@
 #include "memory_mapper.h"
 #include "parameters.h"
 #include "utils.h"
+#include "program_options_utils.hpp"
 
 namespace po = boost::program_options;
 typedef std::tuple<std::vector<std::vector<uint32_t>>, uint64_t> stitch_indices_return_values;
@@ -54,33 +55,42 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
                  path &label_data_path, std::string &universal_label, uint32_t &num_threads, uint32_t &R, uint32_t &L,
                  uint32_t &stitched_R, float &alpha)
 {
-    po::options_description desc{"Arguments"};
+    po::options_description desc{
+        program_options_utils::make_program_description("build_stitched_index", "Build a stitched DiskANN index.")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
-        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
-        desc.add_options()("data_path", po::value<path>(&input_data_path)->required(), "Input data file in bin format");
-        desc.add_options()("index_path_prefix", po::value<path>(&final_index_path_prefix)->required(),
-                           "Path prefix for saving index file components");
-        desc.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64), "Maximum graph degree");
-        desc.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
-                           "Build complexity, higher value results in better graphs");
-        desc.add_options()("stitched_R", po::value<uint32_t>(&stitched_R)->default_value(100),
-                           "Degree to prune final graph down to");
-        desc.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
-                           "alpha controls density and diameter of graph, set "
-                           "1 for sparse graph, "
-                           "1.2 or 1.4 for denser graphs with lower diameter");
-        desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
-                           "Number of threads used for building index (defaults to "
-                           "omp_get_num_procs())");
-        desc.add_options()("label_file", po::value<path>(&label_data_path)->default_value(""),
-                           "Input label file in txt format if present");
-        desc.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
-                           "If a point comes with the specified universal label (and only the "
-                           "univ. "
-                           "label), then the point is considered to have every possible "
-                           "label");
+
+        // Required parameters
+        po::options_description required_configs("Required");
+        required_configs.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                                       program_options_utils::DATA_TYPE_DESCRIPTION);
+        required_configs.add_options()("index_path_prefix",
+                                       po::value<std::string>(&final_index_path_prefix)->required(),
+                                       program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
+        required_configs.add_options()("data_path", po::value<std::string>(&input_data_path)->required(),
+                                       program_options_utils::INPUT_DATA_PATH);
+
+        // Optional parameters
+        po::options_description optional_configs("Optional");
+        optional_configs.add_options()("num_threads,T",
+                                       po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
+                                       program_options_utils::NUMBER_THREADS_DESCRIPTION);
+        optional_configs.add_options()("max_degree,R", po::value<uint32_t>(&R)->default_value(64),
+                                       program_options_utils::MAX_BUILD_DEGREE);
+        optional_configs.add_options()("Lbuild,L", po::value<uint32_t>(&L)->default_value(100),
+                                       program_options_utils::GRAPH_BUILD_COMPLEXITY);
+        optional_configs.add_options()("alpha", po::value<float>(&alpha)->default_value(1.2f),
+                                       program_options_utils::GRAPH_BUILD_ALPHA);
+        optional_configs.add_options()("label_file", po::value<std::string>(&label_data_path)->default_value(""),
+                                       program_options_utils::LABEL_FILE);
+        optional_configs.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
+                                       program_options_utils::UNIVERSAL_LABEL);
+        optional_configs.add_options()("stitched_R", po::value<uint32_t>(&stitched_R)->default_value(100),
+                                       "Degree to prune final graph down to");
+
+        // Merge required and optional parameters
+        desc.add(required_configs).add(optional_configs);
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

@@ -504,10 +504,8 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
     }
 
 #ifdef EXEC_ENV_OLS
-
-    // REFACTOR TODO: Must figure out how to support aligned reader in a clean
-    // manner.
-    copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _aligned_dim);
+    // REFACTOR TODO: Must figure out how to support aligned reader in a clean manner.
+    copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _data_store->get_aligned_dim());
 #else
     _data_store->load(filename); // offset == 0.
 #endif
@@ -2260,7 +2258,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     if (pos < K)
     {
         context.SetState(State::Failure);
-        diskann::cerr << "Found fewer than K elements for query" << std::endl;
+        diskann::cerr << "Found pos: " << pos << "fewer than K elements " << K << " for query" << std::endl;
     }
     else
     {
