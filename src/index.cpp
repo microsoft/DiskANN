@@ -56,10 +56,10 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const bool enable_tags, const bool concurrent_consolidate, const bool pq_dist_build,
                               const size_t num_pq_chunks, const bool use_opq, const size_t num_frozen_pts,
                               const bool init_injectables)
-    : _dist_metric(m), _dim(dim), _max_points(max_points), _dynamic_index(dynamic_index), _enable_tags(enable_tags),
-      _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr), _pq_dist(pq_dist_build), _use_opq(use_opq),
-      _num_pq_chunks(num_pq_chunks), _delete_set(new tsl::robin_set<uint32_t>),
-      _conc_consolidate(concurrent_consolidate)
+    : _dist_metric(m), _dim(dim), _max_points(max_points), _num_frozen_pts(num_frozen_pts),
+      _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
+      _pq_dist(pq_dist_build), _use_opq(use_opq), _num_pq_chunks(num_pq_chunks),
+      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(concurrent_consolidate)
 {
     if (dynamic_index && !enable_tags)
     {
@@ -79,10 +79,9 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                                -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    auto num_fz_points = num_frozen_pts;
-    if (dynamic_index && num_frozen_pts == 0)
+    if (dynamic_index && _num_frozen_pts == 0)
     {
-        num_fz_points = 1;
+        _num_frozen_pts = 1;
     }
     // Sanity check. While logically it is correct, max_points = 0 causes
     // downstream problems.
@@ -90,7 +89,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     {
         _max_points = 1;
     }
-    const size_t total_internal_points = _max_points + num_fz_points;
+    const size_t total_internal_points = _max_points + _num_frozen_pts;
 
     if (_pq_dist)
     {
@@ -124,7 +123,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         _data_store =
             std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
         // init graph store => TODO : graph store should be injected
-        _graph_store = std::make_unique<diskann::InMemGraphStore>(total_internal_points, num_fz_points);
+        _graph_store = std::make_unique<diskann::InMemGraphStore>(total_internal_points, _num_frozen_pts);
         _graph_store->set_start((uint32_t)_max_points);
         _graph_store->resize_graph(total_internal_points);
     }
@@ -151,9 +150,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
     _graph_store = std::move(graph_store);
     _graph_store->set_start((uint32_t)_max_points);
-    auto total_internal_points =
-        _max_points + (_dynamic_index && index_config.num_frozen_pts == 0 ? 1 : index_config.num_frozen_pts);
-    _graph_store->resize_graph(total_internal_points);
+    _graph_store->resize_graph(_max_points + _num_frozen_pts);
 
     // enable delete by default for dynamic index
     if (_dynamic_index)
@@ -228,11 +225,10 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
         return 0;
     }
 
-    auto num_frozen_pts = _graph_store->get_num_frozen_points();
     auto start = _graph_store->get_start();
 
     size_t tag_bytes_written;
-    TagT *tag_data = new TagT[_nd + num_frozen_pts];
+    TagT *tag_data = new TagT[_nd + _num_frozen_pts];
     for (uint32_t i = 0; i < _nd; i++)
     {
         TagT tag;
@@ -246,13 +242,13 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
             std::memset((char *)&tag_data[i], 0, sizeof(TagT));
         }
     }
-    if (num_frozen_pts > 0)
+    if (_num_frozen_pts > 0)
     {
-        std::memset((char *)&tag_data[start], 0, sizeof(TagT) * num_frozen_pts);
+        std::memset((char *)&tag_data[start], 0, sizeof(TagT) * _num_frozen_pts);
     }
     try
     {
-        tag_bytes_written = save_bin<TagT>(tags_file, tag_data, _nd + num_frozen_pts, 1);
+        tag_bytes_written = save_bin<TagT>(tags_file, tag_data, _nd + _num_frozen_pts, 1);
     }
     catch (std::system_error &e)
     {
@@ -265,9 +261,9 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
 template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::save_data(std::string data_file)
 {
     // Note: at this point, either _nd == _max_points or any frozen points have
-    // been temporarily moved to _nd, so _nd + _num_frozen_points is the valid
+    // been temporarily moved to _nd, so _nd + _num_frozen_pts is the valid
     // location limit.
-    return _data_store->save(data_file, (location_t)(_nd + _graph_store->get_num_frozen_points()));
+    return _data_store->save(data_file, (location_t)(_nd + _num_frozen_pts));
 }
 
 // save the graph index on a file as an adjacency list. For each point,
@@ -275,7 +271,7 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
 // 4 byte uint32_t)
 template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::save_graph(std::string graph_file)
 {
-    return _graph_store->store(graph_file, _nd);
+    return _graph_store->store(graph_file, _nd + _num_frozen_pts);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -433,7 +429,7 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    const size_t num_data_points = file_num_points - _graph_store->get_num_frozen_points();
+    const size_t num_data_points = file_num_points - _num_frozen_pts;
     _location_to_tag.reserve(num_data_points);
     _tag_to_location.reserve(num_data_points);
     for (uint32_t i = 0; i < (uint32_t)num_data_points; i++)
@@ -484,10 +480,10 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    if (file_num_points > _max_points + _graph_store->get_num_frozen_points())
+    if (file_num_points > _max_points + _num_frozen_pts)
     {
         // update and tag lock acquired in load() before calling load_data
-        resize(file_num_points - _graph_store->get_num_frozen_points());
+        resize(file_num_points - _num_frozen_pts);
     }
 
 #ifdef EXEC_ENV_OLS
@@ -582,8 +578,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         std::stringstream stream;
         stream << "ERROR: When loading index, loaded " << data_file_num_pts << " points from datafile, "
                << graph_num_pts << " from graph, and " << tags_file_num_pts
-               << " tags, with num_frozen_pts being set to " << _graph_store->get_num_frozen_points()
-               << " in constructor." << std::endl;
+               << " tags, with num_frozen_pts being set to " << _num_frozen_pts << " in constructor." << std::endl;
         diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
@@ -634,7 +629,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         }
     }
 #endif
-    _nd = data_file_num_pts - _graph_store->get_num_frozen_points();
+    _nd = data_file_num_pts - _num_frozen_pts;
     _empty_slots.clear();
     _empty_slots.reserve(_max_points);
     for (auto i = _nd; i < _max_points; i++)
@@ -643,7 +638,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     }
 
     reposition_frozen_point_to_end();
-    diskann::cout << "Num frozen points:" << _graph_store->get_num_frozen_points() << " _nd: " << _nd
+    diskann::cout << "Num frozen points:" << _num_frozen_pts << " _nd: " << _nd
                   << " _start: " << _graph_store->get_start() << " size(_location_to_tag): " << _location_to_tag.size()
                   << " size(_tag_to_location):" << _tag_to_location.size() << " Max points: " << _max_points
                   << std::endl;
@@ -654,8 +649,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     // initialize_q_s().
     if (_query_scratch.size() == 0)
     {
-        initialize_query_scratch(num_threads, search_l, search_l,
-                                 (uint32_t)_graph_store->get_max_range_of_loaded_graph(), _indexingMaxC, _dim);
+        initialize_query_scratch(num_threads, search_l, search_l, (uint32_t)_graph_store->get_max_range_of_graph(),
+                                 _indexingMaxC, _dim);
     }
 }
 
@@ -745,12 +740,11 @@ template <typename T, typename TagT, typename LabelT> uint32_t Index<T, TagT, La
 template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Index<T, TagT, LabelT>::get_init_ids()
 {
     std::vector<uint32_t> init_ids;
-    init_ids.reserve(1 + _graph_store->get_num_frozen_points());
+    init_ids.reserve(1 + _num_frozen_pts);
 
     init_ids.emplace_back(_graph_store->get_start());
 
-    for (uint32_t frozen = (uint32_t)_max_points; frozen < _max_points + _graph_store->get_num_frozen_points();
-         frozen++)
+    for (uint32_t frozen = (uint32_t)_max_points; frozen < _max_points + _num_frozen_pts; frozen++)
     {
         if (frozen != _graph_store->get_start())
         {
@@ -850,7 +844,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     }
 
     // Decide whether to use bitset or robin set to mark visited nodes
-    auto total_num_points = _max_points + _graph_store->get_num_frozen_points();
+    auto total_num_points = _max_points + _num_frozen_pts;
     bool fast_iterate = total_num_points <= MAX_POINTS_FOR_USING_BITSET;
 
     if (fast_iterate)
@@ -880,7 +874,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     // Initialize the candidate pool with starting points
     for (auto id : init_ids)
     {
-        if (id >= _max_points + _graph_store->get_num_frozen_points())
+        if (id >= _max_points + _num_frozen_pts)
         {
             diskann::cerr << "Out of range loc found as an edge : " << id << std::endl;
             throw diskann::ANNException(std::string("Wrong loc") + std::to_string(id), -1, __FUNCSIG__, __FILE__,
@@ -952,7 +946,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 _locks[n].lock();
             for (auto id : _graph_store->get_neighbours(n))
             {
-                assert(id < _max_points + _graph_store->get_num_frozen_points());
+                assert(id < _max_points + _num_frozen_pts);
 
                 if (use_filter)
                 {
@@ -1061,7 +1055,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     prune_neighbors(location, pool, pruned_list, scratch);
 
     assert(!pruned_list.empty());
-    assert(_graph_store->get_graph().size() == _max_points + _graph_store->get_num_frozen_points());
+    assert(_graph_store->get_graph().size() == _max_points + _num_frozen_pts);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1218,7 +1212,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
     for (auto des : src_pool)
     {
         // des.loc is the loc of the neighbors of n
-        assert(des < _max_points + _graph_store->get_num_frozen_points());
+        assert(des < _max_points + _num_frozen_pts);
         // des_pool contains the neighbors of the neighbors of n
         std::vector<uint32_t> copy_of_neighbors;
         bool prune_needed = false;
@@ -1296,21 +1290,20 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
     std::vector<uint32_t> visit_order;
     std::vector<diskann::Neighbor> pool, tmp;
     tsl::robin_set<uint32_t> visited;
-    visit_order.reserve(_nd + _graph_store->get_num_frozen_points());
+    visit_order.reserve(_nd + _num_frozen_pts);
     for (uint32_t i = 0; i < (uint32_t)_nd; i++)
     {
         visit_order.emplace_back(i);
     }
 
     // If there are any frozen points, add them all.
-    for (uint32_t frozen = (uint32_t)_max_points; frozen < _max_points + _graph_store->get_num_frozen_points();
-         frozen++)
+    for (uint32_t frozen = (uint32_t)_max_points; frozen < _max_points + _num_frozen_pts; frozen++)
     {
         visit_order.emplace_back(frozen);
     }
 
     // if there are frozen points, the first such one is set to be the _start
-    if (_graph_store->get_num_frozen_points() > 0)
+    if (_num_frozen_pts > 0)
         _graph_store->set_start((uint32_t)_max_points);
     else
         _graph_store->set_start(calculate_entry_point());
@@ -1408,7 +1401,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
 
     diskann::Timer timer;
 #pragma omp parallel for
-    for (int64_t node = 0; node < (int64_t)(_max_points + _graph_store->get_num_frozen_points()); node++)
+    for (int64_t node = 0; node < (int64_t)(_max_points + _num_frozen_pts); node++)
     {
         if ((size_t)node < _nd || (size_t)node >= _max_points)
         {
@@ -1441,7 +1434,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
 
     diskann::cout << "Prune time : " << timer.elapsed() / 1000 << "ms" << std::endl;
     size_t max = 0, min = 1 << 30, total = 0, cnt = 0;
-    for (size_t i = 0; i < _max_points + _graph_store->get_num_frozen_points(); i++)
+    for (size_t i = 0; i < _max_points + _num_frozen_pts; i++)
     {
         if (i < _nd || i >= _max_points)
         {
@@ -1458,8 +1451,8 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
     if (_nd > 0)
     {
         diskann::cout << "Index built with degree: max:" << max
-                      << "  avg:" << (float)total / (float)(_nd + _graph_store->get_num_frozen_points())
-                      << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+                      << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts) << "  min:" << min
+                      << "  count(deg<2):" << cnt << std::endl;
     }
 }
 
@@ -1472,17 +1465,17 @@ void Index<T, TagT, LabelT>::set_start_points(const T *data, size_t data_count)
     if (_nd > 0)
         throw ANNException("Can not set starting point for a non-empty index", -1, __FUNCSIG__, __FILE__, __LINE__);
 
-    if (data_count != _graph_store->get_num_frozen_points() * _dim)
+    if (data_count != _num_frozen_pts * _dim)
         throw ANNException("Invalid number of points", -1, __FUNCSIG__, __FILE__, __LINE__);
 
     //     memcpy(_data + _aligned_dim * _max_points, data, _aligned_dim *
-    //     sizeof(T) * _graph_store->get_num_frozen_points());
-    for (location_t i = 0; i < _graph_store->get_num_frozen_points(); i++)
+    //     sizeof(T) * _num_frozen_pts);
+    for (location_t i = 0; i < _num_frozen_pts; i++)
     {
         _data_store->set_vector((location_t)(i + _max_points), data + i * _dim);
     }
     _has_built = true;
-    diskann::cout << "Index start points set: #" << _graph_store->get_num_frozen_points() << std::endl;
+    diskann::cout << "Index start points set: #" << _num_frozen_pts << std::endl;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1511,10 +1504,10 @@ void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t rando
     std::normal_distribution<> d{0.0, 1.0};
 
     std::vector<T> points_data;
-    points_data.reserve(_dim * _graph_store->get_num_frozen_points());
+    points_data.reserve(_dim * _num_frozen_pts);
     std::vector<double> real_vec(_dim);
 
-    for (size_t frozen_point = 0; frozen_point < _graph_store->get_num_frozen_points(); frozen_point++)
+    for (size_t frozen_point = 0; frozen_point < _num_frozen_pts; frozen_point++)
     {
         double norm_sq = 0.0;
         for (size_t i = 0; i < _dim; ++i)
@@ -1582,9 +1575,8 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
         if (pool.size() < 2)
             cnt++;
     }
-    diskann::cout << "Index built with degree: max:" << max
-                  << "  avg:" << (float)total / (float)(_nd + _graph_store->get_num_frozen_points()) << "  min:" << min
-                  << "  count(deg<2):" << cnt << std::endl;
+    diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
+                  << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
     _graph_store->set_max_observed_degree(std::max((uint32_t)max, _graph_store->get_max_observed_degree()));
     _has_built = true;
 }
@@ -2271,10 +2263,10 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::generate_frozen_point()
 {
-    if (_graph_store->get_num_frozen_points() == 0)
+    if (_num_frozen_pts == 0)
         return;
 
-    if (_graph_store->get_num_frozen_points() > 1)
+    if (_num_frozen_pts > 1)
     {
         throw ANNException("More than one frozen point not supported in generate_frozen_point", -1, __FUNCSIG__,
                            __FILE__, __LINE__);
@@ -2471,7 +2463,7 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
             num_calls_to_process_delete += 1;
         }
     }
-    for (int64_t loc = _max_points; loc < (int64_t)(_max_points + _graph_store->get_num_frozen_points()); loc++)
+    for (int64_t loc = _max_points; loc < (int64_t)(_max_points + _num_frozen_pts); loc++)
     {
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         auto scratch = manager.scratch_space();
@@ -2502,9 +2494,9 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::compact_frozen_point()
 {
-    if (_nd < _max_points && _graph_store->get_num_frozen_points() > 0)
+    if (_nd < _max_points && _num_frozen_pts > 0)
     {
-        reposition_points((uint32_t)_max_points, (uint32_t)_nd, (uint32_t)_graph_store->get_num_frozen_points());
+        reposition_points((uint32_t)_max_points, (uint32_t)_nd, (uint32_t)_num_frozen_pts);
         _graph_store->set_start((uint32_t)_nd);
     }
 }
@@ -2531,8 +2523,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     diskann::Timer timer;
 
-    std::vector<uint32_t> new_location =
-        std::vector<uint32_t>(_max_points + _graph_store->get_num_frozen_points(), UINT32_MAX);
+    std::vector<uint32_t> new_location = std::vector<uint32_t>(_max_points + _num_frozen_pts, UINT32_MAX);
 
     uint32_t new_counter = 0;
     std::set<uint32_t> empty_locations;
@@ -2548,8 +2539,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             empty_locations.insert(old_location);
         }
     }
-    for (uint32_t old_location = (uint32_t)_max_points;
-         old_location < _max_points + _graph_store->get_num_frozen_points(); old_location++)
+    for (uint32_t old_location = (uint32_t)_max_points; old_location < _max_points + _num_frozen_pts; old_location++)
     {
         new_location[old_location] = old_location;
     }
@@ -2561,12 +2551,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
 
     size_t num_dangling = 0;
-    for (uint32_t old = 0; old < _max_points + _graph_store->get_num_frozen_points(); ++old)
+    for (uint32_t old = 0; old < _max_points + _num_frozen_pts; ++old)
     {
         std::vector<uint32_t> new_adj_list;
 
         if ((new_location[old] < _max_points) // If point continues to exist
-            || (old >= _max_points && old < _max_points + _graph_store->get_num_frozen_points()))
+            || (old >= _max_points && old < _max_points + _num_frozen_pts))
         {
             new_adj_list.reserve(_graph_store->get_neighbours((location_t)old).size());
             for (auto ngh_iter : _graph_store->get_neighbours((location_t)old))
@@ -2700,7 +2690,7 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
     // integer arithmetic rules.
     const uint32_t location_delta = new_location_start - old_location_start;
 
-    for (uint32_t i = 0; i < _max_points + _graph_store->get_num_frozen_points(); i++)
+    for (uint32_t i = 0; i < _max_points + _num_frozen_pts; i++)
         for (auto &loc : _graph_store->get_neighbours((location_t)i))
             if (loc >= old_location_start && loc < old_location_start + num_locations)
                 loc += location_delta;
@@ -2755,7 +2745,7 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::reposition_frozen_point_to_end()
 {
-    if (_graph_store->get_num_frozen_points() == 0)
+    if (_num_frozen_pts == 0)
         return;
 
     if (_nd == _max_points)
@@ -2764,13 +2754,13 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         return;
     }
 
-    reposition_points((uint32_t)_nd, (uint32_t)_max_points, (uint32_t)_graph_store->get_num_frozen_points());
+    reposition_points((uint32_t)_nd, (uint32_t)_max_points, (uint32_t)_num_frozen_pts);
     _graph_store->set_start((uint32_t)_max_points);
 }
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::resize(size_t new_max_points)
 {
-    const size_t new_internal_points = new_max_points + _graph_store->get_num_frozen_points();
+    const size_t new_internal_points = new_max_points + _num_frozen_pts;
     auto start = std::chrono::high_resolution_clock::now();
     assert(_empty_slots.size() == 0); // should not resize if there are empty slots.
 
@@ -2778,10 +2768,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     _graph_store->resize_graph(new_internal_points);
     _locks = std::vector<non_recursive_mutex>(new_internal_points);
 
-    if (_graph_store->get_num_frozen_points() != 0)
+    if (_num_frozen_pts != 0)
     {
-        reposition_points((uint32_t)_max_points, (uint32_t)new_max_points,
-                          (uint32_t)_graph_store->get_num_frozen_points());
+        reposition_points((uint32_t)_max_points, (uint32_t)new_max_points, (uint32_t)_num_frozen_pts);
         _graph_store->set_start((uint32_t)new_max_points);
     }
 
@@ -3061,7 +3050,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 {
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
 
-    boost::dynamic_bitset<> visited(_max_points + _graph_store->get_num_frozen_points());
+    boost::dynamic_bitset<> visited(_max_points + _num_frozen_pts);
 
     size_t MAX_BFS_LEVELS = 32;
     auto bfs_sets = new tsl::robin_set<uint32_t>[MAX_BFS_LEVELS];
@@ -3069,7 +3058,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     bfs_sets[0].insert(_graph_store->get_start());
     visited.set(_graph_store->get_start());
 
-    for (uint32_t i = (uint32_t)_max_points; i < _max_points + _graph_store->get_num_frozen_points(); ++i)
+    for (uint32_t i = (uint32_t)_max_points; i < _max_points + _num_frozen_pts; ++i)
     {
         if (i != _graph_store->get_start())
         {

@@ -13,31 +13,27 @@ namespace diskann
 class AbstractGraphStore
 {
   public:
-    AbstractGraphStore(const size_t max_pts) : _capacity(max_pts)
+    AbstractGraphStore(const size_t total_pts) : _capacity(total_pts)
     {
     }
 
     virtual int load(const std::string &index_path_prefix) = 0;
-    virtual int store(const std::string &index_path_prefix, const size_t active_points) = 0;
+    virtual int store(const std::string &index_path_prefix, const size_t num_points) = 0;
 
+    // not synchronised, user should use lock when necvessary.
     virtual std::vector<location_t> &get_neighbours(const location_t i) = 0;
     virtual void set_neighbours(const location_t i, std::vector<location_t> &neighbors) = 0;
 
     virtual size_t resize_graph(const size_t new_size) = 0;
     virtual void clear_graph() = 0;
 
-    virtual size_t get_num_frozen_points() = 0;
-    virtual size_t get_max_range_of_loaded_graph() = 0;
+    virtual size_t get_max_range_of_graph() = 0;
 
     virtual uint32_t get_max_observed_degree() = 0;
     virtual void set_max_observed_degree(uint32_t max_observed_degree) = 0;
 
     virtual uint32_t get_start() = 0;
     virtual void set_start(uint32_t start) = 0;
-
-    // Active points in graph, it is different then total_points capacity
-    /*virtual size_t get_active_points() = 0;
-    virtual void set_active_points(size_t active_points) = 0;*/
 
     // returns new size after shrinking graph
     virtual size_t shrink_to_fit() = 0;

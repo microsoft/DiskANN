@@ -7,18 +7,18 @@
 namespace diskann
 {
 
-InMemGraphStore::InMemGraphStore(const size_t max_pts, const size_t frozen_points)
-    : AbstractGraphStore(max_pts), _num_frozen_pts(frozen_points)
+InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t num_frozen_pts)
+    : AbstractGraphStore(total_pts), _num_frozen_pts(num_frozen_pts)
 {
 }
 
 int InMemGraphStore::load(const std::string &index_path_prefix)
 {
-    return load_impl(index_path_prefix, get_total_points() - _num_frozen_pts);
+    return load_impl(index_path_prefix, get_total_points());
 }
-int InMemGraphStore::store(const std::string &index_path_prefix, const size_t active_points)
+int InMemGraphStore::store(const std::string &index_path_prefix, const size_t num_points)
 {
-    return save_graph(index_path_prefix, active_points);
+    return save_graph(index_path_prefix, num_points);
 }
 std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t i)
 {
@@ -114,9 +114,9 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
         {
             diskann::cout << "." << std::flush;
         }
-        if (k > _max_range_of_loaded_graph)
+        if (k > _max_range_of_graph)
         {
-            _max_range_of_loaded_graph = k;
+            _max_range_of_graph = k;
         }
     }
 
@@ -130,8 +130,7 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
 {
     size_t expected_file_size;
     size_t file_frozen_pts;
-    size_t file_offset = 0;               // will need this for single file format support
-    auto max_points = get_total_points(); // from parent class holding max_pts
+    size_t file_offset = 0; // will need this for single file format support
 
     std::ifstream in;
     in.exceptions(std::ios::badbit | std::ios::failbit);
@@ -152,7 +151,7 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
         std::stringstream stream;
         if (file_frozen_pts == 1)
         {
-            stream << "ERROR: When loading index, detected dynamic index, but "
+            stream << "ERROR: When loading graph, detected dynamic index, but "
                       "constructor asks for static index. Exitting."
                    << std::endl;
         }
@@ -172,13 +171,13 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
 
     // If user provides more points than max_points
     // resize the _graph to the larger size.
+    auto max_points = get_total_points() - _num_frozen_pts; // from parent class holding max_pts
     if (max_points < expected_max_points)
     {
         diskann::cout << "Number of points in data: " << expected_max_points
                       << " is greater than max_points: " << max_points
                       << " Setting max points to: " << expected_max_points << std::endl;
-        _graph.resize(expected_max_points + _num_frozen_pts);
-        // _max_points = expected_max_points;
+        _graph.resize(expected_max_points + file_frozen_pts);
     }
 
     size_t bytes_read = vamana_metadata_size;
@@ -203,9 +202,9 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
         bytes_read += sizeof(uint32_t) * ((size_t)k + 1);
         if (nodes_read % 10000000 == 0)
             diskann::cout << "." << std::flush;
-        if (k > _max_range_of_loaded_graph)
+        if (k > _max_range_of_graph)
         {
-            _max_range_of_loaded_graph = k;
+            _max_range_of_graph = k;
         }
     }
 
@@ -214,7 +213,7 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
     return nodes_read;
 }
 
-int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size_t active_points)
+int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size_t num_points)
 {
     std::ofstream out;
     open_file_to_write(out, index_path_prefix);
@@ -228,10 +227,9 @@ int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size
     uint32_t ep_u32 = _start;
     out.write((char *)&ep_u32, sizeof(uint32_t));
     out.write((char *)&_num_frozen_pts, sizeof(size_t));
-    // Note: at this point, either active_points == _max_points or any frozen points have
-    // been temporarily moved to active_points, so active_points + _num_frozen_points is the valid
-    // location limit(active_points corresponds to _nd in index.h).
-    for (uint32_t i = 0; i < active_points + _num_frozen_pts; i++)
+
+    // Note: num_points = _nd + _num_frozen_points
+    for (uint32_t i = 0; i < num_points; i++)
     {
         uint32_t GK = (uint32_t)_graph[i].size();
         out.write((char *)&GK, sizeof(uint32_t));
@@ -246,13 +244,9 @@ int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size
     return (int)index_size;
 }
 
-size_t InMemGraphStore::get_num_frozen_points()
+size_t InMemGraphStore::get_max_range_of_graph()
 {
-    return _num_frozen_pts;
-}
-size_t InMemGraphStore::get_max_range_of_loaded_graph()
-{
-    return _max_range_of_loaded_graph;
+    return _max_range_of_graph;
 }
 uint32_t InMemGraphStore::get_max_observed_degree()
 {
