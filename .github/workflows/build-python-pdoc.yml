@@ -11,7 +11,8 @@ jobs:
           python-version: 3.9
       - name: "Run Reference Documentation Generation"
         run: |
-          pip install diskannpy pdoc pipdeptree
+          pip install pdoc pipdeptree
+          pip install -e .
           echo "documentation" > dependencies_documentation.txt
           pipdeptree >> dependencies_documentation.txt
           pdoc -o docs/python/html diskannpy
