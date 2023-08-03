@@ -28,6 +28,17 @@ jobs:
         with:
           fetch-depth: 1
           submodules: true
+      - name: Build dispannpy dependency tree
+        run: |
+          pip install diskannpy pipdeptree
+          echo "dependencies" > dependencies_${{ runner.os }}.txt
+          pipdeptree >> dependencies_${{ runner.os }}.txt
+      - name: Archive dispannpy dependencies artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: dependencies
+          path: |
+            dependencies_${{ runner.os }}.txt
       - name: DiskANN Build CLI Applications
         uses: ./.github/actions/build
   build-documentation:

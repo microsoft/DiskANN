@@ -20,17 +20,6 @@ jobs:
         uses: ./.github/actions/python-wheel
         with:
           cibw-identifier: ${{matrix.cibw-identifier}}
-      - name: Build dependency tree
-        run: |
-          pip install pipdeptree
-          echo "documentation" > dependencies_documentation.txt
-          pipdeptree >> dependencies_${{matrix.cibw-identifier}.txt
-      - name: Archive dependencies artifact
-        uses: actions/upload-artifact@v2
-        with:
-          name: dependencies
-          path: |
-            dependencies_${{matrix.cibw-identifier}.txt
   windows-build:
     name: Python - Windows - ${{matrix.cibw-identifier}}
     strategy:
@@ -51,14 +40,3 @@ jobs:
         uses: ./.github/actions/python-wheel
         with:
           cibw-identifier: ${{matrix.cibw-identifier}}
-      - name: Build dependency tree
-        run: |
-          pip install pipdeptree
-          echo "documentation" > dependencies_documentation.txt
-          pipdeptree >> dependencies_${{matrix.cibw-identifier}.txt
-      - name: Archive dependencies artifact
-        uses: actions/upload-artifact@v2
-        with:
-          name: dependencies
-          path: |
-            dependencies_${{matrix.cibw-identifier}.txt
