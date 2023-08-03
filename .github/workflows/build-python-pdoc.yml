@@ -12,12 +12,16 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: 3.9
-      - name: Build wheel for documentation
-        uses: ./.github/actions/build
+      - name: Install python build
+        run: python -m pip install build
+        shell: bash
+      - name: Building Python Wheel for documentation generation
+        run: python -m build --wheel --outdir documentation_dist
+        shell: bash
       - name: "Run Reference Documentation Generation"
         run: |
           pip install pdoc pipdeptree
-          pip install dist/*.whl 
+          pip install documentation_dist/*.whl 
           echo "documentation" > dependencies_documentation.txt
           pipdeptree >> dependencies_documentation.txt
           pdoc -o docs/python/html diskannpy
