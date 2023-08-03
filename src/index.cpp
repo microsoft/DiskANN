@@ -123,7 +123,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         _data_store =
             std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
         // init graph store => TODO : graph store should be injected
-        _graph_store = std::make_unique<diskann::InMemGraphStore>(total_internal_points, _num_frozen_pts);
+        _graph_store = std::make_unique<diskann::InMemGraphStore>(total_internal_points);
         _graph_store->set_start((uint32_t)_max_points);
         _graph_store->resize_graph(total_internal_points);
     }
@@ -271,7 +271,7 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
 // 4 byte uint32_t)
 template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::save_graph(std::string graph_file)
 {
-    return _graph_store->store(graph_file, _nd + _num_frozen_pts);
+    return _graph_store->store(graph_file, _nd + _num_frozen_pts, _num_frozen_pts);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -686,7 +686,7 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 {
 #endif
 
-    return _graph_store->load(filename);
+    return _graph_store->load(filename, expected_num_points);
 }
 
 template <typename T, typename TagT, typename LabelT>

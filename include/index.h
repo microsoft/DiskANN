@@ -351,7 +351,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // externally and won't be returned by search. At least 1 frozen point is
     // needed for a dynamic index. The frozen points have consecutive locations.
     // See also _start below.
-    size_t _num_frozen_pts;
+    size_t _num_frozen_pts = 0;
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;

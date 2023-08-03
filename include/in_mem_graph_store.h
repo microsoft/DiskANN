@@ -11,10 +11,10 @@ namespace diskann
 class InMemGraphStore : public AbstractGraphStore
 {
   public:
-    InMemGraphStore(const size_t total_pts, const size_t num_frozen_points);
+    InMemGraphStore(const size_t total_pts);
 
-    int load(const std::string &index_path_prefix);
-    int store(const std::string &index_path_prefix, const size_t num_points);
+    int load(const std::string &index_path_prefix, const size_t num_points);
+    int store(const std::string &index_path_prefix, const size_t num_points, const size_t num_froxen_points);
 
     virtual std::vector<location_t> &get_neighbours(const location_t i) override;
     virtual void set_neighbours(const location_t i, std::vector<location_t> &neighbors) override;
@@ -36,13 +36,13 @@ class InMemGraphStore : public AbstractGraphStore
     virtual location_t load_impl(AlignedFileReader &reader, size_t expected_num_points);
 #endif
 
-    int save_graph(const std::string &index_path_prefix, const size_t active_points);
+    int save_graph(const std::string &index_path_prefix, const size_t active_points, const size_t num_frozen_points);
 
   private:
     size_t _max_range_of_graph = 0;
     uint32_t _max_observed_degree = 0;
     uint32_t _start = 0;
-    size_t _num_frozen_pts;
+
     std::vector<std::vector<uint32_t>> _graph;
 };
 

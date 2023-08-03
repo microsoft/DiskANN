@@ -17,8 +17,8 @@ class AbstractGraphStore
     {
     }
 
-    virtual int load(const std::string &index_path_prefix) = 0;
-    virtual int store(const std::string &index_path_prefix, const size_t num_points) = 0;
+    virtual int load(const std::string &index_path_prefix, const size_t num_points) = 0;
+    virtual int store(const std::string &index_path_prefix, const size_t num_points, const size_t num_fz_points) = 0;
 
     // not synchronised, user should use lock when necvessary.
     virtual std::vector<location_t> &get_neighbours(const location_t i) = 0;

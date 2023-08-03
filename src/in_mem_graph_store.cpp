@@ -7,18 +7,18 @@
 namespace diskann
 {
 
-InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t num_frozen_pts)
-    : AbstractGraphStore(total_pts), _num_frozen_pts(num_frozen_pts)
+InMemGraphStore::InMemGraphStore(const size_t total_pts) : AbstractGraphStore(total_pts)
 {
 }
 
-int InMemGraphStore::load(const std::string &index_path_prefix)
+int InMemGraphStore::load(const std::string &index_path_prefix, const size_t num_points)
 {
-    return load_impl(index_path_prefix, get_total_points());
+    return load_impl(index_path_prefix, num_points);
 }
-int InMemGraphStore::store(const std::string &index_path_prefix, const size_t num_points)
+int InMemGraphStore::store(const std::string &index_path_prefix, const size_t num_points,
+                           const size_t num_frozen_points)
 {
-    return save_graph(index_path_prefix, num_points);
+    return save_graph(index_path_prefix, num_points, num_frozen_points);
 }
 std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t i)
 {
@@ -46,7 +46,7 @@ void InMemGraphStore::clear_graph()
 location_t InMemGraphStore::load_impl(const std::string &filename, size_t expected_num_points)
 {
     size_t expected_file_size;
-    size_t file_frozen_pts;
+
     auto max_points = get_max_points();
     int header_size = 2 * sizeof(size_t) + 2 * sizeof(uint32_t);
     std::unique_ptr<char[]> header = std::make_unique<char[]>(header_size);
@@ -146,38 +146,14 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
                   << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << _start
                   << ", file_frozen_pts: " << file_frozen_pts << std::endl;
 
-    if (file_frozen_pts != _num_frozen_pts)
-    {
-        std::stringstream stream;
-        if (file_frozen_pts == 1)
-        {
-            stream << "ERROR: When loading graph, detected dynamic index, but "
-                      "constructor asks for static index. Exitting."
-                   << std::endl;
-        }
-        else
-        {
-            stream << "ERROR: When loading index, detected static index, but "
-                      "constructor asks for dynamic index. Exitting."
-                   << std::endl;
-        }
-        diskann::cerr << stream.str() << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
     diskann::cout << "Loading vamana graph " << filename << "..." << std::flush;
-
-    const size_t expected_max_points = expected_num_points - file_frozen_pts;
 
     // If user provides more points than max_points
     // resize the _graph to the larger size.
-    auto max_points = get_total_points() - _num_frozen_pts; // from parent class holding max_pts
-    if (max_points < expected_max_points)
+    if (get_total_points() < expected_num_points)
     {
-        diskann::cout << "Number of points in data: " << expected_max_points
-                      << " is greater than max_points: " << max_points
-                      << " Setting max points to: " << expected_max_points << std::endl;
-        _graph.resize(expected_max_points + file_frozen_pts);
+        diskann::cout << "resizing graph to " << expected_num_points << std::endl;
+        _graph.resize(expected_num_points);
     }
 
     size_t bytes_read = vamana_metadata_size;
@@ -213,7 +189,8 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
     return nodes_read;
 }
 
-int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size_t num_points)
+int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size_t num_points,
+                                const size_t num_frozen_points)
 {
     std::ofstream out;
     open_file_to_write(out, index_path_prefix);
@@ -226,7 +203,7 @@ int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size
     out.write((char *)&_max_observed_degree, sizeof(uint32_t));
     uint32_t ep_u32 = _start;
     out.write((char *)&ep_u32, sizeof(uint32_t));
-    out.write((char *)&_num_frozen_pts, sizeof(size_t));
+    out.write((char *)&num_frozen_points, sizeof(size_t));
 
     // Note: num_points = _nd + _num_frozen_points
     for (uint32_t i = 0; i < num_points; i++)
