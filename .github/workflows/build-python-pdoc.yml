@@ -35,16 +35,23 @@ jobs:
           name: documentation-site
           path: |
             docs/python/html
-      - name: Publish reference docs (main branch)
+      - name: Publish reference docs for latest development version (main branch)
         uses: peaceiris/actions-gh-pages@v3
-        if: github.ref=='refs/heads/main'
+        if: github.ref == 'refs/heads/main'
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docs/python/html
+          destination_dir: docs/python/dev
+      - name: Publish reference docs by version (main branch)
+        uses: peaceiris/actions-gh-pages@v3
+        if: github.event_name == 'release' && github.ref == 'refs/heads/main'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: docs/python/html
           destination_dir: docs/python/${{ env.DISKANN_VERSION }}
       - name: Publish latest reference docs (main branch)
         uses: peaceiris/actions-gh-pages@v3
-        if: github.ref=='refs/heads/main'
+        if: github.event_name == 'release' && github.ref == 'refs/heads/main'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: docs/python/html

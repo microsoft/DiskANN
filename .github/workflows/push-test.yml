@@ -6,6 +6,11 @@ jobs:
       fail-fast: true
     name: DiskANN Common Build Checks
     uses: ./.github/workflows/common.yml
+  build-documentation:
+    strategy:
+      fail-fast: true
+    name: DiskANN Build Documentation
+    uses: ./.github/workflows/build-python-pdoc.yml
   build:
     strategy:
       fail-fast: false
