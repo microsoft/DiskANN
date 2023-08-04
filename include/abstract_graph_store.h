@@ -17,8 +17,11 @@ class AbstractGraphStore
     {
     }
 
-    virtual int load(const std::string &index_path_prefix, const size_t num_points) = 0;
-    virtual int store(const std::string &index_path_prefix, const size_t num_points, const size_t num_fz_points) = 0;
+    // returns tuple of <nodes_read, start, num_frozen_points>
+    virtual std::tuple<uint32_t, uint32_t, size_t> load(const std::string &index_path_prefix,
+                                                        const size_t num_points) = 0;
+    virtual int store(const std::string &index_path_prefix, const size_t num_points, const size_t num_fz_points,
+                      const uint32_t start) = 0;
 
     // not synchronised, user should use lock when necvessary.
     virtual std::vector<location_t> &get_neighbours(const location_t i) = 0;
@@ -31,9 +34,6 @@ class AbstractGraphStore
 
     virtual uint32_t get_max_observed_degree() = 0;
     virtual void set_max_observed_degree(uint32_t max_observed_degree) = 0;
-
-    virtual uint32_t get_start() = 0;
-    virtual void set_start(uint32_t start) = 0;
 
     // returns new size after shrinking graph
     virtual size_t shrink_to_fit() = 0;

@@ -11,14 +11,15 @@ InMemGraphStore::InMemGraphStore(const size_t total_pts) : AbstractGraphStore(to
 {
 }
 
-int InMemGraphStore::load(const std::string &index_path_prefix, const size_t num_points)
+std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load(const std::string &index_path_prefix,
+                                                             const size_t num_points)
 {
     return load_impl(index_path_prefix, num_points);
 }
 int InMemGraphStore::store(const std::string &index_path_prefix, const size_t num_points,
-                           const size_t num_frozen_points)
+                           const size_t num_frozen_points, const uint32_t start)
 {
-    return save_graph(index_path_prefix, num_points, num_frozen_points);
+    return save_graph(index_path_prefix, num_points, num_frozen_points, start);
 }
 std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t i)
 {
@@ -43,10 +44,12 @@ void InMemGraphStore::clear_graph()
 }
 
 #ifdef EXEC_ENV_OLS
-location_t InMemGraphStore::load_impl(const std::string &filename, size_t expected_num_points)
+std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::string &filename,
+                                                                  size_t expected_num_points)
 {
     size_t expected_file_size;
     size_t file_frozen_pts;
+    uint32_t start;
 
     auto max_points = get_max_points();
     int header_size = 2 * sizeof(size_t) + 2 * sizeof(uint32_t);
@@ -55,11 +58,11 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
 
     expected_file_size = *((size_t *)header.get());
     _max_observed_degree = *((uint32_t *)(header.get() + sizeof(size_t)));
-    _start = *((uint32_t *)(header.get() + sizeof(size_t) + sizeof(uint32_t)));
+    start = *((uint32_t *)(header.get() + sizeof(size_t) + sizeof(uint32_t)));
     file_frozen_pts = *((size_t *)(header.get() + sizeof(size_t) + sizeof(uint32_t) + sizeof(uint32_t)));
 
     diskann::cout << "From graph header, expected_file_size: " << expected_file_size
-                  << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << _start
+                  << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << start
                   << ", file_frozen_pts: " << file_frozen_pts << std::endl;
 
     diskann::cout << "Loading vamana graph from reader..." << std::flush;
@@ -97,16 +100,18 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
         }
     }
 
-    diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to "
-                  << _start << std::endl;
-    return nodes_read;
+    diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to " << start
+                  << std::endl;
+    return std::make_tuple(nodes_read, start, file_frozen_pts);
 }
 #endif
 
-location_t InMemGraphStore::load_impl(const std::string &filename, size_t expected_num_points)
+std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::string &filename,
+                                                                  size_t expected_num_points)
 {
     size_t expected_file_size;
     size_t file_frozen_pts;
+    uint32_t start;
     size_t file_offset = 0; // will need this for single file format support
 
     std::ifstream in;
@@ -115,12 +120,12 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
     in.seekg(file_offset, in.beg);
     in.read((char *)&expected_file_size, sizeof(size_t));
     in.read((char *)&_max_observed_degree, sizeof(uint32_t));
-    in.read((char *)&_start, sizeof(uint32_t));
+    in.read((char *)&start, sizeof(uint32_t));
     in.read((char *)&file_frozen_pts, sizeof(size_t));
     size_t vamana_metadata_size = sizeof(size_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(size_t);
 
     diskann::cout << "From graph header, expected_file_size: " << expected_file_size
-                  << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << _start
+                  << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << start
                   << ", file_frozen_pts: " << file_frozen_pts << std::endl;
 
     diskann::cout << "Loading vamana graph " << filename << "..." << std::flush;
@@ -161,13 +166,13 @@ location_t InMemGraphStore::load_impl(const std::string &filename, size_t expect
         }
     }
 
-    diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to "
-                  << _start << std::endl;
-    return nodes_read;
+    diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to " << start
+                  << std::endl;
+    return std::make_tuple(nodes_read, start, file_frozen_pts);
 }
 
 int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size_t num_points,
-                                const size_t num_frozen_points)
+                                const size_t num_frozen_points, const uint32_t start)
 {
     std::ofstream out;
     open_file_to_write(out, index_path_prefix);
@@ -178,7 +183,7 @@ int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size
     uint32_t max_degree = 0;
     out.write((char *)&index_size, sizeof(uint64_t));
     out.write((char *)&_max_observed_degree, sizeof(uint32_t));
-    uint32_t ep_u32 = _start;
+    uint32_t ep_u32 = start;
     out.write((char *)&ep_u32, sizeof(uint32_t));
     out.write((char *)&num_frozen_points, sizeof(size_t));
 
@@ -206,19 +211,10 @@ uint32_t InMemGraphStore::get_max_observed_degree()
 {
     return _max_observed_degree;
 }
-uint32_t InMemGraphStore::get_start()
-{
-    return _start;
-}
 
 void InMemGraphStore::set_max_observed_degree(uint32_t max_observed_degree)
 {
     this->_max_observed_degree = max_observed_degree;
-};
-
-void InMemGraphStore::set_start(uint32_t start)
-{
-    this->_start = start;
 };
 
 size_t InMemGraphStore::shrink_to_fit()

@@ -359,7 +359,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     //  Start point of the search. When _num_frozen_pts is greater than zero,
     //  this is the location of the first frozen point. Otherwise, this is a
     //  location of one of the points in index.
-    // uint32_t _start = 0;
+    uint32_t _start = 0;
 
     bool _has_built = false;
     bool _saturate_graph = false;
