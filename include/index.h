@@ -68,7 +68,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const bool concurrent_consolidate = false, const bool pq_dist_build = false,
                             const size_t num_pq_chunks = 0, const bool use_opq = false);
 
-    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store
+    //REFACTOR TODO: Ideally, this should take an AbstractPQDataStore, but for now, all our PQDataStores are in-mem
+    //so this should be ok.
+    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store_for_reranking,
+                            std::shared_ptr<AbstractDataStore<T>> data_store_for_candidates
                             /* std::unique_ptr<AbstractGraphStore> graph_store*/);
 
     DISKANN_DLLEXPORT ~Index();
@@ -253,9 +256,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
-    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
+    //The query to use is placed in scratch->aligned_query
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids,
-                                                         InMemQueryScratch<T> *scratch, bool use_filter,
+                                                         bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
@@ -336,7 +340,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_ptr<Distance<T>> _distance;
 
     // Data
-    std::unique_ptr<AbstractDataStore<T>> _data_store;
+    std::shared_ptr<AbstractDataStore<T>> _data_store;
     char *_opt_graph = nullptr;
 
     // Graph related data structures
@@ -400,7 +404,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // REFACTOR
     // uint8_t *_pq_data = nullptr;
     std::shared_ptr<QuantizedDistance<T>> _pq_distance_fn = nullptr;
-    std::shared_ptr<PQDataStore<T>> _pq_data_store = nullptr;
+    std::shared_ptr<AbstractDataStore<T>> _pq_data_store = nullptr;
     bool _pq_generated = false;
     FixedChunkPQTable _pq_table;
 

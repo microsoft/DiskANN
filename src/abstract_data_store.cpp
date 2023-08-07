@@ -44,12 +44,7 @@ void AbstractDataStore<data_t>::preprocess_query(const data_t *query, AbstractSc
 {
 }
 
-template <typename data_t>
-void AbstractDataStore<data_t>::get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
-                                             std::vector<float> &distances,
-                                             AbstractScratch<data_t> *scratch_space) const
-{
-}
+
 
 template DISKANN_DLLEXPORT class AbstractDataStore<float>;
 template DISKANN_DLLEXPORT class AbstractDataStore<int8_t>;

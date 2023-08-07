@@ -1,4 +1,6 @@
 #include "index_factory.h"
+#include "pq_l2_distance.h"
+
 
 namespace diskann
 {
@@ -49,8 +51,17 @@ void IndexFactory::check_config()
     }
 }
 
+template<typename T> Distance<T>* IndexFactory::construct_inmem_distance_fn()
+{
+    if (_config->metric == diskann::Metric::COSINE && std::is_same<T, float>::value) {
+        return (Distance<T> *)new AVXNormalizedCosineDistanceFloat();
+    } else {
+        return (Distance<T> *)get_distance_function<T>(_config->metric);
+    }
+}
+
 template <typename T>
-std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStoreStrategy strategy, size_t num_points,
+std::shared_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStoreStrategy strategy, size_t num_points,
                                                                         size_t dimension)
 {
     const size_t total_internal_points = num_points + _config->num_frozen_pts;
@@ -58,26 +69,38 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStor
     switch (strategy)
     {
     case MEMORY:
-        if (_config->metric == diskann::Metric::COSINE && std::is_same<T, float>::value)
-        {
-            distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
-            return std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, dimension, distance);
-        }
-        else
-        {
-            distance.reset((Distance<T> *)get_distance_function<T>(_config->metric));
-            return std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, dimension, distance);
-        }
-        break;
+        distance.reset(construct_inmem_distance_fn<T>());
+        return std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, dimension, distance);
     default:
         break;
     }
     return nullptr;
 }
 
-std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStoreStrategy, size_t size)
+std::shared_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStoreStrategy, size_t size)
 {
     return std::make_unique<InMemGraphStore>(size);
+}
+
+template <typename T>
+std::shared_ptr<PQDataStore<T>> IndexFactory::construct_pq_datastore(DataStoreStrategy strategy, size_t num_points, size_t dimension)
+{
+    std::shared_ptr<Distance<T>> distance_fn;
+    std::shared_ptr<QuantizedDistance<T>> quantized_distance_fn;
+
+    quantized_distance_fn = std::make_shared<PQL2Distance<T>>(_config->num_pq_chunks, _config->use_opq);
+    switch (strategy)
+    {
+    case MEMORY:
+        distance_fn.reset(construct_inmem_distance_fn<T>());
+        return std::make_unique<diskann::PQDataStore<T>>(dimension, (location_t)(num_points + _config->num_frozen_pts),
+                                                         _config->num_pq_chunks, distance_fn,
+                                                         quantized_distance_fn);
+    default:
+        //REFACTOR TODO: We do support diskPQ - so we may need to add a new class for SSDPQDataStore!
+        break;
+    }
+    return nullptr;
 }
 
 template <typename data_type, typename tag_type, typename label_type>
@@ -87,7 +110,20 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     size_t dim = _config->dimension;
     // auto graph_store = construct_graphstore(_config->graph_strategy, num_points);
     auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim);
-    return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, std::move(data_store));
+    std::shared_ptr<AbstractDataStore<data_type>> pq_data_store = nullptr;
+
+    if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
+    {
+        pq_data_store = construct_pq_datastore<data_type>(_config->data_strategy, num_points, dim);
+    }
+    else
+    {
+        pq_data_store = data_store;
+    }
+
+    //REFACTOR TODO: Must construct in-memory PQDatastore if strategy == ONDISK and must construct
+    //in-mem and on-disk PQDataStore if strategy == ONDISK and diskPQ is required. 
+    return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, data_store, pq_data_store);
 }
 
 std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &data_type, const std::string &tag_type,

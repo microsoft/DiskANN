@@ -187,7 +187,6 @@ void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t 
                                           const uint32_t location_count, float *distances,
                                           AbstractScratch<data_t> *scratch_space) const
 {
-    assert(scratch_space == nullptr); // Scratch space should only be used by PQ data store.
     for (location_t i = 0; i < location_count; i++)
     {
         distances[i] = _distance_fn->compare(query, _data + locations[i] * _aligned_dim, (uint32_t)this->_aligned_dim);
@@ -199,6 +198,17 @@ float InMemDataStore<data_t>::get_distance(const location_t loc1, const location
 {
     return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim,
                                  (uint32_t)this->_aligned_dim);
+}
+
+template<typename data_t>
+void InMemDataStore<data_t>::get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
+                                          std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const
+{
+    for (int i = 0; i < ids.size(); i++)
+    {
+        distances[i] =
+            _distance_fn->compare(preprocessed_query, _data + ids[i] * _aligned_dim, (uint32_t)this->_aligned_dim);
+    }
 }
 
 template <typename data_t> location_t InMemDataStore<data_t>::expand(const location_t new_size)

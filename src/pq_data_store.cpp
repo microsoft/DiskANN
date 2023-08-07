@@ -18,6 +18,9 @@ PQDataStore<data_t>::PQDataStore(size_t dim, location_t num_points, size_t num_p
     : AbstractDataStore<data_t>(num_points, dim), _quantized_data(nullptr), _num_chunks(num_pq_chunks),
       _distance_metric(distance_fn->get_metric()), _distance_fn(distance_fn), _pq_distance_fn(pq_distance_fn)
 {
+    if (num_pq_chunks > dim) {
+        throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
 }
 
 template <typename data_t> PQDataStore<data_t>::~PQDataStore()

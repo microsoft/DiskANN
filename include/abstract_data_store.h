@@ -91,7 +91,7 @@ template <typename data_t> class AbstractDataStore
     // Specific overload for index.cpp.
     // REFACTOR TODO: Check if the default implementation is sufficient for most cases.
     virtual void get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
-                              std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const;
+                              std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const = 0;
     virtual float get_distance(const location_t loc1, const location_t loc2) const = 0;
 
     // stats of the data stored in store

@@ -7,6 +7,8 @@
 
 namespace diskann
 {
+    //REFACTOR TODO: By default, the PQDataStore is an in-memory datastore because both Vamana and 
+    //DiskANN treat it the same way. But with DiskPQ, that may need to change. 
 template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
 {
 
