@@ -1151,7 +1151,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     }
 
     if (beam_width > defaults::MAX_N_SECTOR_READS)
-        throw ANNException("Beamwidth can not be higher than defaults::MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__, __LINE__);
+        throw ANNException("Beamwidth can not be higher than defaults::MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__,
+                           __LINE__);
 
     ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
     auto data = manager.scratch_space();
@@ -1331,7 +1332,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 fnhood.second = sector_scratch + sector_scratch_idx * defaults::SECTOR_LEN;
                 sector_scratch_idx++;
                 frontier_nhoods.push_back(fnhood);
-                frontier_read_reqs.emplace_back(NODE_SECTOR_NO(((size_t)id)) * defaults::SECTOR_LEN, defaults::SECTOR_LEN, fnhood.second);
+                frontier_read_reqs.emplace_back(NODE_SECTOR_NO(((size_t)id)) * defaults::SECTOR_LEN,
+                                                defaults::SECTOR_LEN, fnhood.second);
                 if (stats != nullptr)
                 {
                     stats->n_4k++;
@@ -1498,8 +1500,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         for (size_t i = 0; i < full_retset.size(); ++i)
         {
-            vec_read_reqs.emplace_back(VECTOR_SECTOR_NO(((size_t)full_retset[i].id)) * defaults::SECTOR_LEN, defaults::SECTOR_LEN,
-                                       sector_scratch + i * defaults::SECTOR_LEN);
+            vec_read_reqs.emplace_back(VECTOR_SECTOR_NO(((size_t)full_retset[i].id)) * defaults::SECTOR_LEN,
+                                       defaults::SECTOR_LEN, sector_scratch + i * defaults::SECTOR_LEN);
 
             if (stats != nullptr)
             {
