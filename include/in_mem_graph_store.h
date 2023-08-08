@@ -11,7 +11,7 @@ namespace diskann
 class InMemGraphStore : public AbstractGraphStore
 {
   public:
-    InMemGraphStore(const size_t total_pts);
+    InMemGraphStore(const size_t total_pts, const size_t max_range);
 
     // returns tuple of <nodes_read, start, num_frozen_points>
     virtual std::tuple<uint32_t, uint32_t, size_t> load(const std::string &index_path_prefix,
@@ -19,7 +19,13 @@ class InMemGraphStore : public AbstractGraphStore
     virtual int store(const std::string &index_path_prefix, const size_t num_points, const size_t num_frozen_points,
                       const uint32_t start) override;
 
-    virtual std::vector<location_t> &get_neighbours(const location_t i) override;
+    virtual const std::vector<location_t> &get_neighbours(const location_t i) const override;
+    virtual void add_neighbour(const location_t i, location_t neighbour_id) override;
+    virtual void clear_neighbours(const location_t i) override;
+    virtual void swap_neighbours(const location_t a, location_t b) override;
+
+    virtual void reserve_neighbour_location(const location_t i, const size_t capacity) override;
+
     virtual void set_neighbours(const location_t i, std::vector<location_t> &neighbors) override;
 
     virtual size_t resize_graph(const size_t new_size) override;
@@ -28,8 +34,6 @@ class InMemGraphStore : public AbstractGraphStore
     virtual size_t get_max_range_of_graph() override;
     virtual uint32_t get_max_observed_degree() override;
     virtual void set_max_observed_degree(uint32_t max_observed_degree) override;
-
-    virtual size_t shrink_to_fit() override;
 
   protected:
     virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(const std::string &filename, size_t expected_num_points);

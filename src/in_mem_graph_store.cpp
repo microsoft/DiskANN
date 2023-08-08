@@ -7,8 +7,15 @@
 namespace diskann
 {
 
-InMemGraphStore::InMemGraphStore(const size_t total_pts) : AbstractGraphStore(total_pts)
+InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t max_range)
+    : AbstractGraphStore(total_pts, max_range)
 {
+    // reserving location for graph neighbours
+    _graph.resize(total_pts);
+    for (size_t i = 0; i < total_pts; i++)
+    {
+        _graph[i].reserve(max_range);
+    }
 }
 
 std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load(const std::string &index_path_prefix,
@@ -21,13 +28,37 @@ int InMemGraphStore::store(const std::string &index_path_prefix, const size_t nu
 {
     return save_graph(index_path_prefix, num_points, num_frozen_points, start);
 }
-std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t i)
+const std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t i) const
 {
-    return _graph[i];
+    return _graph.at(i);
 }
+
+void InMemGraphStore::add_neighbour(const location_t i, location_t neighbour_id)
+{
+    if (_graph[i].size() > _max_observed_degree)
+    {
+        _max_observed_degree = (uint32_t)_graph.size();
+    }
+    _graph[i].emplace_back(neighbour_id);
+}
+
+void InMemGraphStore::clear_neighbours(const location_t i)
+{
+    _graph[i].clear();
+    _graph[i].reserve(get_max_range());
+};
+void InMemGraphStore::swap_neighbours(const location_t a, location_t b)
+{
+    _graph[a].swap(_graph[b]);
+};
 
 void InMemGraphStore::set_neighbours(const location_t i, std::vector<location_t> &neighbors)
 {
+    if (neighbors.empty())
+    {
+        _graph[i].clear();
+        return;
+    }
     _graph[i].assign(neighbors.begin(), neighbors.end());
 }
 
@@ -212,15 +243,14 @@ uint32_t InMemGraphStore::get_max_observed_degree()
     return _max_observed_degree;
 }
 
+void InMemGraphStore::reserve_neighbour_location(const location_t i, const size_t capacity)
+{
+    _graph[i].reserve(capacity);
+}
+
 void InMemGraphStore::set_max_observed_degree(uint32_t max_observed_degree)
 {
     this->_max_observed_degree = max_observed_degree;
 };
-
-size_t InMemGraphStore::shrink_to_fit()
-{
-    _graph.shrink_to_fit();
-    return _graph.size();
-}
 
 } // namespace diskann
