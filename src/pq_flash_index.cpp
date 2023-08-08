@@ -41,7 +41,7 @@ namespace diskann
 
 template <typename T, typename LabelT>
 PQFlashIndex<T, LabelT>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
-    : reader(fileReader), metric(m)
+    : reader(fileReader), metric(m), thread_data(nullptr)
 {
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT)
     {

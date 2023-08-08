@@ -79,7 +79,8 @@ template <typename T> inline void add_variant(py::module_ &m, const Variant &var
         .def("save", &diskannpy::DynamicMemoryIndex<T>::save, "save_path"_a = "", "compact_before_save"_a = false)
         .def("insert", &diskannpy::DynamicMemoryIndex<T>::insert, "vector"_a, "id"_a)
         .def("mark_deleted", &diskannpy::DynamicMemoryIndex<T>::mark_deleted, "id"_a)
-        .def("consolidate_delete", &diskannpy::DynamicMemoryIndex<T>::consolidate_delete);
+        .def("consolidate_delete", &diskannpy::DynamicMemoryIndex<T>::consolidate_delete)
+        .def("num_points", &diskannpy::DynamicMemoryIndex<T>::num_points);
 
     py::class_<diskannpy::StaticDiskIndex<T>>(m, variant.static_disk_index_name.c_str())
         .def(py::init<const diskann::Metric, const std::string &, const uint32_t, const size_t, const uint32_t>(),
