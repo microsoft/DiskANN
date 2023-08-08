@@ -944,7 +944,7 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
-    bool use_filter, const std::vector<LabelT> &filter_label, bool search_invocation)
+    bool use_filter, const std::vector<LabelT> &filter_labels, bool search_invocation)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -1035,9 +1035,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                                         __LINE__);
         }
 
+        if (_dynamic_index)
+            _locks[id].lock();
+
         if (use_filter)
         {
-            if (!detect_common_filters(id, search_invocation, filter_label))
+            if (!detect_common_filters(id, search_invocation, filter_labels))
                 continue;
         }
 
@@ -1064,6 +1067,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
         }
+
+        if (_dynamic_index)
+            _locks[id].unlock();
     }
 
     uint32_t hops = 0;
@@ -1105,7 +1111,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (!detect_common_filters(id, search_invocation, filter_label))
+                    if (!detect_common_filters(id, search_invocation, filter_labels))
                         continue;
                 }
 
