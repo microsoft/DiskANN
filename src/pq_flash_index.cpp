@@ -96,13 +96,13 @@ template <typename T, typename LabelT> PQFlashIndex<T, LabelT>::~PQFlashIndex()
 
 template <typename T, typename LabelT> inline uint64_t PQFlashIndex<T, LabelT>::get_node_sector(uint64_t node_id)
 {
-    return 1 + (nnodes_per_sector > 0 ? node_id / nnodes_per_sector : node_id * nsectors_per_node);
+    return 1 + (_nnodes_per_sector > 0 ? node_id / _nnodes_per_sector : node_id * _nsectors_per_node);
 }
 
 template <typename T, typename LabelT>
 inline char *PQFlashIndex<T, LabelT>::offset_to_node(char *sector_buf, uint64_t node_id)
 {
-    return sector_buf + (nnodes_per_sector == 0 ? 0 : (node_id % nnodes_per_sector) * max_node_len);
+    return sector_buf + (_nnodes_per_sector == 0 ? 0 : (node_id % _nnodes_per_sector) * _max_node_len);
 }
 
 template <typename T, typename LabelT>
@@ -134,8 +134,8 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     auto this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
 
-    nhood_cache_buf = new uint32_t[num_cached_nodes * (max_degree + 1)];
-    memset(nhood_cache_buf, 0, num_cached_nodes * (max_degree + 1));
+    nhood_cache_buf = new uint32_t[num_cached_nodes * (_max_degree + 1)];
+    memset(nhood_cache_buf, 0, num_cached_nodes * (_max_degree + 1));
 
     size_t coord_cache_buf_len = num_cached_nodes * aligned_dim;
     diskann::alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
@@ -188,7 +188,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
             uint32_t *nbrs = node_nhood + 1;
             std::pair<uint32_t, uint32_t *> cnhood;
             cnhood.first = nnbrs;
-            cnhood.second = nhood_cache_buf + node_idx * (max_degree + 1);
+            cnhood.second = nhood_cache_buf + node_idx * (_max_degree + 1);
             memcpy(cnhood.second, nbrs, nnbrs * sizeof(uint32_t));
             nhood_cache.insert(std::make_pair(nhood.first, cnhood));
             aligned_free(nhood.second);
@@ -927,11 +927,11 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     size_t medoid_id_on_file;
     READ_U64(index_metadata, medoid_id_on_file);
-    READ_U64(index_metadata, max_node_len);
-    READ_U64(index_metadata, nnodes_per_sector);
-    max_degree = ((max_node_len - disk_bytes_per_point) / sizeof(uint32_t)) - 1;
+    READ_U64(index_metadata, _max_node_len);
+    READ_U64(index_metadata, _nnodes_per_sector);
+    _max_degree = ((_max_node_len - disk_bytes_per_point) / sizeof(uint32_t)) - 1;
 
-    if (max_degree > defaults::MAX_GRAPH_DEGREE)
+    if (_max_degree > defaults::MAX_GRAPH_DEGREE)
     {
         std::stringstream stream;
         stream << "Error loading index. Ensure that max graph degree (R) does "
@@ -967,9 +967,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     }
 
     diskann::cout << "Disk-Index File Meta-data: ";
-    diskann::cout << "# nodes per sector: " << nnodes_per_sector;
-    diskann::cout << ", max node len (bytes): " << max_node_len;
-    diskann::cout << ", max node degree: " << max_degree << std::endl;
+    diskann::cout << "# nodes per sector: " << _nnodes_per_sector;
+    diskann::cout << ", max node len (bytes): " << _max_node_len;
+    diskann::cout << ", max node degree: " << _max_degree << std::endl;
 
 #ifdef EXEC_ENV_OLS
     delete[] bytes;

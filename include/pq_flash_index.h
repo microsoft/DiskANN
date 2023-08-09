@@ -124,13 +124,14 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // offset in sector: [0]
     //
     // Common info
-    // nnbrs of node `i`: *(unsigned*) (buf)
-    // nbrs of node `i`: ((unsigned*)buf) + 1
+    // coords start at ofsset 
+    // #nbrs of node `i`: *(unsigned*) (offset + disk_bytes_per_point)
+    // nbrs of node `i` : (unsigned*) (offset + disk_bytes_per_point + 1)
 
-    uint64_t max_node_len = 0;
-    uint64_t nnodes_per_sector = 0; // 0 for multi-sector nodes, >0 for multi-node sectors
-    uint64_t nsectors_per_node = 0; // 0 for muli-node sectors, >0 for multi-sector nodes
-    uint64_t max_degree = 0;
+    uint64_t _max_node_len = 0;
+    uint64_t _nnodes_per_sector = 0; // 0 for multi-sector nodes, >0 for multi-node sectors
+    uint64_t _nsectors_per_node = 0; // 0 for muli-node sectors, >0 for multi-sector nodes
+    uint64_t _max_degree = 0;
 
 
     // Data used for searching with re-order vectors
