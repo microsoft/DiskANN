@@ -41,6 +41,8 @@ class DynamicMemoryIndex
                                             uint64_t num_queries, uint64_t knn, uint64_t complexity,
                                             uint32_t num_threads);
     void consolidate_delete();
+    size_t num_points();
+
 
   private:
     const uint32_t _initial_search_complexity;

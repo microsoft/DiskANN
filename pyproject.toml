@@ -3,7 +3,7 @@ requires = [
     "setuptools>=59.6",
     "pybind11>=2.10.0",
     "cmake>=3.22",
-    "numpy>=1.21",
+    "numpy==1.25", # this is important to keep fixed. It also means anyone using something other than 1.25 won't be able to use this library
     "wheel",
     "ninja"
 ]
@@ -11,22 +11,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diskannpy"
-version = "0.5.0.rc1"
+version = "0.6.0"
 
 description = "DiskANN Python extension module"
-# readme = "../README.md"
-requires-python = ">=3.8"
+readme = "python/README.md"
+requires-python = ">=3.9"
 license = {text = "MIT License"}
 dependencies = [
-    "numpy"
+    "numpy==1.25"
 ]
 authors = [
     {name = "Harsha Vardhan Simhadri", email = "harshasi@microsoft.com"},
     {name = "Dax Pryce", email = "daxpryce@microsoft.com"}
 ]
 
+[project.optional-dependencies]
+dev = ["black", "isort", "mypy"]
+
 [tool.setuptools]
 package-dir = {"" = "python/src"}
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.mypy]
+plugins = "numpy.typing.mypy_plugin"
 
 [tool.cibuildwheel]
 manylinux-x86_64-image = "manylinux_2_28"
@@ -34,7 +44,6 @@ test-requires = ["scikit-learn~=1.2"]
 build-frontend = "build"
 skip = ["pp*", "*-win32", "*-manylinux_i686", "*-musllinux*"]
 test-command = "python -m unittest discover {project}/python/tests"
-
 
 [tool.cibuildwheel.linux]
 before-build = [

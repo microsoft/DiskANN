@@ -11,18 +11,11 @@
 #include "tsl/robin_map.h"
 #include "tsl/sparse_map.h"
 
-#include "neighbor.h"
-#include "concurrent_queue.h"
-#include "pq.h"
 #include "aligned_file_reader.h"
-
-// In-mem index related limits
-#define GRAPH_SLACK_FACTOR 1.3
-
-// SSD Index related limits
-#define MAX_GRAPH_DEGREE 512
-#define SECTOR_LEN (size_t)4096
-#define MAX_N_SECTOR_READS 128
+#include "concurrent_queue.h"
+#include "defaults.h"
+#include "neighbor.h"
+#include "pq.h"
 
 namespace diskann
 {

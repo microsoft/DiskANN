@@ -1,7 +1,7 @@
 name: Build Python Wheel
 description: Builds a python wheel with cibuildwheel
 inputs:
-  cibw-identifer:
+  cibw-identifier:
     description: "CI build wheel identifier to build"
     required: true
 runs:
