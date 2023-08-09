@@ -77,10 +77,10 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStor
 
 std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStoreStrategy strategy, size_t size)
 {
+    auto max_degree_to_use = _config->index_write_params != nullptr ? _config->index_write_params->max_degree : 0;
     switch (strategy)
     {
     case GraphStoreStrategy::MEMORY:
-        auto max_degree_to_use = _config->index_write_params != nullptr ? _config->index_write_params->max_degree : 0;
         return std::make_unique<InMemGraphStore>(size,
                                                  (size_t)(max_degree_to_use * defaults::GRAPH_SLACK_FACTOR * 1.05));
     default:
