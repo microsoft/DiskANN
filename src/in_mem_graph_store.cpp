@@ -10,12 +10,6 @@ namespace diskann
 InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t max_range)
     : AbstractGraphStore(total_pts, max_range)
 {
-    // reserving location for graph neighbours
-    _graph.resize(total_pts);
-    for (size_t i = 0; i < total_pts; i++)
-    {
-        _graph[i].reserve(max_range);
-    }
 }
 
 std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load(const std::string &index_path_prefix,
