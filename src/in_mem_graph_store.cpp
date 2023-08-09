@@ -38,7 +38,6 @@ void InMemGraphStore::add_neighbour(const location_t i, location_t neighbour_id)
 void InMemGraphStore::clear_neighbours(const location_t i)
 {
     _graph[i].clear();
-    _graph[i].reserve(get_max_range());
 };
 void InMemGraphStore::swap_neighbours(const location_t a, location_t b)
 {
