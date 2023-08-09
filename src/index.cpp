@@ -2704,18 +2704,14 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
     std::vector<location_t> updated_neighbours_location;
     for (uint32_t i = 0; i < _max_points + _num_frozen_pts; i++)
     {
-        for (auto &loc : _graph_store->get_neighbours((location_t)i))
+        auto &i_neighbours = _graph_store->get_neighbours((location_t)i);
+        std::vector<location_t> i_neighbours_copy(i_neighbours.begin(), i_neighbours.end());
+        for (auto &loc : i_neighbours_copy)
         {
             if (loc >= old_location_start && loc < old_location_start + num_locations)
-            {
-                updated_neighbours_location.emplace_back(loc + location_delta);
-            }
-            else
-            {
-                updated_neighbours_location.emplace_back(loc);
-            }
+                loc += location_delta;
         }
-        _graph_store->set_neighbours(i, updated_neighbours_location);
+        _graph_store->set_neighbours(i, i_neighbours_copy);
     }
 
     // The [start, end) interval which will contain obsolete points to be
