@@ -6,7 +6,6 @@
 
 namespace diskann
 {
-
 InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t max_range)
     : AbstractGraphStore(total_pts, max_range)
 {
