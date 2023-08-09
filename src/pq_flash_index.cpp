@@ -17,8 +17,6 @@
 #define READ_U32(stream, val) stream.read((char *)&val, sizeof(uint32_t))
 #define READ_UNSIGNED(stream, val) stream.read((char *)&val, sizeof(unsigned))
 
-// sector # on disk where node_id is present with in the graph part
-#define NODE_SECTOR_NO(node_id) (((uint64_t)(node_id)) / nnodes_per_sector + 1)
 
 // obtains region of sector containing node
 #define OFFSET_TO_NODE(sector_buf, node_id)                                                                            \
@@ -101,6 +99,12 @@ template <typename T, typename LabelT> PQFlashIndex<T, LabelT>::~PQFlashIndex()
     }
 }
 
+template <typename T, typename LabelT> inline uint64_t PQFlashIndex<T, LabelT>::get_node_sector(uint64_t node_id)
+{
+    assert(nnodes_per_sector > 0 || nsectors_per_node > 0);
+    return 1 + (nnodes_per_sector > 0 ? node_id / nnodes_per_sector : node_id * nsectors_per_node);
+}
+
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve)
 {
@@ -126,7 +130,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     size_t num_cached_nodes = node_list.size();
 
     // borrow thread data
-    ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
+    ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data); 
     auto this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
 
@@ -154,7 +158,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
             nhoods.push_back(std::make_pair(node_list[node_idx], buf));
             read.len = defaults::SECTOR_LEN;
             read.buf = buf;
-            read.offset = NODE_SECTOR_NO(node_list[node_idx]) * defaults::SECTOR_LEN;
+            read.offset = get_node_sector(node_list[node_idx]) * defaults::SECTOR_LEN;
             read_reqs.push_back(read);
         }
 
@@ -382,7 +386,7 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
                 AlignedRead read;
                 read.len = defaults::SECTOR_LEN;
                 read.buf = buf;
-                read.offset = NODE_SECTOR_NO(nodes_to_expand[cur_pt]) * defaults::SECTOR_LEN;
+                read.offset = get_node_sector(nodes_to_expand[cur_pt]) * defaults::SECTOR_LEN;
                 read_reqs.push_back(read);
             }
 
@@ -464,7 +468,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
         std::vector<AlignedRead> medoid_read(1);
         medoid_read[0].len = defaults::SECTOR_LEN;
         medoid_read[0].buf = medoid_buf;
-        medoid_read[0].offset = NODE_SECTOR_NO(medoid) * defaults::SECTOR_LEN;
+        medoid_read[0].offset = get_node_sector(medoid) * defaults::SECTOR_LEN;
         reader->read(medoid_read, ctx);
 
         // all data about medoid
@@ -752,8 +756,6 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     }
 
     this->data_dim = pq_file_dim;
-    // will reset later if we use PQ on disk
-    this->disk_data_dim = this->data_dim;
     // will change later if we use PQ on disk or if we are using
     // inner product without PQ
     this->disk_bytes_per_point = this->data_dim * sizeof(T);
@@ -1332,7 +1334,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 fnhood.second = sector_scratch + sector_scratch_idx * defaults::SECTOR_LEN;
                 sector_scratch_idx++;
                 frontier_nhoods.push_back(fnhood);
-                frontier_read_reqs.emplace_back(NODE_SECTOR_NO(((size_t)id)) * defaults::SECTOR_LEN,
+                frontier_read_reqs.emplace_back(get_node_sector(((size_t)id)) * defaults::SECTOR_LEN,
                                                 defaults::SECTOR_LEN, fnhood.second);
                 if (stats != nullptr)
                 {

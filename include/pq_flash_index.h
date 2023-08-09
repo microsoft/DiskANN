@@ -100,6 +100,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
+    DISKANN_DLLEXPORT uint64_t get_node_sector(uint64_t node_id);
+
   private:
     DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, uint32_t label_id);
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
@@ -115,7 +117,11 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // nnbrs of node `i`: *(unsigned*) (buf)
     // nbrs of node `i`: ((unsigned*)buf) + 1
 
-    uint64_t max_node_len = 0, nnodes_per_sector = 0, max_degree = 0;
+    uint64_t max_node_len = 0;
+    uint64_t nnodes_per_sector = 0;
+    uint64_t nsectors_per_node = 0;
+    uint64_t max_degree = 0;
+
 
     // Data used for searching with re-order vectors
     uint64_t ndims_reorder_vecs = 0, reorder_data_start_sector = 0, nvecs_per_sector = 0;
@@ -131,8 +137,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t num_frozen_points = 0;
     uint64_t frozen_location = 0;
     uint64_t data_dim = 0;
-    uint64_t disk_data_dim = 0; // will be different from data_dim only if we use
-                                // PQ for disk data (very large dimensionality)
     uint64_t aligned_dim = 0;
     uint64_t disk_bytes_per_point = 0;
 
