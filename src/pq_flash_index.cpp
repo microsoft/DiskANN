@@ -17,11 +17,6 @@
 #define READ_U32(stream, val) stream.read((char *)&val, sizeof(uint32_t))
 #define READ_UNSIGNED(stream, val) stream.read((char *)&val, sizeof(unsigned))
 
-
-// obtains region of sector containing node
-#define OFFSET_TO_NODE(sector_buf, node_id)                                                                            \
-    ((char *)sector_buf + (((uint64_t)node_id) % nnodes_per_sector) * max_node_len)
-
 // returns region of `node_buf` containing [NNBRS][NBR_ID(uint32_t)]
 #define OFFSET_TO_NODE_NHOOD(node_buf) (unsigned *)((char *)node_buf + disk_bytes_per_point)
 
@@ -101,8 +96,13 @@ template <typename T, typename LabelT> PQFlashIndex<T, LabelT>::~PQFlashIndex()
 
 template <typename T, typename LabelT> inline uint64_t PQFlashIndex<T, LabelT>::get_node_sector(uint64_t node_id)
 {
-    assert(nnodes_per_sector > 0 || nsectors_per_node > 0);
     return 1 + (nnodes_per_sector > 0 ? node_id / nnodes_per_sector : node_id * nsectors_per_node);
+}
+
+template <typename T, typename LabelT>
+inline char *PQFlashIndex<T, LabelT>::offset_to_node(char *sector_buf, uint64_t node_id)
+{
+    return sector_buf + (nnodes_per_sector == 0 ? 0 : (node_id % nnodes_per_sector) * max_node_len);
 }
 
 template <typename T, typename LabelT>
@@ -130,7 +130,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     size_t num_cached_nodes = node_list.size();
 
     // borrow thread data
-    ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data); 
+    ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
     auto this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
 
@@ -175,7 +175,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
             }
 #endif
             auto &nhood = nhoods[i];
-            char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+            char *node_buf = offset_to_node(nhood.second, nhood.first);
             T *node_coords = OFFSET_TO_NODE_COORDS(node_buf);
             T *cached_coords = coord_cache_buf + node_idx * aligned_dim;
             memcpy(cached_coords, node_coords, disk_bytes_per_point);
@@ -406,7 +406,7 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
                 auto &nhood = nhoods[i];
 
                 // insert node coord into coord_cache
-                char *node_buf = OFFSET_TO_NODE(nhood.second, nhood.first);
+                char *node_buf = offset_to_node(nhood.second, nhood.first);
                 uint32_t *node_nhood = OFFSET_TO_NODE_NHOOD(node_buf);
                 uint64_t nnbrs = (uint64_t)*node_nhood;
                 uint32_t *nbrs = node_nhood + 1;
@@ -472,7 +472,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
         reader->read(medoid_read, ctx);
 
         // all data about medoid
-        char *medoid_node_buf = OFFSET_TO_NODE(medoid_buf, medoid);
+        char *medoid_node_buf = offset_to_node(medoid_buf, medoid);
 
         // add medoid coords to `coord_cache`
         T *medoid_coords = new T[data_dim];
@@ -1421,7 +1421,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         for (auto &frontier_nhood : frontier_nhoods)
         {
 #endif
-            char *node_disk_buf = OFFSET_TO_NODE(frontier_nhood.second, frontier_nhood.first);
+            char *node_disk_buf = offset_to_node(frontier_nhood.second, frontier_nhood.first);
             uint32_t *node_buf = OFFSET_TO_NODE_NHOOD(node_disk_buf);
             uint64_t nnbrs = (uint64_t)(*node_buf);
             T *node_fp_coords = OFFSET_TO_NODE_COORDS(node_disk_buf);

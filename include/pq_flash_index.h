@@ -100,7 +100,11 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
+    // sector # on disk where node_id is present with in the graph part
     DISKANN_DLLEXPORT uint64_t get_node_sector(uint64_t node_id);
+
+    // ptr to start of the node
+    DISKANN_DLLEXPORT char*  offset_to_node(char* sector_buf, uint64_t node_id);
 
   private:
     DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, uint32_t label_id);
@@ -111,15 +115,21 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
                                                   const uint32_t nthreads);
 
-    // index info
+    // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]
+    //
+    // index info for multi-sector nodes
+    // nhood of node `i` is in sector: [i * nsectors_per_node]
+    // offset in sector: [0]
+    //
+    // Common info
     // nnbrs of node `i`: *(unsigned*) (buf)
     // nbrs of node `i`: ((unsigned*)buf) + 1
 
     uint64_t max_node_len = 0;
-    uint64_t nnodes_per_sector = 0;
-    uint64_t nsectors_per_node = 0;
+    uint64_t nnodes_per_sector = 0; // 0 for multi-sector nodes, >0 for multi-node sectors
+    uint64_t nsectors_per_node = 0; // 0 for muli-node sectors, >0 for multi-sector nodes
     uint64_t max_degree = 0;
 
 
