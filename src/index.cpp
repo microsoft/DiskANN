@@ -1223,7 +1223,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
             auto &des_pool = _graph_store->get_neighbours(des);
             if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end())
             {
-                if (des_pool.size() < (uint64_t)(GRAPH_SLACK_FACTOR * range))
+                if (des_pool.size() < (uint64_t)(defaults::GRAPH_SLACK_FACTOR * range))
                 {
                     // des_pool.emplace_back(n);
                     _graph_store->add_neighbour(des, n);
@@ -1244,7 +1244,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
             tsl::robin_set<uint32_t> dummy_visited(0);
             std::vector<Neighbor> dummy_pool(0);
 
-            size_t reserveSize = (size_t)(std::ceil(1.05 * GRAPH_SLACK_FACTOR * range));
+            size_t reserveSize = (size_t)(std::ceil(1.05 * defaults::GRAPH_SLACK_FACTOR * range));
             dummy_visited.reserve(reserveSize);
             dummy_pool.reserve(reserveSize);
 

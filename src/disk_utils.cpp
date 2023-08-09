@@ -895,14 +895,14 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     if (vamana_frozen_num == 1)
         vamana_frozen_loc = medoid;
     max_node_len = (((uint64_t)width_u32 + 1) * sizeof(uint32_t)) + (ndims_64 * sizeof(T));
-    nnodes_per_sector = SECTOR_LEN / max_node_len;
+    nnodes_per_sector = defaults::SECTOR_LEN / max_node_len;
 
     diskann::cout << "medoid: " << medoid << "B" << std::endl;
     diskann::cout << "max_node_len: " << max_node_len << "B" << std::endl;
     diskann::cout << "nnodes_per_sector: " << nnodes_per_sector << "B" << std::endl;
 
-    // SECTOR_LEN buffer for each sector
-    std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
+    // defaults::SECTOR_LEN buffer for each sector
+    std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(defaults::SECTOR_LEN);
     std::unique_ptr<char[]> node_buf = std::make_unique<char[]>(max_node_len);
     uint32_t &nnbrs = *(uint32_t *)(node_buf.get() + ndims_64 * sizeof(T));
     uint32_t *nhood_buf = (uint32_t *)(node_buf.get() + (ndims_64 * sizeof(T)) + sizeof(uint32_t));
@@ -914,10 +914,10 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
     if (append_reorder_data)
     {
-        n_data_nodes_per_sector = SECTOR_LEN / (ndims_reorder_file * sizeof(float));
+        n_data_nodes_per_sector = defaults::SECTOR_LEN / (ndims_reorder_file * sizeof(float));
         n_reorder_sectors = ROUND_UP(npts_64, n_data_nodes_per_sector) / n_data_nodes_per_sector;
     }
-    uint64_t disk_index_file_size = (n_sectors + n_reorder_sectors + 1) * SECTOR_LEN;
+    uint64_t disk_index_file_size = (n_sectors + n_reorder_sectors + 1) * defaults::SECTOR_LEN;
 
     std::vector<uint64_t> output_file_meta;
     output_file_meta.push_back(npts_64);
@@ -936,7 +936,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     }
     output_file_meta.push_back(disk_index_file_size);
 
-    diskann_writer.write(sector_buf.get(), SECTOR_LEN);
+    diskann_writer.write(sector_buf.get(), defaults::SECTOR_LEN);
 
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
     diskann::cout << "# sectors: " << n_sectors << std::endl;
@@ -947,7 +947,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
         {
             diskann::cout << "Sector #" << sector << "written" << std::endl;
         }
-        memset(sector_buf.get(), 0, SECTOR_LEN);
+        memset(sector_buf.get(), 0, defaults::SECTOR_LEN);
         for (uint64_t sector_node_id = 0; sector_node_id < nnodes_per_sector && cur_node_id < npts_64; sector_node_id++)
         {
             memset(node_buf.get(), 0, max_node_len);
@@ -985,7 +985,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
             cur_node_id++;
         }
         // flush sector to disk
-        diskann_writer.write(sector_buf.get(), SECTOR_LEN);
+        diskann_writer.write(sector_buf.get(), defaults::SECTOR_LEN);
     }
     if (append_reorder_data)
     {
@@ -1001,7 +1001,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
                 diskann::cout << "Reorder data Sector #" << sector << "written" << std::endl;
             }
 
-            memset(sector_buf.get(), 0, SECTOR_LEN);
+            memset(sector_buf.get(), 0, defaults::SECTOR_LEN);
 
             for (uint64_t sector_node_id = 0; sector_node_id < n_data_nodes_per_sector && sector_node_id < npts_64;
                  sector_node_id++)
@@ -1013,7 +1013,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
                 memcpy(sector_buf.get() + (sector_node_id * vec_len), vec_buf.get(), vec_len);
             }
             // flush sector to disk
-            diskann_writer.write(sector_buf.get(), SECTOR_LEN);
+            diskann_writer.write(sector_buf.get(), defaults::SECTOR_LEN);
         }
     }
     diskann_writer.close();
