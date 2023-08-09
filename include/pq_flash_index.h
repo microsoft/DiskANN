@@ -100,12 +100,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
-    // sector # on disk where node_id is present with in the graph part
-    DISKANN_DLLEXPORT uint64_t get_node_sector(uint64_t node_id);
-
-    // ptr to start of the node
-    DISKANN_DLLEXPORT char*  offset_to_node(char* sector_buf, uint64_t node_id);
-
   private:
     DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, uint32_t label_id);
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
@@ -114,6 +108,19 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT inline int32_t get_filter_number(const LabelT &filter_label);
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
                                                   const uint32_t nthreads);
+
+    
+    // sector # on disk where node_id is present with in the graph part
+    DISKANN_DLLEXPORT uint64_t get_node_sector(uint64_t node_id);
+
+    // ptr to start of the node
+    DISKANN_DLLEXPORT char* offset_to_node(char *sector_buf, uint64_t node_id);
+
+    // returns region of `node_buf` containing [NNBRS][NBR_ID(uint32_t)]
+    DISKANN_DLLEXPORT uint32_t *offset_to_node_nhood(char *node_buf);
+   
+    // returns region of `node_buf` containing [COORD(T)]
+    DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
 
     // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
@@ -144,12 +151,12 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     float max_base_norm = 0.0f;
 
     // data info
-    uint64_t num_points = 0;
-    uint64_t num_frozen_points = 0;
-    uint64_t frozen_location = 0;
-    uint64_t data_dim = 0;
-    uint64_t aligned_dim = 0;
-    uint64_t disk_bytes_per_point = 0;
+    uint64_t _num_points = 0;
+    uint64_t _num_frozen_points = 0;
+    uint64_t _frozen_location = 0;
+    uint64_t _data_dim = 0;
+    uint64_t _aligned_dim = 0;
+    uint64_t _disk_bytes_per_point = 0;
 
     std::string disk_index_file;
     std::vector<std::pair<uint32_t, uint32_t>> node_visit_counter;
