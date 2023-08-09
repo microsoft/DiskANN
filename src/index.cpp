@@ -123,8 +123,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         _data_store =
             std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
         // init graph store => TODO : graph store should be injected
-        _graph_store = std::make_unique<diskann::InMemGraphStore>(total_internal_points,
-                                                                  (size_t)(defaults::GRAPH_SLACK_FACTOR * 1.05));
+        _graph_store = std::make_unique<diskann::InMemGraphStore>(total_internal_points, 0);
         _start = (uint32_t)_max_points;
         _graph_store->resize_graph(total_internal_points);
     }
@@ -1311,15 +1310,6 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
     else
         _start = calculate_entry_point();
 
-    // Note : when using new index factory it is already reserved
-    for (size_t p = 0; p < _nd; p++)
-    {
-        _graph_store->reserve_neighbour_location(
-            (location_t)p, (size_t)(std::ceil(_indexingRange * defaults::GRAPH_SLACK_FACTOR * 1.05)));
-        /*graph_store->get_neighbours((location_t)p)
-            .reserve((size_t)(std::ceil(_indexingRange * GRAPH_SLACK_FACTOR * 1.05)));*/
-    }
-
     diskann::Timer link_timer;
 
 #pragma omp parallel for schedule(dynamic, 2048)
@@ -1342,11 +1332,7 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
         }
         {
             LockGuard guard(_locks[node]);
-            // already reserved
-            /*_graph_store->get_neighbours((location_t)node)
-                .reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));*/
-            _graph_store->reserve_neighbour_location((location_t)node,
-                                                     (size_t)(_indexingRange * defaults::GRAPH_SLACK_FACTOR * 1.05));
+
             _graph_store->set_neighbours(node, pruned_list);
             assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
         }
@@ -2916,9 +2902,6 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 
         LockGuard guard(_locks[location]);
         _graph_store->clear_neighbours(location);
-        _graph_store->reserve_neighbour_location(location,
-                                                 (size_t)(_indexingRange * defaults::GRAPH_SLACK_FACTOR * 1.05));
-        //_graph_store->get_neighbours(location).reserve((size_t)(_indexingRange * GRAPH_SLACK_FACTOR * 1.05));
 
         for (auto link : pruned_list)
         {

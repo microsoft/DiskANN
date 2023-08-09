@@ -11,7 +11,7 @@ namespace diskann
 class InMemGraphStore : public AbstractGraphStore
 {
   public:
-    InMemGraphStore(const size_t total_pts, const size_t max_range);
+    InMemGraphStore(const size_t total_pts, const size_t reserve_graph_degree);
 
     // returns tuple of <nodes_read, start, num_frozen_points>
     virtual std::tuple<uint32_t, uint32_t, size_t> load(const std::string &index_path_prefix,
@@ -23,8 +23,6 @@ class InMemGraphStore : public AbstractGraphStore
     virtual void add_neighbour(const location_t i, location_t neighbour_id) override;
     virtual void clear_neighbours(const location_t i) override;
     virtual void swap_neighbours(const location_t a, location_t b) override;
-
-    virtual void reserve_neighbour_location(const location_t i, const size_t capacity) override;
 
     virtual void set_neighbours(const location_t i, std::vector<location_t> &neighbors) override;
 

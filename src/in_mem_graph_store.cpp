@@ -6,9 +6,14 @@
 
 namespace diskann
 {
-InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t max_range)
-    : AbstractGraphStore(total_pts, max_range)
+InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t reserve_graph_degree)
+    : AbstractGraphStore(total_pts, reserve_graph_degree)
 {
+    _graph.resize(total_pts);
+    for (size_t i = 0; i < total_pts; i++)
+    {
+        _graph[i].reserve(reserve_graph_degree);
+    }
 }
 
 std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load(const std::string &index_path_prefix,
@@ -224,14 +229,10 @@ size_t InMemGraphStore::get_max_range_of_graph()
 {
     return _max_range_of_graph;
 }
+
 uint32_t InMemGraphStore::get_max_observed_degree()
 {
     return _max_observed_degree;
-}
-
-void InMemGraphStore::reserve_neighbour_location(const location_t i, const size_t capacity)
-{
-    _graph[i].reserve(capacity);
 }
 
 void InMemGraphStore::set_max_observed_degree(uint32_t max_observed_degree)

@@ -80,8 +80,9 @@ std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStor
     switch (strategy)
     {
     case GraphStoreStrategy::MEMORY:
+        auto max_degree_to_use = _config->index_write_params != nullptr ? _config->index_write_params->max_degree : 0;
         return std::make_unique<InMemGraphStore>(size,
-                                                 (size_t)(_config->max_points * defaults::GRAPH_SLACK_FACTOR * 1.05));
+                                                 (size_t)(max_degree_to_use * defaults::GRAPH_SLACK_FACTOR * 1.05));
     default:
         throw ANNException("Error : Current GraphStoreStratagy is not supported.", -1);
     }

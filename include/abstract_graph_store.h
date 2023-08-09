@@ -13,7 +13,8 @@ namespace diskann
 class AbstractGraphStore
 {
   public:
-    AbstractGraphStore(const size_t total_pts, const size_t max_range) : _capacity(total_pts), _max_range(max_range)
+    AbstractGraphStore(const size_t total_pts, const size_t reserve_graph_degree)
+        : _capacity(total_pts), _reserve_graph_degree(reserve_graph_degree)
     {
     }
 
@@ -28,9 +29,6 @@ class AbstractGraphStore
     virtual void add_neighbour(const location_t i, location_t neighbour_id) = 0;
     virtual void clear_neighbours(const location_t i) = 0;
     virtual void swap_neighbours(const location_t a, location_t b) = 0;
-
-    // for backward compatibility
-    virtual void reserve_neighbour_location(const location_t i, const size_t capacity) = 0;
 
     virtual void set_neighbours(const location_t i, std::vector<location_t> &neighbors) = 0;
 
@@ -56,14 +54,14 @@ class AbstractGraphStore
         _capacity = new_capacity;
     }
 
-    size_t get_max_range()
+    size_t get_reserve_graph_degree()
     {
-        return _max_range;
+        return _reserve_graph_degree;
     }
 
   private:
     size_t _capacity;
-    size_t _max_range;
+    size_t _reserve_graph_degree;
 };
 
 } // namespace diskann
