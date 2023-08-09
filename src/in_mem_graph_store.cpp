@@ -28,11 +28,11 @@ const std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t 
 
 void InMemGraphStore::add_neighbour(const location_t i, location_t neighbour_id)
 {
+    _graph[i].emplace_back(neighbour_id);
     if (_graph[i].size() > _max_observed_degree)
     {
         _max_observed_degree = (uint32_t)_graph.size();
     }
-    _graph[i].emplace_back(neighbour_id);
 }
 
 void InMemGraphStore::clear_neighbours(const location_t i)
@@ -47,11 +47,6 @@ void InMemGraphStore::swap_neighbours(const location_t a, location_t b)
 
 void InMemGraphStore::set_neighbours(const location_t i, std::vector<location_t> &neighbors)
 {
-    if (neighbors.empty())
-    {
-        _graph[i].clear();
-        return;
-    }
     _graph[i].assign(neighbors.begin(), neighbors.end());
 }
 
@@ -68,8 +63,7 @@ void InMemGraphStore::clear_graph()
 }
 
 #ifdef EXEC_ENV_OLS
-std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::string &filename,
-                                                                  size_t expected_num_points)
+std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileReader &reader, size_t expected_num_points)
 {
     size_t expected_file_size;
     size_t file_frozen_pts;
