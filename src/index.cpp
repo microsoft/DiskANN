@@ -27,59 +27,33 @@ namespace diskann
 // Initialize an index with metric m, load the data of type T with filename
 // (bin), and initialize max_points
 template <typename T, typename TagT, typename LabelT>
-Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
-                              const IndexWriteParameters &indexParams, const uint32_t initial_search_list_size,
-                              const uint32_t search_threads, const bool enable_tags, const bool concurrent_consolidate,
-                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
-    : Index(m, dim, max_points, dynamic_index, enable_tags, concurrent_consolidate, pq_dist_build, num_pq_chunks,
-            use_opq, indexParams.num_frozen_points)
+Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store)
+    : _dist_metric(index_config.metric), _dim(index_config.dimension), _max_points(index_config.max_points),
+      _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
+      _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
+      _pq_dist(index_config.pq_dist_build), _use_opq(index_config.use_opq), _num_pq_chunks(index_config.num_pq_chunks),
+      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
 {
-    if (dynamic_index)
-    {
-        this->enable_delete();
-    }
-    _indexingQueueSize = indexParams.search_list_size;
-    _indexingRange = indexParams.max_degree;
-    _indexingMaxC = indexParams.max_occlusion_size;
-    _indexingAlpha = indexParams.alpha;
-    _filterIndexingQueueSize = indexParams.filter_list_size;
 
-    uint32_t num_threads_indx = indexParams.num_threads;
-    uint32_t num_scratch_spaces = search_threads + num_threads_indx;
-
-    initialize_query_scratch(num_scratch_spaces, initial_search_list_size, _indexingQueueSize, _indexingRange,
-                             _indexingMaxC, dim);
-}
-
-template <typename T, typename TagT, typename LabelT>
-Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
-                              const bool enable_tags, const bool concurrent_consolidate, const bool pq_dist_build,
-                              const size_t num_pq_chunks, const bool use_opq, const size_t num_frozen_pts,
-                              const bool init_data_store)
-    : _dist_metric(m), _dim(dim), _max_points(max_points), _num_frozen_pts(num_frozen_pts),
-      _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
-      _pq_dist(pq_dist_build), _use_opq(use_opq), _num_pq_chunks(num_pq_chunks),
-      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(concurrent_consolidate)
-{
-    if (dynamic_index && !enable_tags)
+    if (_dynamic_index && !_enable_tags)
     {
         throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
     if (_pq_dist)
     {
-        if (dynamic_index)
+        if (_dynamic_index)
             throw ANNException("ERROR: Dynamic Indexing not supported with PQ distance based "
                                "index construction",
                                -1, __FUNCSIG__, __FILE__, __LINE__);
-        if (m == diskann::Metric::INNER_PRODUCT)
+        if (_dist_metric == diskann::Metric::INNER_PRODUCT)
             throw ANNException("ERROR: Inner product metrics not yet supported "
                                "with PQ distance "
                                "base index",
                                -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    if (dynamic_index && _num_frozen_pts == 0)
+    if (_dynamic_index && _num_frozen_pts == 0)
     {
         _num_frozen_pts = 1;
     }
@@ -90,7 +64,6 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         _max_points = 1;
     }
     const size_t total_internal_points = _max_points + _num_frozen_pts;
-
     if (_pq_dist)
     {
         if (_num_pq_chunks > _dim)
@@ -103,65 +76,133 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
 
     _final_graph.resize(total_internal_points);
 
-    if (init_data_store)
-    {
-        // Issue #374: data_store is injected from index factory. Keeping this for backward compatibility.
-        // distance is owned by data_store
-        if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value)
-        {
-            // This is safe because T is float inside the if block.
-            this->_distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
-            this->_normalize_vecs = true;
-            diskann::cout << "Normalizing vectors and using L2 for cosine "
-                             "AVXNormalizedCosineDistanceFloat()."
-                          << std::endl;
-        }
-        else
-        {
-            this->_distance.reset((Distance<T> *)get_distance_function<T>(m));
-        }
-        // Note: moved this to factory, keeping this for backward compatibility.
-        _data_store =
-            std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
-    }
+    _data_store = std::move(data_store);
+    _distance.reset(_data_store->get_dist_fn());
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
-
-    if (enable_tags)
+    if (_enable_tags)
     {
         _location_to_tag.reserve(total_internal_points);
         _tag_to_location.reserve(total_internal_points);
     }
+
+    if (_dynamic_index)
+    {
+        this->enable_delete(); // enable delete by default for dynamic index
+        // if write params are not passed, it is inffered that ctor is called by search
+        if (index_config.index_write_params != nullptr)
+        {
+            _indexingQueueSize = index_config.index_write_params->search_list_size;
+            _indexingRange = index_config.index_write_params->max_degree;
+            _indexingMaxC = index_config.index_write_params->max_occlusion_size;
+            _indexingAlpha = index_config.index_write_params->alpha;
+            _filterIndexingQueueSize = index_config.index_write_params->filter_list_size;
+
+            uint32_t num_threads_indx = index_config.index_write_params->num_threads;
+            uint32_t num_scratch_spaces = index_config.search_threads + num_threads_indx;
+
+            initialize_query_scratch(num_scratch_spaces, index_config.initial_search_list_size, _indexingQueueSize,
+                                     _indexingRange, _indexingMaxC, _data_store->get_dims());
+        }
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>
-Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store)
-    : Index(index_config.metric, index_config.dimension, index_config.max_points, index_config.dynamic_index,
-            index_config.enable_tags, index_config.concurrent_consolidate, index_config.pq_dist_build,
-            index_config.num_pq_chunks, index_config.use_opq, index_config.num_frozen_pts, false)
+Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points,
+                              const std::shared_ptr<IndexWriteParameters> &indexParameters,
+                              const uint32_t initial_search_list_size, const size_t num_frozen_pts,
+                              const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
+                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
+    : _dist_metric(m), _dim(dim), _max_points(max_points), _num_frozen_pts(num_frozen_pts),
+      _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
+      _pq_dist(pq_dist_build), _use_opq(use_opq), _num_pq_chunks(num_pq_chunks),
+      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(concurrent_consolidate)
 {
+    if (_dynamic_index && !_enable_tags)
+    {
+        throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
 
-    _data_store = std::move(data_store);
-    _distance.reset(_data_store->get_dist_fn());
+    if (_pq_dist)
+    {
+        if (_dynamic_index)
+            throw ANNException("ERROR: Dynamic Indexing not supported with PQ distance based "
+                               "index construction",
+                               -1, __FUNCSIG__, __FILE__, __LINE__);
+        if (_dist_metric == diskann::Metric::INNER_PRODUCT)
+            throw ANNException("ERROR: Inner product metrics not yet supported "
+                               "with PQ distance "
+                               "base index",
+                               -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
 
-    // enable delete by default for dynamic index
+    if (_dynamic_index && _num_frozen_pts == 0)
+    {
+        _num_frozen_pts = 1;
+    }
+    // Sanity check. While logically it is correct, max_points = 0 causes
+    // downstream problems.
+    if (_max_points == 0)
+    {
+        _max_points = 1;
+    }
+    const size_t total_internal_points = _max_points + _num_frozen_pts;
+    if (_pq_dist)
+    {
+        if (_num_pq_chunks > _dim)
+            throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
+        alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
+        std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
+    }
+
+    _start = (uint32_t)_max_points;
+
+    _final_graph.resize(total_internal_points);
+
+    // Issue #374: data_store is injected from index factory. Keeping this for backward compatibility.
+    // distance is owned by data_store
+    if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value)
+    {
+        // This is safe because T is float inside the if block.
+        this->_distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
+        this->_normalize_vecs = true;
+        diskann::cout << "Normalizing vectors and using L2 for cosine "
+                         "AVXNormalizedCosineDistanceFloat()."
+                      << std::endl;
+    }
+    else
+    {
+        this->_distance.reset((Distance<T> *)get_distance_function<T>(m));
+    }
+    // Note: moved this to factory, keeping this for backward compatibility.
+    _data_store =
+        std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
+
+    _locks = std::vector<non_recursive_mutex>(total_internal_points);
+    if (_enable_tags)
+    {
+        _location_to_tag.reserve(total_internal_points);
+        _tag_to_location.reserve(total_internal_points);
+    }
+
     if (_dynamic_index)
     {
-        this->enable_delete();
-    }
-    if (_dynamic_index && index_config.index_write_params != nullptr)
-    {
-        _indexingQueueSize = index_config.index_write_params->search_list_size;
-        _indexingRange = index_config.index_write_params->max_degree;
-        _indexingMaxC = index_config.index_write_params->max_occlusion_size;
-        _indexingAlpha = index_config.index_write_params->alpha;
-        _filterIndexingQueueSize = index_config.index_write_params->filter_list_size;
+        this->enable_delete(); // enable delete by default for dynamic index
+        // if write params are not passed, it is inffered that ctor is called by search
+        if (indexParameters != nullptr)
+        {
+            _indexingQueueSize = indexParameters->search_list_size;
+            _indexingRange = indexParameters->max_degree;
+            _indexingMaxC = indexParameters->max_occlusion_size;
+            _indexingAlpha = indexParameters->alpha;
+            _filterIndexingQueueSize = indexParameters->filter_list_size;
 
-        uint32_t num_threads_indx = index_config.index_write_params->num_threads;
-        uint32_t num_scratch_spaces = index_config.search_threads + num_threads_indx;
+            uint32_t num_threads_indx = indexParameters->num_threads;
+            uint32_t num_scratch_spaces = indexParameters->num_threads + num_threads_indx;
 
-        initialize_query_scratch(num_scratch_spaces, index_config.initial_search_list_size, _indexingQueueSize,
-                                 _indexingRange, _indexingMaxC, _data_store->get_dims());
+            initialize_query_scratch(num_scratch_spaces, initial_search_list_size, _indexingQueueSize, _indexingRange,
+                                     _indexingMaxC, _data_store->get_dims());
+        }
     }
 }
 

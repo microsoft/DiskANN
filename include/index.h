@@ -49,18 +49,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
      **************************************************************************/
 
   public:
-    // Constructor for Bulk operations and for creating the index object solely
-    // for loading a prexisting index.
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points = 1, const bool dynamic_index = false,
-                            const bool enable_tags = false, const bool concurrent_consolidate = false,
-                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false, const size_t num_frozen_pts = 0,
-                            const bool init_data_store = true);
-
-    // Constructor for incremental index
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
-                            const IndexWriteParameters &indexParameters, const uint32_t initial_search_list_size,
-                            const uint32_t search_threads, const bool enable_tags = false,
+    // For internal use - uses new constructor internally
+    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
+                            const std::shared_ptr<IndexWriteParameters> &indexParameters,
+                            const uint32_t initial_search_list_size, const size_t num_frozen_pts = 0,
+                            const bool dynamic_index = false, const bool enable_tags = false,
                             const bool concurrent_consolidate = false, const bool pq_dist_build = false,
                             const size_t num_pq_chunks = 0, const bool use_opq = false);
 

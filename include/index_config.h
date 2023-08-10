@@ -60,9 +60,7 @@ struct IndexConfig
 class IndexConfigBuilder
 {
   public:
-    IndexConfigBuilder()
-    {
-    }
+    IndexConfigBuilder() = default;
 
     IndexConfigBuilder &with_metric(Metric m)
     {
