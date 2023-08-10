@@ -38,12 +38,11 @@ diskann::Index<DT, DynamicIdType, filterT> dynamic_index_builder(const diskann::
         initial_search_threads != 0 ? initial_search_threads : omp_get_num_threads();
     return diskann::Index<DT, DynamicIdType, filterT>(
         m, dimensions, max_vectors,
-        true,                      // dynamic_index
-        write_params,              // used for insert
-        initial_search_complexity, // used to prepare the scratch space for searching. can / may
-                                   // be expanded if the search asks for a larger L.
-        _initial_search_threads,   // also used for the scratch space
-        true,                      // enable_tags
+        std::make_shared<diskann::IndexWriteParameters>(paras), // index write params
+        initial_search_complexity,                              // initial_search_list_size
+        0,                                                      // frozen_points
+        true,                                                   // dynamic_index
+        true,                                                   // enable_tags
         concurrent_consolidation,
         false,  // pq_dist_build
         0,      // num_pq_chunks

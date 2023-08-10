@@ -19,13 +19,15 @@ diskann::Index<DT, StaticIdType, filterT> static_index_builder(const diskann::Me
     }
 
     return diskann::Index<DT>(m, dimensions, num_points,
-                              false, // not a dynamic_index
-                              false, // no enable_tags/ids
-                              false, // no concurrent_consolidate,
-                              false, // pq_dist_build
-                              0,     // num_pq_chunks
-                              false, // use_opq = false
-                              0);    // num_frozen_points
+                              nullptr, // index write params
+                              initial_search_complexity,
+                              0,      // num frozen points
+                              false,  // not a dynamic_index
+                              false,  // no enable_tags/ids
+                              false,  // no concurrent_consolidate,
+                              false,  // pq_dist_build
+                              0,      // num_pq_chunks
+                              false); // use_opq = false
 }
 
 template <class DT>
