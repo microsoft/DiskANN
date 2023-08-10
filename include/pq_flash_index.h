@@ -127,7 +127,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]
     //
     // index info for multi-sector nodes
-    // nhood of node `i` is in sector: [i * nsectors_per_node]
+    // nhood of node `i` is in sector: [i * DIV_ROUND_UP(_max_node_len, SECTOR_LEN)]
     // offset in sector: [0]
     //
     // Common info
@@ -137,7 +137,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     uint64_t _max_node_len = 0;
     uint64_t _nnodes_per_sector = 0; // 0 for multi-sector nodes, >0 for multi-node sectors
-    uint64_t _nsectors_per_node = 0; // 0 for muli-node sectors, >0 for multi-sector nodes
     uint64_t _max_degree = 0;
 
 

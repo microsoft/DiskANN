@@ -90,7 +90,8 @@ template <typename T, typename LabelT> PQFlashIndex<T, LabelT>::~PQFlashIndex()
 
 template <typename T, typename LabelT> inline uint64_t PQFlashIndex<T, LabelT>::get_node_sector(uint64_t node_id)
 {
-    return 1 + (_nnodes_per_sector > 0 ? node_id / _nnodes_per_sector : node_id * _nsectors_per_node);
+    return 1 + (_nnodes_per_sector > 0 ? node_id / _nnodes_per_sector
+                                       : node_id * DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN));
 }
 
 template <typename T, typename LabelT>
