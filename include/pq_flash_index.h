@@ -129,7 +129,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     //
     // returns a vector of bool one for each node_id: true if read is success, else false
     //
-    DISKANN_DLLEXPORT std::vector<bool> read_nodes(const std::vector<size_t> &node_ids, std::vector<T *> &coord_buffers,
+    DISKANN_DLLEXPORT std::vector<bool> read_nodes(const std::vector<uint32_t> &node_ids, std::vector<T *> &coord_buffers,
                                                    std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers);
 
     // index info for multi-node sectors

@@ -131,7 +131,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
 
 
 template <typename T, typename LabelT>
-std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<size_t> &node_ids,
+std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t> &node_ids,
                                                       std::vector<T *> &coord_buffers,
                                                       std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers)
 {
@@ -200,67 +200,44 @@ void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
     auto this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
 
+    // Allocate space for neighborhood cache
     nhood_cache_buf = new uint32_t[num_cached_nodes * (_max_degree + 1)];
     memset(nhood_cache_buf, 0, num_cached_nodes * (_max_degree + 1));
-
+    
+    // Allocate space for coordinate cache
     size_t coord_cache_buf_len = num_cached_nodes * _aligned_dim;
     diskann::alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
     size_t BLOCK_SIZE = 8;
     size_t num_blocks = DIV_ROUND_UP(num_cached_nodes, BLOCK_SIZE);
-
     for (size_t block = 0; block < num_blocks; block++)
     {
         size_t start_idx = block * BLOCK_SIZE;
         size_t end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
 
-        std::vector<AlignedRead> read_reqs;
-        std::vector<std::pair<uint32_t, char *>> nhoods;
+        // Copy offset into buffers to read into
+        std::vector<uint32_t> nodes_to_read;
+        std::vector<T *> coord_buffers;
+        std::vector<std::pair<uint32_t, uint32_t *>> nbr_buffers;       
         for (size_t node_idx = start_idx; node_idx < end_idx; node_idx++)
         {
-            //MULTISECTORFIX
-            AlignedRead read;
-            char *buf = nullptr;
-            alloc_aligned((void **)&buf, defaults::SECTOR_LEN, defaults::SECTOR_LEN);
-            nhoods.push_back(std::make_pair(node_list[node_idx], buf));
-            read.len = defaults::SECTOR_LEN;
-            read.buf = buf;
-            read.offset = get_node_sector(node_list[node_idx]) * defaults::SECTOR_LEN;
-            read_reqs.push_back(read);
+            nodes_to_read.push_back(node_list[node_idx]);
+            coord_buffers.push_back(coord_cache_buf + node_idx * _aligned_dim);
+            nbr_buffers.emplace_back(0, nhood_cache_buf + node_idx * (_max_degree + 1));
         }
 
-        reader->read(read_reqs, ctx);
+        // issue the reads
+        auto read_status = read_nodes(nodes_to_read, coord_buffers, nbr_buffers);
 
-        size_t node_idx = start_idx;
-        for (uint32_t i = 0; i < read_reqs.size(); i++)
+        // check for success and insert into the cache.
+        for (size_t i = 0; i < read_status.size(); i++)
         {
-#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle failed reads in
-                                                 // production settings
-            if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS)
+            if (read_status[i] == true)
             {
-                continue;
+                coord_cache.insert(std::make_pair(nodes_to_read[i], coord_buffers[i]));
+                nhood_cache.insert(std::make_pair(nodes_to_read[i], nbr_buffers[i]));
             }
-#endif
-            auto &nhood = nhoods[i];
-            char *node_buf = offset_to_node(nhood.second, nhood.first);
-            T *node_coords = offset_to_node_coords(node_buf);
-            T *cached_coords = coord_cache_buf + node_idx * _aligned_dim;
-            memcpy(cached_coords, node_coords, _disk_bytes_per_point);
-            coord_cache.insert(std::make_pair(nhood.first, cached_coords));
-
-            // insert node nhood into nhood_cache
-            uint32_t *node_nhood = offset_to_node_nhood(node_buf);
-
-            auto nnbrs = *node_nhood;
-            uint32_t *nbrs = node_nhood + 1;
-            std::pair<uint32_t, uint32_t *> cnhood;
-            cnhood.first = nnbrs;
-            cnhood.second = nhood_cache_buf + node_idx * (_max_degree + 1);
-            memcpy(cnhood.second, nbrs, nnbrs * sizeof(uint32_t));
-            nhood_cache.insert(std::make_pair(nhood.first, cnhood));
-            aligned_free(nhood.second);
-            node_idx++;
         }
     }
     diskann::cout << "..done." << std::endl;
