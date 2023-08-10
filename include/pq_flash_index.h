@@ -122,6 +122,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // returns region of `node_buf` containing [COORD(T)]
     DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
 
+   std::vector < std::pair<T *, std::pair<uint32_t, uint32_t *>>> read_n_blocks(std::vector<size_t> &node_ids);
+
     // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]
@@ -155,7 +157,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _frozen_location = 0;
     uint64_t _data_dim = 0;
     uint64_t _aligned_dim = 0;
-    uint64_t _disk_bytes_per_point = 0;
+    uint64_t _disk_bytes_per_point = 0; // Number of bytes 
 
     std::string disk_index_file;
     std::vector<std::pair<uint32_t, uint32_t>> node_visit_counter;
@@ -193,6 +195,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // nhood_cache
     unsigned *nhood_cache_buf = nullptr;
     tsl::robin_map<uint32_t, std::pair<uint32_t, uint32_t *>> nhood_cache;
+
+    // TODO: dtor needs to free uint32_t* in caches.
 
     // coord_cache
     T *coord_cache_buf = nullptr;

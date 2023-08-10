@@ -129,7 +129,84 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
     load_flag = true;
 }
 
-template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
+
+//
+// returns a vector of size node_ids.size(), 
+// retval[i].first contains a new buffer with coords. The callee must free this
+// 
+//
+//
+template <typename T, typename LabelT>
+std::vector < std::pair<T *, std::pair<uint32_t, uint32_t *>>> PQFlashIndex<T, LabelT>::read_n_blocks(
+                      std::vector<size_t> &node_ids)
+{
+    std::vector<AlignedRead> read_reqs;
+    std::vector<std::pair<T*, std::pair<uint32_t, uint32_t*>>> retval;
+        
+    char *buf = nullptr;
+    auto num_sectors = _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
+    alloc_aligned((void **)&buf, node_ids.size() * num_sectors * defaults::SECTOR_LEN, defaults::SECTOR_LEN);
+
+
+    for (size_t i = 0; i < node_ids.size(); ++i)
+    {
+        auto node_id = node_ids[i];
+
+        auto buf_offset = buf + num_sectors * i * defaults::SECTOR_LEN;
+
+        AlignedRead read;
+        read.len = num_sectors * defaults::SECTOR_LEN;
+        read.buf = buf_offset;
+        read.offset = get_node_sector(node_id) * defaults::SECTOR_LEN;
+        read_reqs.push_back(read);
+    }
+
+    // borrow thread data
+    ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
+    auto this_thread_data = manager.scratch_space();
+    IOContext &ctx = this_thread_data->ctx;
+
+    reader->read(read_reqs, ctx);
+
+    for (uint32_t i = 0; i < read_reqs.size(); i++)
+    {
+        bool read_failed = false;
+#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle failed reads in
+                                                 // production settings
+        if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS)
+        {
+            read_failed = true;
+        }
+#endif
+        if (read_failed)
+        {
+            retval.emplace_back(nullptr, std::make_pair(0, nullptr));
+        }
+        else
+        {
+            char *node_buf = offset_to_node((char*)read_reqs[i].buf, node_ids[i]);
+
+            T *node_coords = offset_to_node_coords(node_buf);
+            T *coords = new T[_disk_bytes_per_point];
+            memcpy(coords, node_coords, _disk_bytes_per_point);
+
+            uint32_t *node_nhood = offset_to_node_nhood(node_buf);
+            auto num_nbrs = *node_nhood;
+            uint32_t *nbrs = new uint32_t[num_nbrs];
+            memcpy(nbrs, node_nhood + 1, num_nbrs * sizeof(uint32_t));
+
+            retval.emplace_back(coords, std::make_pair(num_nbrs, nbrs));
+        }
+    }
+
+    aligned_free(buf);
+
+    return retval;
+}
+
+
+template <typename T, typename LabelT> 
+void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
 {
     diskann::cout << "Loading the cache list into memory.." << std::flush;
     size_t num_cached_nodes = node_list.size();
@@ -157,6 +234,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
         std::vector<std::pair<uint32_t, char *>> nhoods;
         for (size_t node_idx = start_idx; node_idx < end_idx; node_idx++)
         {
+            //MULTISECTORFIX
             AlignedRead read;
             char *buf = nullptr;
             alloc_aligned((void **)&buf, defaults::SECTOR_LEN, defaults::SECTOR_LEN);
@@ -385,6 +463,7 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
             std::vector<std::pair<uint32_t, char *>> nhoods;
             for (size_t cur_pt = start; cur_pt < end; cur_pt++)
             {
+                //MULTISECTORFIX
                 char *buf = nullptr;
                 alloc_aligned((void **)&buf, defaults::SECTOR_LEN, defaults::SECTOR_LEN);
                 nhoods.emplace_back(nodes_to_expand[cur_pt], buf);
@@ -469,6 +548,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
         auto medoid = medoids[cur_m];
         // read medoid nhood
         char *medoid_buf = nullptr;
+        // MULTISECTORFIX
         alloc_aligned((void **)&medoid_buf, defaults::SECTOR_LEN, defaults::SECTOR_LEN);
         std::vector<AlignedRead> medoid_read(1);
         medoid_read[0].len = defaults::SECTOR_LEN;
@@ -1337,6 +1417,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 auto id = frontier[i];
                 std::pair<uint32_t, char *> fnhood;
                 fnhood.first = id;
+                // MULTISECTORFIX
                 fnhood.second = sector_scratch + sector_scratch_idx * defaults::SECTOR_LEN;
                 sector_scratch_idx++;
                 frontier_nhoods.push_back(fnhood);
@@ -1508,6 +1589,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         for (size_t i = 0; i < full_retset.size(); ++i)
         {
+            // MULTISECTORFIX
             vec_read_reqs.emplace_back(VECTOR_SECTOR_NO(((size_t)full_retset[i].id)) * defaults::SECTOR_LEN,
                                        defaults::SECTOR_LEN, sector_scratch + i * defaults::SECTOR_LEN);
 
@@ -1532,6 +1614,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         for (size_t i = 0; i < full_retset.size(); ++i)
         {
             auto id = full_retset[i].id;
+            // MULTISECTORFIX
             auto location = (sector_scratch + i * defaults::SECTOR_LEN) + VECTOR_SECTOR_OFFSET(id);
             full_retset[i].distance = dist_cmp->compare(aligned_query_T, (T *)location, (uint32_t)this->_data_dim);
         }
