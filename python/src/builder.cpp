@@ -46,9 +46,8 @@ void build_memory_index(const diskann::Metric metric, const std::string &vector_
                                                            .build();
     size_t data_num, data_dim;
     diskann::get_bin_metadata(vector_bin_path, data_num, data_dim);
-    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num,
-                                          std::make_shared<diskann::IndexWriteParameters>(index_build_params), 0, 0,
-                                          use_tags, use_tags, false, use_pq_build, num_pq_bytes, use_opq);
+    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, nullptr, 0, 0, use_tags, use_tags, false,
+                                          use_pq_build, num_pq_bytes, use_opq);
 
     if (use_tags)
     {
