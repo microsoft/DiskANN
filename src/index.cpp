@@ -113,97 +113,32 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const uint32_t initial_search_list_size, const size_t num_frozen_pts,
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
                               const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
-    : _dist_metric(m), _dim(dim), _max_points(max_points), _num_frozen_pts(num_frozen_pts),
-      _dynamic_index(dynamic_index), _enable_tags(enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
-      _pq_dist(pq_dist_build), _use_opq(use_opq), _num_pq_chunks(num_pq_chunks),
-      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(concurrent_consolidate)
+    : Index(IndexConfigBuilder()
+                .with_metric(m)
+                .with_dimension(dim)
+                .with_max_points(max_points)
+                .with_index_write_params(indexParameters)
+                .with_initial_search_list_size(initial_search_list_size)
+                .with_num_frozen_pts(num_frozen_pts)
+                .is_dynamic_index(dynamic_index)
+                .is_enable_tags(enable_tags)
+                .is_concurrent_consolidate(concurrent_consolidate)
+                .is_pq_dist_build(pq_dist_build)
+                .with_num_pq_chunks(num_pq_chunks)
+                .is_use_opq(use_opq)
+                .with_data_type(diskann_type_to_name<T>())
+                .build(),
+            std::make_unique<diskann::InMemDataStore<T>>(
+                (location_t)(max_points + num_frozen_pts), dim, [m] { // lambda to get distance
+                    std::shared_ptr<Distance<T>> distance;
+                    if (m == diskann::Metric::COSINE && std::is_same<T, float>::value)
+                    {
+                        distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
+                    }
+                    distance.reset((Distance<T> *)get_distance_function<T>(m));
+                    return distance;
+                }()))
 {
-    if (_dynamic_index && !_enable_tags)
-    {
-        throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
-    if (_pq_dist)
-    {
-        if (_dynamic_index)
-            throw ANNException("ERROR: Dynamic Indexing not supported with PQ distance based "
-                               "index construction",
-                               -1, __FUNCSIG__, __FILE__, __LINE__);
-        if (_dist_metric == diskann::Metric::INNER_PRODUCT)
-            throw ANNException("ERROR: Inner product metrics not yet supported "
-                               "with PQ distance "
-                               "base index",
-                               -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
-    if (_dynamic_index && _num_frozen_pts == 0)
-    {
-        _num_frozen_pts = 1;
-    }
-    // Sanity check. While logically it is correct, max_points = 0 causes
-    // downstream problems.
-    if (_max_points == 0)
-    {
-        _max_points = 1;
-    }
-    const size_t total_internal_points = _max_points + _num_frozen_pts;
-    if (_pq_dist)
-    {
-        if (_num_pq_chunks > _dim)
-            throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
-        alloc_aligned(((void **)&_pq_data), total_internal_points * _num_pq_chunks * sizeof(char), 8 * sizeof(char));
-        std::memset(_pq_data, 0, total_internal_points * _num_pq_chunks * sizeof(char));
-    }
-
-    _start = (uint32_t)_max_points;
-
-    _final_graph.resize(total_internal_points);
-
-    // Issue #374: data_store is injected from index factory. Keeping this for backward compatibility.
-    // distance is owned by data_store
-    if (m == diskann::Metric::COSINE && std::is_floating_point<T>::value)
-    {
-        // This is safe because T is float inside the if block.
-        this->_distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
-        this->_normalize_vecs = true;
-        diskann::cout << "Normalizing vectors and using L2 for cosine "
-                         "AVXNormalizedCosineDistanceFloat()."
-                      << std::endl;
-    }
-    else
-    {
-        this->_distance.reset((Distance<T> *)get_distance_function<T>(m));
-    }
-    // Note: moved this to factory, keeping this for backward compatibility.
-    _data_store =
-        std::make_unique<diskann::InMemDataStore<T>>((location_t)total_internal_points, _dim, this->_distance);
-
-    _locks = std::vector<non_recursive_mutex>(total_internal_points);
-    if (_enable_tags)
-    {
-        _location_to_tag.reserve(total_internal_points);
-        _tag_to_location.reserve(total_internal_points);
-    }
-
-    if (_dynamic_index)
-    {
-        this->enable_delete(); // enable delete by default for dynamic index
-        // if write params are not passed, it is inffered that ctor is called by search
-        if (indexParameters != nullptr)
-        {
-            _indexingQueueSize = indexParameters->search_list_size;
-            _indexingRange = indexParameters->max_degree;
-            _indexingMaxC = indexParameters->max_occlusion_size;
-            _indexingAlpha = indexParameters->alpha;
-            _filterIndexingQueueSize = indexParameters->filter_list_size;
-
-            uint32_t num_threads_indx = indexParameters->num_threads;
-            uint32_t num_scratch_spaces = indexParameters->num_threads + num_threads_indx;
-
-            initialize_query_scratch(num_scratch_spaces, initial_search_list_size, _indexingQueueSize, _indexingRange,
-                                     _indexingMaxC, _data_store->get_dims());
-        }
-    }
 }
 
 template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~Index()

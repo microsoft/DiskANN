@@ -158,6 +158,16 @@ class IndexConfigBuilder
         return *this;
     }
 
+    IndexConfigBuilder &with_index_write_params(const std::shared_ptr<IndexWriteParameters> &index_write_params_ptr)
+    {
+        if (index_write_params_ptr == nullptr)
+        {
+            return *this;
+        }
+        this->_index_write_params = index_write_params_ptr;
+        return *this;
+    }
+
     IndexConfigBuilder &with_search_threads(uint32_t search_threads)
     {
         this->_search_threads = search_threads;
