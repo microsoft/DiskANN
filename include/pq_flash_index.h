@@ -122,7 +122,15 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // returns region of `node_buf` containing [COORD(T)]
     DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
 
-   std::vector < std::pair<T *, std::pair<uint32_t, uint32_t *>>> read_n_blocks(std::vector<size_t> &node_ids);
+    //
+    //  node_ids: input list of node_ids to be read
+    // coord_buffers: pointers to pre-allocated buffers that coords need to copied to
+    // nbr_buffers: pre-allocated buffers to copy neighbors into
+    //
+    // returns a vector of bool one for each node_id: true if read is success, else false
+    //
+    DISKANN_DLLEXPORT std::vector<bool> read_nodes(const std::vector<size_t> &node_ids, std::vector<T *> &coord_buffers,
+                                                   std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers);
 
     // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
@@ -192,15 +200,14 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // closest centroid as the starting point of search
     float *centroid_data = nullptr;
 
-    // nhood_cache
+    // nhood_cache; the uint32_t in nhood_Cache are offsets into nhood_cache_buf
     unsigned *nhood_cache_buf = nullptr;
     tsl::robin_map<uint32_t, std::pair<uint32_t, uint32_t *>> nhood_cache;
 
-    // TODO: dtor needs to free uint32_t* in caches.
-
-    // coord_cache
+    
+    // coord_cache; The T* in coord_cache are offsets into coord_cache_buf
     T *coord_cache_buf = nullptr;
-    tsl::robin_map<uint32_t, T *> coord_cache;
+    tsl::robin_map<uint32_t, T *> coord_cache; 
 
     // thread-specific scratch
     ConcurrentQueue<SSDThreadData<T> *> thread_data;

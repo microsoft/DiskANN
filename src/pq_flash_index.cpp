@@ -130,73 +130,57 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
 }
 
 
-//
-// returns a vector of size node_ids.size(), 
-// retval[i].first contains a new buffer with coords. The callee must free this
-// 
-//
-//
 template <typename T, typename LabelT>
-std::vector < std::pair<T *, std::pair<uint32_t, uint32_t *>>> PQFlashIndex<T, LabelT>::read_n_blocks(
-                      std::vector<size_t> &node_ids)
+std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<size_t> &node_ids,
+                                                      std::vector<T *> &coord_buffers,
+                                                      std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers)
 {
     std::vector<AlignedRead> read_reqs;
-    std::vector<std::pair<T*, std::pair<uint32_t, uint32_t*>>> retval;
-        
+    std::vector<bool> retval(true, node_ids.size());
+
     char *buf = nullptr;
     auto num_sectors = _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
     alloc_aligned((void **)&buf, node_ids.size() * num_sectors * defaults::SECTOR_LEN, defaults::SECTOR_LEN);
 
-
+    // create read requests
     for (size_t i = 0; i < node_ids.size(); ++i)
     {
         auto node_id = node_ids[i];
 
-        auto buf_offset = buf + num_sectors * i * defaults::SECTOR_LEN;
-
         AlignedRead read;
         read.len = num_sectors * defaults::SECTOR_LEN;
-        read.buf = buf_offset;
+        read.buf = buf + i * num_sectors * defaults::SECTOR_LEN;
         read.offset = get_node_sector(node_id) * defaults::SECTOR_LEN;
         read_reqs.push_back(read);
     }
 
-    // borrow thread data
+    // borrow thread data and issue reads
     ScratchStoreManager<SSDThreadData<T>> manager(this->thread_data);
     auto this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
-
     reader->read(read_reqs, ctx);
 
+    // copy reads into buffers
     for (uint32_t i = 0; i < read_reqs.size(); i++)
     {
-        bool read_failed = false;
 #if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle failed reads in
                                                  // production settings
         if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS)
         {
-            read_failed = true;
+            retval[i] = false;
+            continue;
         }
 #endif
-        if (read_failed)
-        {
-            retval.emplace_back(nullptr, std::make_pair(0, nullptr));
-        }
-        else
-        {
-            char *node_buf = offset_to_node((char*)read_reqs[i].buf, node_ids[i]);
 
-            T *node_coords = offset_to_node_coords(node_buf);
-            T *coords = new T[_disk_bytes_per_point];
-            memcpy(coords, node_coords, _disk_bytes_per_point);
+        char *node_buf = offset_to_node((char *)read_reqs[i].buf, node_ids[i]);
 
-            uint32_t *node_nhood = offset_to_node_nhood(node_buf);
-            auto num_nbrs = *node_nhood;
-            uint32_t *nbrs = new uint32_t[num_nbrs];
-            memcpy(nbrs, node_nhood + 1, num_nbrs * sizeof(uint32_t));
+        T *node_coords = offset_to_node_coords(node_buf);
+        memcpy(coord_buffers[i], node_coords, _disk_bytes_per_point);
 
-            retval.emplace_back(coords, std::make_pair(num_nbrs, nbrs));
-        }
+        uint32_t *node_nhood = offset_to_node_nhood(node_buf);
+        auto num_nbrs = *node_nhood;
+        nbr_buffers[i].first = num_nbrs;
+        memcpy(nbr_buffers[i].second, node_nhood + 1, num_nbrs * sizeof(uint32_t));
     }
 
     aligned_free(buf);
@@ -230,6 +214,7 @@ void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
     {
         size_t start_idx = block * BLOCK_SIZE;
         size_t end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
+
         std::vector<AlignedRead> read_reqs;
         std::vector<std::pair<uint32_t, char *>> nhoods;
         for (size_t node_idx = start_idx; node_idx < end_idx; node_idx++)
