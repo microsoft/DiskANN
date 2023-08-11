@@ -1,6 +1,6 @@
 #!/bin/bash
 
-apt install cmake \
+DEBIAN_FRONTEND=noninteractive apt install -y cmake \
   g++ \
   libaio-dev \
   libgoogle-perftools-dev \
