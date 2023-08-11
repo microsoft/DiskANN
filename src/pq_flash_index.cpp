@@ -129,7 +129,6 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
     load_flag = true;
 }
 
-
 template <typename T, typename LabelT>
 std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t> &node_ids,
                                                       std::vector<T *> &coord_buffers,
@@ -194,9 +193,7 @@ std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t
     return retval;
 }
 
-
-template <typename T, typename LabelT> 
-void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
+template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
 {
     diskann::cout << "Loading the cache list into memory.." << std::flush;
     size_t num_cached_nodes = node_list.size();
@@ -209,7 +206,7 @@ void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
     // Allocate space for neighborhood cache
     nhood_cache_buf = new uint32_t[num_cached_nodes * (_max_degree + 1)];
     memset(nhood_cache_buf, 0, num_cached_nodes * (_max_degree + 1));
-    
+
     // Allocate space for coordinate cache
     size_t coord_cache_buf_len = num_cached_nodes * _aligned_dim;
     diskann::alloc_aligned((void **)&coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
@@ -225,7 +222,7 @@ void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
         // Copy offset into buffers to read into
         std::vector<uint32_t> nodes_to_read;
         std::vector<T *> coord_buffers;
-        std::vector<std::pair<uint32_t, uint32_t *>> nbr_buffers;       
+        std::vector<std::pair<uint32_t, uint32_t *>> nbr_buffers;
         for (size_t node_idx = start_idx; node_idx < end_idx; node_idx++)
         {
             nodes_to_read.push_back(node_list[node_idx]);

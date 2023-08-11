@@ -943,7 +943,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
     diskann::cout << "# sectors: " << n_sectors << std::endl;
     uint64_t cur_node_id = 0;
-    
+
     if (nnodes_per_sector > 0)
     { // Write multiple nodes per sector
         for (uint64_t sector = 0; sector < n_sectors; sector++)

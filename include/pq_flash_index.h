@@ -109,27 +109,27 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
                                                   const uint32_t nthreads);
 
-    
     // sector # on disk where node_id is present with in the graph part
     DISKANN_DLLEXPORT uint64_t get_node_sector(uint64_t node_id);
 
     // ptr to start of the node
-    DISKANN_DLLEXPORT char* offset_to_node(char *sector_buf, uint64_t node_id);
+    DISKANN_DLLEXPORT char *offset_to_node(char *sector_buf, uint64_t node_id);
 
     // returns region of `node_buf` containing [NNBRS][NBR_ID(uint32_t)]
     DISKANN_DLLEXPORT uint32_t *offset_to_node_nhood(char *node_buf);
-   
+
     // returns region of `node_buf` containing [COORD(T)]
     DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
 
     //
-    //  node_ids: input list of node_ids to be read
-    // coord_buffers: pointers to pre-allocated buffers that coords need to copied to
+    // node_ids: input list of node_ids to be read
+    // coord_buffers: pointers to pre-allocated buffers that coords need to copied to. If null, dont copy.
     // nbr_buffers: pre-allocated buffers to copy neighbors into
     //
     // returns a vector of bool one for each node_id: true if read is success, else false
     //
-    DISKANN_DLLEXPORT std::vector<bool> read_nodes(const std::vector<uint32_t> &node_ids, std::vector<T *> &coord_buffers,
+    DISKANN_DLLEXPORT std::vector<bool> read_nodes(const std::vector<uint32_t> &node_ids,
+                                                   std::vector<T *> &coord_buffers,
                                                    std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers);
 
     // index info for multi-node sectors
@@ -141,14 +141,13 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // offset in sector: [0]
     //
     // Common info
-    // coords start at ofsset 
+    // coords start at ofsset
     // #nbrs of node `i`: *(unsigned*) (offset + disk_bytes_per_point)
     // nbrs of node `i` : (unsigned*) (offset + disk_bytes_per_point + 1)
 
     uint64_t _max_node_len = 0;
     uint64_t _nnodes_per_sector = 0; // 0 for multi-sector nodes, >0 for multi-node sectors
     uint64_t _max_degree = 0;
-
 
     // Data used for searching with re-order vectors
     uint64_t ndims_reorder_vecs = 0, reorder_data_start_sector = 0, nvecs_per_sector = 0;
@@ -165,7 +164,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _frozen_location = 0;
     uint64_t _data_dim = 0;
     uint64_t _aligned_dim = 0;
-    uint64_t _disk_bytes_per_point = 0; // Number of bytes 
+    uint64_t _disk_bytes_per_point = 0; // Number of bytes
 
     std::string disk_index_file;
     std::vector<std::pair<uint32_t, uint32_t>> node_visit_counter;
@@ -204,10 +203,9 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     unsigned *nhood_cache_buf = nullptr;
     tsl::robin_map<uint32_t, std::pair<uint32_t, uint32_t *>> nhood_cache;
 
-    
     // coord_cache; The T* in coord_cache are offsets into coord_cache_buf
     T *coord_cache_buf = nullptr;
-    tsl::robin_map<uint32_t, T *> coord_cache; 
+    tsl::robin_map<uint32_t, T *> coord_cache;
 
     // thread-specific scratch
     ConcurrentQueue<SSDThreadData<T> *> thread_data;
