@@ -40,9 +40,9 @@ class TestStaticMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
-            _
+            _,
         ) in self._test_matrix:
-            with self.subTest():
+            with self.subTest(msg=f"Testing dtype {dtype}"):
                 index = dap.StaticMemoryIndex(
                     index_directory=ann_dir,
                     num_threads=16,
@@ -66,7 +66,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     self.assertTrue(
                         recall > 0.70,
                         f"Recall [{recall}] was not over 0.7",
-                        )
+                    )
 
     def test_single(self):
         for (
@@ -76,9 +76,9 @@ class TestStaticMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
-            _
+            _,
         ) in self._test_matrix:
-            with self.subTest():
+            with self.subTest(msg=f"Testing dtype {dtype}"):
                 index = dap.StaticMemoryIndex(
                     index_directory=ann_dir,
                     num_threads=16,
@@ -98,7 +98,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             index_vectors,
             ann_dir,
             vector_bin_file,
-            _
+            _,
         ) = build_random_vectors_and_memory_index(np.single, "l2", "not_ann")
         good_ranges = {
             "index_directory": ann_dir,

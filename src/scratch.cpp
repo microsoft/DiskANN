@@ -28,14 +28,14 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     memset(_aligned_query, 0, aligned_dim * sizeof(T));
 
     if (init_pq_scratch)
-        _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
+        _pq_scratch = new PQScratch<T>(defaults::MAX_GRAPH_DEGREE, aligned_dim);
     else
         _pq_scratch = nullptr;
 
     _occlude_factor.reserve(maxc);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
-    _id_scratch.reserve((size_t)std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
-    _dist_scratch.reserve((size_t)std::ceil(1.5 * GRAPH_SLACK_FACTOR * _R));
+    _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
+    _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
 
     resize_for_new_L(std::max(search_l, indexing_l));
 }
@@ -96,10 +96,11 @@ template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, si
     size_t coord_alloc_size = ROUND_UP(sizeof(T) * aligned_dim, 256);
 
     diskann::alloc_aligned((void **)&coord_scratch, coord_alloc_size, 256);
-    diskann::alloc_aligned((void **)&sector_scratch, (size_t)MAX_N_SECTOR_READS * (size_t)SECTOR_LEN, SECTOR_LEN);
+    diskann::alloc_aligned((void **)&sector_scratch, defaults::MAX_N_SECTOR_READS * defaults::SECTOR_LEN,
+                           defaults::SECTOR_LEN);
     diskann::alloc_aligned((void **)&aligned_query_T, aligned_dim * sizeof(T), 8 * sizeof(T));
 
-    _pq_scratch = new PQScratch<T>(MAX_GRAPH_DEGREE, aligned_dim);
+    _pq_scratch = new PQScratch<T>(defaults::MAX_GRAPH_DEGREE, aligned_dim);
 
     memset(coord_scratch, 0, coord_alloc_size);
     memset(aligned_query_T, 0, aligned_dim * sizeof(T));

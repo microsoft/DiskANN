@@ -31,7 +31,7 @@ namespace diskann
 inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree)
 {
     double size_of_data = ((double)size) * ROUND_UP(dim, 8) * datasize;
-    double size_of_graph = ((double)size) * degree * sizeof(uint32_t) * GRAPH_SLACK_FACTOR;
+    double size_of_graph = ((double)size) * degree * sizeof(uint32_t) * defaults::GRAPH_SLACK_FACTOR;
     double size_of_locks = ((double)size) * sizeof(non_recursive_mutex);
     double size_of_outer_vector = ((double)size) * sizeof(ptrdiff_t);
 
