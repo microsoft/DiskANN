@@ -158,7 +158,7 @@ class IndexConfigBuilder
         return *this;
     }
 
-    IndexConfigBuilder &with_index_write_params(const std::shared_ptr<IndexWriteParameters> &index_write_params_ptr)
+    IndexConfigBuilder &with_index_write_params(std::shared_ptr<IndexWriteParameters> index_write_params_ptr)
     {
         if (index_write_params_ptr == nullptr)
         {
