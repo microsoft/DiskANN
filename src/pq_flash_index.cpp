@@ -463,7 +463,7 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
                         }
                     }
                 }
-                aligned_free(nbr_buffers[i].second);
+                delete[] nbr_buffers[i].second;
             }
         }
 
@@ -500,39 +500,39 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
     auto data = manager.scratch_space();
     IOContext &ctx = data->ctx;
     diskann::cout << "Loading centroid data from medoids vector data of " << num_medoids << " medoid(s)" << std::endl;
+
+    std::vector<uint32_t> nodes_to_read;
+    std::vector<T *> medoid_bufs;
+    std::vector<std::pair<uint32_t, uint32_t *>> nbr_bufs;
+
     for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++)
     {
-        auto medoid = medoids[cur_m];
-        // read medoid nhood
-        char *medoid_buf = nullptr;
-        // MULTISECTORFIX
-        alloc_aligned((void **)&medoid_buf, defaults::SECTOR_LEN, defaults::SECTOR_LEN);
-        std::vector<AlignedRead> medoid_read(1);
-        medoid_read[0].len = defaults::SECTOR_LEN;
-        medoid_read[0].buf = medoid_buf;
-        medoid_read[0].offset = get_node_sector(medoid) * defaults::SECTOR_LEN;
-        reader->read(medoid_read, ctx);
+        nodes_to_read.push_back(medoids[cur_m]);
+        medoid_bufs.push_back(new T[_data_dim]);
+        nbr_bufs.emplace_back(0, nullptr);
+    }
 
-        // all data about medoid
-        char *medoid_node_buf = offset_to_node(medoid_buf, medoid);
+    auto read_status = read_nodes(nodes_to_read, medoid_bufs, nbr_bufs);
 
-        // add medoid coords to `coord_cache`
-        T *medoid_coords = new T[_data_dim];
-        T *medoid_disk_coords = offset_to_node_coords(medoid_node_buf);
-        memcpy(medoid_coords, medoid_disk_coords, _disk_bytes_per_point);
-
-        if (!use_disk_index_pq)
+    for (uint64_t cur_m = 0; cur_m < num_medoids; cur_m++)
+    {
+        if (read_status[cur_m] == true)
         {
-            for (uint32_t i = 0; i < _data_dim; i++)
-                centroid_data[cur_m * _aligned_dim + i] = medoid_coords[i];
+            if (!use_disk_index_pq)
+            {
+                for (uint32_t i = 0; i < _data_dim; i++)
+                    centroid_data[cur_m * _aligned_dim + i] = medoid_bufs[cur_m][i];
+            }
+            else
+            {
+                disk_pq_table.inflate_vector((uint8_t *)medoid_bufs[cur_m], (centroid_data + cur_m * _aligned_dim));
+            }
         }
         else
         {
-            disk_pq_table.inflate_vector((uint8_t *)medoid_coords, (centroid_data + cur_m * _aligned_dim));
+            throw ANNException("Unable to read a medoid", -1, __FUNCSIG__, __FILE__, __LINE__);
         }
-
-        aligned_free(medoid_buf);
-        delete[] medoid_coords;
+        delete[] medoid_bufs[cur_m];
     }
 }
 
