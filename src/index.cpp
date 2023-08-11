@@ -54,6 +54,11 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
                                -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
+    if (_dist_metric == diskann::Metric::COSINE && std::is_floating_point<T>::value)
+    {
+        this->_normalize_vecs = true;
+    }
+
     if (_dynamic_index && _num_frozen_pts == 0)
     {
         _num_frozen_pts = 1;
@@ -91,7 +96,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
     {
         this->enable_delete(); // enable delete by default for dynamic index
         // if write params are not passed, it is inffered that ctor is called by search
-        if (index_config.index_write_params != nullptr)
+        if (index_config.index_write_params != nullptr && index_config.index_search_params != nullptr)
         {
             _indexingQueueSize = index_config.index_write_params->search_list_size;
             _indexingRange = index_config.index_write_params->max_degree;
@@ -100,10 +105,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
             _filterIndexingQueueSize = index_config.index_write_params->filter_list_size;
 
             uint32_t num_threads_indx = index_config.index_write_params->num_threads;
-            uint32_t num_scratch_spaces = index_config.search_threads + num_threads_indx;
+            uint32_t num_scratch_spaces = index_config.index_search_params->num_search_threads + num_threads_indx;
 
-            initialize_query_scratch(num_scratch_spaces, index_config.initial_search_list_size, _indexingQueueSize,
-                                     _indexingRange, _indexingMaxC, _data_store->get_dims());
+            initialize_query_scratch(num_scratch_spaces, index_config.index_search_params->initial_search_list_size,
+                                     _indexingQueueSize, _indexingRange, _indexingMaxC, _data_store->get_dims());
         }
     }
 }
@@ -111,7 +116,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points,
                               const std::shared_ptr<IndexWriteParameters> &indexParameters,
-                              const uint32_t initial_search_list_size, const size_t num_frozen_pts,
+                              const std::shared_ptr<IndexSearchParams> &indexSearchParams, const size_t num_frozen_pts,
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
                               const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
     : Index(IndexConfigBuilder()
@@ -119,7 +124,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .with_dimension(dim)
                 .with_max_points(max_points)
                 .with_index_write_params(indexParameters)
-                .with_initial_search_list_size(initial_search_list_size)
+                .with_index_search_params(indexSearchParams)
                 .with_num_frozen_pts(num_frozen_pts)
                 .is_dynamic_index(dynamic_index)
                 .is_enable_tags(enable_tags)
@@ -128,7 +133,6 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .with_num_pq_chunks(num_pq_chunks)
                 .is_use_opq(use_opq)
                 .with_data_type(diskann_type_to_name<T>())
-                .with_search_threads(indexParameters != nullptr ? indexParameters->num_threads : 0)
                 .build(),
             std::move(IndexFactory::construct_datastore<T>(diskann::MEMORY, max_points + num_frozen_pts, dim, m)))
 {

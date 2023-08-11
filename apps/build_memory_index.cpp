@@ -40,8 +40,9 @@ int build_in_memory_index(const diskann::Metric &metric, const std::string &data
     size_t data_num, data_dim;
     diskann::get_bin_metadata(data_path, data_num, data_dim);
 
-    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, nullptr, 0, 0, false, false, false, use_pq_build,
-                                          num_pq_bytes, use_opq);
+    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num,
+                                          std::make_shared<diskann::IndexWriteParameters>(paras), nullptr, 0, false,
+                                          false, false, use_pq_build, num_pq_bytes, use_opq);
     auto s = std::chrono::high_resolution_clock::now();
     if (label_file == "")
     {
