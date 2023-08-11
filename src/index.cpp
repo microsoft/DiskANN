@@ -83,7 +83,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
     _final_graph.resize(total_internal_points);
 
     _data_store = std::move(data_store);
-    _distance.reset(_data_store->get_dist_fn());
+    //_distance.reset(_data_store->get_dist_fn());
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
     if (_enable_tags)
@@ -2137,7 +2137,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
-    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    _data_store->get_dist_fn()->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    //_distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
     auto retval =
         iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
 
@@ -2239,7 +2240,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     // REFACTOR
     // T *aligned_query = scratch->aligned_query();
     // memcpy(aligned_query, query, _dim * sizeof(T));
-    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    _data_store->get_dist_fn()->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    //_distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
     auto retval = iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, true, filter_vec, true);
 
     auto best_L_nodes = scratch->best_l_nodes();
@@ -2318,7 +2320,8 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     const std::vector<uint32_t> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
 
-    _distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    //_distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    _data_store->get_dist_fn()->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
     iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();

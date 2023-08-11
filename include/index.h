@@ -323,7 +323,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   private:
     // Distance functions
     Metric _dist_metric = diskann::L2;
-    std::shared_ptr<Distance<T>> _distance;
+    //std::shared_ptr<Distance<T>> _distance;
 
     // Data
     std::unique_ptr<AbstractDataStore<T>> _data_store;
