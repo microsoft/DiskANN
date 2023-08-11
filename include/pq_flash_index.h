@@ -150,13 +150,15 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _max_degree = 0;
 
     // Data used for searching with re-order vectors
-    uint64_t ndims_reorder_vecs = 0, reorder_data_start_sector = 0, nvecs_per_sector = 0;
+    uint64_t _ndims_reorder_vecs = 0;
+    uint64_t _reorder_data_start_sector = 0;
+    uint64_t _nvecs_per_sector = 0;
 
     diskann::Metric metric = diskann::Metric::L2;
 
     // used only for inner product search to re-scale the result value
     // (due to the pre-processing of base during index build)
-    float max_base_norm = 0.0f;
+    float _max_base_norm = 0.0f;
 
     // data info
     uint64_t _num_points = 0;
@@ -166,54 +168,54 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _aligned_dim = 0;
     uint64_t _disk_bytes_per_point = 0; // Number of bytes
 
-    std::string disk_index_file;
-    std::vector<std::pair<uint32_t, uint32_t>> node_visit_counter;
+    std::string _disk_index_file;
+    std::vector<std::pair<uint32_t, uint32_t>> _node_visit_counter;
 
     // PQ data
-    // n_chunks = # of chunks ndims is split into
-    // data: char * n_chunks
+    // _n_chunks = # of chunks ndims is split into
+    // data: char * _n_chunks
     // chunk_size = chunk size of each dimension chunk
-    // pq_tables = float* [[2^8 * [chunk_size]] * n_chunks]
+    // pq_tables = float* [[2^8 * [chunk_size]] * _n_chunks]
     uint8_t *data = nullptr;
-    uint64_t n_chunks;
-    FixedChunkPQTable pq_table;
+    uint64_t _n_chunks;
+    FixedChunkPQTable _pq_table;
 
     // distance comparator
-    std::shared_ptr<Distance<T>> dist_cmp;
-    std::shared_ptr<Distance<float>> dist_cmp_float;
+    std::shared_ptr<Distance<T>> _dist_cmp;
+    std::shared_ptr<Distance<float>> _dist_cmp_float;
 
     // for very large datasets: we use PQ even for the disk resident index
-    bool use_disk_index_pq = false;
-    uint64_t disk_pq_n_chunks = 0;
-    FixedChunkPQTable disk_pq_table;
+    bool _use_disk_index_pq = false;
+    uint64_t _disk_pq_n_chunks = 0;
+    FixedChunkPQTable _disk_pq_table;
 
     // medoid/start info
 
     // graph has one entry point by default,
     // we can optionally have multiple starting points
-    uint32_t *medoids = nullptr;
+    uint32_t *_medoids = nullptr;
     // defaults to 1
-    size_t num_medoids;
+    size_t _num_medoids;
     // by default, it is empty. If there are multiple
     // centroids, we pick the medoid corresponding to the
     // closest centroid as the starting point of search
-    float *centroid_data = nullptr;
+    float *_centroid_data = nullptr;
 
     // nhood_cache; the uint32_t in nhood_Cache are offsets into nhood_cache_buf
-    unsigned *nhood_cache_buf = nullptr;
-    tsl::robin_map<uint32_t, std::pair<uint32_t, uint32_t *>> nhood_cache;
+    unsigned *_nhood_cache_buf = nullptr;
+    tsl::robin_map<uint32_t, std::pair<uint32_t, uint32_t *>> _nhood_cache;
 
     // coord_cache; The T* in coord_cache are offsets into coord_cache_buf
-    T *coord_cache_buf = nullptr;
-    tsl::robin_map<uint32_t, T *> coord_cache;
+    T *_coord_cache_buf = nullptr;
+    tsl::robin_map<uint32_t, T *> _coord_cache;
 
     // thread-specific scratch
-    ConcurrentQueue<SSDThreadData<T> *> thread_data;
-    uint64_t max_nthreads;
-    bool load_flag = false;
-    bool count_visited_nodes = false;
-    bool reorder_data_exists = false;
-    uint64_t reoreder_data_offset = 0;
+    ConcurrentQueue<SSDThreadData<T> *> _thread_data;
+    uint64_t _max_nthreads;
+    bool _load_flag = false;
+    bool _count_visited_nodes = false;
+    bool _reorder_data_exists = false;
+    uint64_t _reoreder_data_offset = 0;
 
     // filter support
     uint32_t *_pts_to_label_offsets = nullptr;
