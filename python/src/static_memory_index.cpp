@@ -17,7 +17,7 @@ diskann::Index<DT, StaticIdType, filterT> static_index_builder(const diskann::Me
     {
         throw std::runtime_error("initial_search_complexity must be a positive uint32_t");
     }
-    auto index_search_params = diskann::IndexSearchParams(initial_search_complexity, 0);
+    auto index_search_params = diskann::IndexSearchParams(initial_search_complexity, omp_get_num_threads());
     return diskann::Index<DT>(m, dimensions, num_points,
                               nullptr,                                                           // index write params
                               std::make_shared<diskann::IndexSearchParams>(index_search_params), // index search params
