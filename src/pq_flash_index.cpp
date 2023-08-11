@@ -174,13 +174,19 @@ std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t
 
         char *node_buf = offset_to_node((char *)read_reqs[i].buf, node_ids[i]);
 
-        T *node_coords = offset_to_node_coords(node_buf);
-        memcpy(coord_buffers[i], node_coords, _disk_bytes_per_point);
+        if (coord_buffers[i] != nullptr)
+        {
+            T *node_coords = offset_to_node_coords(node_buf);
+            memcpy(coord_buffers[i], node_coords, _disk_bytes_per_point);
+        }
 
-        uint32_t *node_nhood = offset_to_node_nhood(node_buf);
-        auto num_nbrs = *node_nhood;
-        nbr_buffers[i].first = num_nbrs;
-        memcpy(nbr_buffers[i].second, node_nhood + 1, num_nbrs * sizeof(uint32_t));
+        if (nbr_buffers[i].second != nullptr)
+        {
+            uint32_t *node_nhood = offset_to_node_nhood(node_buf);
+            auto num_nbrs = *node_nhood;
+            nbr_buffers[i].first = num_nbrs;
+            memcpy(nbr_buffers[i].second, node_nhood + 1, num_nbrs * sizeof(uint32_t));
+        }
     }
 
     aligned_free(buf);
