@@ -136,7 +136,7 @@ std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t
                                                       std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers)
 {
     std::vector<AlignedRead> read_reqs;
-    std::vector<bool> retval(true, node_ids.size());
+    std::vector<bool> retval(node_ids.size(), true);
 
     char *buf = nullptr;
     auto num_sectors = _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
@@ -427,54 +427,46 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
             diskann::cout << "." << std::flush;
             size_t start = block * BLOCK_SIZE;
             size_t end = (std::min)((block + 1) * BLOCK_SIZE, nodes_to_expand.size());
-            std::vector<AlignedRead> read_reqs;
-            std::vector<std::pair<uint32_t, char *>> nhoods;
+
+            std::vector<uint32_t> nodes_to_read;
+            std::vector<T *> coord_buffers(end - start, nullptr);
+            std::vector<std::pair<uint32_t, uint32_t *>> nbr_buffers;
+
             for (size_t cur_pt = start; cur_pt < end; cur_pt++)
             {
-                //MULTISECTORFIX
-                char *buf = nullptr;
-                alloc_aligned((void **)&buf, defaults::SECTOR_LEN, defaults::SECTOR_LEN);
-                nhoods.emplace_back(nodes_to_expand[cur_pt], buf);
-                AlignedRead read;
-                read.len = defaults::SECTOR_LEN;
-                read.buf = buf;
-                read.offset = get_node_sector(nodes_to_expand[cur_pt]) * defaults::SECTOR_LEN;
-                read_reqs.push_back(read);
+                nodes_to_read.push_back(nodes_to_expand[cur_pt]);
+                nbr_buffers.emplace_back(0, new uint32_t[_max_degree + 1]);
             }
 
             // issue read requests
-            reader->read(read_reqs, ctx);
+            auto read_status = read_nodes(nodes_to_read, coord_buffers, nbr_buffers);
 
             // process each nhood buf
-            for (uint32_t i = 0; i < read_reqs.size(); i++)
+            for (uint32_t i = 0; i < read_status.size(); i++)
             {
-#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle read failures in
-                                                 // production settings
-                if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS)
+                if (read_status[i] == false)
                 {
                     continue;
                 }
-#endif
-                auto &nhood = nhoods[i];
-
-                // insert node coord into coord_cache
-                char *node_buf = offset_to_node(nhood.second, nhood.first);
-                uint32_t *node_nhood = offset_to_node_nhood(node_buf);
-                uint64_t nnbrs = (uint64_t)*node_nhood;
-                uint32_t *nbrs = node_nhood + 1;
-                // explore next level
-                for (uint64_t j = 0; j < nnbrs && !finish_flag; j++)
+                else
                 {
-                    if (node_set.find(nbrs[j]) == node_set.end())
+                    uint32_t nnbrs = nbr_buffers[i].first;
+                    uint32_t *nbrs = nbr_buffers[i].second;
+
+                    // explore next level
+                    for (uint32_t j = 0; j < nnbrs && !finish_flag; j++)
                     {
-                        cur_level->insert(nbrs[j]);
-                    }
-                    if (cur_level->size() + node_set.size() >= num_nodes_to_cache)
-                    {
-                        finish_flag = true;
+                        if (node_set.find(nbrs[j]) == node_set.end())
+                        {
+                            cur_level->insert(nbrs[j]);
+                        }
+                        if (cur_level->size() + node_set.size() >= num_nodes_to_cache)
+                        {
+                            finish_flag = true;
+                        }
                     }
                 }
-                aligned_free(nhood.second);
+                aligned_free(nbr_buffers[i].second);
             }
         }
 
