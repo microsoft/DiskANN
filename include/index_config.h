@@ -190,9 +190,6 @@ class IndexConfigBuilder
 
         if (_dynamic_index && _index_search_params != nullptr)
         {
-            if (_index_search_params->num_search_threads == 0)
-                throw ANNException("Error: please pass search_threads for building dynamic index.", -1);
-
             if (_index_search_params->initial_search_list_size == 0)
                 throw ANNException("Error: please pass initial_search_list_size for building dynamic index.", -1);
         }
