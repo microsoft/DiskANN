@@ -53,19 +53,20 @@ template <typename T>
 std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStoreStrategy strategy, size_t num_points,
                                                                         size_t dimension, Metric m)
 {
-    std::shared_ptr<Distance<T>> distance;
+    std::unique_ptr<Distance<T>> distance;
     switch (strategy)
     {
     case MEMORY:
         if (m == diskann::Metric::COSINE && std::is_same<T, float>::value)
         {
             distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
-            return std::make_unique<diskann::InMemDataStore<T>>((location_t)num_points, dimension, distance);
+
+            return std::make_unique<diskann::InMemDataStore<T>>((location_t)num_points, dimension, std::move(distance));
         }
         else
         {
             distance.reset((Distance<T> *)get_distance_function<T>(m));
-            return std::make_unique<diskann::InMemDataStore<T>>((location_t)num_points, dimension, distance);
+            return std::make_unique<diskann::InMemDataStore<T>>((location_t)num_points, dimension, std::move(distance));
         }
         break;
     default:

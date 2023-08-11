@@ -83,7 +83,6 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
     _final_graph.resize(total_internal_points);
 
     _data_store = std::move(data_store);
-    //_distance.reset(_data_store->get_dist_fn());
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
     if (_enable_tags)

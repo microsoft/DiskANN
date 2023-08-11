@@ -49,7 +49,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
      **************************************************************************/
 
   public:
-    // For internal use - uses new constructor internally
+    // For index level use - uses new constructor internally
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
                             const std::shared_ptr<IndexWriteParameters> indexParameters,
                             const std::shared_ptr<IndexSearchParams> indexSearchParams, const size_t num_frozen_pts = 0,
@@ -57,6 +57,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const bool concurrent_consolidate = false, const bool pq_dist_build = false,
                             const size_t num_pq_chunks = 0, const bool use_opq = false);
 
+    // use functionality compatible with abstract index
     DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store
                             /* std::unique_ptr<AbstractGraphStore> graph_store*/);
 
@@ -322,7 +323,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   private:
     // Distance functions
     Metric _dist_metric = diskann::L2;
-    // std::shared_ptr<Distance<T>> _distance;
 
     // Data
     std::unique_ptr<AbstractDataStore<T>> _data_store;

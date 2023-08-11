@@ -697,6 +697,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         uint64_t shard_base_dim, shard_base_pts;
         get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
+
         diskann::Index<T> _index(
             compareMetric, shard_base_dim, shard_base_pts, std::make_shared<diskann::IndexWriteParameters>(paras),
             nullptr, paras.num_frozen_points, false, false, false, build_pq_bytes > 0, build_pq_bytes, use_opq);
