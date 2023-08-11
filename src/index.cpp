@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include "index_factory.h"
 #include <type_traits>
 #include <omp.h>
 
@@ -129,16 +130,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .with_data_type(diskann_type_to_name<T>())
                 .with_search_threads(indexParameters != nullptr ? indexParameters->num_threads : 0)
                 .build(),
-            std::make_unique<diskann::InMemDataStore<T>>(
-                (location_t)(max_points + num_frozen_pts), dim, [m] { // lambda to get distance
-                    std::shared_ptr<Distance<T>> distance;
-                    if (m == diskann::Metric::COSINE && std::is_same<T, float>::value)
-                    {
-                        distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
-                    }
-                    distance.reset((Distance<T> *)get_distance_function<T>(m));
-                    return distance;
-                }()))
+            std::move(IndexFactory::construct_datastore<T>(diskann::MEMORY, max_points + num_frozen_pts, dim, m)))
 {
 }
 
