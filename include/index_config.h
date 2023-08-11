@@ -188,6 +188,11 @@ class IndexConfigBuilder
         if (_data_type == "" || _data_type.empty())
             throw ANNException("Error: data_type can not be empty", -1);
 
+        if (_dynamic_index && _num_frozen_pts == 0)
+        {
+            _num_frozen_pts = 1;
+        }
+
         if (_dynamic_index && _index_search_params != nullptr)
         {
             if (_index_search_params->initial_search_list_size == 0)
