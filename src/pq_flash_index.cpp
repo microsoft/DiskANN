@@ -1254,7 +1254,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     // query <-> PQ chunk centers distances
     _pq_table.preprocess_query(query_rotated); // center the query and rotate if
-                                              // we have a rotation matrix
+                                               // we have a rotation matrix
     float *pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
     _pq_table.populate_chunk_distances(query_rotated, pq_dists);
 
@@ -1335,7 +1335,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     while (retset.has_unexpanded_node() && num_ios < io_limit)
     {
         // clear iteration state
-        frontier.clear(); 
+        frontier.clear();
         frontier_nhoods.clear();
         frontier_read_reqs.clear();
         cached_nhoods.clear();
