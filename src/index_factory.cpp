@@ -60,7 +60,6 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStor
         if (m == diskann::Metric::COSINE && std::is_same<T, float>::value)
         {
             distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
-
             return std::make_unique<diskann::InMemDataStore<T>>((location_t)num_points, dimension, std::move(distance));
         }
         else
@@ -86,7 +85,8 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     size_t num_points = _config->max_points + _config->num_frozen_pts;
     size_t dim = _config->dimension;
     // auto graph_store = construct_graphstore(_config->graph_strategy, num_points);
-    auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
+    auto data_store =
+        IndexFactory::construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
     return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, std::move(data_store));
 }
 

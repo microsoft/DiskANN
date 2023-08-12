@@ -134,7 +134,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .with_data_type(diskann_type_to_name<T>())
                 .build(),
             std::move(IndexFactory::construct_datastore<T>(
-                diskann::MEMORY, max_points + (dynamic_index && num_frozen_pts == 0 ? 1 : num_frozen_pts), dim, m)))
+                diskann::MEMORY, max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim,
+                m)))
 {
 }
 
