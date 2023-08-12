@@ -147,4 +147,11 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &
         throw ANNException("Error: unsupported label_type please choose from [uint/ushort]", -1);
 }
 
+template DISKANN_DLLEXPORT std::unique_ptr<AbstractDataStore<uint8_t>> IndexFactory::construct_datastore(
+    DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
+template DISKANN_DLLEXPORT std::unique_ptr<AbstractDataStore<int8_t>> IndexFactory::construct_datastore(
+    DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
+template DISKANN_DLLEXPORT std::unique_ptr<AbstractDataStore<float>> IndexFactory::construct_datastore(
+    DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
+
 } // namespace diskann
