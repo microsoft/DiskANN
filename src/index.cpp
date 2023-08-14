@@ -1965,8 +1965,9 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     else
     {
         // TODO: this should ideally happen in save()
+        uint32_t unv_label_as_num = 0;
         convert_labels_string_to_int(build_params.label_file, labels_file_to_use, mem_labels_int_map_file,
-                                     build_params.universal_label);
+                                     build_params.universal_label, unv_label_as_num);
         if (build_params.universal_label != "")
         {
             LabelT unv_label_as_num = 0;
@@ -2156,7 +2157,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
     convert_pts_label_to_bitmask(_pts_to_labels, _bitmask_buf, _labels.size());
 
-    std::unordered_map<LabelT, std::vector<_u32>> label_to_points;
+    std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
     std::vector<std::uint64_t> label_bitmask;
     for (int lbl = 0; lbl < _labels.size(); lbl++)
     {
@@ -2177,8 +2178,8 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
             bitmask_full_val.merge_bitmask_val(bitmask_val);
         }
 
-        std::vector<_u32> labeled_points;
-        for (_u32 point_id = 0; point_id < num_points_to_load; point_id++)
+        std::vector<uint32_t> labeled_points;
+        for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
         {
             simple_bitmask bm(_bitmask_buf.get_bitmask(point_id), _bitmask_buf._bitmask_size);
             bool pt_has_lbl = bm.test_full_mask_val(bitmask_full_val);
@@ -2188,6 +2189,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                 labeled_points.emplace_back(point_id);
             }
         }
+        label_to_points[x] = labeled_points;
     }
 
     uint32_t num_cands = 25;
