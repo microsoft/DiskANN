@@ -19,7 +19,7 @@ jobs:
     name: Disk with PQ
     uses: ./.github/workflows/disk-pq.yml
   multi-sector-disk-pq:
-    name: Disk with PQ
+    name: Multi-sector Disk with PQ
     uses: ./.github/workflows/multi-sector-disk-pq.yml
   labels:
     name: Labels
