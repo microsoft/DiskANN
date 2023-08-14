@@ -895,7 +895,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     if (vamana_frozen_num == 1)
         vamana_frozen_loc = medoid;
     max_node_len = (((uint64_t)width_u32 + 1) * sizeof(uint32_t)) + (ndims_64 * sizeof(T));
-    nnodes_per_sector = defaults::SECTOR_LEN / max_node_len;
+    nnodes_per_sector = defaults::SECTOR_LEN / max_node_len; // 0 if max_node_len > SECTOR_LEN
 
     diskann::cout << "medoid: " << medoid << "B" << std::endl;
     diskann::cout << "max_node_len: " << max_node_len << "B" << std::endl;
@@ -903,12 +903,14 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
     // defaults::SECTOR_LEN buffer for each sector
     std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(defaults::SECTOR_LEN);
+    std::unique_ptr<char[]> multisector_buf = std::make_unique<char[]>(ROUND_UP(max_node_len, defaults::SECTOR_LEN));
     std::unique_ptr<char[]> node_buf = std::make_unique<char[]>(max_node_len);
     uint32_t &nnbrs = *(uint32_t *)(node_buf.get() + ndims_64 * sizeof(T));
     uint32_t *nhood_buf = (uint32_t *)(node_buf.get() + (ndims_64 * sizeof(T)) + sizeof(uint32_t));
 
     // number of sectors (1 for meta data)
-    uint64_t n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
+    uint64_t n_sectors = nnodes_per_sector > 0 ? ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector
+                                               : npts_64 * DIV_ROUND_UP(max_node_len, defaults::SECTOR_LEN);
     uint64_t n_reorder_sectors = 0;
     uint64_t n_data_nodes_per_sector = 0;
 
@@ -941,15 +943,68 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
     diskann::cout << "# sectors: " << n_sectors << std::endl;
     uint64_t cur_node_id = 0;
-    for (uint64_t sector = 0; sector < n_sectors; sector++)
-    {
-        if (sector % 100000 == 0)
+
+    if (nnodes_per_sector > 0)
+    { // Write multiple nodes per sector
+        for (uint64_t sector = 0; sector < n_sectors; sector++)
         {
-            diskann::cout << "Sector #" << sector << "written" << std::endl;
+            if (sector % 100000 == 0)
+            {
+                diskann::cout << "Sector #" << sector << "written" << std::endl;
+            }
+            memset(sector_buf.get(), 0, defaults::SECTOR_LEN);
+            for (uint64_t sector_node_id = 0; sector_node_id < nnodes_per_sector && cur_node_id < npts_64;
+                 sector_node_id++)
+            {
+                memset(node_buf.get(), 0, max_node_len);
+                // read cur node's nnbrs
+                vamana_reader.read((char *)&nnbrs, sizeof(uint32_t));
+
+                // sanity checks on nnbrs
+                assert(nnbrs > 0);
+                assert(nnbrs <= width_u32);
+
+                // read node's nhood
+                vamana_reader.read((char *)nhood_buf, (std::min)(nnbrs, width_u32) * sizeof(uint32_t));
+                if (nnbrs > width_u32)
+                {
+                    vamana_reader.seekg((nnbrs - width_u32) * sizeof(uint32_t), vamana_reader.cur);
+                }
+
+                // write coords of node first
+                //  T *node_coords = data + ((uint64_t) ndims_64 * cur_node_id);
+                base_reader.read((char *)cur_node_coords.get(), sizeof(T) * ndims_64);
+                memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
+
+                // write nnbrs
+                *(uint32_t *)(node_buf.get() + ndims_64 * sizeof(T)) = (std::min)(nnbrs, width_u32);
+
+                // write nhood next
+                memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(uint32_t), nhood_buf,
+                       (std::min)(nnbrs, width_u32) * sizeof(uint32_t));
+
+                // get offset into sector_buf
+                char *sector_node_buf = sector_buf.get() + (sector_node_id * max_node_len);
+
+                // copy node buf into sector_node_buf
+                memcpy(sector_node_buf, node_buf.get(), max_node_len);
+                cur_node_id++;
+            }
+            // flush sector to disk
+            diskann_writer.write(sector_buf.get(), defaults::SECTOR_LEN);
         }
-        memset(sector_buf.get(), 0, defaults::SECTOR_LEN);
-        for (uint64_t sector_node_id = 0; sector_node_id < nnodes_per_sector && cur_node_id < npts_64; sector_node_id++)
+    }
+    else
+    { // Write multi-sector nodes
+        uint64_t nsectors_per_node = DIV_ROUND_UP(max_node_len, defaults::SECTOR_LEN);
+        for (uint64_t i = 0; i < npts_64; i++)
         {
+            if ((i * nsectors_per_node) % 100000 == 0)
+            {
+                diskann::cout << "Sector #" << i * nsectors_per_node << "written" << std::endl;
+            }
+            memset(multisector_buf.get(), 0, nsectors_per_node * defaults::SECTOR_LEN);
+
             memset(node_buf.get(), 0, max_node_len);
             // read cur node's nnbrs
             vamana_reader.read((char *)&nnbrs, sizeof(uint32_t));
@@ -968,25 +1023,20 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
             // write coords of node first
             //  T *node_coords = data + ((uint64_t) ndims_64 * cur_node_id);
             base_reader.read((char *)cur_node_coords.get(), sizeof(T) * ndims_64);
-            memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
+            memcpy(multisector_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
 
             // write nnbrs
-            *(uint32_t *)(node_buf.get() + ndims_64 * sizeof(T)) = (std::min)(nnbrs, width_u32);
+            *(uint32_t *)(multisector_buf.get() + ndims_64 * sizeof(T)) = (std::min)(nnbrs, width_u32);
 
             // write nhood next
-            memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(uint32_t), nhood_buf,
+            memcpy(multisector_buf.get() + ndims_64 * sizeof(T) + sizeof(uint32_t), nhood_buf,
                    (std::min)(nnbrs, width_u32) * sizeof(uint32_t));
 
-            // get offset into sector_buf
-            char *sector_node_buf = sector_buf.get() + (sector_node_id * max_node_len);
-
-            // copy node buf into sector_node_buf
-            memcpy(sector_node_buf, node_buf.get(), max_node_len);
-            cur_node_id++;
+            // flush sector to disk
+            diskann_writer.write(multisector_buf.get(), nsectors_per_node * defaults::SECTOR_LEN);
         }
-        // flush sector to disk
-        diskann_writer.write(sector_buf.get(), defaults::SECTOR_LEN);
     }
+
     if (append_reorder_data)
     {
         diskann::cout << "Index written. Appending reorder data..." << std::endl;
