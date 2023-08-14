@@ -1251,6 +1251,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     // sector scratch
     char *sector_scratch = query_scratch->sector_scratch;
     uint64_t &sector_scratch_idx = query_scratch->sector_idx;
+    const uint64_t num_sectors_per_node =
+        _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_disk_bytes_per_point, defaults::SECTOR_LEN); 
 
     // query <-> PQ chunk centers distances
     _pq_table.preprocess_query(query_rotated); // center the query and rotate if
@@ -1375,12 +1377,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 auto id = frontier[i];
                 std::pair<uint32_t, char *> fnhood;
                 fnhood.first = id;
-                // MULTISECTORFIX
-                fnhood.second = sector_scratch + sector_scratch_idx * defaults::SECTOR_LEN;
+                fnhood.second = sector_scratch + num_sectors_per_node * sector_scratch_idx * defaults::SECTOR_LEN;
                 sector_scratch_idx++;
                 frontier_nhoods.push_back(fnhood);
-                frontier_read_reqs.emplace_back(get_node_sector(((size_t)id)) * defaults::SECTOR_LEN,
-                                                defaults::SECTOR_LEN, fnhood.second);
+                frontier_read_reqs.emplace_back(get_node_sector((size_t)id) * defaults::SECTOR_LEN,
+                                                num_sectors_per_node * defaults::SECTOR_LEN, fnhood.second);
                 if (stats != nullptr)
                 {
                     stats->n_4k++;
@@ -1391,7 +1392,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             io_timer.reset();
 #ifdef USE_BING_INFRA
             reader->read(frontier_read_reqs, ctx,
-                         true); // async reader windows.
+                         false); // synhronous reader for Bing.
 #else
             reader->read(frontier_read_reqs, ctx); // synchronous IO linux
 #endif
