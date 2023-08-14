@@ -10,6 +10,7 @@ class IndexFactory
     DISKANN_DLLEXPORT explicit IndexFactory(const IndexConfig &config);
     DISKANN_DLLEXPORT std::unique_ptr<AbstractIndex> create_instance();
 
+    // Consruct a data store with distance function emplaced within
     template <typename T>
     DISKANN_DLLEXPORT static std::unique_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy,
                                                                                        size_t num_points,

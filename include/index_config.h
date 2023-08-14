@@ -33,7 +33,9 @@ struct IndexConfig
     std::string tag_type;
     std::string data_type;
 
+    // Params for building index
     std::shared_ptr<IndexWriteParameters> index_write_params;
+    // Params for searching index
     std::shared_ptr<IndexSearchParams> index_search_params;
 
   private:
