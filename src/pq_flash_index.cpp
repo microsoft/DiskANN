@@ -1398,7 +1398,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
                         continue;
 
-                    if (use_filter && !point_has_label(id, filter_num) && !point_has_label(id, _universal_filter_num))
+                    if (use_filter && !point_has_label(id, filter_num) 
+                        && (!_use_universal_label || !point_has_label(id, _universal_filter_num)))
                         continue;
                     cmps++;
                     float dist = dist_scratch[m];
@@ -1460,7 +1461,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
                         continue;
 
-                    if (use_filter && !point_has_label(id, filter_num) && !point_has_label(id, _universal_filter_num))
+                    if (use_filter && !point_has_label(id, filter_num) 
+                        && (!_use_universal_label || !point_has_label(id, _universal_filter_num)))
                         continue;
                     cmps++;
                     float dist = dist_scratch[m];
