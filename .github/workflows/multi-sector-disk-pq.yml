@@ -27,7 +27,7 @@ jobs:
         uses: ./.github/actions/build
         
       - name: Generate Data
-        uses: ./.github/actions/generate-random
+        uses: ./.github/actions/generate-high-dim-random
 
       - name: build and search disk index (1020D, one shot graph build, L2, no diskPQ) (float)
         if: success() || failure()
