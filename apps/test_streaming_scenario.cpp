@@ -186,6 +186,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_num_frozen_points(num_start_pts)
                                                .build();
 
+    auto index_search_params = diskann::IndexSearchParams(L, insert_threads);
     diskann::IndexWriteParameters delete_params = diskann::IndexWriteParametersBuilder(L, R)
                                                       .with_max_occlusion_size(C)
                                                       .with_alpha(alpha)
@@ -200,7 +201,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     diskann::cout << "metadata: file " << data_path << " has " << num_points << " points in " << dim << " dims"
                   << std::endl;
     aligned_dim = ROUND_UP(dim, 8);
-
     auto index_config = diskann::IndexConfigBuilder()
                             .with_metric(diskann::L2)
                             .with_dimension(dim)
@@ -210,12 +210,11 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                             .is_use_opq(false)
                             .with_num_pq_chunks(0)
                             .is_pq_dist_build(false)
-                            .with_search_threads(insert_threads)
-                            .with_initial_search_list_size(L)
                             .with_tag_type(diskann_type_to_name<TagT>())
                             .with_label_type(diskann_type_to_name<LabelT>())
                             .with_data_type(diskann_type_to_name<T>())
                             .with_index_write_params(params)
+                            .with_index_search_params(index_search_params)
                             .with_data_load_store_strategy(diskann::MEMORY)
                             .build();
 

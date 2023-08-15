@@ -33,24 +33,23 @@ struct IndexConfig
     std::string tag_type;
     std::string data_type;
 
+    // Params for building index
     std::shared_ptr<IndexWriteParameters> index_write_params;
-
-    uint32_t search_threads;
-    uint32_t initial_search_list_size;
+    // Params for searching index
+    std::shared_ptr<IndexSearchParams> index_search_params;
 
   private:
     IndexConfig(DataStoreStrategy data_strategy, GraphStoreStrategy graph_strategy, Metric metric, size_t dimension,
                 size_t max_points, size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
                 bool pq_dist_build, bool concurrent_consolidate, bool use_opq, const std::string &data_type,
                 const std::string &tag_type, const std::string &label_type,
-                std::shared_ptr<IndexWriteParameters> index_write_params, uint32_t search_threads,
-                uint32_t initial_search_list_size)
+                std::shared_ptr<IndexWriteParameters> index_write_params,
+                std::shared_ptr<IndexSearchParams> index_search_params)
         : data_strategy(data_strategy), graph_strategy(graph_strategy), metric(metric), dimension(dimension),
           max_points(max_points), dynamic_index(dynamic_index), enable_tags(enable_tags), pq_dist_build(pq_dist_build),
           concurrent_consolidate(concurrent_consolidate), use_opq(use_opq), num_pq_chunks(num_pq_chunks),
           num_frozen_pts(num_frozen_points), label_type(label_type), tag_type(tag_type), data_type(data_type),
-          index_write_params(index_write_params), search_threads(search_threads),
-          initial_search_list_size(initial_search_list_size)
+          index_write_params(index_write_params), index_search_params(index_search_params)
     {
     }
 
@@ -60,9 +59,7 @@ struct IndexConfig
 class IndexConfigBuilder
 {
   public:
-    IndexConfigBuilder()
-    {
-    }
+    IndexConfigBuilder() = default;
 
     IndexConfigBuilder &with_metric(Metric m)
     {
@@ -160,15 +157,31 @@ class IndexConfigBuilder
         return *this;
     }
 
-    IndexConfigBuilder &with_search_threads(uint32_t search_threads)
+    IndexConfigBuilder &with_index_write_params(std::shared_ptr<IndexWriteParameters> index_write_params_ptr)
     {
-        this->_search_threads = search_threads;
+        if (index_write_params_ptr == nullptr)
+        {
+            diskann::cout << "Passed, empty build_params while creating index config" << std::endl;
+            return *this;
+        }
+        this->_index_write_params = index_write_params_ptr;
         return *this;
     }
 
-    IndexConfigBuilder &with_initial_search_list_size(uint32_t search_list_size)
+    IndexConfigBuilder &with_index_search_params(IndexSearchParams &search_params)
     {
-        this->_initial_search_list_size = search_list_size;
+        this->_index_search_params = std::make_shared<IndexSearchParams>(search_params);
+        return *this;
+    }
+
+    IndexConfigBuilder &with_index_search_params(std::shared_ptr<IndexSearchParams> search_params_ptr)
+    {
+        if (search_params_ptr == nullptr)
+        {
+            diskann::cout << "Passed, empty search_params while creating index config" << std::endl;
+            return *this;
+        }
+        this->_index_search_params = search_params_ptr;
         return *this;
     }
 
@@ -177,19 +190,20 @@ class IndexConfigBuilder
         if (_data_type == "" || _data_type.empty())
             throw ANNException("Error: data_type can not be empty", -1);
 
-        if (_dynamic_index && _index_write_params != nullptr)
+        if (_dynamic_index && _num_frozen_pts == 0)
         {
-            if (_search_threads == 0)
-                throw ANNException("Error: please pass search_threads for building dynamic index.", -1);
+            _num_frozen_pts = 1;
+        }
 
-            if (_initial_search_list_size == 0)
+        if (_dynamic_index)
+        {
+            if (_index_search_params != nullptr && _index_search_params->initial_search_list_size == 0)
                 throw ANNException("Error: please pass initial_search_list_size for building dynamic index.", -1);
         }
 
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
                            _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build, _concurrent_consolidate,
-                           _use_opq, _data_type, _tag_type, _label_type, _index_write_params, _search_threads,
-                           _initial_search_list_size);
+                           _use_opq, _data_type, _tag_type, _label_type, _index_write_params, _index_search_params);
     }
 
     IndexConfigBuilder(const IndexConfigBuilder &) = delete;
@@ -217,8 +231,6 @@ class IndexConfigBuilder
     std::string _data_type;
 
     std::shared_ptr<IndexWriteParameters> _index_write_params;
-
-    uint32_t _search_threads;
-    uint32_t _initial_search_list_size;
+    std::shared_ptr<IndexSearchParams> _index_search_params;
 };
 } // namespace diskann
