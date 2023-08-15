@@ -1,16 +1,16 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include "index_factory.h"
-#include <type_traits>
 #include <omp.h>
 
-#include "tsl/robin_set.h"
-#include "tsl/robin_map.h"
-#include "boost/dynamic_bitset.hpp"
+#include <type_traits>
 
+#include "boost/dynamic_bitset.hpp"
+#include "index_factory.h"
 #include "memory_mapper.h"
 #include "timer.h"
+#include "tsl/robin_map.h"
+#include "tsl/robin_set.h"
 #include "windows_customizations.h"
 #if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
@@ -36,7 +36,6 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
       _pq_dist(index_config.pq_dist_build), _use_opq(index_config.use_opq), _num_pq_chunks(index_config.num_pq_chunks),
       _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
 {
-
     if (_dynamic_index && !_enable_tags)
     {
         throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -94,7 +93,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
     if (_dynamic_index)
     {
         this->enable_delete(); // enable delete by default for dynamic index
-        // if write params are not passed, it is inffered that ctor is called by search
+        // if write params are not passed, it is inffered that ctor is called by
+        // search
         if (index_config.index_write_params != nullptr && index_config.index_search_params != nullptr)
         {
             _indexingQueueSize = index_config.index_write_params->search_list_size;
@@ -114,16 +114,16 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points,
-                              const std::shared_ptr<IndexWriteParameters> indexParameters,
-                              const std::shared_ptr<IndexSearchParams> indexSearchParams, const size_t num_frozen_pts,
+                              const std::shared_ptr<IndexWriteParameters> index_parameters,
+                              const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts,
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
                               const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
     : Index(IndexConfigBuilder()
                 .with_metric(m)
                 .with_dimension(dim)
                 .with_max_points(max_points)
-                .with_index_write_params(indexParameters)
-                .with_index_search_params(indexSearchParams)
+                .with_index_write_params(index_parameters)
+                .with_index_search_params(index_search_params)
                 .with_num_frozen_pts(num_frozen_pts)
                 .is_dynamic_index(dynamic_index)
                 .is_enable_tags(enable_tags)
@@ -133,14 +133,14 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .is_use_opq(use_opq)
                 .with_data_type(diskann_type_to_name<T>())
                 .build(),
-            std::move(IndexFactory::construct_datastore<T>(
+            IndexFactory::construct_datastore<T>(
                 DataStoreStrategy::MEMORY,
-                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m)),
-            IndexFactory::construct_graphstore(GraphStoreStrategy::MEMORY,
-                                               max_points +
-                                                   (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
-                                               (size_t)((indexParameters == nullptr ? 0 : indexParameters->max_degree) *
-                                                        defaults::GRAPH_SLACK_FACTOR * 1.05)))
+                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m),
+            IndexFactory::construct_graphstore(
+                GraphStoreStrategy::MEMORY,
+                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
+                         defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
 }
 
@@ -456,7 +456,8 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
     }
 
 #ifdef EXEC_ENV_OLS
-    // REFACTOR TODO: Must figure out how to support aligned reader in a clean manner.
+    // REFACTOR TODO: Must figure out how to support aligned reader in a clean
+    // manner.
     copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _data_store->get_aligned_dim());
 #else
     _data_store->load(filename); // offset == 0.
@@ -726,7 +727,8 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
     return init_ids;
 }
 
-// Find common filter between a node's labels and a given set of labels, while taking into account universal label
+// Find common filter between a node's labels and a given set of labels, while
+// taking into account universal label
 template <typename T, typename TagT, typename LabelT>
 bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
@@ -737,8 +739,8 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
                           curr_node_labels.end(), std::back_inserter(common_filters));
     if (common_filters.size() > 0)
     {
-        // This is to reduce the repetitive calls. If common_filters size is > 0 , we dont need to check further for
-        // universal label
+        // This is to reduce the repetitive calls. If common_filters size is > 0 ,
+        // we dont need to check further for universal label
         return true;
     }
     if (_use_universal_label)
@@ -2175,7 +2177,8 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     const std::vector<uint32_t> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
 
-    //_distance->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    //_distance->preprocess_query(query, _data_store->get_dims(),
+    // scratch->aligned_query());
     _data_store->get_dist_fn()->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
     iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
 
@@ -2687,7 +2690,8 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
         {
             assert(_graph_store->get_neighbours(new_location_start + loc_offset).empty());
             /* _graph_store->get_neighbours(new_location_start + loc_offset)
-                 .swap(_graph_store->get_neighbours(old_location_start + loc_offset));*/
+                 .swap(_graph_store->get_neighbours(old_location_start +
+               loc_offset));*/
             _graph_store->swap_neighbours(new_location_start + loc_offset, old_location_start + loc_offset);
         }
 
@@ -2707,7 +2711,8 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
         {
             assert(_graph_store->get_neighbours(new_location_start + loc_offset - 1u).empty());
             /*_graph_store->get_neighbours(new_location_start + loc_offset - 1u)
-                .swap(_graph_store->get_neighbours(old_location_start + loc_offset - 1u));*/
+                .swap(_graph_store->get_neighbours(old_location_start + loc_offset -
+               1u));*/
             _graph_store->swap_neighbours(new_location_start + loc_offset - 1u, old_location_start + loc_offset - 1u);
         }
 
@@ -3126,8 +3131,10 @@ void Index<T, TagT, LabelT>::_search_with_optimized_layout(const DataType &query
     }
     catch (const std::bad_any_cast &e)
     {
-        throw ANNException(
-            "Error: bad any cast while performing _search_with_optimized_layout() " + std::string(e.what()), -1);
+        throw ANNException("Error: bad any cast while performing "
+                           "_search_with_optimized_layout() " +
+                               std::string(e.what()),
+                           -1);
     }
     catch (const std::exception &e)
     {

@@ -52,11 +52,12 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   public:
     // Call this when creating and passing Index Config is inconvenient.
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
-                            const std::shared_ptr<IndexWriteParameters> indexParameters,
-                            const std::shared_ptr<IndexSearchParams> indexSearchParams, const size_t num_frozen_pts = 0,
-                            const bool dynamic_index = false, const bool enable_tags = false,
-                            const bool concurrent_consolidate = false, const bool pq_dist_build = false,
-                            const size_t num_pq_chunks = 0, const bool use_opq = false);
+                            const std::shared_ptr<IndexWriteParameters> index_parameters,
+                            const std::shared_ptr<IndexSearchParams> index_search_params,
+                            const size_t num_frozen_pts = 0, const bool dynamic_index = false,
+                            const bool enable_tags = false, const bool concurrent_consolidate = false,
+                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
+                            const bool use_opq = false);
 
     DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store,
                             std::unique_ptr<AbstractGraphStore> graph_store);

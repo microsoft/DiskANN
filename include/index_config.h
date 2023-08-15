@@ -197,9 +197,9 @@ class IndexConfigBuilder
             _num_frozen_pts = 1;
         }
 
-        if (_dynamic_index && _index_search_params != nullptr)
+        if (_dynamic_index)
         {
-            if (_index_search_params->initial_search_list_size == 0)
+            if (_index_search_params != nullptr && _index_search_params->initial_search_list_size == 0)
                 throw ANNException("Error: please pass initial_search_list_size for building dynamic index.", -1);
         }
 
