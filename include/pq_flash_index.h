@@ -105,7 +105,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                                    std::vector<T *> &coord_buffers,
                                                    std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers);
 
-    DISKANN_DLLEXPORT std::vector<std::uint8_t> get_pq_vector(std::uint64_t VID);
+    DISKANN_DLLEXPORT std::vector<std::uint8_t> get_pq_vector(std::uint64_t vid);
     DISKANN_DLLEXPORT uint64_t get_num_points();
 
   protected:
