@@ -28,7 +28,8 @@ namespace diskann
 // Initialize an index with metric m, load the data of type T with filename
 // (bin), and initialize max_points
 template <typename T, typename TagT, typename LabelT>
-Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store)
+Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store,
+                              std::unique_ptr<AbstractGraphStore> graph_store)
     : _dist_metric(index_config.metric), _dim(index_config.dimension), _max_points(index_config.max_points),
       _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
       _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
@@ -80,9 +81,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
     _start = (uint32_t)_max_points;
 
-    _final_graph.resize(total_internal_points);
-
     _data_store = std::move(data_store);
+    _graph_store = std::move(graph_store);
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
     if (_enable_tags)
@@ -134,8 +134,12 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .with_data_type(diskann_type_to_name<T>())
                 .build(),
             std::move(IndexFactory::construct_datastore<T>(
-                diskann::MEMORY, max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim,
-                m)))
+                DataStoreStrategy::MEMORY,
+                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m)),
+            IndexFactory::construct_graphstore(
+                GraphStoreStrategy::MEMORY,
+                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                (size_t)(indexParameters->max_degree * defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
 }
 
@@ -649,7 +653,6 @@ template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_num_points)
 {
 #endif
-
     auto res = _graph_store->load(filename, expected_num_points);
     _start = std::get<1>(res);
     _num_frozen_pts = std::get<2>(res);

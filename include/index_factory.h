@@ -12,14 +12,16 @@ class IndexFactory
 
     // Consruct a data store with distance function emplaced within
     template <typename T>
-    DISKANN_DLLEXPORT static std::unique_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy,
-                                                                                       size_t num_points,
-                                                                                       size_t dimension, Metric m);
+    DISKANN_DLLEXPORT static std::unique_ptr<AbstractDataStore<T>> construct_datastore(const DataStoreStrategy stratagy,
+                                                                                       const size_t num_points,
+                                                                                       const size_t dimension,
+                                                                                       const Metric m);
+
+    DISKANN_DLLEXPORT static std::unique_ptr<AbstractGraphStore> construct_graphstore(
+        const GraphStoreStrategy stratagy, const size_t size, const size_t reserve_graph_degree);
 
   private:
     void check_config();
-
-    std::unique_ptr<AbstractGraphStore> construct_graphstore(GraphStoreStrategy stratagy, size_t size);
 
     template <typename data_type, typename tag_type, typename label_type>
     std::unique_ptr<AbstractIndex> create_instance();

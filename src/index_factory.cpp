@@ -47,16 +47,22 @@ void IndexFactory::check_config()
                                " is not supported. please select from [int32, uint32, int64, uint64]",
                            -1);
     }
+
+    if (_config->index_write_params == nullptr)
+    {
+        throw ANNException("Error: Please pass IndexWriteParams with copnfig", -1);
+    }
 }
 
 template <typename T>
-std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStoreStrategy strategy, size_t num_points,
-                                                                        size_t dimension, Metric m)
+std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(const DataStoreStrategy strategy,
+                                                                        const size_t num_points, const size_t dimension,
+                                                                        const Metric m)
 {
     std::unique_ptr<Distance<T>> distance;
     switch (strategy)
     {
-    case MEMORY:
+    case diskann::DataStoreStrategy::MEMORY:
         if (m == diskann::Metric::COSINE && std::is_same<T, float>::value)
         {
             distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
@@ -74,14 +80,14 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStor
     return nullptr;
 }
 
-std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStoreStrategy strategy, size_t size)
+std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(const GraphStoreStrategy strategy,
+                                                                       const size_t size,
+                                                                       const size_t reserve_graph_degree)
 {
-    auto max_degree_to_use = _config->index_write_params != nullptr ? _config->index_write_params->max_degree : 0;
     switch (strategy)
     {
     case GraphStoreStrategy::MEMORY:
-        return std::make_unique<InMemGraphStore>(size,
-                                                 (size_t)(max_degree_to_use * defaults::GRAPH_SLACK_FACTOR * 1.05));
+        return std::make_unique<InMemGraphStore>(size, reserve_graph_degree);
     default:
         throw ANNException("Error : Current GraphStoreStratagy is not supported.", -1);
     }
@@ -92,8 +98,10 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
 {
     size_t num_points = _config->max_points + _config->num_frozen_pts;
     size_t dim = _config->dimension;
-    auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim);
-    auto graph_store = construct_graphstore(_config->graph_strategy, num_points + _config->num_frozen_pts);
+    auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
+    auto graph_store =
+        construct_graphstore(_config->graph_strategy, num_points + _config->num_frozen_pts,
+                             (size_t)(defaults::GRAPH_SLACK_FACTOR * 1.05 * _config->index_write_params->max_degree));
     return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, std::move(data_store),
                                                                              std::move(graph_store));
 }
