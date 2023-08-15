@@ -1697,7 +1697,7 @@ std::vector<std::uint8_t> PQFlashIndex<T, LabelT>::get_pq_vector(std::uint64_t V
 
 template <typename T, typename LabelT> std::uint64_t PQFlashIndex<T, LabelT>::get_num_points()
 {
-    return num_points;
+    return _num_points;
 }
 
 // instantiations
