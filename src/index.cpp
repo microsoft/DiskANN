@@ -114,16 +114,16 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points,
-                              const std::shared_ptr<IndexWriteParameters> indexParameters,
-                              const std::shared_ptr<IndexSearchParams> indexSearchParams, const size_t num_frozen_pts,
+                              const std::shared_ptr<IndexWriteParameters> index_parameters,
+                              const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts,
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
                               const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
     : Index(IndexConfigBuilder()
                 .with_metric(m)
                 .with_dimension(dim)
                 .with_max_points(max_points)
-                .with_index_write_params(indexParameters)
-                .with_index_search_params(indexSearchParams)
+                .with_index_write_params(index_parameters)
+                .with_index_search_params(index_search_params)
                 .with_num_frozen_pts(num_frozen_pts)
                 .is_dynamic_index(dynamic_index)
                 .is_enable_tags(enable_tags)

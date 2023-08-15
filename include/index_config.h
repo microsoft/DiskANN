@@ -195,10 +195,12 @@ class IndexConfigBuilder
             _num_frozen_pts = 1;
         }
 
-        if (_dynamic_index && _index_search_params != nullptr)
+        if (_dynamic_index)
         {
-            if (_index_search_params->initial_search_list_size == 0)
+            if (_index_search_params != nullptr && _index_search_params->initial_search_list_size == 0)
                 throw ANNException("Error: please pass initial_search_list_size for building dynamic index.", -1);
+            if (_index_write_params == nullptr)
+                throw ANNException("Error: please pass index_write_params for dynamic index", -1);
         }
 
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
