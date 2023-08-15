@@ -1689,9 +1689,9 @@ template <typename T, typename LabelT> char *PQFlashIndex<T, LabelT>::getHeaderB
 #endif
 
 template <typename T, typename LabelT>
-std::vector<std::uint8_t> PQFlashIndex<T, LabelT>::get_pq_vector(std::uint64_t VID)
+std::vector<std::uint8_t> PQFlashIndex<T, LabelT>::get_pq_vector(std::uint64_t vid)
 {
-    std::uint8_t *pqVec = &this->data[VID * this->_n_chunks];
+    std::uint8_t *pqVec = &this->data[vid * this->_n_chunks];
     return std::vector<std::uint8_t>(pqVec, pqVec + this->_n_chunks);
 }
 
