@@ -94,6 +94,20 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT diskann::Metric get_metric();
 
+    //
+    // node_ids: input list of node_ids to be read
+    // coord_buffers: pointers to pre-allocated buffers that coords need to copied to. If null, dont copy.
+    // nbr_buffers: pre-allocated buffers to copy neighbors into
+    //
+    // returns a vector of bool one for each node_id: true if read is success, else false
+    //
+    DISKANN_DLLEXPORT std::vector<bool> read_nodes(const std::vector<uint32_t> &node_ids,
+                                                   std::vector<T *> &coord_buffers,
+                                                   std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers);
+
+    DISKANN_DLLEXPORT std::vector<std::uint8_t> get_pq_vector(std::uint64_t vid);
+    DISKANN_DLLEXPORT uint64_t get_num_points();
+
   protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(uint64_t nthreads, uint64_t visited_reserve = 4096);
@@ -120,17 +134,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     // returns region of `node_buf` containing [COORD(T)]
     DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
-
-    //
-    // node_ids: input list of node_ids to be read
-    // coord_buffers: pointers to pre-allocated buffers that coords need to copied to. If null, dont copy.
-    // nbr_buffers: pre-allocated buffers to copy neighbors into
-    //
-    // returns a vector of bool one for each node_id: true if read is success, else false
-    //
-    DISKANN_DLLEXPORT std::vector<bool> read_nodes(const std::vector<uint32_t> &node_ids,
-                                                   std::vector<T *> &coord_buffers,
-                                                   std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers);
 
     // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
