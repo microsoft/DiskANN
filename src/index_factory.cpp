@@ -47,11 +47,6 @@ void IndexFactory::check_config()
                                " is not supported. please select from [int32, uint32, int64, uint64]",
                            -1);
     }
-
-    if (_config->index_write_params == nullptr)
-    {
-        throw ANNException("Error: Please pass IndexWriteParams with copnfig", -1);
-    }
 }
 
 template <typename T>
@@ -98,10 +93,12 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
 {
     size_t num_points = _config->max_points + _config->num_frozen_pts;
     size_t dim = _config->dimension;
+    size_t max_reserve_degree =
+        (size_t)(defaults::GRAPH_SLACK_FACTOR * 1.05 *
+                 (_config->index_write_params == nullptr ? 0 : _config->index_write_params->max_degree));
     auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
     auto graph_store =
-        construct_graphstore(_config->graph_strategy, num_points + _config->num_frozen_pts,
-                             (size_t)(defaults::GRAPH_SLACK_FACTOR * 1.05 * _config->index_write_params->max_degree));
+        construct_graphstore(_config->graph_strategy, num_points + _config->num_frozen_pts, max_reserve_degree);
     return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, std::move(data_store),
                                                                              std::move(graph_store));
 }
