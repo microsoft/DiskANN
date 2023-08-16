@@ -30,7 +30,7 @@ class AbstractGraphStore
     virtual void clear_neighbours(const location_t i) = 0;
     virtual void swap_neighbours(const location_t a, location_t b) = 0;
 
-    virtual void set_neighbours(const location_t i, std::vector<location_t> &neighbors) = 0;
+    virtual void set_neighbours(const location_t i, std::vector<location_t> &neighbours) = 0;
 
     virtual size_t resize_graph(const size_t new_size) = 0;
     virtual void clear_graph() = 0;

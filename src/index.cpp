@@ -157,13 +157,6 @@ template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~I
         LockGuard lg(lock);
     }
 
-    // if (this->_distance != nullptr)
-    //{
-    //     delete this->_distance;
-    //     this->_distance = nullptr;
-    // }
-    // REFACTOR
-
     if (_opt_graph != nullptr)
     {
         delete[] _opt_graph;
@@ -774,14 +767,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     std::vector<float> &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
 
-    // REFACTOR
-    // T *aligned_query = scratch->aligned_query();
-    // memcpy(aligned_query, query, _dim * sizeof(T));
-    // if (_normalize_vecs)
-    //{
-    //     normalize((float *)aligned_query, _dim);
-    // }
-
     T *aligned_query = scratch->aligned_query();
 
     float *query_float = nullptr;
@@ -1142,8 +1127,6 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
         pruned_list.clear();
         return;
     }
-
-    //_graph_store->set_max_observed_degree((std::max)(_graph_store->get_max_observed_degree(), range));
 
     // If using _pq_build, over-write the PQ distances with actual distances
     if (_pq_dist)
@@ -1544,7 +1527,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
     }
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
-    // _graph_store->set_max_observed_degree(std::max((uint32_t)max, _graph_store->get_max_observed_degree()));
+
     _has_built = true;
 }
 template <typename T, typename TagT, typename LabelT>
@@ -1586,16 +1569,6 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
         _nd = num_points_to_load;
 
         _data_store->populate_data(data, (location_t)num_points_to_load);
-
-        // REFACTOR
-        // memcpy((char *)_data, (char *)data, _aligned_dim * _nd * sizeof(T));
-        // if (_normalize_vecs)
-        //{
-        //     for (size_t i = 0; i < num_points_to_load; i++)
-        //     {
-        //         normalize(_data + _aligned_dim * i, _aligned_dim);
-        //     }
-        // }
     }
 
     build_with_data_populated(parameters, tags);
@@ -2094,9 +2067,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     filter_vec.emplace_back(filter_label);
 
-    // REFACTOR
-    // T *aligned_query = scratch->aligned_query();
-    // memcpy(aligned_query, query, _dim * sizeof(T));
     _data_store->get_dist_fn()->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
     auto retval = iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, true, filter_vec, true);
 

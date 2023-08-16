@@ -49,12 +49,12 @@ void InMemGraphStore::swap_neighbours(const location_t a, location_t b)
     _graph[a].swap(_graph[b]);
 };
 
-void InMemGraphStore::set_neighbours(const location_t i, std::vector<location_t> &neighbors)
+void InMemGraphStore::set_neighbours(const location_t i, std::vector<location_t> &neighbours)
 {
-    _graph[i].assign(neighbors.begin(), neighbors.end());
-    if (_max_observed_degree < neighbors.size())
+    _graph[i].assign(neighbours.begin(), neighbours.end());
+    if (_max_observed_degree < neighbours.size())
     {
-        _max_observed_degree = (uint32_t)(neighbors.size());
+        _max_observed_degree = (uint32_t)(neighbours.size());
     }
 }
 
@@ -174,7 +174,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
 
         if (k == 0)
         {
-            diskann::cerr << "ERROR: Point found with no out-neighbors, point#" << nodes_read << std::endl;
+            diskann::cerr << "ERROR: Point found with no out-neighbours, point#" << nodes_read << std::endl;
         }
 
         cc += k;
