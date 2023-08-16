@@ -616,7 +616,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                               std::string medoids_file, std::string centroids_file, size_t build_pq_bytes, bool use_opq,
                               uint32_t num_threads, bool use_filters, const std::string &label_file,
                               const std::string &labels_to_medoids_file, const std::string &universal_label,
-                              const uint32_t Lf)
+                              const uint32_t Lf, uint32_t universal_label_num = 0)
 {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
@@ -643,8 +643,8 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         {
             if (universal_label != "")
             { //  indicates no universal label
-                LabelT unv_label_as_num = 0;
-                _index.set_universal_label(unv_label_as_num);
+            //    LabelT unv_label_as_num = 0;
+                _index.set_universal_label(universal_label_num);
             }
             _index.build_filtered_index(base_file.c_str(), label_file, base_num, paras);
         }
@@ -707,8 +707,8 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             diskann::extract_shard_labels(label_file, shard_ids_file, shard_labels_file);
             if (universal_label != "")
             { //  indicates no universal label
-                LabelT unv_label_as_num = 0;
-                _index.set_universal_label(unv_label_as_num);
+//                LabelT unv_label_as_num = 0;
+                _index.set_universal_label(universal_label_num);
             }
             _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
         }
@@ -1173,9 +1173,9 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     // into replica dummy points which evenly distribute the filters. The rest
     // of index build happens on the augmented base and labels
     std::string augmented_data_file, augmented_labels_file;
+    std::uint32_t universal_label_id = 0;
     if (use_filters)
     {
-        std::uint32_t universal_label_id = 0;
         convert_labels_string_to_int(labels_file_original, labels_file_to_use, disk_labels_int_map_file,
                                      universal_label, universal_label_id);
         augmented_data_file = index_prefix_path + "_augmented_data.bin";
@@ -1234,7 +1234,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     diskann::build_merged_vamana_index<T, LabelT>(data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
                                                   indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
                                                   build_pq_bytes, use_opq, num_threads, use_filters, labels_file_to_use,
-                                                  labels_to_medoids_path, universal_label, Lf);
+                                                  labels_to_medoids_path, universal_label, Lf, universal_label_id);
     diskann::cout << timer.elapsed_seconds_for_step("building merged vamana index") << std::endl;
 
     timer.reset();
