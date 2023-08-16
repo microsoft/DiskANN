@@ -9,7 +9,7 @@ namespace diskann
 InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t reserve_graph_degree)
     : AbstractGraphStore(total_pts, reserve_graph_degree)
 {
-    _graph.resize(total_pts);
+    this->resize_graph(total_pts);
     for (size_t i = 0; i < total_pts; i++)
     {
         _graph[i].reserve(reserve_graph_degree);
@@ -34,9 +34,9 @@ const std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t 
 void InMemGraphStore::add_neighbour(const location_t i, location_t neighbour_id)
 {
     _graph[i].emplace_back(neighbour_id);
-    if (_graph[i].size() > _max_observed_degree)
+    if (_max_observed_degree < _graph[i].size())
     {
-        _max_observed_degree = (uint32_t)_graph.size();
+        _max_observed_degree = (uint32_t)(_graph[i].size());
     }
 }
 
@@ -52,6 +52,10 @@ void InMemGraphStore::swap_neighbours(const location_t a, location_t b)
 void InMemGraphStore::set_neighbours(const location_t i, std::vector<location_t> &neighbors)
 {
     _graph[i].assign(neighbors.begin(), neighbors.end());
+    if (_max_observed_degree < neighbors.size())
+    {
+        _max_observed_degree = (uint32_t)(neighbors.size());
+    }
 }
 
 size_t InMemGraphStore::resize_graph(const size_t new_size)
@@ -94,7 +98,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileRea
     if (get_total_points() < expected_num_points)
     {
         diskann::cout << "resizing graph to " << expected_num_points << std::endl;
-        _graph.resize(expected_num_points);
+        this->resize_graph(expected_num_points);
     }
 
     uint32_t nodes_read = 0;
@@ -157,7 +161,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
     if (get_total_points() < expected_num_points)
     {
         diskann::cout << "resizing graph to " << expected_num_points << std::endl;
-        _graph.resize(expected_num_points);
+        this->resize_graph(expected_num_points);
     }
 
     size_t bytes_read = vamana_metadata_size;
@@ -234,10 +238,5 @@ uint32_t InMemGraphStore::get_max_observed_degree()
 {
     return _max_observed_degree;
 }
-
-void InMemGraphStore::set_max_observed_degree(uint32_t max_observed_degree)
-{
-    this->_max_observed_degree = max_observed_degree;
-};
 
 } // namespace diskann

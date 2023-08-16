@@ -1143,8 +1143,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
         return;
     }
 
-    _graph_store->set_max_observed_degree((std::max)(_graph_store->get_max_observed_degree(), range));
-    //_max_observed_degree = (std::max)(_max_observed_degree, range);
+    //_graph_store->set_max_observed_degree((std::max)(_graph_store->get_max_observed_degree(), range));
 
     // If using _pq_build, over-write the PQ distances with actual distances
     if (_pq_dist)
@@ -1545,7 +1544,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
     }
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
-    _graph_store->set_max_observed_degree(std::max((uint32_t)max, _graph_store->get_max_observed_degree()));
+    // _graph_store->set_max_observed_degree(std::max((uint32_t)max, _graph_store->get_max_observed_degree()));
     _has_built = true;
 }
 template <typename T, typename TagT, typename LabelT>

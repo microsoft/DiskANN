@@ -36,7 +36,6 @@ class AbstractGraphStore
     virtual void clear_graph() = 0;
 
     virtual uint32_t get_max_observed_degree() = 0;
-    virtual void set_max_observed_degree(uint32_t max_observed_degree) = 0;
 
     // set during load
     virtual size_t get_max_range_of_graph() = 0;
