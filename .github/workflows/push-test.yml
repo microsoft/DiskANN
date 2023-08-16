@@ -6,6 +6,11 @@ jobs:
       fail-fast: true
     name: DiskANN Common Build Checks
     uses: ./.github/workflows/common.yml
+  build-documentation:
+    strategy:
+      fail-fast: true
+    name: DiskANN Build Documentation
+    uses: ./.github/workflows/build-python-pdoc.yml
   build:
     strategy:
       fail-fast: false
@@ -28,6 +33,17 @@ jobs:
         with:
           fetch-depth: 1
           submodules: true
+      - name: Build dispannpy dependency tree
+        run: |
+          pip install diskannpy pipdeptree
+          echo "dependencies" > dependencies_${{ matrix.os }}.txt
+          pipdeptree >> dependencies_${{ matrix.os }}.txt
+      - name: Archive dispannpy dependencies artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: dependencies
+          path: |
+            dependencies_${{ matrix.os }}.txt
       - name: DiskANN Build CLI Applications
         uses: ./.github/actions/build
 #  python:

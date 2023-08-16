@@ -22,50 +22,6 @@
 
 namespace po = boost::program_options;
 
-template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
-int build_in_memory_index(const diskann::Metric &metric, const std::string &data_path, const uint32_t R,
-                          const uint32_t L, const float alpha, const std::string &save_path, const uint32_t num_threads,
-                          const bool use_pq_build, const size_t num_pq_bytes, const bool use_opq,
-                          const std::string &label_file, const std::string &universal_label, const uint32_t Lf)
-{
-    diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
-                                              .with_filter_list_size(Lf)
-                                              .with_alpha(alpha)
-                                              .with_saturate_graph(false)
-                                              .with_num_threads(num_threads)
-                                              .build();
-    std::string labels_file_to_use = save_path + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = save_path + "_labels_map.txt";
-
-    size_t data_num, data_dim;
-    diskann::get_bin_metadata(data_path, data_num, data_dim);
-
-    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num, false, false, false, use_pq_build, num_pq_bytes,
-                                          use_opq);
-    auto s = std::chrono::high_resolution_clock::now();
-    if (label_file == "")
-    {
-        index.build(data_path.c_str(), data_num, paras);
-    }
-    else
-    {
-        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
-        if (universal_label != "")
-        {
-            LabelT unv_label_as_num = 0;
-            index.set_universal_label(unv_label_as_num);
-        }
-        index.build_filtered_index(data_path.c_str(), labels_file_to_use, data_num, paras);
-    }
-    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-
-    std::cout << "Indexing time: " << diff.count() << "\n";
-    index.save(save_path.c_str());
-    if (label_file != "")
-        std::remove(labels_file_to_use.c_str());
-    return 0;
-}
-
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
