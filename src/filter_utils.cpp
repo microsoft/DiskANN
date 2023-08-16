@@ -45,8 +45,10 @@ void generate_label_indices(path input_data_path, path final_index_path_prefix, 
 
         size_t number_of_label_points, dimension;
         diskann::get_bin_metadata(curr_label_input_data_path, number_of_label_points, dimension);
-        diskann::Index<T> index(diskann::Metric::L2, dimension, number_of_label_points, nullptr, nullptr, 0, false,
-                                false);
+
+        diskann::Index<T> index(diskann::Metric::L2, dimension, number_of_label_points,
+                                std::make_shared<diskann::IndexWriteParameters>(label_index_build_parameters), nullptr,
+                                0, false, false);
 
         auto index_build_timer = std::chrono::high_resolution_clock::now();
         index.build(curr_label_input_data_path.c_str(), number_of_label_points, label_index_build_parameters);

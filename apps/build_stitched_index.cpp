@@ -286,10 +286,7 @@ void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, p
 
     diskann::get_bin_metadata(input_data_path, number_of_label_points, dimension);
 
-    auto index_write_params = diskann::IndexWriteParametersBuilder(0 /*L*/, stitched_R).build();
-    diskann::Index<T> index(diskann::Metric::L2, dimension, number_of_label_points,
-                            std::make_shared<diskann::IndexWriteParameters>(index_write_params), nullptr, 0, false,
-                            false);
+    diskann::Index<T> index(diskann::Metric::L2, dimension, number_of_label_points, nullptr, nullptr, 0, false, false);
 
     // not searching this index, set search_l to 0
     index.load(full_index_path_prefix.c_str(), num_threads, 1);
