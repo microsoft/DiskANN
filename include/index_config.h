@@ -3,14 +3,16 @@
 
 namespace diskann
 {
-enum DataStoreStrategy
+enum class DataStoreStrategy
 {
     MEMORY
 };
 
-enum GraphStoreStrategy
+enum class GraphStoreStrategy
 {
+    MEMORY
 };
+
 struct IndexConfig
 {
     DataStoreStrategy data_strategy;
@@ -199,6 +201,13 @@ class IndexConfigBuilder
         {
             if (_index_search_params != nullptr && _index_search_params->initial_search_list_size == 0)
                 throw ANNException("Error: please pass initial_search_list_size for building dynamic index.", -1);
+        }
+
+        // sanity check
+        if (_dynamic_index && _num_frozen_pts == 0)
+        {
+            diskann::cout << "_num_frozen_pts passed as 0 for dynamic_index. Setting it to 1 for safety." << std::endl;
+            _num_frozen_pts = 1;
         }
 
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,

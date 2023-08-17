@@ -215,7 +215,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                             .with_data_type(diskann_type_to_name<T>())
                             .with_index_write_params(params)
                             .with_index_search_params(index_search_params)
-                            .with_data_load_store_strategy(diskann::MEMORY)
+                            .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
+                            .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
                             .build();
 
     diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);

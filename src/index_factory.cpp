@@ -50,13 +50,14 @@ void IndexFactory::check_config()
 }
 
 template <typename T>
-std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStoreStrategy strategy, size_t num_points,
-                                                                        size_t dimension, Metric m)
+std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(const DataStoreStrategy strategy,
+                                                                        const size_t num_points, const size_t dimension,
+                                                                        const Metric m)
 {
     std::unique_ptr<Distance<T>> distance;
     switch (strategy)
     {
-    case MEMORY:
+    case diskann::DataStoreStrategy::MEMORY:
         if (m == diskann::Metric::COSINE && std::is_same<T, float>::value)
         {
             distance.reset((Distance<T> *)new AVXNormalizedCosineDistanceFloat());
@@ -74,9 +75,17 @@ std::unique_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStor
     return nullptr;
 }
 
-std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(GraphStoreStrategy, size_t size)
+std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(const GraphStoreStrategy strategy,
+                                                                       const size_t size,
+                                                                       const size_t reserve_graph_degree)
 {
-    return std::make_unique<InMemGraphStore>(size);
+    switch (strategy)
+    {
+    case GraphStoreStrategy::MEMORY:
+        return std::make_unique<InMemGraphStore>(size, reserve_graph_degree);
+    default:
+        throw ANNException("Error : Current GraphStoreStratagy is not supported.", -1);
+    }
 }
 
 template <typename data_type, typename tag_type, typename label_type>
@@ -84,10 +93,14 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
 {
     size_t num_points = _config->max_points + _config->num_frozen_pts;
     size_t dim = _config->dimension;
-    // auto graph_store = construct_graphstore(_config->graph_strategy, num_points);
-    auto data_store =
-        IndexFactory::construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
-    return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, std::move(data_store));
+    size_t max_reserve_degree =
+        (size_t)(defaults::GRAPH_SLACK_FACTOR * 1.05 *
+                 (_config->index_write_params == nullptr ? 0 : _config->index_write_params->max_degree));
+    auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
+    auto graph_store =
+        construct_graphstore(_config->graph_strategy, num_points + _config->num_frozen_pts, max_reserve_degree);
+    return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, std::move(data_store),
+                                                                             std::move(graph_store));
 }
 
 std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &data_type, const std::string &tag_type,

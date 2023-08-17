@@ -120,20 +120,6 @@ int main(int argc, char **argv)
         size_t data_num, data_dim;
         diskann::get_bin_metadata(data_path, data_num, data_dim);
 
-        auto config = diskann::IndexConfigBuilder()
-                          .with_metric(metric)
-                          .with_dimension(data_dim)
-                          .with_max_points(data_num)
-                          .with_data_load_store_strategy(diskann::MEMORY)
-                          .with_data_type(data_type)
-                          .with_label_type(label_type)
-                          .is_dynamic_index(false)
-                          .is_enable_tags(false)
-                          .is_use_opq(use_opq)
-                          .is_pq_dist_build(use_pq_build)
-                          .with_num_pq_chunks(build_PQ_bytes)
-                          .build();
-
         auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
                                       .with_filter_list_size(Lf)
                                       .with_alpha(alpha)
@@ -146,6 +132,22 @@ int main(int argc, char **argv)
                                 .with_label_file(label_file)
                                 .with_save_path_prefix(index_path_prefix)
                                 .build();
+        auto config = diskann::IndexConfigBuilder()
+                          .with_metric(metric)
+                          .with_dimension(data_dim)
+                          .with_max_points(data_num)
+                          .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
+                          .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
+                          .with_data_type(data_type)
+                          .with_label_type(label_type)
+                          .is_dynamic_index(false)
+                          .with_index_write_params(index_build_params)
+                          .is_enable_tags(false)
+                          .is_use_opq(use_opq)
+                          .is_pq_dist_build(use_pq_build)
+                          .with_num_pq_chunks(build_PQ_bytes)
+                          .build();
+
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.create_instance();
         index->build(data_path, data_num, build_params);

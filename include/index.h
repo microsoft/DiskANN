@@ -19,6 +19,7 @@
 #include "windows_customizations.h"
 #include "scratch.h"
 #include "in_mem_data_store.h"
+#include "in_mem_graph_store.h"
 #include "abstract_index.h"
 
 #define OVERHEAD_FACTOR 1.1
@@ -58,9 +59,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
                             const bool use_opq = false);
 
-    // This is called by IndexFactory which returns AbstractIndex's simplified API
-    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store
-                            /* std::unique_ptr<AbstractGraphStore> graph_store*/);
+    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store,
+                            std::unique_ptr<AbstractGraphStore> graph_store);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -327,10 +327,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Data
     std::unique_ptr<AbstractDataStore<T>> _data_store;
-    char *_opt_graph = nullptr;
 
     // Graph related data structures
-    std::vector<std::vector<uint32_t>> _final_graph;
+    std::unique_ptr<AbstractGraphStore> _graph_store;
+
+    char *_opt_graph = nullptr;
 
     T *_data = nullptr; // coordinates of all base points
     // Dimensions
@@ -344,15 +345,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // needed for a dynamic index. The frozen points have consecutive locations.
     // See also _start below.
     size_t _num_frozen_pts = 0;
-    size_t _max_range_of_loaded_graph = 0;
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;
 
-    uint32_t _max_observed_degree = 0;
-    // Start point of the search. When _num_frozen_pts is greater than zero,
-    // this is the location of the first frozen point. Otherwise, this is a
-    // location of one of the points in index.
+    //  Start point of the search. When _num_frozen_pts is greater than zero,
+    //  this is the location of the first frozen point. Otherwise, this is a
+    //  location of one of the points in index.
     uint32_t _start = 0;
 
     bool _has_built = false;
