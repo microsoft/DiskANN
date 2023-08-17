@@ -746,10 +746,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
     std::string centroids_file = std::string(disk_index_file) + "_centroids.bin";
 
-    std::string labels_file = labels_filepath;
-    std::string labels_to_medoids = labels_to_medoids_filepath;
+    std::string labels_file = (labels_filepath == nullptr ? "" : labels_filepath);
+    std::string labels_to_medoids = (labels_to_medoids_filepath == nullptr ? "" : labels_to_medoids_filepath);
     std::string dummy_map_file = std ::string(disk_index_file) + "_dummy_map.txt";
-    std::string labels_map_file = labels_map_filepath;
+    std::string labels_map_file = (labels_map_filepath == nullptr ? "" : labels_map_filepath);
     size_t num_pts_in_label_file = 0;
 
     size_t pq_file_dim, pq_file_num_centroids;
@@ -820,7 +820,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
                 throw FileException(labels_to_medoids, e, __FUNCSIG__, __FILE__, __LINE__);
             }
         }
-        std::string univ_label_file = unv_label_filepath;
+
+        std::string univ_label_file = (unv_label_filepath == nullptr ? "" : unv_label_filepath);
         if (file_exists(univ_label_file))
         {
             std::ifstream universal_label_reader(univ_label_file);
