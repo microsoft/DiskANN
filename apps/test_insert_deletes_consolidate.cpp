@@ -163,19 +163,21 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     const size_t last_point_threshold = points_to_skip + max_points_to_insert;
 
     bool enable_tags = true;
+    using TagT = uint32_t;
+    auto data_type = diskann_type_to_name<T>();
+    auto tag_type = diskann_type_to_name<TagT>();
+    auto index_search_params = diskann::IndexSearchParams(params.search_list_size, params.num_threads);
     diskann::IndexConfig index_config = diskann::IndexConfigBuilder()
                                             .with_metric(diskann::L2)
                                             .with_dimension(dim)
                                             .with_max_points(max_points_to_insert)
                                             .is_dynamic_index(true)
                                             .with_index_write_params(params)
-                                            .with_search_threads(params.num_threads)
-                                            .with_initial_search_list_size(params.search_list_size)
-                                            .with_num_frozen_pts(params.num_frozen_points)
-                                            .with_data_type(diskann_type_to_name<T>())
-                                            .with_tag_type(diskann_type_to_name<TagT>())
-                                            .with_label_type(diskann_type_to_name<LabelT>())
-                                            .with_data_load_store_strategy(diskann::MEMORY)
+                                            .with_index_search_params(index_search_params)
+                                            .with_data_type(data_type)
+                                            .with_tag_type(tag_type)
+                                            .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
+                                            .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
                                             .is_enable_tags(enable_tags)
                                             .is_concurrent_consolidate(concurrent)
                                             .build();
