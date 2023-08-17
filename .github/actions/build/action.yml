@@ -26,3 +26,14 @@ runs:
         mklink /j .\dist\bin .\x64\Release\
       shell: cmd
     # ------------ End Windows Build ---------------
+    # ------------ Windows Build With EXEC_ENV_OLS and USE_BING_INFRA ---------------
+    - name: Add VisualStudio command line tools into path
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+    - name: Run configure and build for Windows with Bing feature flags
+      if: runner.os == 'Windows'
+      run: |
+        mkdir build_bing && cd build_bing && cmake .. -DEXEC_ENV_OLS=1 -DUSE_BING_INFRA=1 -DUNIT_TEST=True && msbuild diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property:Platform="x64" -consoleloggerparameters:"ErrorsOnly;Summary"
+        cd ..
+      shell: cmd
+    # ------------ End Windows Build ---------------

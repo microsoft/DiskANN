@@ -750,7 +750,7 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
     std::string pq_compressed_vectors = std::string(index_prefix) + "_pq_compressed.bin";
     std::string _disk_index_file = std::string(index_prefix) + "_disk.index";
 #ifdef EXEC_ENV_OLS
-    return load_from_separate_paths(files, num_threads, disk_index_file.c_str(), pq_table_bin.c_str(),
+    return load_from_separate_paths(files, num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
                                     pq_compressed_vectors.c_str());
 #else
     return load_from_separate_paths(num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
@@ -919,7 +919,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #ifdef EXEC_ENV_OLS
         // giving 0 chunks to make the _pq_table infer from the
         // chunk_offsets file the correct value
-        disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0);
+        _disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0);
 #else
         // giving 0 chunks to make the _pq_table infer from the
         // chunk_offsets file the correct value
@@ -939,7 +939,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     // DiskPriorityIO class. So, we need to estimate how many
     // bytes are needed to store the header and read in that many using our
     // 'standard' aligned file reader approach.
-    reader->open(disk_index_file);
+    reader->open(_disk_index_file);
     this->setup_thread_data(num_threads);
     this->_max_nthreads = num_threads;
 
@@ -1033,7 +1033,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     if (files.fileExists(medoids_file))
     {
         size_t tmp_dim;
-        diskann::load_bin<uint32_t>(files, medoids_file, medoids, _num_medoids, tmp_dim);
+        diskann::load_bin<uint32_t>(files, medoids_file, _medoids, _num_medoids, tmp_dim);
 #else
     if (file_exists(medoids_file))
     {
