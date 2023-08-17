@@ -238,7 +238,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // Set to a larger value than the actual header to accommodate
     // any additions we make to the header. This is an outer limit
     // on how big the header can be.
-    static const int HEADER_SIZE = SECTOR_LEN;
+    static const int HEADER_SIZE = defaults::SECTOR_LEN;
     char *getHeaderBytes();
 #endif
 };
