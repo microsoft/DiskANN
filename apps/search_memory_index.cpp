@@ -378,7 +378,7 @@ int main(int argc, char **argv)
 
     try
     {
-        diskann::Metric metric = diskann::get_metric_from_string(dist_fn, data_type);
+        diskann::Metric metric = diskann::get_metric_from_string(dist_fn);
 
         if (!query_filters.empty() && label_type == "ushort")
         {
