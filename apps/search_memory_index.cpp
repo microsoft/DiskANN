@@ -348,32 +348,6 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    diskann::Metric metric;
-    if ((dist_fn == std::string("mips")) && (data_type == std::string("float")))
-    {
-        metric = diskann::Metric::INNER_PRODUCT;
-    }
-    else if (dist_fn == std::string("l2"))
-    {
-        metric = diskann::Metric::L2;
-    }
-    else if (dist_fn == std::string("cosine"))
-    {
-        metric = diskann::Metric::COSINE;
-    }
-    else if ((dist_fn == std::string("fast_l2")) && (data_type == std::string("float")))
-    {
-        metric = diskann::Metric::FAST_L2;
-    }
-    else
-    {
-        std::cout << "Unsupported distance function. Currently only l2/ cosine are "
-                     "supported in general, and mips/fast_l2 only for floating "
-                     "point data."
-                  << std::endl;
-        return -1;
-    }
-
     if (dynamic && not tags)
     {
         std::cerr << "Tags must be enabled while searching dynamically built indices" << std::endl;
@@ -404,6 +378,8 @@ int main(int argc, char **argv)
 
     try
     {
+        diskann::Metric metric = diskann::get_metric_from_string(dist_fn, data_type);
+
         if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("int8"))

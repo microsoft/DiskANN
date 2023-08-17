@@ -707,20 +707,8 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    diskann::Metric metric;
-    if (dist_fn == std::string("l2"))
-    {
-        metric = diskann::Metric::L2;
-    }
-    else if (dist_fn == std::string("mips"))
-    {
-        metric = diskann::Metric::INNER_PRODUCT;
-    }
-    else if (dist_fn == std::string("cosine"))
-    {
-        metric = diskann::Metric::COSINE;
-    }
-    else
+    diskann::Metric metric = diskann::get_metric_from_string(dist_fn);
+    if (metric != diskann::Metric::L2 && metric != diskann::Metric::INNER_PRODUCT && metric != diskann::Metric::COSINE)
     {
         std::cerr << "Unsupported distance function. Use l2/mips/cosine." << std::endl;
         return -1;

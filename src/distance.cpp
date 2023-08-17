@@ -22,6 +22,35 @@
 namespace diskann
 {
 
+    
+Metric get_metric_from_string(const std::string &dist_fn_str, const std::string& data_type_str)
+{
+    if ((dist_fn_str == std::string("mips")) && (data_type_str == std::string("float")))
+    {
+        return diskann::Metric::INNER_PRODUCT;
+    }
+    else if (dist_fn_str == std::string("l2"))
+    {
+        return diskann::Metric::L2;
+    }
+    else if (dist_fn_str == std::string("cosine"))
+    {
+        return diskann::Metric::COSINE;
+    }
+    else if ((dist_fn_str == std::string("fast_l2")) && (data_type_str == std::string("float")))
+    {
+        return diskann::Metric::FAST_L2;
+    }
+    else
+    {
+        std::string error(
+            "Unsupported distance function. l2/cosine are supported in general. mips/fast_l2 only for float32.");
+
+        throw ANNException(error, -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+}
+
+
 //
 // Base Class Implementatons
 //
