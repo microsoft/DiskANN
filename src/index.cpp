@@ -2304,7 +2304,8 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
         {
             std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
             _graph_store->clear_neighbours((location_t)loc);
-            _graph_store->set_neighbours((location_t)loc, expanded_nodes_set);
+            for (auto &ngh : expanded_nodes_set)
+                _graph_store->add_neighbour((location_t)loc, ngh);
         }
         else
         {
