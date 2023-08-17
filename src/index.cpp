@@ -1329,9 +1329,7 @@ void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
             prune_neighbors(node, dummy_pool, new_out_neighbors, scratch);
 
             _graph_store->clear_neighbours((location_t)node);
-
-            for (auto id : new_out_neighbors)
-                _graph_store->add_neighbour((location_t)node, id);
+            _graph_store->set_neighbours((location_t)node, new_out_neighbors);
         }
     }
     if (_nd > 0)
@@ -1376,8 +1374,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
 
                 prune_neighbors((uint32_t)node, dummy_pool, range, maxc, alpha, new_out_neighbors, scratch);
                 _graph_store->clear_neighbours((location_t)node);
-                for (auto id : new_out_neighbors)
-                    _graph_store->add_neighbour((location_t)node, (location_t)id);
+                _graph_store->set_neighbours((location_t)node, new_out_neighbors);
             }
         }
     }
@@ -2307,8 +2304,7 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
         {
             std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
             _graph_store->clear_neighbours((location_t)loc);
-            for (auto &ngh : expanded_nodes_set)
-                _graph_store->add_neighbour((location_t)loc, ngh);
+            _graph_store->set_neighbours((location_t)loc, expanded_nodes_set);
         }
         else
         {
@@ -2849,14 +2845,15 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
         LockGuard guard(_locks[location]);
         _graph_store->clear_neighbours(location);
 
+        std::vector<uint32_t> neighbor_links;
         for (auto link : pruned_list)
         {
             if (_conc_consolidate)
                 if (!_location_to_tag.contains(link))
                     continue;
-            _graph_store->add_neighbour(location, link);
-            //_graph_store->get_neighbours(location).emplace_back(link);
+            neighbor_links.emplace_back(link);
         }
+        _graph_store->set_neighbours(location, neighbor_links);
         assert(_graph_store->get_neighbours(location).size() <= _indexingRange);
 
         if (_conc_consolidate)
