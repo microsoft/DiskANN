@@ -708,12 +708,16 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
     std::string pq_compressed_vectors = std::string(index_prefix) + "_pq_compressed.bin";
     std::string disk_index_file = std::string(index_prefix) + "_disk.index";
+    std::string labels_file = std::string(index_prefix) + "_labels.txt";
+    std::string labels_to_medoids = std::string(index_prefix) + "_labels_to_medoids.txt";
+    std::string labels_map_file = std::string(index_prefix) + "_labels_map.txt";
+
 #ifdef EXEC_ENV_OLS
     return load_from_separate_paths(files, num_threads, disk_index_file.c_str(), pq_table_bin.c_str(),
-                                    pq_compressed_vectors.c_str());
+                                    pq_compressed_vectors.c_str(), labels_file.c_str(), labels_to_medoids.c_str(), labels_map_file.c_str());
 #else
     return load_from_separate_paths(num_threads, disk_index_file.c_str(), pq_table_bin.c_str(),
-                                    pq_compressed_vectors.c_str());
+                                    pq_compressed_vectors.c_str(), labels_file.c_str(), labels_to_medoids.c_str(), labels_map_file.c_str());
 #endif
 }
 
@@ -721,12 +725,16 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
 template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load_from_separate_paths(diskann::MemoryMappedFiles &files, uint32_t num_threads,
                                                       const char *index_filepath, const char *pivots_filepath,
-                                                      const char *compressed_filepath)
+                                                      const char *compressed_filepath,
+                                                      const char* labels_filepath, const char* labels_to_medoids_filepath,
+                                                      const char* labels_map_filepath)
 {
 #else
 template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
-                                                      const char *pivots_filepath, const char *compressed_filepath)
+                                                      const char *pivots_filepath, const char *compressed_filepath,
+                                                      const char* labels_filepath, const char* labels_to_medoids_filepath,
+                                                      const char* labels_map_filepath)
 {
 #endif
     std::string pq_table_bin = pivots_filepath;
@@ -735,10 +743,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string medoids_file = std::string(disk_index_file) + "_medoids.bin";
     std::string centroids_file = std::string(disk_index_file) + "_centroids.bin";
 
-    std::string labels_file = std ::string(disk_index_file) + "_labels.txt";
-    std::string labels_to_medoids = std ::string(disk_index_file) + "_labels_to_medoids.txt";
+    std::string labels_file = labels_filepath;
+    std::string labels_to_medoids = labels_to_medoids_filepath;
     std::string dummy_map_file = std ::string(disk_index_file) + "_dummy_map.txt";
-    std::string labels_map_file = std ::string(disk_index_file) + "_labels_map.txt";
+    std::string labels_map_file = labels_map_filepath;
     size_t num_pts_in_label_file = 0;
 
     size_t pq_file_dim, pq_file_num_centroids;
