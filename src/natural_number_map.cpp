@@ -107,8 +107,8 @@ template <typename Key, typename Value> void natural_number_map<Key, Value>::cle
 }
 
 // Instantiate used templates.
-template class natural_number_map<unsigned, int32_t>;
-template class natural_number_map<unsigned, uint32_t>;
-template class natural_number_map<unsigned, int64_t>;
-template class natural_number_map<unsigned, uint64_t>;
+template class natural_number_map<uint32_t, int32_t>;
+template class natural_number_map<uint32_t, uint32_t>;
+template class natural_number_map<uint32_t, int64_t>;
+template class natural_number_map<uint32_t, uint64_t>;
 } // namespace diskann
