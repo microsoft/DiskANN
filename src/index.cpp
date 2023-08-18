@@ -92,6 +92,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
     if (_dynamic_index)
     {
+        if (_filtered_index)
+        {
+            _pts_to_labels.resize(total_internal_points);
+        }
         this->enable_delete(); // enable delete by default for dynamic index
         // if write params are not passed, it is inffered that ctor is called by
         // search
@@ -2725,16 +2729,14 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
                 _pts_to_labels[new_location_start + loc_offset].swap(_pts_to_labels[old_location_start + loc_offset]);
             }
         }
+        // If ranges are overlapping, make sure not to clear the newly copied
+        // data.
+        if (mem_clear_loc_start < new_location_start + num_locations)
+        {
+            // Clear only after the end of the new range.
+            mem_clear_loc_start = new_location_start + num_locations;
+        }
     }
-
-    // If ranges are overlapping, make sure not to clear the newly copied
-    // data.
-    if (mem_clear_loc_start < new_location_start + num_locations)
-    {
-        // Clear only after the end of the new range.
-        mem_clear_loc_start = new_location_start + num_locations;
-    }
-
     else
     {
         // Old location after the new location: copy from the end of the range
