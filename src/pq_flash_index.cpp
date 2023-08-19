@@ -1392,7 +1392,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             io_timer.reset();
 #ifdef USE_BING_INFRA
             reader->read(frontier_read_reqs, ctx,
-                         false); // synhronous reader for Bing.
+                         true); // synhronous reader for Bing.
 #else
             reader->read(frontier_read_reqs, ctx); // synchronous IO linux
 #endif
