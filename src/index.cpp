@@ -40,6 +40,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
     {
         throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
+    if (index_config.index_write_params != nullptr)
+    {
+        _filtered_index = index_config.index_write_params->has_labels;
+    }
 
     if (_pq_dist)
     {
