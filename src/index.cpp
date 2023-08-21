@@ -850,9 +850,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                                         __LINE__);
         }
 
-        if (_dynamic_index)
-            _locks[id].lock();
-
         if (use_filter)
         {
             if (!detect_common_filters(id, search_invocation, filter_labels))
@@ -882,9 +879,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
         }
-
-        if (_dynamic_index)
-            _locks[id].unlock();
     }
 
     uint32_t hops = 0;
