@@ -164,8 +164,6 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
     bool enable_tags = true;
     using TagT = uint32_t;
-    auto data_type = diskann_type_to_name<T>();
-    auto tag_type = diskann_type_to_name<TagT>();
     auto index_search_params = diskann::IndexSearchParams(params.search_list_size, params.num_threads);
     diskann::IndexConfig index_config = diskann::IndexConfigBuilder()
                                             .with_metric(diskann::L2)
@@ -174,11 +172,13 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                                             .is_dynamic_index(true)
                                             .with_index_write_params(params)
                                             .with_index_search_params(index_search_params)
-                                            .with_data_type(data_type)
-                                            .with_tag_type(tag_type)
+                                            .with_data_type(diskann_type_to_name<T>())
+                                            .with_tag_type(diskann_type_to_name<TagT>())
+                                            .with_label_type(diskann_type_to_name<LabelT>())
                                             .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
                                             .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
                                             .is_enable_tags(enable_tags)
+                                            .with_num_frozen_pts(params.num_frozen_points)
                                             .is_concurrent_consolidate(concurrent)
                                             .build();
 
