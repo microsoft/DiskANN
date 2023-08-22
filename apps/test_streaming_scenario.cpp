@@ -195,8 +195,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                .with_alpha(alpha)
                                                .with_saturate_graph(saturate_graph)
                                                .with_num_threads(insert_threads)
-                                               .with_num_frozen_points(num_start_pts)
-                                               .with_labels(has_labels)
                                                .with_filter_list_size(Lf)
                                                .build();
 
@@ -206,7 +204,6 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                       .with_alpha(alpha)
                                                       .with_saturate_graph(saturate_graph)
                                                       .with_num_threads(consolidate_threads)
-                                                      .with_labels(has_labels)
                                                       .with_filter_list_size(Lf)
                                                       .build();
 
@@ -237,9 +234,10 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                             .is_dynamic_index(true)
                             .is_enable_tags(true)
                             .is_use_opq(false)
+                            .is_filtered(has_labels)
                             .with_num_pq_chunks(0)
                             .is_pq_dist_build(false)
-                            .with_num_frozen_pts(params.num_frozen_points)
+                            .with_num_frozen_pts(num_start_pts)
                             .with_tag_type(diskann_type_to_name<TagT>())
                             .with_label_type(diskann_type_to_name<LabelT>())
                             .with_data_type(diskann_type_to_name<T>())

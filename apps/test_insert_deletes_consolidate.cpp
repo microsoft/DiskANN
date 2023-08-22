@@ -178,7 +178,8 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                                             .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
                                             .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
                                             .is_enable_tags(enable_tags)
-                                            .with_num_frozen_pts(params.num_frozen_points)
+                                            .is_filtered(has_labels)
+                                            .with_num_frozen_pts(num_start_pts)
                                             .is_concurrent_consolidate(concurrent)
                                             .build();
 
@@ -492,8 +493,6 @@ int main(int argc, char **argv)
                                                    .with_max_occlusion_size(500)
                                                    .with_alpha(alpha)
                                                    .with_num_threads(num_threads)
-                                                   .with_num_frozen_points(num_start_pts)
-                                                   .with_labels(has_labels)
                                                    .with_filter_list_size(Lf)
                                                    .build();
 

@@ -33,16 +33,13 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
     : _dist_metric(index_config.metric), _dim(index_config.dimension), _max_points(index_config.max_points),
       _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
       _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
-      _pq_dist(index_config.pq_dist_build), _use_opq(index_config.use_opq), _num_pq_chunks(index_config.num_pq_chunks),
+      _pq_dist(index_config.pq_dist_build), _use_opq(index_config.use_opq),
+      _filtered_index(index_config.filtered_index), _num_pq_chunks(index_config.num_pq_chunks),
       _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
 {
     if (_dynamic_index && !_enable_tags)
     {
         throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-    if (index_config.index_write_params != nullptr)
-    {
-        _filtered_index = index_config.index_write_params->has_labels;
     }
 
     if (_pq_dist)
@@ -125,7 +122,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const std::shared_ptr<IndexWriteParameters> index_parameters,
                               const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts,
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
-                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
+                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq,
+                              const bool filtered_index)
     : Index(IndexConfigBuilder()
                 .with_metric(m)
                 .with_dimension(dim)
@@ -139,6 +137,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .is_pq_dist_build(pq_dist_build)
                 .with_num_pq_chunks(num_pq_chunks)
                 .is_use_opq(use_opq)
+                .is_filtered(filtered_index)
                 .with_data_type(diskann_type_to_name<T>())
                 .build(),
             IndexFactory::construct_datastore<T>(

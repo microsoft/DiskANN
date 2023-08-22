@@ -14,7 +14,6 @@ BOOST_AUTO_TEST_CASE(test_build)
     float alpha = (float)rand();
     uint32_t filter_list_size = rand();
     uint32_t max_occlusion_size = rand();
-    uint32_t num_frozen_points = rand();
     bool saturate_graph = true;
 
     diskann::IndexWriteParametersBuilder builder(search_list_size, max_degree);
@@ -22,7 +21,6 @@ BOOST_AUTO_TEST_CASE(test_build)
     builder.with_alpha(alpha)
         .with_filter_list_size(filter_list_size)
         .with_max_occlusion_size(max_occlusion_size)
-        .with_num_frozen_points(num_frozen_points)
         .with_num_threads(0)
         .with_saturate_graph(saturate_graph);
 
@@ -34,7 +32,6 @@ BOOST_AUTO_TEST_CASE(test_build)
         BOOST_TEST(alpha == parameters.alpha);
         BOOST_TEST(filter_list_size == parameters.filter_list_size);
         BOOST_TEST(max_occlusion_size == parameters.max_occlusion_size);
-        BOOST_TEST(num_frozen_points == parameters.num_frozen_points);
         BOOST_TEST(saturate_graph == parameters.saturate_graph);
 
         BOOST_TEST(parameters.num_threads > (uint32_t)0);
@@ -43,8 +40,7 @@ BOOST_AUTO_TEST_CASE(test_build)
     {
         uint32_t num_threads = rand() + 1;
         saturate_graph = false;
-        builder.with_num_threads(num_threads)
-            .with_saturate_graph(saturate_graph);
+        builder.with_num_threads(num_threads).with_saturate_graph(saturate_graph);
 
         auto parameters = builder.build();
 
@@ -53,7 +49,6 @@ BOOST_AUTO_TEST_CASE(test_build)
         BOOST_TEST(alpha == parameters.alpha);
         BOOST_TEST(filter_list_size == parameters.filter_list_size);
         BOOST_TEST(max_occlusion_size == parameters.max_occlusion_size);
-        BOOST_TEST(num_frozen_points == parameters.num_frozen_points);
         BOOST_TEST(saturate_graph == parameters.saturate_graph);
 
         BOOST_TEST(num_threads == parameters.num_threads);
