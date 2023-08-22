@@ -131,11 +131,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
     std::vector<float> latency_stats(query_num, 0);
     std::vector<uint32_t> cmp_stats;
-    if (not tags)
-    {
-        cmp_stats = std::vector<uint32_t>(query_num, 0);
-    }
-    if (filtered_search)
+    if (not tags || filtered_search)
     {
         cmp_stats = std::vector<uint32_t>(query_num, 0);
     }
