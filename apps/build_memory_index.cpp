@@ -127,7 +127,7 @@ int main(int argc, char **argv)
                                       .with_num_threads(num_threads)
                                       .build();
 
-        auto build_params = diskann::IndexBuildParamsBuilder(index_build_params)
+        auto build_params = diskann::IndexBuildParamsBuilder()
                                 .with_universal_label(universal_label)
                                 .with_label_file(label_file)
                                 .with_save_path_prefix(index_path_prefix)

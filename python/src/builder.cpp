@@ -65,11 +65,11 @@ void build_memory_index(const diskann::Metric metric, const std::string &vector_
         size_t tag_dims = 1;
         diskann::load_bin(tags_file, tags_data, data_num, tag_dims);
         std::vector<TagT> tags(tags_data, tags_data + data_num);
-        index.build(vector_bin_path.c_str(), data_num, index_build_params, tags);
+        index.build(vector_bin_path.c_str(), data_num, tags);
     }
     else
     {
-        index.build(vector_bin_path.c_str(), data_num, index_build_params);
+        index.build(vector_bin_path.c_str(), data_num);
     }
 
     index.save(index_output_path.c_str());

@@ -86,23 +86,20 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
-                                 const IndexWriteParameters &parameters,
                                  const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Batch build from a file. Optionally pass tags file.
-    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
-                                 const IndexWriteParameters &parameters, const char *tag_filename);
+    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load, const char *tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
-    DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                                 const std::vector<TagT> &tags);
+    DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, const std::vector<TagT> &tags);
 
     DISKANN_DLLEXPORT void build(const std::string &data_file, const size_t num_points_to_load,
                                  IndexBuildParams &build_params);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
-                                                const size_t num_points_to_load, IndexWriteParameters &parameters,
+                                                const size_t num_points_to_load,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
@@ -231,7 +228,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Use after _data and _nd have been populated
     // Acquire exclusive _update_lock before calling
-    void build_with_data_populated(const IndexWriteParameters &parameters, const std::vector<TagT> &tags);
+    void build_with_data_populated(const std::vector<TagT> &tags);
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
@@ -277,7 +274,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch);
 
     // Acquire exclusive _update_lock before calling
-    void link(const IndexWriteParameters &parameters);
+    void link();
 
     // Acquire exclusive _tag_lock and _delete_lock before calling
     int reserve_location();
@@ -386,6 +383,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _indexingRange;
     uint32_t _indexingMaxC;
     float _indexingAlpha;
+    uint32_t _indexingThreads;
 
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
