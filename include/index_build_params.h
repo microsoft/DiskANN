@@ -3,7 +3,7 @@
 
 namespace diskann
 {
-struct IndexBuildParams
+struct IndexFilterParams
 {
   public:
     std::string save_path_prefix;
@@ -12,21 +12,21 @@ struct IndexBuildParams
     uint32_t filter_threshold = 0;
 
   private:
-    IndexBuildParams(const std::string &save_path_prefix, const std::string &label_file,
-                     const std::string &universal_label, uint32_t filter_threshold)
+    IndexFilterParams(const std::string &save_path_prefix, const std::string &label_file,
+                      const std::string &universal_label, uint32_t filter_threshold)
         : save_path_prefix(save_path_prefix), label_file(label_file), universal_label(universal_label),
           filter_threshold(filter_threshold)
     {
     }
 
-    friend class IndexBuildParamsBuilder;
+    friend class IndexFilterParamsBuilder;
 };
-class IndexBuildParamsBuilder
+class IndexFilterParamsBuilder
 {
   public:
-    IndexBuildParamsBuilder() = default;
+    IndexFilterParamsBuilder() = default;
 
-    IndexBuildParamsBuilder &with_save_path_prefix(const std::string &save_path_prefix)
+    IndexFilterParamsBuilder &with_save_path_prefix(const std::string &save_path_prefix)
     {
         if (save_path_prefix.empty() || save_path_prefix == "")
             throw ANNException("Error: save_path_prefix can't be empty", -1);
@@ -34,31 +34,31 @@ class IndexBuildParamsBuilder
         return *this;
     }
 
-    IndexBuildParamsBuilder &with_label_file(const std::string &label_file)
+    IndexFilterParamsBuilder &with_label_file(const std::string &label_file)
     {
         this->_label_file = label_file;
         return *this;
     }
 
-    IndexBuildParamsBuilder &with_universal_label(const std::string &univeral_label)
+    IndexFilterParamsBuilder &with_universal_label(const std::string &univeral_label)
     {
         this->_universal_label = univeral_label;
         return *this;
     }
 
-    IndexBuildParamsBuilder &with_filter_threshold(const std::uint32_t &filter_threshold)
+    IndexFilterParamsBuilder &with_filter_threshold(const std::uint32_t &filter_threshold)
     {
         this->_filter_threshold = filter_threshold;
         return *this;
     }
 
-    IndexBuildParams build()
+    IndexFilterParams build()
     {
-        return IndexBuildParams(_save_path_prefix, _label_file, _universal_label, _filter_threshold);
+        return IndexFilterParams(_save_path_prefix, _label_file, _universal_label, _filter_threshold);
     }
 
-    IndexBuildParamsBuilder(const IndexBuildParamsBuilder &) = delete;
-    IndexBuildParamsBuilder &operator=(const IndexBuildParamsBuilder &) = delete;
+    IndexFilterParamsBuilder(const IndexFilterParamsBuilder &) = delete;
+    IndexFilterParamsBuilder &operator=(const IndexFilterParamsBuilder &) = delete;
 
   private:
     std::string _save_path_prefix;

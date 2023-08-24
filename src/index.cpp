@@ -1699,24 +1699,24 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t num_points_to_load,
-                                   IndexBuildParams &build_params)
+                                   IndexFilterParams &filter_params)
 {
-    std::string labels_file_to_use = build_params.save_path_prefix + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = build_params.save_path_prefix + "_labels_map.txt";
+    std::string labels_file_to_use = filter_params.save_path_prefix + "_label_formatted.txt";
+    std::string mem_labels_int_map_file = filter_params.save_path_prefix + "_labels_map.txt";
 
     size_t points_to_load = num_points_to_load == 0 ? _max_points : num_points_to_load;
 
     auto s = std::chrono::high_resolution_clock::now();
-    if (build_params.label_file == "")
+    if (filter_params.label_file == "")
     {
         this->build(data_file.c_str(), points_to_load);
     }
     else
     {
         // TODO: this should ideally happen in save()
-        convert_labels_string_to_int(build_params.label_file, labels_file_to_use, mem_labels_int_map_file,
-                                     build_params.universal_label);
-        if (build_params.universal_label != "")
+        convert_labels_string_to_int(filter_params.label_file, labels_file_to_use, mem_labels_int_map_file,
+                                     filter_params.universal_label);
+        if (filter_params.universal_label != "")
         {
             LabelT unv_label_as_num = 0;
             this->set_universal_label(unv_label_as_num);
@@ -1725,11 +1725,6 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
-    // cleanup
-    if (build_params.label_file != "")
-    {
-        // clean_up_artifacts({labels_file_to_use, mem_labels_int_map_file}, {});
-    }
 }
 
 template <typename T, typename TagT, typename LabelT>

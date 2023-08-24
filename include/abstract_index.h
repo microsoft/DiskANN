@@ -42,7 +42,7 @@ class AbstractIndex
     virtual ~AbstractIndex() = default;
 
     virtual void build(const std::string &data_file, const size_t num_points_to_load,
-                       IndexBuildParams &build_params) = 0;
+                       IndexFilterParams &build_params) = 0;
 
     template <typename data_type, typename tag_type>
     void build(const data_type *data, const size_t num_points_to_load, const std::vector<tag_type> &tags);
