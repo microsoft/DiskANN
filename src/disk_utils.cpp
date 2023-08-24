@@ -704,7 +704,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts,
                                  std::make_shared<diskann::IndexWriteParameters>(low_degree_params), nullptr,
-                                 low_degree_params.num_frozen_points, false, false, false, build_pq_bytes > 0,
+                                 defaults::NUM_FROZEN_POINTS_STATIC, false, false, false, build_pq_bytes > 0,
                                  build_pq_bytes, use_opq);
         if (!use_filters)
         {
