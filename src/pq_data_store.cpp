@@ -211,9 +211,9 @@ template <typename data_t> size_t PQDataStore<data_t>::get_alignment_factor() co
     return 1;
 }
 
-template <typename data_t> std::shared_ptr<Distance<data_t>> PQDataStore<data_t>::get_dist_fn() const
+template <typename data_t> Distance<data_t>* PQDataStore<data_t>::get_dist_fn() const
 {
-    return _distance_fn;
+    return _distance_fn.get();
 }
 
 template <typename data_t> location_t PQDataStore<data_t>::load_impl(const std::string &file_prefix)

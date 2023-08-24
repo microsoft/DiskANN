@@ -18,9 +18,15 @@ jobs:
   disk-pq:
     name: Disk with PQ
     uses: ./.github/workflows/disk-pq.yml
+  multi-sector-disk-pq:
+    name: Multi-sector Disk with PQ
+    uses: ./.github/workflows/multi-sector-disk-pq.yml
   labels:
     name: Labels
     uses: ./.github/workflows/labels.yml
   dynamic:
     name: Dynamic
     uses: ./.github/workflows/dynamic.yml
+  python:
+    name: Python
+    uses: ./.github/workflows/build-python.yml

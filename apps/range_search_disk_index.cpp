@@ -15,6 +15,7 @@
 #include "pq_flash_index.h"
 #include "partition.h"
 #include "timer.h"
+#include "program_options_utils.hpp"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -273,29 +274,42 @@ int main(int argc, char **argv)
     std::vector<uint32_t> Lvec;
     float range;
 
-    po::options_description desc{"Arguments"};
+    po::options_description desc{program_options_utils::make_program_description(
+        "range_search_disk_index", "Searches disk DiskANN indexes using ranges")};
     try
     {
         desc.add_options()("help,h", "Print information on arguments");
-        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
-        desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
-                           "distance function <l2/mips/fast_l2>");
-        desc.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
-                           "Path prefix to the index");
-        desc.add_options()("query_file", po::value<std::string>(&query_file)->required(),
-                           "Query file in binary format");
-        desc.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
-                           "ground truth file for the queryset");
-        desc.add_options()("range_threshold,K", po::value<float>(&range)->required(),
-                           "Number of neighbors to be returned");
-        desc.add_options()("search_list,L", po::value<std::vector<uint32_t>>(&Lvec)->multitoken(),
-                           "List of L values of search");
-        desc.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2), "Beamwidth for search");
-        desc.add_options()("num_nodes_to_cache", po::value<uint32_t>(&num_nodes_to_cache)->default_value(100000),
-                           "Beamwidth for search");
-        desc.add_options()("num_threads,T", po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
-                           "Number of threads used for building index (defaults to "
-                           "omp_get_num_procs())");
+
+        // Required parameters
+        po::options_description required_configs("Required");
+        required_configs.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                                       program_options_utils::DATA_TYPE_DESCRIPTION);
+        required_configs.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                                       program_options_utils::DISTANCE_FUNCTION_DESCRIPTION);
+        required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
+                                       program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
+        required_configs.add_options()("query_file", po::value<std::string>(&query_file)->required(),
+                                       program_options_utils::QUERY_FILE_DESCRIPTION);
+        required_configs.add_options()("search_list,L",
+                                       po::value<std::vector<uint32_t>>(&Lvec)->multitoken()->required(),
+                                       program_options_utils::SEARCH_LIST_DESCRIPTION);
+        required_configs.add_options()("range_threshold,K", po::value<float>(&range)->required(),
+                                       "Number of neighbors to be returned");
+
+        // Optional parameters
+        po::options_description optional_configs("Optional");
+        optional_configs.add_options()("num_threads,T",
+                                       po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
+                                       program_options_utils::NUMBER_THREADS_DESCRIPTION);
+        optional_configs.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
+                                       program_options_utils::GROUND_TRUTH_FILE_DESCRIPTION);
+        optional_configs.add_options()("num_nodes_to_cache", po::value<uint32_t>(&num_nodes_to_cache)->default_value(0),
+                                       program_options_utils::NUMBER_OF_NODES_TO_CACHE);
+        optional_configs.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2),
+                                       program_options_utils::BEAMWIDTH);
+
+        // Merge required and optional parameters
+        desc.add(required_configs).add(optional_configs);
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

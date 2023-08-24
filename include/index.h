@@ -19,6 +19,7 @@
 #include "windows_customizations.h"
 #include "scratch.h"
 #include "in_mem_data_store.h"
+#include "in_mem_graph_store.h"
 #include "abstract_index.h"
 
 // REFACTOR
@@ -35,7 +36,7 @@ namespace diskann
 inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree)
 {
     double size_of_data = ((double)size) * ROUND_UP(dim, 8) * datasize;
-    double size_of_graph = ((double)size) * degree * sizeof(uint32_t) * GRAPH_SLACK_FACTOR;
+    double size_of_graph = ((double)size) * degree * sizeof(uint32_t) * defaults::GRAPH_SLACK_FACTOR;
     double size_of_locks = ((double)size) * sizeof(non_recursive_mutex);
     double size_of_outer_vector = ((double)size) * sizeof(ptrdiff_t);
 
@@ -55,24 +56,16 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   public:
     // Constructor for Bulk operations and for creating the index object solely
     // for loading a prexisting index.
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points = 1, const bool dynamic_index = false,
-                            const bool enable_tags = false, const bool concurrent_consolidate = false,
-                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false, const size_t num_frozen_pts = 0,
-                            const bool init_data_store = true);
+    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store,
+                            std::unique_ptr<AbstractGraphStore> graph_store,
+                            std::shared_ptr<AbstractDataStore<T>> pq_data_store = nullptr);
 
     // Constructor for incremental index
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
-                            const IndexWriteParameters &indexParameters, const uint32_t initial_search_list_size,
-                            const uint32_t search_threads, const bool enable_tags = false,
-                            const bool concurrent_consolidate = false, const bool pq_dist_build = false,
-                            const size_t num_pq_chunks = 0, const bool use_opq = false);
-
-    //REFACTOR TODO: Ideally, this should take an AbstractPQDataStore, but for now, all our PQDataStores are in-mem
-    //so this should be ok.
-    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store_for_reranking,
-                            std::shared_ptr<AbstractDataStore<T>> data_store_for_candidates
-                            /* std::unique_ptr<AbstractGraphStore> graph_store*/);
+    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
+                            const std::shared_ptr<IndexWriteParameters> index_parameters,
+                            const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts,
+                            const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
+                            const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -337,14 +330,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   private:
     // Distance functions
     Metric _dist_metric = diskann::L2;
-    std::shared_ptr<Distance<T>> _distance;
 
     // Data
     std::shared_ptr<AbstractDataStore<T>> _data_store;
-    char *_opt_graph = nullptr;
+
 
     // Graph related data structures
-    std::vector<std::vector<uint32_t>> _final_graph;
+    std::unique_ptr<AbstractGraphStore> _graph_store;
+
+    char *_opt_graph = nullptr;
 
     // Dimensions
     size_t _dim = 0;
@@ -357,15 +351,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // needed for a dynamic index. The frozen points have consecutive locations.
     // See also _start below.
     size_t _num_frozen_pts = 0;
-    size_t _max_range_of_loaded_graph = 0;
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;
 
-    uint32_t _max_observed_degree = 0;
-    // Start point of the search. When _num_frozen_pts is greater than zero,
-    // this is the location of the first frozen point. Otherwise, this is a
-    // location of one of the points in index.
+    //  Start point of the search. When _num_frozen_pts is greater than zero,
+    //  this is the location of the first frozen point. Otherwise, this is a
+    //  location of one of the points in index.
     uint32_t _start = 0;
 
     bool _has_built = false;
@@ -374,6 +366,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _dynamic_index = false;
     bool _enable_tags = false;
     bool _normalize_vecs = false; // Using normalied L2 for cosine.
+    bool _deletes_enabled = false;
 
     // Filter Support
 

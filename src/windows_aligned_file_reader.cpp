@@ -6,6 +6,7 @@
 #include "windows_aligned_file_reader.h"
 #include <iostream>
 #include "utils.h"
+#include <stdlib.h>
 
 #define SECTOR_LEN 4096
 
@@ -43,9 +44,17 @@ void WindowsAlignedFileReader::register_thread()
         FILE_ATTRIBUTE_READONLY | FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED | FILE_FLAG_RANDOM_ACCESS, NULL);
     if (ctx.fhandle == INVALID_HANDLE_VALUE)
     {
-        std::stringstream ss;
-        ss << m_filename.c_str();
-        diskann::cout << "Error opening " << ss.str() << " -- error=" << GetLastError() << std::endl;
+        const size_t c_max_filepath_len = 256;
+        size_t actual_len = 0;
+        char filePath[c_max_filepath_len];
+        if (wcstombs_s(&actual_len, filePath, c_max_filepath_len, m_filename.c_str(), m_filename.length()) == 0)
+        {
+            diskann::cout << "Error opening " << filePath << " -- error=" << GetLastError() << std::endl;
+        }
+        else
+        {
+            diskann::cout << "Error converting wchar to char -- error=" << GetLastError() << std::endl;
+        }
     }
 
     // create IOCompletionPort

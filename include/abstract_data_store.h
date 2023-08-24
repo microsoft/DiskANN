@@ -20,6 +20,8 @@ template <typename data_t> class AbstractDataStore
   public:
     AbstractDataStore(const location_t capacity, const size_t dim);
 
+    // virtual ~AbstractDataStore() = default;
+
     // Return number of points returned
     virtual location_t load(const std::string &filename) = 0;
 
@@ -99,7 +101,10 @@ template <typename data_t> class AbstractDataStore
     // in the dataset
     virtual location_t calculate_medoid() const = 0;
 
-    virtual std::shared_ptr<Distance<data_t>> get_dist_fn() const = 0;
+    //REFACTOR PQ TODO: Each data store knows about its distance function, so this is 
+    //redundant. However, we don't have an OptmizedDataStore yet, and to preserve code 
+    //compability, we are exposing this function. 
+    virtual Distance<data_t>* get_dist_fn() const = 0;
 
     // search helpers
     // if the base data is aligned per the request of the metric, this will tell

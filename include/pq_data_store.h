@@ -65,7 +65,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     // We are returning the distance function that is used for full precision
     // vectors here, not the PQ distance function. This is because the callers
     // all are expecting a Distance<T> not QuantizedDistance<T>.
-    virtual std::shared_ptr<Distance<data_t>> get_dist_fn() const override;
+    virtual Distance<data_t>* get_dist_fn() const override;
 
     virtual location_t calculate_medoid() const override;
 

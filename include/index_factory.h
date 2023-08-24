@@ -13,24 +13,27 @@ class IndexFactory
     DISKANN_DLLEXPORT explicit IndexFactory(const IndexConfig &config);
     DISKANN_DLLEXPORT std::unique_ptr<AbstractIndex> create_instance();
 
-  private:
-    void check_config();
 
-    template <typename T> 
-    Distance<T>* construct_inmem_distance_fn();
+    DISKANN_DLLEXPORT static std::unique_ptr<AbstractGraphStore> construct_graphstore(
+        const GraphStoreStrategy stratagy, const size_t size, const size_t reserve_graph_degree);
 
     template <typename T>
-    std::shared_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy, size_t num_points,
-                                                              size_t dimension);
+    DISKANN_DLLEXPORT static std::shared_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy,
+                                                                                       size_t num_points,
+                                                                                       size_t dimension, 
+        Metric m);
+    // For now PQDataStore incorporates within itself all variants of quantization that we support. In the
+    // future it may be necessary to introduce an AbstractPQDataStore class to spearate various quantization
+    // flavours.
+    template <typename T>
+    DISKANN_DLLEXPORT static std::shared_ptr<PQDataStore<T>> construct_pq_datastore(DataStoreStrategy strategy,
+                                                                                    size_t num_points, size_t dimension,
+                                                                                    Metric m, size_t num_pq_chunks,
+                                                                                    bool use_opq);
+    template <typename T> static Distance<T> *construct_inmem_distance_fn(Metric m);
 
-    std::shared_ptr<AbstractGraphStore> construct_graphstore(GraphStoreStrategy stratagy, size_t size);
-
-    //For now PQDataStore incorporates within itself all variants of quantization that we support. In the 
-    //future it may be necessary to introduce an AbstractPQDataStore class to spearate various quantization
-    //flavours. 
-    template<typename T>
-    std::shared_ptr<PQDataStore<T>> construct_pq_datastore(DataStoreStrategy strategy, size_t num_points,
-                                                        size_t dimension);
+  private:
+   void check_config();
 
     template <typename data_type, typename tag_type, typename label_type>
     std::unique_ptr<AbstractIndex> create_instance();
