@@ -216,7 +216,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
     if (beginning_index_size > 0)
     {
-        index->build(data, beginning_index_size, params, tags);
+        index->build(data, beginning_index_size, tags);
     }
     else
     {
