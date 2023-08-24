@@ -73,7 +73,9 @@ const char *LABEL_FILE = "Input label file in txt format for Filtered Index buil
 const char *UNIVERSAL_LABEL =
     "Universal label, Use only in conjunction with label file for filtered index build. If a "
     "graph node has all the labels against it, we can assign a special universal filter to the "
-    "point instead of comma separated filters for that point";
+    "point instead of comma separated filters for that point.  The universal label should be assigned to nodes "
+    "in the labels file instead of listing all labels for a node.  DiskANN will not automatically assign a "
+    "universal label to a node.";
 const char *FILTERED_LBUILD = "Build complexity for filtered points, higher value results in better graphs";
 
 } // namespace program_options_utils
