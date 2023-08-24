@@ -693,16 +693,19 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         std::string shard_index_file = merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
 
-        diskann::IndexWriteParameters paras =
-            diskann::IndexWriteParametersBuilder(L, (2 * R / 3)).with_filter_list_size(Lf).build();
+        diskann::IndexWriteParameters low_degree_params = diskann::IndexWriteParametersBuilder(L, 2 * R / 3)
+                                                              .with_filter_list_size(Lf)
+                                                              .with_saturate_graph(false)
+                                                              .with_num_threads(num_threads)
+                                                              .build();
 
         uint64_t shard_base_dim, shard_base_pts;
         get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
 
         diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts,
-                                 std::make_shared<diskann::IndexWriteParameters>(paras), nullptr,
-                                 defaults::NUM_FROZEN_POINTS_STATIC, false, false, false, build_pq_bytes > 0,
-                                 build_pq_bytes, use_opq, use_filters);
+                                 std::make_shared<diskann::IndexWriteParameters>(low_degree_params), nullptr,
+                                 low_degree_params.num_frozen_points, false, false, false, build_pq_bytes > 0,
+                                 build_pq_bytes, use_opq);
         if (!use_filters)
         {
             _index.build(shard_base_file.c_str(), shard_base_pts);
