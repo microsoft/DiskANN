@@ -110,9 +110,9 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
         _indexingThreads = index_config.index_write_params->num_threads;
         _saturate_graph = index_config.index_write_params->saturate_graph;
 
-            uint32_t num_threads_indx = index_config.index_write_params->num_threads;
-            uint32_t num_scratch_spaces = index_config.index_search_params->num_search_threads + num_threads_indx;
-
+        if (index_config.index_search_params != nullptr)
+        {
+            uint32_t num_scratch_spaces = index_config.index_search_params->num_search_threads + _indexingThreads;
             initialize_query_scratch(num_scratch_spaces, index_config.index_search_params->initial_search_list_size,
                                      _indexingQueueSize, _indexingRange, _indexingMaxC, _data_store->get_dims());
         }
@@ -1738,9 +1738,6 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t num_points_to_load,
                                    IndexFilterParams &filter_params)
 {
-    std::string labels_file_to_use = build_params.save_path_prefix + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = build_params.save_path_prefix + "_labels_map.txt";
-
     size_t points_to_load = num_points_to_load == 0 ? _max_points : num_points_to_load;
 
     auto s = std::chrono::high_resolution_clock::now();
@@ -1751,12 +1748,11 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     else
     {
         // TODO: this should ideally happen in save()
-        std::string labels_file_to_use = build_params.save_path_prefix + "_label_formatted.txt";
-        std::string mem_labels_int_map_file = build_params.save_path_prefix + "_labels_map.txt";
-        convert_labels_string_to_int(
-            filter_params.label_file, labels_file_to_use,
-            mem_labels_int_map_file, filter_params.universal_label);
-        if (build_params.universal_label != "")
+        std::string labels_file_to_use = filter_params.save_path_prefix + "_label_formatted.txt";
+        std::string mem_labels_int_map_file = filter_params.save_path_prefix + "_labels_map.txt";
+        convert_labels_string_to_int(filter_params.label_file, labels_file_to_use, mem_labels_int_map_file,
+                                     filter_params.universal_label);
+        if (filter_params.universal_label != "")
         {
             LabelT unv_label_as_num = 0;
             this->set_universal_label(unv_label_as_num);
