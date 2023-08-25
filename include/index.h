@@ -94,8 +94,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Batch build from a data array, which must pad vectors to aligned_dim
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, const std::vector<TagT> &tags);
 
+    // Based on filter params builds a filtered or unfiltered index
     DISKANN_DLLEXPORT void build(const std::string &data_file, const size_t num_points_to_load,
-                                 IndexBuildParams &build_params);
+                                 IndexFilterParams &build_params);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
@@ -194,8 +195,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
   protected:
     // overload of abstract index virtual methods
-    virtual void _build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                        TagVector &tags) override;
+    virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) override;
 
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) override;
