@@ -639,7 +639,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             compareMetric, base_dim, base_num, std::make_shared<diskann::IndexWriteParameters>(paras), nullptr,
             paras.num_frozen_points, false, false, false, build_pq_bytes > 0, build_pq_bytes, use_opq);
         if (!use_filters)
-            _index.build(base_file.c_str(), base_num, paras);
+            _index.build(base_file.c_str(), base_num);
         else
         {
             if (universal_label != "")
@@ -647,7 +647,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                 LabelT unv_label_as_num = 0;
                 _index.set_universal_label(unv_label_as_num);
             }
-            _index.build_filtered_index(base_file.c_str(), label_file, base_num, paras);
+            _index.build_filtered_index(base_file.c_str(), label_file, base_num);
         }
         _index.save(mem_index_path.c_str());
 
@@ -707,7 +707,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                                  build_pq_bytes, use_opq);
         if (!use_filters)
         {
-            _index.build(shard_base_file.c_str(), shard_base_pts, low_degree_params);
+            _index.build(shard_base_file.c_str(), shard_base_pts);
         }
         else
         {
@@ -717,7 +717,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                 LabelT unv_label_as_num = 0;
                 _index.set_universal_label(unv_label_as_num);
             }
-            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts, low_degree_params);
+            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts);
         }
         _index.save(shard_index_file.c_str());
         // copy universal label file from first shard to the final destination

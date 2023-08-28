@@ -6,12 +6,11 @@ namespace diskann
 {
 
 template <typename data_type, typename tag_type>
-void AbstractIndex::build(const data_type *data, const size_t num_points_to_load,
-                          const IndexWriteParameters &parameters, const std::vector<tag_type> &tags)
+void AbstractIndex::build(const data_type *data, const size_t num_points_to_load, const std::vector<tag_type> &tags)
 {
     auto any_data = std::any(data);
     auto any_tags_vec = TagVector(tags);
-    this->_build(any_data, num_points_to_load, parameters, any_tags_vec);
+    this->_build(any_data, num_points_to_load, any_tags_vec);
 }
 
 template <typename data_type, typename IDType>
@@ -92,50 +91,38 @@ template <typename tag_type, typename data_type> int AbstractIndex::get_vector_b
 
 // exports
 template DISKANN_DLLEXPORT void AbstractIndex::build<float, int32_t>(const float *data, const size_t num_points_to_load,
-                                                                     const IndexWriteParameters &parameters,
                                                                      const std::vector<int32_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<int8_t, int32_t>(const int8_t *data,
                                                                       const size_t num_points_to_load,
-                                                                      const IndexWriteParameters &parameters,
                                                                       const std::vector<int32_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<uint8_t, int32_t>(const uint8_t *data,
                                                                        const size_t num_points_to_load,
-                                                                       const IndexWriteParameters &parameters,
                                                                        const std::vector<int32_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<float, uint32_t>(const float *data,
                                                                       const size_t num_points_to_load,
-                                                                      const IndexWriteParameters &parameters,
                                                                       const std::vector<uint32_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<int8_t, uint32_t>(const int8_t *data,
                                                                        const size_t num_points_to_load,
-                                                                       const IndexWriteParameters &parameters,
                                                                        const std::vector<uint32_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<uint8_t, uint32_t>(const uint8_t *data,
                                                                         const size_t num_points_to_load,
-                                                                        const IndexWriteParameters &parameters,
                                                                         const std::vector<uint32_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<float, int64_t>(const float *data, const size_t num_points_to_load,
-                                                                     const IndexWriteParameters &parameters,
                                                                      const std::vector<int64_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<int8_t, int64_t>(const int8_t *data,
                                                                       const size_t num_points_to_load,
-                                                                      const IndexWriteParameters &parameters,
                                                                       const std::vector<int64_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<uint8_t, int64_t>(const uint8_t *data,
                                                                        const size_t num_points_to_load,
-                                                                       const IndexWriteParameters &parameters,
                                                                        const std::vector<int64_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<float, uint64_t>(const float *data,
                                                                       const size_t num_points_to_load,
-                                                                      const IndexWriteParameters &parameters,
                                                                       const std::vector<uint64_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<int8_t, uint64_t>(const int8_t *data,
                                                                        const size_t num_points_to_load,
-                                                                       const IndexWriteParameters &parameters,
                                                                        const std::vector<uint64_t> &tags);
 template DISKANN_DLLEXPORT void AbstractIndex::build<uint8_t, uint64_t>(const uint8_t *data,
                                                                         const size_t num_points_to_load,
-                                                                        const IndexWriteParameters &parameters,
                                                                         const std::vector<uint64_t> &tags);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search<float, uint32_t>(

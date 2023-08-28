@@ -51,7 +51,7 @@ void generate_label_indices(path input_data_path, path final_index_path_prefix, 
                                 0, false, false);
 
         auto index_build_timer = std::chrono::high_resolution_clock::now();
-        index.build(curr_label_input_data_path.c_str(), number_of_label_points, label_index_build_parameters);
+        index.build(curr_label_input_data_path.c_str(), number_of_label_points);
         std::chrono::duration<double> current_indexing_time =
             std::chrono::high_resolution_clock::now() - index_build_timer;
 

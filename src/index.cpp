@@ -93,18 +93,21 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
     if (_dynamic_index)
     {
         this->enable_delete(); // enable delete by default for dynamic index
-        // if write params are not passed, it is inffered that ctor is called by
-        // search
-        if (index_config.index_write_params != nullptr && index_config.index_search_params != nullptr)
-        {
-            _indexingQueueSize = index_config.index_write_params->search_list_size;
-            _indexingRange = index_config.index_write_params->max_degree;
-            _indexingMaxC = index_config.index_write_params->max_occlusion_size;
-            _indexingAlpha = index_config.index_write_params->alpha;
-            _filterIndexingQueueSize = index_config.index_write_params->filter_list_size;
+    }
 
-            uint32_t num_threads_indx = index_config.index_write_params->num_threads;
-            uint32_t num_scratch_spaces = index_config.index_search_params->num_search_threads + num_threads_indx;
+    if (index_config.index_write_params != nullptr)
+    {
+        _indexingQueueSize = index_config.index_write_params->search_list_size;
+        _indexingRange = index_config.index_write_params->max_degree;
+        _indexingMaxC = index_config.index_write_params->max_occlusion_size;
+        _indexingAlpha = index_config.index_write_params->alpha;
+        _filterIndexingQueueSize = index_config.index_write_params->filter_list_size;
+        _indexingThreads = index_config.index_write_params->num_threads;
+        _saturate_graph = index_config.index_write_params->saturate_graph;
+
+        if (index_config.index_search_params != nullptr)
+        {
+            uint32_t num_scratch_spaces = index_config.index_search_params->num_search_threads + _indexingThreads;
 
             initialize_query_scratch(num_scratch_spaces, index_config.index_search_params->initial_search_list_size,
                                      _indexingQueueSize, _indexingRange, _indexingMaxC, _data_store->get_dims());
@@ -1227,20 +1230,11 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
     inter_insert(n, pruned_list, _indexingRange, scratch);
 }
 
-template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::link(const IndexWriteParameters &parameters)
+template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::link()
 {
-    uint32_t num_threads = parameters.num_threads;
+    uint32_t num_threads = _indexingThreads;
     if (num_threads != 0)
         omp_set_num_threads(num_threads);
-
-    _saturate_graph = parameters.saturate_graph;
-
-    _indexingQueueSize = parameters.search_list_size;
-    _filterIndexingQueueSize = parameters.filter_list_size;
-    _indexingRange = parameters.max_degree;
-    _indexingMaxC = parameters.max_occlusion_size;
-    _indexingAlpha = parameters.alpha;
 
     /* visit_order is a vector that is initialized to the entire graph */
     std::vector<uint32_t> visit_order;
@@ -1473,8 +1467,7 @@ void Index<T, TagT, LabelT>::set_start_points_at_random(T radius, uint32_t rando
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameters &parameters,
-                                                       const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &tags)
 {
     diskann::cout << "Starting index build with " << _nd << " points... " << std::endl;
 
@@ -1498,10 +1491,10 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
         }
     }
 
-    uint32_t index_R = parameters.max_degree;
-    uint32_t num_threads_index = parameters.num_threads;
-    uint32_t index_L = parameters.search_list_size;
-    uint32_t maxc = parameters.max_occlusion_size;
+    uint32_t index_R = _indexingRange;
+    uint32_t num_threads_index = _indexingThreads;
+    uint32_t index_L = _indexingQueueSize;
+    uint32_t maxc = _indexingMaxC;
 
     if (_query_scratch.size() == 0)
     {
@@ -1510,7 +1503,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
     }
 
     generate_frozen_point();
-    link(parameters);
+    link();
 
     size_t max = 0, min = SIZE_MAX, total = 0, cnt = 0;
     for (size_t i = 0; i < _nd; i++)
@@ -1528,13 +1521,11 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const IndexWriteParameter
     _has_built = true;
 }
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::_build(const DataType &data, const size_t num_points_to_load,
-                                    const IndexWriteParameters &parameters, TagVector &tags)
+void Index<T, TagT, LabelT>::_build(const DataType &data, const size_t num_points_to_load, TagVector &tags)
 {
     try
     {
-        this->build(std::any_cast<const T *>(data), num_points_to_load, parameters,
-                    tags.get<const std::vector<TagT>>());
+        this->build(std::any_cast<const T *>(data), num_points_to_load, tags.get<const std::vector<TagT>>());
     }
     catch (const std::bad_any_cast &e)
     {
@@ -1546,8 +1537,7 @@ void Index<T, TagT, LabelT>::_build(const DataType &data, const size_t num_point
     }
 }
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load,
-                                   const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     if (num_points_to_load == 0)
     {
@@ -1568,12 +1558,11 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
         _data_store->populate_data(data, (location_t)num_points_to_load);
     }
 
-    build_with_data_populated(parameters, tags);
+    build_with_data_populated(tags);
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
-                                   const IndexWriteParameters &parameters, const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     // idealy this should call build_filtered_index based on params passed
 
@@ -1662,12 +1651,11 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
         _nd = num_points_to_load;
     }
-    build_with_data_populated(parameters, tags);
+    build_with_data_populated(tags);
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load,
-                                   const IndexWriteParameters &parameters, const char *tag_filename)
+void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points_to_load, const char *tag_filename)
 {
     std::vector<TagT> tags;
 
@@ -1706,43 +1694,37 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
             }
         }
     }
-    build(filename, num_points_to_load, parameters, tags);
+    build(filename, num_points_to_load, tags);
 }
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t num_points_to_load,
-                                   IndexBuildParams &build_params)
+                                   IndexFilterParams &filter_params)
 {
-    std::string labels_file_to_use = build_params.save_path_prefix + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = build_params.save_path_prefix + "_labels_map.txt";
+    std::string labels_file_to_use = filter_params.save_path_prefix + "_label_formatted.txt";
+    std::string mem_labels_int_map_file = filter_params.save_path_prefix + "_labels_map.txt";
 
     size_t points_to_load = num_points_to_load == 0 ? _max_points : num_points_to_load;
 
     auto s = std::chrono::high_resolution_clock::now();
-    if (build_params.label_file == "")
+    if (filter_params.label_file == "")
     {
-        this->build(data_file.c_str(), points_to_load, build_params.index_write_params);
+        this->build(data_file.c_str(), points_to_load);
     }
     else
     {
         // TODO: this should ideally happen in save()
-        convert_labels_string_to_int(build_params.label_file, labels_file_to_use, mem_labels_int_map_file,
-                                     build_params.universal_label);
-        if (build_params.universal_label != "")
+        convert_labels_string_to_int(filter_params.label_file, labels_file_to_use, mem_labels_int_map_file,
+                                     filter_params.universal_label);
+        if (filter_params.universal_label != "")
         {
             LabelT unv_label_as_num = 0;
             this->set_universal_label(unv_label_as_num);
         }
-        this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load,
-                                   build_params.index_write_params);
+        this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
-    // cleanup
-    if (build_params.label_file != "")
-    {
-        // clean_up_artifacts({labels_file_to_use, mem_labels_int_map_file}, {});
-    }
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1838,8 +1820,7 @@ void Index<T, TagT, LabelT>::set_universal_label(const LabelT &label)
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const std::string &label_file,
-                                                  const size_t num_points_to_load, IndexWriteParameters &parameters,
-                                                  const std::vector<TagT> &tags)
+                                                  const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     _labels_file = label_file; // original label file
     _filtered_index = true;
@@ -1903,7 +1884,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         _medoid_counts[best_medoid]++;
     }
 
-    this->build(filename, num_points_to_load, parameters, tags);
+    this->build(filename, num_points_to_load, tags);
 }
 
 template <typename T, typename TagT, typename LabelT>
