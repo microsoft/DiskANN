@@ -80,12 +80,10 @@ template <typename data_t> class AbstractDataStore
     // num_points) to zero
     virtual void copy_vectors(const location_t from_loc, const location_t to_loc, const location_t num_points) = 0;
 
-    // Some datastores like PQ stores need a preprocessing step before querying.
-    // Optionally, a scratch object can be passed in to avoid memory allocations
-    // Default implementation does nothing.
-    // REFACTOR TODO: Currently, we take an aligned_query as parameter, but this
-    // should change and this function should do the necessary alignment.
-    virtual void preprocess_query(const data_t *aligned_query, AbstractScratch<data_t> *query_scratch = nullptr) const;
+    //With the PQ Data Store PR, we have also changed iterate_to_fixed_point to NOT take the query
+    //from the scratch object. Therefore every data store has to implement preprocess_query which
+    //at the least will be to copy the query into the scratch object. So making this pure virtual.
+    virtual void preprocess_query(const data_t *aligned_query, AbstractScratch<data_t> *query_scratch = nullptr) const = 0;
     // distance functions.
     virtual float get_distance(const data_t *query, const location_t loc) const = 0;
     virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,

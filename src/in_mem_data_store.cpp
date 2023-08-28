@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include <memory>
+#include "abstract_scratch.h"
 #include "in_mem_data_store.h"
 
 #include "utils.h"
@@ -176,6 +177,22 @@ template <typename data_t> void InMemDataStore<data_t>::prefetch_vector(const lo
 {
     diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)loc * sizeof(data_t),
                              sizeof(data_t) * _aligned_dim);
+}
+
+template <typename data_t>
+void InMemDataStore<data_t>::preprocess_query(const data_t *query, AbstractScratch<data_t> *query_scratch) const
+{
+    if (query_scratch != nullptr )
+    {
+        memcpy(query_scratch->aligned_query_T(), query, sizeof(data_t) * this->get_dims());
+    }
+    else
+    {
+        std::stringstream ss;
+        ss << "In InMemDataStore::preprocess_query: Query scratch is null";
+        diskann::cerr << ss.str() << std::endl;
+        throw diskann::ANNException(ss.str(), -1);
+    }
 }
 
 template <typename data_t> float InMemDataStore<data_t>::get_distance(const data_t *query, const location_t loc) const

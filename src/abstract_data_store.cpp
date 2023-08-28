@@ -39,12 +39,6 @@ template <typename data_t> location_t AbstractDataStore<data_t>::resize(const lo
     }
 }
 
-template <typename data_t>
-void AbstractDataStore<data_t>::preprocess_query(const data_t *query, AbstractScratch<data_t> *query_scratch) const
-{
-}
-
-
 
 template DISKANN_DLLEXPORT class AbstractDataStore<float>;
 template DISKANN_DLLEXPORT class AbstractDataStore<int8_t>;
