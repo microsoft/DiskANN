@@ -34,8 +34,7 @@ diskann::Index<DT, DynamicIdType, filterT> dynamic_index_builder(const diskann::
                                                                  const uint32_t initial_search_threads,
                                                                  const bool concurrent_consolidation)
 {
-    const uint32_t _initial_search_threads =
-        initial_search_threads != 0 ? initial_search_threads : omp_get_num_threads();
+    const uint32_t _initial_search_threads = initial_search_threads != 0 ? initial_search_threads : omp_get_num_procs();
 
     auto index_search_params = diskann::IndexSearchParams(initial_search_complexity, _initial_search_threads);
     return diskann::Index<DT, DynamicIdType, filterT>(

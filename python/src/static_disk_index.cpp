@@ -14,7 +14,8 @@ StaticDiskIndex<DT>::StaticDiskIndex(const diskann::Metric metric, const std::st
                                      const uint32_t cache_mechanism)
     : _reader(std::make_shared<PlatformSpecificAlignedFileReader>()), _index(_reader, metric)
 {
-    int load_success = _index.load(num_threads, index_path_prefix.c_str());
+    const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_procs();
+    int load_success = _index.load(_num_threads, index_path_prefix.c_str());
     if (load_success != 0)
     {
         throw std::runtime_error("index load failed.");
@@ -22,7 +23,7 @@ StaticDiskIndex<DT>::StaticDiskIndex(const diskann::Metric metric, const std::st
     if (cache_mechanism == 1)
     {
         std::string sample_file = index_path_prefix + std::string("_sample_data.bin");
-        cache_sample_paths(num_nodes_to_cache, sample_file, num_threads);
+        cache_sample_paths(num_nodes_to_cache, sample_file, _num_threads);
     }
     else if (cache_mechanism == 2)
     {
