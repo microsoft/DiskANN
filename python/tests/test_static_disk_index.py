@@ -62,13 +62,16 @@ class TestStaticDiskIndex(unittest.TestCase):
                 )
 
                 k = 5
-                diskann_neighbors, diskann_distances = index.batch_search(
+                batch_response = index.batch_search(
                     query_vectors,
                     k_neighbors=k,
                     complexity=5,
                     beam_width=2,
                     num_threads=16,
                 )
+                self.assertIsInstance(batch_response, dap.QueryResponseBatch)
+
+                diskann_neighbors, diskann_distances = batch_response
                 if metric == "l2":
                     knn = NearestNeighbors(
                         n_neighbors=100, algorithm="auto", metric="l2"
@@ -93,9 +96,11 @@ class TestStaticDiskIndex(unittest.TestCase):
                 )
 
                 k = 5
-                ids, dists = index.search(
+                response = index.search(
                     query_vectors[0], k_neighbors=k, complexity=5, beam_width=2
                 )
+                self.assertIsInstance(response, dap.QueryResponse)
+                ids, dists = response
                 self.assertEqual(ids.shape[0], k)
                 self.assertEqual(dists.shape[0], k)
 
