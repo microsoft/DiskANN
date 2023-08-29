@@ -1834,11 +1834,18 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             lbls.push_back(token_as_num);
             _labels.insert(token_as_num);
         }
+
         if (lbls.size() <= 0)
         {
             diskann::cout << "No label found";
             exit(-1);
         }
+
+        if (!_use_universal_label && lbls.size() == 1 && lbls[0] == 0)
+        {
+            set_universal_label(0); // if 0 is seen as a label, it is garuntee that its universal label
+        }
+
         std::sort(lbls.begin(), lbls.end());
         _pts_to_labels[line_cnt] = lbls;
         line_cnt++;
@@ -2862,6 +2869,12 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                       << std::endl;
             return -1;
         }
+
+        if (!_use_universal_label && labels.size() == 1 && labels[0] == 0)
+        {
+            set_universal_label(0);
+        }
+
         _pts_to_labels[location] = labels;
 
         for (LabelT label : labels)
