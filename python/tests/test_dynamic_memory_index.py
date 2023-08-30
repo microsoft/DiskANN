@@ -40,6 +40,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             build_random_vectors_and_memory_index(np.float32, "cosine", with_tags=True),
             build_random_vectors_and_memory_index(np.uint8, "cosine", with_tags=True),
             build_random_vectors_and_memory_index(np.int8, "cosine", with_tags=True),
+            build_random_vectors_and_memory_index(np.float32, "mips", with_tags=True),
         ]
         cls._example_ann_dir = cls._test_matrix[0][4]
 

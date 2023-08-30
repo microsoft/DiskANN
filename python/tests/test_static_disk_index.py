@@ -36,8 +36,9 @@ class TestStaticDiskIndex(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._test_matrix = [
             _build_random_vectors_and_index(np.float32, "l2"),
-            # _build_random_vectors_and_index(np.uint8, "l2"),
-            # _build_random_vectors_and_index(np.int8, "l2"),
+            _build_random_vectors_and_index(np.uint8, "l2"),
+            _build_random_vectors_and_index(np.int8, "l2"),
+            _build_random_vectors_and_index(np.float32, "mips"),
         ]
         cls._example_ann_dir = cls._test_matrix[0][4]
 
