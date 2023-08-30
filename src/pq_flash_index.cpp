@@ -682,7 +682,7 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             LabelT token_as_num = (LabelT)std::stoul(token);
-            _pts_to_labels[labels_seen_so_far++] = (uint32_t)token_as_num;
+            _pts_to_labels[labels_seen_so_far++] = (LabelT)token_as_num;
             num_lbls_in_cur_pt++;
         }
 
