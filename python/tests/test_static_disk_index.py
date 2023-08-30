@@ -25,7 +25,7 @@ def _build_random_vectors_and_index(dtype, metric):
             complexity=32,
             search_memory_maximum=0.00003,
             build_memory_maximum=1,
-            num_threads=1,
+            num_threads=0,
             pq_disk_bytes=0,
         )
     return metric, dtype, query_vectors, index_vectors, ann_dir
@@ -38,6 +38,7 @@ class TestStaticDiskIndex(unittest.TestCase):
             _build_random_vectors_and_index(np.float32, "l2"),
             _build_random_vectors_and_index(np.uint8, "l2"),
             _build_random_vectors_and_index(np.int8, "l2"),
+            _build_random_vectors_and_index(np.float32, "mips"),
         ]
         cls._example_ann_dir = cls._test_matrix[0][4]
 
@@ -149,3 +150,19 @@ class TestStaticDiskIndex(unittest.TestCase):
                     index.batch_search(
                         queries=np.array([[]], dtype=np.single), **kwargs
                     )
+
+    def test_zero_threads(self):
+        for metric, dtype, query_vectors, index_vectors, ann_dir in self._test_matrix:
+            with self.subTest(msg=f"Testing dtype {dtype}"):
+                index = dap.StaticDiskIndex(
+                    distance_metric="l2",
+                    vector_dtype=dtype,
+                    index_directory=ann_dir,
+                    num_threads=0,  # Issue #432
+                    num_nodes_to_cache=10,
+                )
+
+                k = 5
+                ids, dists = index.batch_search(
+                    query_vectors, k_neighbors=k, complexity=5, beam_width=2, num_threads=0
+                )

@@ -40,6 +40,7 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             build_random_vectors_and_memory_index(np.float32, "cosine", with_tags=True),
             build_random_vectors_and_memory_index(np.uint8, "cosine", with_tags=True),
             build_random_vectors_and_memory_index(np.int8, "cosine", with_tags=True),
+            build_random_vectors_and_memory_index(np.float32, "mips", with_tags=True),
         ]
         cls._example_ann_dir = cls._test_matrix[0][4]
 
@@ -442,4 +443,27 @@ class TestDynamicMemoryIndex(unittest.TestCase):
             warnings.simplefilter("error")  # turns warnings into raised exceptions
             index.batch_insert(rng.random((2, 10), dtype=np.float32), np.array([15, 25], dtype=np.uint32))
 
+    def test_zero_threads(self):
+        for (
+                metric,
+                dtype,
+                query_vectors,
+                index_vectors,
+                ann_dir,
+                vector_bin_file,
+                generated_tags,
+        ) in self._test_matrix:
+            with self.subTest(msg=f"Testing dtype {dtype}"):
+                index = dap.DynamicMemoryIndex(
+                    distance_metric="l2",
+                    vector_dtype=dtype,
+                    dimensions=10,
+                    max_vectors=11_000,
+                    complexity=64,
+                    graph_degree=32,
+                    num_threads=0, # explicitly asking it to use all available threads.
+                )
+                index.batch_insert(vectors=index_vectors, vector_ids=generated_tags, num_threads=0)
 
+                k = 5
+                ids, dists = index.batch_search(query_vectors, k_neighbors=k, complexity=5, num_threads=0)

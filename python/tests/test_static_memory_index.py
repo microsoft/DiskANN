@@ -20,6 +20,7 @@ class TestStaticMemoryIndex(unittest.TestCase):
             build_random_vectors_and_memory_index(np.float32, "cosine"),
             build_random_vectors_and_memory_index(np.uint8, "cosine"),
             build_random_vectors_and_memory_index(np.int8, "cosine"),
+            build_random_vectors_and_memory_index(np.float32, "mips"),
         ]
         cls._example_ann_dir = cls._test_matrix[0][4]
 
@@ -165,3 +166,23 @@ class TestStaticMemoryIndex(unittest.TestCase):
                     index.batch_search(
                         queries=np.array([[]], dtype=np.single), **kwargs
                     )
+
+    def test_zero_threads(self):
+        for (
+            metric,
+            dtype,
+            query_vectors,
+            index_vectors,
+            ann_dir,
+            vector_bin_file,
+            _,
+        ) in self._test_matrix:
+            with self.subTest(msg=f"Testing dtype {dtype}"):
+                index = dap.StaticMemoryIndex(
+                    index_directory=ann_dir,
+                    num_threads=0,
+                    initial_search_complexity=32,
+                )
+
+                k = 5
+                ids, dists = index.batch_search(query_vectors, k_neighbors=k, complexity=5, num_threads=0)
