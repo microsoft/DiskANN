@@ -2079,7 +2079,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     if (pos < K)
     {
-        diskann::cerr << "Found fewer than K elements for query" << std::endl;
+        //diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
 
     return retval;
