@@ -38,6 +38,17 @@ class IndexWriteParameters
     friend class IndexWriteParametersBuilder;
 };
 
+class IndexSearchParams
+{
+  public:
+    IndexSearchParams(const uint32_t initial_search_list_size, const uint32_t num_search_threads)
+        : initial_search_list_size(initial_search_list_size), num_search_threads(num_search_threads)
+    {
+    }
+    const uint32_t initial_search_list_size; // search L
+    const uint32_t num_search_threads;       // search threads
+};
+
 class IndexWriteParametersBuilder
 {
     /**

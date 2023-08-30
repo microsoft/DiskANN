@@ -42,11 +42,10 @@ class AbstractIndex
     virtual ~AbstractIndex() = default;
 
     virtual void build(const std::string &data_file, const size_t num_points_to_load,
-                       IndexBuildParams &build_params) = 0;
+                       IndexFilterParams &build_params) = 0;
 
     template <typename data_type, typename tag_type>
-    void build(const data_type *data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-               const std::vector<tag_type> &tags);
+    void build(const data_type *data, const size_t num_points_to_load, const std::vector<tag_type> &tags);
 
     virtual void save(const char *filename, bool compact_before_save = false) = 0;
 
@@ -98,8 +97,7 @@ class AbstractIndex
     template <typename tag_type, typename data_type> int get_vector_by_tag(tag_type &tag, data_type *vec);
 
   private:
-    virtual void _build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                        TagVector &tags) = 0;
+    virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) = 0;
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::string &filter_label,

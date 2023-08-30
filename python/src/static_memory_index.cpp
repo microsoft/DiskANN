@@ -17,15 +17,17 @@ diskann::Index<DT, StaticIdType, filterT> static_index_builder(const diskann::Me
     {
         throw std::runtime_error("initial_search_complexity must be a positive uint32_t");
     }
-
+    auto index_search_params = diskann::IndexSearchParams(initial_search_complexity, omp_get_num_threads());
     return diskann::Index<DT>(m, dimensions, num_points,
-                              false, // not a dynamic_index
-                              false, // no enable_tags/ids
-                              false, // no concurrent_consolidate,
-                              false, // pq_dist_build
-                              0,     // num_pq_chunks
-                              false, // use_opq = false
-                              0);    // num_frozen_points
+                              nullptr,                                                           // index write params
+                              std::make_shared<diskann::IndexSearchParams>(index_search_params), // index search params
+                              0,                                                                 // num frozen points
+                              false,                                                             // not a dynamic_index
+                              false,                                                             // no enable_tags/ids
+                              false,  // no concurrent_consolidate,
+                              false,  // pq_dist_build
+                              0,      // num_pq_chunks
+                              false); // use_opq = false
 }
 
 template <class DT>
