@@ -736,8 +736,6 @@ template <typename T, typename TagT, typename LabelT>
 bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
 {
-    if (incoming_labels.empty())
-        return false;
     auto &curr_node_labels = _pts_to_labels[point_id];
     std::vector<LabelT> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
@@ -2466,8 +2464,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             //  update medoid id's as frozen points are treated as medoid
             for (auto &[label, medoid_id] : _label_to_medoid_id)
             {
-                if (label == _universal_label)
-                    continue;
+                /*  if (label == _universal_label)
+                      continue;*/
                 _label_to_medoid_id[label] = (uint32_t)_nd + (medoid_id - (uint32_t)_max_points);
             }
         }
@@ -2765,8 +2763,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         for (auto &[label, medoid_id] : _label_to_medoid_id)
         {
-            if (label == _universal_label)
-                continue;
+            /*if (label == _universal_label)
+                continue;*/
             _label_to_medoid_id[label] = (uint32_t)_max_points + (medoid_id - (uint32_t)_nd);
         }
     }
@@ -2879,7 +2877,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 
         for (LabelT label : labels)
         {
-            if (label != _universal_label && _labels.find(label) == _labels.end())
+            if (_labels.find(label) == _labels.end())
             {
                 if (_frozen_pts_used >= _num_frozen_pts)
                 {
