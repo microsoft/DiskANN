@@ -125,6 +125,7 @@ void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, 
     catch (std::system_error &e)
     {
         std::cout << "Exiting after catching exception in insertion task: " << e.what() << std::endl;
+        exit(-1);
     }
 }
 
