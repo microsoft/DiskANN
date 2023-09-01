@@ -251,6 +251,12 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
     auto index = index_factory.create_instance();
 
+    if (universal_label != "")
+    {
+        LabelT u_label = 0;
+        index->set_universal_label(u_label);
+    }
+
     if (max_points_to_insert == 0)
     {
         max_points_to_insert = num_points;

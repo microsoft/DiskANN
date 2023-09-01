@@ -186,6 +186,12 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
     auto index = index_factory.create_instance();
 
+    if (universal_label != "")
+    {
+        LabelT u_label = 0;
+        index->set_universal_label(u_label);
+    }
+
     if (points_to_skip > num_points)
     {
         throw diskann::ANNException("Asked to skip more points than in data file", -1, __FUNCSIG__, __FILE__, __LINE__);

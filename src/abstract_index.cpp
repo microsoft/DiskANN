@@ -98,6 +98,12 @@ template <typename tag_type, typename data_type> int AbstractIndex::get_vector_b
     return this->_get_vector_by_tag(any_tag, any_data_ptr);
 }
 
+template <typename label_type> void AbstractIndex::set_universal_label(const label_type universal_label)
+{
+    auto any_label = std::any(universal_label);
+    this->_set_universal_label(any_label);
+}
+
 // exports
 template DISKANN_DLLEXPORT void AbstractIndex::build<float, int32_t>(const float *data, const size_t num_points_to_load,
                                                                      const std::vector<int32_t> &tags);
@@ -328,5 +334,8 @@ template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<int64_t, int8_t>
 template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint64_t, float>(uint64_t &tag, float *vec);
 template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint64_t, uint8_t>(uint64_t &tag, uint8_t *vec);
 template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint64_t, int8_t>(uint64_t &tag, int8_t *vec);
+
+template DISKANN_DLLEXPORT void AbstractIndex::set_universal_label<uint16_t>(const uint16_t label);
+template DISKANN_DLLEXPORT void AbstractIndex::set_universal_label<uint32_t>(const uint32_t label);
 
 } // namespace diskann

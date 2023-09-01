@@ -1839,17 +1839,18 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             exit(-1);
         }
 
-        if (!_use_universal_label && lbls.size() == 1 && lbls[0] == 0)
-        {
-            set_universal_label(0); // if 0 is seen as a label, it is garuntee that its universal label
-        }
-
         std::sort(lbls.begin(), lbls.end());
         _pts_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
     num_points = (size_t)line_cnt;
     diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::_set_universal_label(const LabelType universal_label)
+{
+    this->set_universal_label(std::any_cast<const LabelT>(universal_label));
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2866,11 +2867,6 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                              " . there are no labels for the point."
                       << std::endl;
             return -1;
-        }
-
-        if (!_use_universal_label && labels.size() == 1 && labels[0] == 0)
-        {
-            set_universal_label(0);
         }
 
         _pts_to_labels[location] = labels;

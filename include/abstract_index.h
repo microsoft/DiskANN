@@ -103,6 +103,8 @@ class AbstractIndex
     // memory should be allocated for vec before calling this function
     template <typename tag_type, typename data_type> int get_vector_by_tag(tag_type &tag, data_type *vec);
 
+    template <typename label_type> void set_universal_label(const label_type universal_label);
+
   private:
     virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
@@ -120,5 +122,6 @@ class AbstractIndex
     virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
                                      float *distances, DataVector &res_vectors) = 0;
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) = 0;
+    virtual void _set_universal_label(const LabelType universal_label) = 0;
 };
 } // namespace diskann
