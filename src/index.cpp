@@ -315,7 +315,8 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
             {
                 std::ofstream label_writer(std::string(filename) + "_labels.txt");
                 assert(label_writer.is_open());
-                for (uint32_t i = 0; i < _nd + _frozen_pts_used; i++)
+                auto frozen_pts_to_use = _dynamic_index ? _frozen_pts_used : _num_frozen_pts;
+                for (uint32_t i = 0; i < _nd + frozen_pts_to_use; i++)
                 {
                     for (uint32_t j = 0; j + 1 < _pts_to_labels[i].size(); j++)
                     {
