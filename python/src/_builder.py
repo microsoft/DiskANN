@@ -70,6 +70,15 @@ def build_disk_index(
     in the format DiskANN's PQ Flash Index builder requires. This temp folder is deleted upon index creation completion
     or error.
 
+    ## Distance Metric and Vector Datatype Restrictions
+    | Metric \ Datatype | np.float32 | np.uint8 | np.int8 |
+    |-------------------|------------|----------|---------|
+    | L2                |      ✅     |     ✅    |    ✅    |
+    | MIPS              |      ✅     |     ❌    |    ❌    |
+    | Cosine [^bug-in-disk-cosine]     |      ❌     |     ❌    |    ❌    |
+
+    [^bug-in-disk-cosine]: For StaticDiskIndex, Cosine distances are not currently supported.
+
     ### Parameters
     - **data**: Either a `str` representing a path to a DiskANN vector bin file, or a numpy.ndarray,
       of a supported dtype, in 2 dimensions. Note that `vector_dtype` must be provided if data is a `str`
@@ -119,6 +128,12 @@ def build_disk_index(
     vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
         data, vector_dtype, index_directory, index_prefix
     )
+    _assert(dap_metric != _native_dap.COSINE, "Cosine is currently not supported in StaticDiskIndex")
+    if dap_metric == _native_dap.INNER_PRODUCT:
+        _assert(
+            vector_dtype_actual == np.float32,
+            "Integral vector dtypes (np.uint8, np.int8) are not supported with distance metric mips"
+        )
 
     num_points, dimensions = vectors_metadata_from_file(vector_bin_path)
 
@@ -176,6 +191,14 @@ def build_memory_index(
     `diskannpy.DynamicMemoryIndex`, you **must** supply a valid value for the `tags` parameter. **Do not supply
     tags if the index is intended to be `diskannpy.StaticMemoryIndex`**!
 
+    ## Distance Metric and Vector Datatype Restrictions
+
+    | Metric \ Datatype | np.float32 | np.uint8 | np.int8 |
+    |-------------------|------------|----------|---------|
+    | L2                |      ✅     |     ✅    |    ✅    |
+    | MIPS              |      ✅     |     ❌    |    ❌    |
+    | Cosine            |      ✅     |     ✅    |    ✅    |
+
     ### Parameters
 
     - **data**: Either a `str` representing a path to an existing DiskANN vector bin file, or a numpy.ndarray of a
@@ -232,6 +255,11 @@ def build_memory_index(
     vector_bin_path, vector_dtype_actual = _valid_path_and_dtype(
         data, vector_dtype, index_directory, index_prefix
     )
+    if dap_metric == _native_dap.INNER_PRODUCT:
+        _assert(
+            vector_dtype_actual == np.float32,
+            "Integral vector dtypes (np.uint8, np.int8) are not supported with distance metric mips"
+        )
 
     num_points, dimensions = vectors_metadata_from_file(vector_bin_path)
 

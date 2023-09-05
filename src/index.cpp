@@ -1789,6 +1789,10 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     {
         return _label_map[raw_label];
     }
+    if (_use_universal_label)
+    {
+        return _universal_label;
+    }
     std::stringstream stream;
     stream << "Unable to find label in the Label Map";
     diskann::cerr << stream.str() << std::endl;
@@ -2410,7 +2414,7 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
     const uint32_t range = params.max_degree;
     const uint32_t maxc = params.max_occlusion_size;
     const float alpha = params.alpha;
-    const uint32_t num_threads = params.num_threads == 0 ? omp_get_num_threads() : params.num_threads;
+    const uint32_t num_threads = params.num_threads == 0 ? omp_get_num_procs() : params.num_threads;
 
     uint32_t num_calls_to_process_delete = 0;
     diskann::Timer timer;
