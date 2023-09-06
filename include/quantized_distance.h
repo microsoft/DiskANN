@@ -14,7 +14,7 @@ template <typename data_t> class QuantizedDistance
     QuantizedDistance() = default;
     QuantizedDistance(const QuantizedDistance &) = delete;
     QuantizedDistance &operator=(const QuantizedDistance &) = delete;
-    virtual ~QuantizedDistance(){};
+    virtual ~QuantizedDistance() = default;
 
     virtual bool is_opq() const = 0;
     virtual std::string get_quantized_vectors_filename(const std::string &prefix) const = 0;

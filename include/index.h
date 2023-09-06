@@ -22,7 +22,6 @@
 #include "in_mem_graph_store.h"
 #include "abstract_index.h"
 
-// REFACTOR
 #include "quantized_distance.h"
 #include "pq_data_store.h"
 
@@ -63,9 +62,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Constructor for incremental index
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
                             const std::shared_ptr<IndexWriteParameters> index_parameters,
-                            const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts,
-                            const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
-                            const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq);
+                            const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts = 0,
+                            const bool dynamic_index = false, const bool enable_tags = false, const bool concurrent_consolidate = false,
+                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0, const bool use_opq = false);
 
     DISKANN_DLLEXPORT ~Index();
 

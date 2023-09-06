@@ -94,16 +94,16 @@ std::shared_ptr<PQDataStore<T>> IndexFactory::construct_pq_datastore(DataStoreSt
                                                                      size_t dimension, Metric m, size_t num_pq_chunks,
                                                                      bool use_opq)
 {
-    std::shared_ptr<Distance<T>> distance_fn;
-    std::shared_ptr<QuantizedDistance<T>> quantized_distance_fn;
+    std::unique_ptr<Distance<T>> distance_fn;
+    std::unique_ptr<QuantizedDistance<T>> quantized_distance_fn;
 
-    quantized_distance_fn = std::make_shared<PQL2Distance<T>>((uint32_t)num_pq_chunks, use_opq);
+    quantized_distance_fn = std::move(std::make_unique<PQL2Distance<T>>((uint32_t)num_pq_chunks, use_opq));
     switch (strategy)
     {
     case DataStoreStrategy::MEMORY:
         distance_fn.reset(construct_inmem_distance_fn<T>(m));
         return std::make_shared<diskann::PQDataStore<T>>(dimension, (location_t)(num_points), num_pq_chunks,
-                                                         distance_fn, quantized_distance_fn);
+                                                         std::move(distance_fn), std::move(quantized_distance_fn));
     default:
         // REFACTOR TODO: We do support diskPQ - so we may need to add a new class for SSDPQDataStore!
         break;

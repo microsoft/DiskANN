@@ -19,9 +19,7 @@
 #ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif
-// REFACTOR TODO: Must move to factory.
-#include "pq_scratch.h"
-#include "pq_l2_distance.h"
+
 #include "index.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
@@ -763,12 +761,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     float *pq_dists = nullptr;
 
-    //REFACTOR PQ: Preprocess the query with the appropriate "pq" datastore. It could 
-    // also be the "actual" datastore in which case this is a no-op.
-    //if (_pq_dist)
-    //{
-        _pq_data_store->preprocess_query(aligned_query, scratch);
-    //}
+    _pq_data_store->preprocess_query(aligned_query, scratch);
 
     if (expanded_nodes.size() > 0 || id_scratch.size() > 0)
     {
@@ -798,7 +791,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     // Lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, scratch, pq_dists](const std::vector<uint32_t> &ids, std::vector<float> &dists_out) {
-        // REFACTOR
         _pq_data_store->get_distance(scratch->aligned_query(), ids, dists_out, scratch);
     };
 
@@ -830,20 +822,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
 
             float distance;
-            //if (_pq_dist)
-            //{
-                // REFACTOR PQ. We pay a small price in efficiency for better code structure. 
-                uint32_t ids[] = {id};
-                float distances[] = {std::numeric_limits<float>::max()};
-                _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
-                distance = distances[0];
-                // pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists,
-                //                &distance);
-            //}
-            //else
-            //{
-            //    distance = _data_store->get_distance(aligned_query, id);
-            //}
+            uint32_t ids[] = {id};
+            float distances[] = {std::numeric_limits<float>::max()};
+            _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
+            distance = distances[0];
+
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
         }
@@ -915,29 +898,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
         }
 
-        // Compute distances to unvisited nodes in the expansion
-        // REFACTOR PQ
-        //if (_pq_dist)
-        //{
-            assert(dist_scratch.capacity() >= id_scratch.size());
-            compute_dists(id_scratch, dist_scratch);
-        //}
-        //else
-        //{
-        //    assert(dist_scratch.size() == 0);
-        //    for (size_t m = 0; m < id_scratch.size(); ++m)
-        //    {
-        //        uint32_t id = id_scratch[m];
-
-        //        if (m + 1 < id_scratch.size())
-        //        {
-        //            auto nextn = id_scratch[m + 1];
-        //            _data_store->prefetch_vector(nextn);
-        //        }
-
-        //        dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
-        //    }
-        //}
+        assert(dist_scratch.capacity() >= id_scratch.size());
+        compute_dists(id_scratch, dist_scratch);
         cmps += (uint32_t)id_scratch.size();
 
         // Insert <id, dist> pairs into the pool of candidates
@@ -1586,8 +1548,6 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
                << " points, but "
                << "index can support only " << _max_points << " points as specified in constructor." << std::endl;
 
-        // REFACTOR PQDataStore will take care of its memory
-        // if (_pq_dist) aligned_free(_pq_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -1597,8 +1557,6 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         stream << "ERROR: Driver requests loading " << num_points_to_load << " points and file has only "
                << file_num_points << " points." << std::endl;
 
-        // REFACTOR: PQDataStore will take care of its memory
-        // if (_pq_dist) aligned_free(_pq_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -1609,8 +1567,6 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
                << "but file has " << file_dim << " dimension." << std::endl;
         diskann::cerr << stream.str() << std::endl;
 
-        // REFACTOR: PQDataStore will take care of its memory
-        // if (_pq_dist) aligned_free(_pq_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
@@ -1618,7 +1574,6 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
     //to not populate_data if it has been called once. 
     if (_pq_dist)
     {
-        // REFACTOR
 #ifdef EXEC_ENV_OLS
         std::stringstream ss; 
         ss << "PQ Build is not supported in DLVS environment (i.e. if EXEC_ENV_OLS is defined)" << std::endl;
@@ -3023,12 +2978,6 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     delete[] bfs_sets;
 }
 
-// REFACTOR: This should be an OptimizedDataStore class, dummy impl here for
-// compiling sake template <typename T, typename TagT, typename LabelT> void
-// Index<T, TagT, LabelT>::optimize_index_layout()
-//{ // use after build or load
-//}
-
 // REFACTOR: This should be an OptimizedDataStore class
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::optimize_index_layout()
 { // use after build or load
@@ -3064,14 +3013,6 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     _graph_store->resize_graph(0);
     delete[] cur_vec;
 }
-
-//  REFACTOR: once optimized layout becomes its own Data+Graph store, we should
-//  just invoke regular search
-// template <typename T, typename TagT, typename LabelT>
-// void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query,
-// size_t K, size_t L, uint32_t *indices)
-//{
-//}
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::_search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices)

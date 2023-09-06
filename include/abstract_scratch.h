@@ -12,7 +12,7 @@ template <typename data_t> struct AbstractScratch
     AbstractScratch() = default;
     // This class does not take any responsibilty for memory management of
     // its members. It is the responsibility of the derived classes to do so.
-    virtual ~AbstractScratch(){};
+    virtual ~AbstractScratch() = default;
 
     // Scratch objects should not be copied
     AbstractScratch(const AbstractScratch &) = delete;

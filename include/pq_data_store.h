@@ -13,8 +13,10 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
 {
 
   public:
-    PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks, std::shared_ptr<Distance<data_t>> distance_fn,
-                std::shared_ptr<QuantizedDistance<data_t>> pq_distance_fn);
+    PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks, std::unique_ptr<Distance<data_t>> distance_fn,
+                std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn);
+    PQDataStore(const PQDataStore&) = delete;
+    PQDataStore &operator=(const PQDataStore&) = delete;
     ~PQDataStore();
 
     // Load quantized vectors from a set of files. Here filename is treated
@@ -89,7 +91,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     bool _use_opq = false;
 
     Metric _distance_metric;
-    std::shared_ptr<Distance<data_t>> _distance_fn = nullptr;
-    std::shared_ptr<QuantizedDistance<data_t>> _pq_distance_fn = nullptr;
+    std::unique_ptr<Distance<data_t>> _distance_fn = nullptr;
+    std::unique_ptr<QuantizedDistance<data_t>> _pq_distance_fn = nullptr;
 };
 } // namespace diskann
