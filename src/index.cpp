@@ -93,11 +93,11 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
     if (_dynamic_index)
     {
+        this->enable_delete(); // enable delete by default for dynamic index
         if (_filtered_index)
         {
             _pts_to_labels.resize(total_internal_points);
         }
-        this->enable_delete(); // enable delete by default for dynamic index
     }
 
     if (index_config.index_write_params != nullptr)
@@ -315,8 +315,7 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
             {
                 std::ofstream label_writer(std::string(filename) + "_labels.txt");
                 assert(label_writer.is_open());
-                auto frozen_pts_to_use = _dynamic_index ? _frozen_pts_used : _num_frozen_pts;
-                for (uint32_t i = 0; i < _nd + frozen_pts_to_use; i++)
+                for (uint32_t i = 0; i < _nd + _num_frozen_pts; i++)
                 {
                     for (uint32_t j = 0; j + 1 < _pts_to_labels[i].size(); j++)
                     {
@@ -1838,11 +1837,11 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             _labels.insert(token_as_num);
         }
 
-        if (lbls.size() <= 0)
+        /*if (lbls.size() <= 0)
         {
             diskann::cout << "No label found";
             exit(-1);
-        }
+        }*/
 
         std::sort(lbls.begin(), lbls.end());
         _pts_to_labels[line_cnt] = lbls;
@@ -2104,7 +2103,23 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         {
             // safe because Index uses uint32_t ids internally
             // and IDType will be uint32_t or uint64_t
-            indices[pos] = (IdType)best_L_nodes[i].id;
+            if (_enable_tags)
+            {
+                TagT tag;
+                if (_location_to_tag.try_get(best_L_nodes[i].id, tag))
+                {
+                    indices[pos] = (IdType)tag;
+                }
+                else
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                indices[pos] = (IdType)best_L_nodes[i].id;
+            }
+
             if (distances != nullptr)
             {
 #ifdef EXEC_ENV_OLS
