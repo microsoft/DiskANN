@@ -173,7 +173,7 @@ template <typename label_type> class FilterHandler
             std::ofstream medoid_writer(save_path);
             if (medoid_writer.fail())
             {
-                throw diskann::ANNException(std::string("Failed to open medoid file ") + filename, -1);
+                throw diskann::ANNException(std::string("Failed to open medoid file ") + save_path, -1);
             }
             for (auto iter : _label_to_medoid_id)
             {
