@@ -21,6 +21,7 @@
 #include "in_mem_data_store.h"
 #include "in_mem_graph_store.h"
 #include "abstract_index.h"
+#include "filter_handler.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -364,7 +365,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _filtered_index = false;
     std::vector<std::vector<LabelT>> _pts_to_labels;
     tsl::robin_set<LabelT> _labels;
-    std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     bool _use_universal_label = false;

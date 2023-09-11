@@ -1826,7 +1826,6 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const std::string &label_file,
                                                   const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
-    _labels_file = label_file; // original label file
     _filtered_index = true;
     _label_to_medoid_id.clear();
     size_t num_points_labels = 0;
