@@ -21,7 +21,7 @@
 #include "in_mem_data_store.h"
 #include "in_mem_graph_store.h"
 #include "abstract_index.h"
-#include "filter_handler.h"
+#include "filter_manager.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -330,7 +330,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::unique_ptr<AbstractGraphStore> _graph_store;
 
     // Filter Handler
-    std::unique_ptr<FilterHandler<LabelT>> _filter_handler;
+    std::unique_ptr<FilterManager<LabelT>> _filter_manager;
 
     char *_opt_graph = nullptr;
 

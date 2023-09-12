@@ -6,14 +6,14 @@
 namespace diskann
 {
 // This class is responsible for filter actions in index, and should not be used outside.
-template <typename label_type> class FilterHandler
+template <typename label_type> class FilterManager
 {
   public:
-    FilterHandler(const size_t num_points) : _num_points(num_points)
+    FilterManager(const size_t num_points) : _num_points(num_points)
     {
         _pts_to_labels.resize(num_points);
     }
-    ~FilterHandler() = default;
+    ~FilterManager() = default;
 
     // needs some internal lock
     bool detect_common_filters(uint32_t point_id, bool search_invocation,
