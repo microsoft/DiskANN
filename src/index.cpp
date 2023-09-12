@@ -138,6 +138,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .is_enable_tags(enable_tags)
                 .is_concurrent_consolidate(concurrent_consolidate)
                 .is_pq_dist_build(pq_dist_build)
+                .is_filtered(filtered_index)
                 .with_num_pq_chunks(num_pq_chunks)
                 .is_use_opq(use_opq)
                 .with_data_type(diskann_type_to_name<T>())
