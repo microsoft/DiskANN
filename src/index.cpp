@@ -34,7 +34,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
       _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
       _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
       _pq_dist(index_config.pq_dist_build), _use_opq(index_config.use_opq), _num_pq_chunks(index_config.num_pq_chunks),
-      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
+      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate),
+      _filtered_index(index_config.filtered_index)
 {
     if (_dynamic_index && !_enable_tags)
     {
@@ -124,7 +125,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const std::shared_ptr<IndexWriteParameters> index_parameters,
                               const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts,
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
-                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq)
+                              const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq,
+                              const bool filtered_index)
     : Index(IndexConfigBuilder()
                 .with_metric(m)
                 .with_dimension(dim)
@@ -519,10 +521,13 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 #ifndef EXEC_ENV_OLS
     if (file_exists(labels_file))
     {
-        _filter_handler->load_label_map(labels_map_file); // load_label_map(labels_map_file);
+        if (_filter_handler == nullptr)
+        {
+            _filter_handler = std::make_unique<FilterHandler<LabelT>>(_max_points + _num_frozen_pts);
+        }
         parse_label_file(labels_file, label_num_pts);
+        _filter_handler->load_label_map(labels_map_file); // load_label_map(labels_map_file);
         assert(label_num_pts == data_file_num_pts);
-        //_filter_handler
         _filter_handler->load_medoids(labels_to_medoids);
 
         std::string universal_label_file(filename);

@@ -144,6 +144,7 @@ int main(int argc, char **argv)
                           .with_index_write_params(index_build_params)
                           .is_enable_tags(false)
                           .is_use_opq(use_opq)
+                          .is_filtered(label_file != "")
                           .is_pq_dist_build(use_pq_build)
                           .with_num_pq_chunks(build_PQ_bytes)
                           .build();

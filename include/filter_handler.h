@@ -11,7 +11,7 @@ template <typename label_type> class FilterHandler
   public:
     FilterHandler(const size_t num_points) : _num_points(num_points)
     {
-        _pts_to_labels.reserve(num_points);
+        _pts_to_labels.resize(num_points);
     }
     ~FilterHandler() = default;
 
@@ -296,6 +296,7 @@ template <typename label_type> class FilterHandler
     label_type _universal_label = 0; // this is the internal mapping, may not always be true in future
     tsl::robin_set<label_type> _universal_labels_set;
 
+    // populates pts_to labels and _labels from given label file
     size_t parse_label_file(const std::string &label_file)
     {
         // Format of Label txt file: filters with comma separators
