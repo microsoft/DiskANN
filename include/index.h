@@ -329,6 +329,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Graph related data structures
     std::unique_ptr<AbstractGraphStore> _graph_store;
 
+    // Filter Handler
+    std::unique_ptr<FilterHandler<LabelT>> _filter_handler;
+
     char *_opt_graph = nullptr;
 
     T *_data = nullptr; // coordinates of all base points
@@ -363,14 +366,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Filter Support
 
     bool _filtered_index = false;
-    std::vector<std::vector<LabelT>> _pts_to_labels;
-    tsl::robin_set<LabelT> _labels;
-    std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
-    std::unordered_map<uint32_t, uint32_t> _medoid_counts;
-    bool _use_universal_label = false;
-    LabelT _universal_label = 0;
+    /*  std::vector<std::vector<LabelT>> _pts_to_labels;
+      tsl::robin_set<LabelT> _labels;
+      std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
+      std::unordered_map<uint32_t, uint32_t> _medoid_counts;
+      bool _use_universal_label = false;
+      LabelT _universal_label = 0;
+      std::unordered_map<std::string, LabelT> _label_map;*/
     uint32_t _filterIndexingQueueSize;
-    std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;

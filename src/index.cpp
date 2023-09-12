@@ -82,6 +82,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
 
     _data_store = std::move(data_store);
     _graph_store = std::move(graph_store);
+    if (_filtered_index)
+    {
+        _filter_handler = std::make_unique<FilterHandler<LabelT>>(total_internal_points);
+    }
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
     if (_enable_tags)
@@ -283,44 +287,8 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     {
         if (_filtered_index)
         {
-            if (_label_to_medoid_id.size() > 0)
-            {
-                std::ofstream medoid_writer(std::string(filename) + "_labels_to_medoids.txt");
-                if (medoid_writer.fail())
-                {
-                    throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
-                }
-                for (auto iter : _label_to_medoid_id)
-                {
-                    medoid_writer << iter.first << ", " << iter.second << std::endl;
-                }
-                medoid_writer.close();
-            }
-
-            if (_use_universal_label)
-            {
-                std::ofstream universal_label_writer(std::string(filename) + "_universal_label.txt");
-                assert(universal_label_writer.is_open());
-                universal_label_writer << _universal_label << std::endl;
-                universal_label_writer.close();
-            }
-
-            if (_pts_to_labels.size() > 0)
-            {
-                std::ofstream label_writer(std::string(filename) + "_labels.txt");
-                assert(label_writer.is_open());
-                for (uint32_t i = 0; i < _pts_to_labels.size(); i++)
-                {
-                    for (uint32_t j = 0; j < (_pts_to_labels[i].size() - 1); j++)
-                    {
-                        label_writer << _pts_to_labels[i][j] << ",";
-                    }
-                    if (_pts_to_labels[i].size() != 0)
-                        label_writer << _pts_to_labels[i][_pts_to_labels[i].size() - 1];
-                    label_writer << std::endl;
-                }
-                label_writer.close();
-            }
+            _filter_handler->save_medoids(std::string(filename) + "_labels_to_medoids.txt");
+            _filter_handler->save_labels(std::string(filename), _nd + _num_frozen_pts);
         }
 
         std::string graph_file = std::string(filename);
@@ -551,46 +519,20 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 #ifndef EXEC_ENV_OLS
     if (file_exists(labels_file))
     {
-        _label_map = load_label_map(labels_map_file);
+        _filter_handler->load_label_map(labels_map_file); // load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
         assert(label_num_pts == data_file_num_pts);
-        if (file_exists(labels_to_medoids))
-        {
-            std::ifstream medoid_stream(labels_to_medoids);
-            std::string line, token;
-            uint32_t line_cnt = 0;
-
-            _label_to_medoid_id.clear();
-
-            while (std::getline(medoid_stream, line))
-            {
-                std::istringstream iss(line);
-                uint32_t cnt = 0;
-                uint32_t medoid = 0;
-                LabelT label;
-                while (std::getline(iss, token, ','))
-                {
-                    token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-                    token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-                    LabelT token_as_num = (LabelT)std::stoul(token);
-                    if (cnt == 0)
-                        label = token_as_num;
-                    else
-                        medoid = token_as_num;
-                    cnt++;
-                }
-                _label_to_medoid_id[label] = medoid;
-                line_cnt++;
-            }
-        }
+        //_filter_handler
+        _filter_handler->load_medoids(labels_to_medoids);
 
         std::string universal_label_file(filename);
         universal_label_file += "_universal_label.txt";
         if (file_exists(universal_label_file))
         {
+            LabelT universal_label;
             std::ifstream universal_label_reader(universal_label_file);
-            universal_label_reader >> _universal_label;
-            _use_universal_label = true;
+            universal_label_reader >> universal_label;
+            _filter_handler->set_universal_label(universal_label);
             universal_label_reader.close();
         }
     }
@@ -729,31 +671,7 @@ template <typename T, typename TagT, typename LabelT>
 bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
 {
-    auto &curr_node_labels = _pts_to_labels[point_id];
-    std::vector<LabelT> common_filters;
-    std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
-                          curr_node_labels.end(), std::back_inserter(common_filters));
-    if (common_filters.size() > 0)
-    {
-        // This is to reduce the repetitive calls. If common_filters size is > 0 ,
-        // we dont need to check further for universal label
-        return true;
-    }
-    if (_use_universal_label)
-    {
-        if (!search_invocation)
-        {
-            if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) != incoming_labels.end() ||
-                std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
-                common_filters.push_back(_universal_label);
-        }
-        else
-        {
-            if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
-                common_filters.push_back(_universal_label);
-        }
-    }
-    return (common_filters.size() > 0);
+    return _filter_handler->detect_common_filters(point_id, search_invocation, incoming_labels);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -844,7 +762,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter)
         {
-            if (!detect_common_filters(id, search_invocation, filter_label))
+            if (!_filter_handler->detect_common_filters(id, search_invocation, filter_label))
                 continue;
         }
 
@@ -912,7 +830,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (!detect_common_filters(id, search_invocation, filter_label))
+                    if (!_filter_handler->detect_common_filters(id, search_invocation, filter_label))
                         continue;
                 }
 
@@ -989,12 +907,12 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     else
     {
         std::vector<uint32_t> filter_specific_start_nodes;
-        for (auto &x : _pts_to_labels[location])
-            filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
+        for (auto &x : _filter_handler->get_labels_by_point_id(location))
+            filter_specific_start_nodes.emplace_back(_filter_handler->get_medoid_by_label(x));
 
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
-                               _pts_to_labels[location], false);
+                               _filter_handler->get_labels_by_point_id(location), false);
     }
 
     auto &pool = scratch->pool();
@@ -1077,9 +995,11 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     uint32_t a = iter->id;
                     uint32_t b = iter2->id;
-                    for (auto &x : _pts_to_labels[b])
+                    for (auto &x : _filter_handler->get_labels_by_point_id(b))
                     {
-                        if (std::find(_pts_to_labels[a].begin(), _pts_to_labels[a].end(), x) == _pts_to_labels[a].end())
+                        if (std::find(_filter_handler->get_labels_by_point_id(a).begin(),
+                                      _filter_handler->get_labels_by_point_id(a).end(),
+                                      x) == _filter_handler->get_labels_by_point_id(a).end())
                         {
                             prune_allowed = false;
                         }
@@ -1750,76 +1670,19 @@ std::unordered_map<std::string, LabelT> Index<T, TagT, LabelT>::load_label_map(c
 template <typename T, typename TagT, typename LabelT>
 LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
 {
-    if (_label_map.find(raw_label) != _label_map.end())
-    {
-        return _label_map[raw_label];
-    }
-    if (_use_universal_label)
-    {
-        return _universal_label;
-    }
-    std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    return _filter_handler->get_converted_label(raw_label);
 }
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points)
 {
-    // Format of Label txt file: filters with comma separators
-
-    std::ifstream infile(label_file);
-    if (infile.fail())
-    {
-        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
-    }
-
-    std::string line, token;
-    uint32_t line_cnt = 0;
-
-    while (std::getline(infile, line))
-    {
-        line_cnt++;
-    }
-    _pts_to_labels.resize(line_cnt, std::vector<LabelT>());
-
-    infile.clear();
-    infile.seekg(0, std::ios::beg);
-    line_cnt = 0;
-
-    while (std::getline(infile, line))
-    {
-        std::istringstream iss(line);
-        std::vector<LabelT> lbls(0);
-        getline(iss, token, '\t');
-        std::istringstream new_iss(token);
-        while (getline(new_iss, token, ','))
-        {
-            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = (LabelT)std::stoul(token);
-            lbls.push_back(token_as_num);
-            _labels.insert(token_as_num);
-        }
-        if (lbls.size() <= 0)
-        {
-            diskann::cout << "No label found";
-            exit(-1);
-        }
-        std::sort(lbls.begin(), lbls.end());
-        _pts_to_labels[line_cnt] = lbls;
-        line_cnt++;
-    }
-    num_points = (size_t)line_cnt;
-    diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
+    num_points = _filter_handler->load_labels(label_file);
 }
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::set_universal_label(const LabelT &label)
 {
-    _use_universal_label = true;
-    _universal_label = label;
+    _filter_handler->set_universal_label(label);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1827,66 +1690,11 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                                                   const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
-    _label_to_medoid_id.clear();
-    size_t num_points_labels = 0;
+    // _label_to_medoid_id.clear();
+    auto &label_set = _filter_handler->get_all_label_set();
+    size_t num_points_labels = _filter_handler->load_labels(label_file);
 
-    parse_label_file(label_file,
-                     num_points_labels); // determines medoid for each label and identifies
-                                         // the points to label mapping
-
-    std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
-
-    for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
-    {
-        for (auto label : _pts_to_labels[point_id])
-        {
-            if (label != _universal_label)
-            {
-                label_to_points[label].emplace_back(point_id);
-            }
-            else
-            {
-                for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++)
-                {
-                    auto itr = _labels.begin();
-                    std::advance(itr, lbl);
-                    auto &x = *itr;
-                    label_to_points[x].emplace_back(point_id);
-                }
-            }
-        }
-    }
-
-    uint32_t num_cands = 25;
-    for (auto itr = _labels.begin(); itr != _labels.end(); itr++)
-    {
-        uint32_t best_medoid_count = std::numeric_limits<uint32_t>::max();
-        auto &curr_label = *itr;
-        uint32_t best_medoid;
-        auto labeled_points = label_to_points[curr_label];
-        for (uint32_t cnd = 0; cnd < num_cands; cnd++)
-        {
-            uint32_t cur_cnd = labeled_points[rand() % labeled_points.size()];
-            uint32_t cur_cnt = std::numeric_limits<uint32_t>::max();
-            if (_medoid_counts.find(cur_cnd) == _medoid_counts.end())
-            {
-                _medoid_counts[cur_cnd] = 0;
-                cur_cnt = 0;
-            }
-            else
-            {
-                cur_cnt = _medoid_counts[cur_cnd];
-            }
-            if (cur_cnt < best_medoid_count)
-            {
-                best_medoid_count = cur_cnt;
-                best_medoid = cur_cnd;
-            }
-        }
-        _label_to_medoid_id[curr_label] = best_medoid;
-        _medoid_counts[best_medoid]++;
-    }
-
+    _filter_handler->calculate_best_medoids(num_points_to_load, 25);
     this->build(filename, num_points_to_load, tags);
 }
 
@@ -2036,9 +1844,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
-    if (_label_to_medoid_id.find(filter_label) != _label_to_medoid_id.end())
+    if (_filter_handler->label_has_medoid(filter_label))
     {
-        init_ids.emplace_back(_label_to_medoid_id[filter_label]);
+        init_ids.emplace_back(_filter_handler->get_medoid_by_label(filter_label));
     }
     else
     {
