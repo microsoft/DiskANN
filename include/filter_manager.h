@@ -89,6 +89,7 @@ template <typename label_type> class FilterManager
     void set_universal_label(label_type universal_label)
     {
         _universal_label = universal_label; // remove this when multiple labels are supported
+        _use_universal_label = true;
         //_universal_labels_set.insert(universal_label); // when we support multiple universal labels
     }
 
