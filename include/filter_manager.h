@@ -89,13 +89,14 @@ template <typename label_type> class FilterManager
     void set_universal_label(label_type universal_label)
     {
         _universal_label = universal_label; // remove this when multiple labels are supported
-        _universal_labels_set.insert(universal_label);
+        //_universal_labels_set.insert(universal_label); // when we support multiple universal labels
     }
 
     const label_type get_universal_label() const
     {
         // for now there is only one universal label, so return the first one
-        *_universal_labels_set.begin();
+        // return *_universal_labels_set.begin();
+        return _universal_label;
     }
 
     // ideally takes raw label file and then genrate internal mapping and keep the info of mapping

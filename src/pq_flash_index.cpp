@@ -821,7 +821,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             std::string univ_label;
             universal_label_reader >> univ_label;
             universal_label_reader.close();
-            if (univ_label != "")
+            if (!univ_label.empty())
             {
                 LabelT label_as_num = (LabelT)std::stoul(univ_label);
                 set_universal_label(label_as_num);
