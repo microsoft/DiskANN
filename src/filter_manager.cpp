@@ -1,4 +1,3 @@
-#pragma once
 #include <filter_manager.h>
 
 namespace diskann
