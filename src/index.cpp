@@ -526,8 +526,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         {
             _filter_manager = std::make_unique<FilterManager<LabelT>>(_max_points + _num_frozen_pts);
         }
-        parse_label_file(labels_file, label_num_pts);
         _filter_manager->load_label_map(labels_map_file); // load_label_map(labels_map_file);
+        parse_label_file(labels_file, label_num_pts);
         assert(label_num_pts == data_file_num_pts);
         _filter_manager->load_medoids(labels_to_medoids);
 

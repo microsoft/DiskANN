@@ -64,12 +64,12 @@ template <typename label_type> class FilterManager
         _label_to_medoid_id[label] = new_medoid;
     }
 
-    uint32_t get_medoid_by_label(const label_type &label)
+    const uint32_t &get_medoid_by_label(const label_type &label)
     {
         return _label_to_medoid_id[label];
     }
 
-    bool label_has_medoid(label_type label)
+    bool label_has_medoid(const label_type &label)
     {
         return _label_to_medoid_id.find(label) != _label_to_medoid_id.end();
     }
@@ -78,11 +78,6 @@ template <typename label_type> class FilterManager
     void add_label_to_point(const location_t point_id, label_type label)
     {
         _pts_to_labels[point_id].emplace_back(label);
-        // if never seen before add it to label set, should be O(1)
-        if (_labels.find(label) == _labels.end())
-        {
-            _labels.insert(label);
-        }
     }
 
     // TODO: in future we may accept a set or vector of universal labels
@@ -182,10 +177,11 @@ template <typename label_type> class FilterManager
         {
             std::ofstream universal_label_writer(save_path_prefix + "_universal_label.txt");
             assert(universal_label_writer.is_open());
-            for (auto label : _universal_labels_set)
+            universal_label_writer << _universal_label << std::endl;
+            /*for (auto label : _universal_labels_set)
             {
                 universal_label_writer << label << std::endl;
-            }
+            }*/
             universal_label_writer.close();
         }
     }
