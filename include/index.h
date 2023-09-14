@@ -21,7 +21,7 @@
 #include "in_mem_data_store.h"
 #include "in_mem_graph_store.h"
 #include "abstract_index.h"
-#include "filter_manager.h"
+#include "in_mem_filter_store.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -101,7 +101,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
-                                                const size_t num_points_to_load,
+                                                const std::string &universal_label, const size_t num_points_to_load,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
@@ -329,8 +329,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Graph related data structures
     std::unique_ptr<AbstractGraphStore> _graph_store;
 
-    // Filter Handler
-    std::unique_ptr<FilterManager<LabelT>> _filter_manager;
+    // Filter Store
+    std::unique_ptr<AbstractFilterStore<LabelT>> _filter_store;
 
     char *_opt_graph = nullptr;
 

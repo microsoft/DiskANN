@@ -1,17 +1,17 @@
-#include <filter_manager.h>
+#include <in_mem_filter_store.h>
 
 namespace diskann
 {
 
 template <typename label_type>
-FilterManager<label_type>::FilterManager(const size_t num_points) : _num_points(num_points)
+InMemFilterStore<label_type>::InMemFilterStore(const size_t num_points) : AbstractFilterStore<label_type>(num_points)
 {
     _pts_to_labels.resize(num_points);
 }
 
 template <typename label_type>
-bool FilterManager<label_type>::detect_common_filters(uint32_t point_id, bool search_invocation,
-                                                      const std::vector<label_type> &incoming_labels)
+bool InMemFilterStore<label_type>::detect_common_filters(uint32_t point_id, bool search_invocation,
+                                                         const std::vector<label_type> &incoming_labels)
 {
     auto &curr_node_labels = _pts_to_labels[point_id];
     std::vector<label_type> common_filters;
@@ -41,59 +41,78 @@ bool FilterManager<label_type>::detect_common_filters(uint32_t point_id, bool se
 }
 
 template <typename label_type>
-const std::vector<label_type> &FilterManager<label_type>::get_labels_by_point_id(const location_t point_id)
+const std::vector<label_type> &InMemFilterStore<label_type>::get_labels_by_point_id(const location_t point_id)
 {
     return _pts_to_labels[point_id];
 }
 
-template <typename label_type> const tsl::robin_set<label_type> &FilterManager<label_type>::get_all_label_set()
+template <typename label_type> const tsl::robin_set<label_type> &InMemFilterStore<label_type>::get_all_label_set()
 {
     return _labels;
 }
 
 template <typename label_type>
-void FilterManager<label_type>::update_medoid_by_label(const label_type &label, const uint32_t new_medoid)
+void InMemFilterStore<label_type>::update_medoid_by_label(const label_type &label, const uint32_t new_medoid)
 {
     _label_to_medoid_id[label] = new_medoid;
 }
 
-template <typename label_type> const uint32_t &FilterManager<label_type>::get_medoid_by_label(const label_type &label)
+template <typename label_type>
+const uint32_t &InMemFilterStore<label_type>::get_medoid_by_label(const label_type &label)
 {
     return _label_to_medoid_id[label];
 }
 
-template <typename label_type> bool FilterManager<label_type>::label_has_medoid(const label_type &label)
+template <typename label_type> bool InMemFilterStore<label_type>::label_has_medoid(const label_type &label)
 {
     return _label_to_medoid_id.find(label) != _label_to_medoid_id.end();
 }
 
 template <typename label_type>
-void FilterManager<label_type>::add_label_to_point(const location_t point_id, label_type label)
+void InMemFilterStore<label_type>::add_label_to_point(const location_t point_id, label_type label)
 {
     _pts_to_labels[point_id].emplace_back(label);
 }
 
-template <typename label_type> void FilterManager<label_type>::set_universal_label(label_type universal_label)
+template <typename label_type> void InMemFilterStore<label_type>::set_universal_label(label_type universal_label)
 {
     _universal_label = universal_label; // remove this when multiple labels are supported
     _use_universal_label = true;
     //_universal_labels_set.insert(universal_label); // when we support multiple universal labels
 }
 
-template <typename label_type> const label_type FilterManager<label_type>::get_universal_label() const
+template <typename label_type> const label_type InMemFilterStore<label_type>::get_universal_label() const
 {
     // for now there is only one universal label, so return the first one
     // return *_universal_labels_set.begin();
     return _universal_label;
 }
 
-template <typename label_type> size_t FilterManager<label_type>::load_labels(const std::string &labels_file)
+// ideally takes raw label file and then genrate internal mapping and keep the info of mapping
+template <typename label_type>
+size_t InMemFilterStore<label_type>::load_raw_labels(const std::string &raw_labels_file,
+                                                     const std::string &raw_universal_label)
+{
+    std::string raw_label_file_path =
+        std::string(raw_labels_file).erase(raw_labels_file.size() - 4); // remove .txt from end
+    // generate a map file
+    std::string labels_file_to_use =
+        raw_label_file_path + "_label_formatted.txt"; // will not be used after parse, can be safely deleted.
+    std::string mem_labels_int_map_file = raw_label_file_path + "_labels_map.txt";
+    this->convert_labels_string_to_int(raw_labels_file, labels_file_to_use, mem_labels_int_map_file,
+                                       raw_universal_label);
+    load_label_map(mem_labels_int_map_file); // may cause extra mem usage in build but cleaner API
+    return parse_label_file(labels_file_to_use);
+}
+
+template <typename label_type> size_t InMemFilterStore<label_type>::load_labels(const std::string &labels_file)
 {
     // parse the generated label file
     return parse_label_file(labels_file);
 }
 
-template <typename label_type> size_t FilterManager<label_type>::load_medoids(const std::string &labels_to_medoid_file)
+template <typename label_type>
+size_t InMemFilterStore<label_type>::load_medoids(const std::string &labels_to_medoid_file)
 {
     if (file_exists(labels_to_medoid_file))
     {
@@ -127,7 +146,7 @@ template <typename label_type> size_t FilterManager<label_type>::load_medoids(co
     throw ANNException("ERROR: can not load medoids file does not exist", -1);
 }
 
-template <typename label_type> void FilterManager<label_type>::load_label_map(const std::string &labels_map_file)
+template <typename label_type> void InMemFilterStore<label_type>::load_label_map(const std::string &labels_map_file)
 {
     std::ifstream map_reader(labels_map_file);
     std::string line, token;
@@ -145,12 +164,12 @@ template <typename label_type> void FilterManager<label_type>::load_label_map(co
 }
 
 template <typename label_type>
-void FilterManager<label_type>::save_labels(const std::string &save_path_prefix, const size_t total_points)
+void InMemFilterStore<label_type>::save_labels(const std::string &save_path, const size_t total_points)
 {
 
     if (_pts_to_labels.size() > 0)
     {
-        std::ofstream label_writer(save_path_prefix + "_labels.txt");
+        std::ofstream label_writer(save_path);
         assert(label_writer.is_open());
         for (uint32_t i = 0; i < total_points; i++)
         {
@@ -164,10 +183,13 @@ void FilterManager<label_type>::save_labels(const std::string &save_path_prefix,
         }
         label_writer.close();
     }
+}
 
+template <typename label_type> void InMemFilterStore<label_type>::save_universal_label(const std::string &save_path)
+{
     if (_use_universal_label)
     {
-        std::ofstream universal_label_writer(save_path_prefix + "_universal_label.txt");
+        std::ofstream universal_label_writer(save_path);
         assert(universal_label_writer.is_open());
         universal_label_writer << _universal_label << std::endl;
         /*for (auto label : _universal_labels_set)
@@ -178,7 +200,7 @@ void FilterManager<label_type>::save_labels(const std::string &save_path_prefix,
     }
 }
 
-template <typename label_type> void FilterManager<label_type>::save_medoids(const std::string &save_path)
+template <typename label_type> void InMemFilterStore<label_type>::save_medoids(const std::string &save_path)
 {
     if (_label_to_medoid_id.size() > 0)
     {
@@ -195,7 +217,18 @@ template <typename label_type> void FilterManager<label_type>::save_medoids(cons
     }
 }
 
-template <typename label_type> label_type FilterManager<label_type>::get_converted_label(const std::string &raw_label)
+template <typename label_type> void InMemFilterStore<label_type>::save_label_map(const std::string &save_path)
+{
+    std::ofstream map_writer(save_path);
+    for (auto mp : _label_map)
+    {
+        map_writer << mp.first << "\t" << mp.second << std::endl;
+    }
+    map_writer.close();
+}
+
+template <typename label_type>
+label_type InMemFilterStore<label_type>::get_converted_label(const std::string &raw_label)
 {
     if (_label_map.empty())
     {
@@ -216,7 +249,8 @@ template <typename label_type> label_type FilterManager<label_type>::get_convert
 }
 
 template <typename label_type>
-void FilterManager<label_type>::calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates)
+void InMemFilterStore<label_type>::calculate_best_medoids(const size_t num_points_to_load,
+                                                          const uint32_t num_candidates)
 {
     std::unordered_map<label_type, std::vector<uint32_t>> label_to_points;
 
@@ -272,7 +306,7 @@ void FilterManager<label_type>::calculate_best_medoids(const size_t num_points_t
     }
 }
 
-template <typename label_type> size_t FilterManager<label_type>::parse_label_file(const std::string &label_file)
+template <typename label_type> size_t InMemFilterStore<label_type>::parse_label_file(const std::string &label_file)
 {
     // Format of Label txt file: filters with comma separators
     std::ifstream infile(label_file);
@@ -321,7 +355,60 @@ template <typename label_type> size_t FilterManager<label_type>::parse_label_fil
     return (size_t)line_cnt;
 }
 
-template DISKANN_DLLEXPORT class FilterManager<uint32_t>;
-template DISKANN_DLLEXPORT class FilterManager<uint16_t>;
+template <typename label_type>
+void InMemFilterStore<label_type>::convert_labels_string_to_int(const std::string &inFileName,
+                                                                const std::string &outFileName,
+                                                                const std::string &mapFileName,
+                                                                const std::string &unv_label)
+{
+    std::unordered_map<std::string, uint32_t> string_int_map;
+    std::ofstream label_writer(outFileName);
+    std::ifstream label_reader(inFileName);
+    if (unv_label != "")
+    {
+        string_int_map[unv_label] = 0; // if the mapping is changed, chnage set accordingly.
+        set_universal_label((label_type)0);
+    }
+    std::string line, token;
+    while (std::getline(label_reader, line))
+    {
+        std::istringstream new_iss(line);
+        std::vector<uint32_t> lbls;
+        while (getline(new_iss, token, ','))
+        {
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+            if (string_int_map.find(token) == string_int_map.end())
+            {
+                uint32_t nextId = (uint32_t)string_int_map.size() + 1;
+                string_int_map[token] = nextId;
+            }
+            lbls.push_back(string_int_map[token]);
+        }
+        if (lbls.size() <= 0)
+        {
+            std::cout << "No label found";
+            exit(-1);
+        }
+        for (size_t j = 0; j < lbls.size(); j++)
+        {
+            if (j != lbls.size() - 1)
+                label_writer << lbls[j] << ",";
+            else
+                label_writer << lbls[j] << std::endl;
+        }
+    }
+    label_writer.close();
+
+    std::ofstream map_writer(mapFileName);
+    for (auto mp : string_int_map)
+    {
+        map_writer << mp.first << "\t" << mp.second << std::endl;
+    }
+    map_writer.close();
+}
+
+template DISKANN_DLLEXPORT class InMemFilterStore<uint32_t>;
+template DISKANN_DLLEXPORT class InMemFilterStore<uint16_t>;
 
 } // namespace diskann
