@@ -70,6 +70,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
+    std::string label_file = index_path + "_labels.txt";
     auto config = diskann::IndexConfigBuilder()
                       .with_metric(metric)
                       .with_dimension(query_dim)
@@ -86,6 +87,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       .is_use_opq(false)
                       .with_num_pq_chunks(0)
                       .with_num_frozen_pts(num_frozen_pts)
+                      .with_filtered_index(file_exists(label_file))
                       .build();
 
     auto index_factory = diskann::IndexFactory(config);

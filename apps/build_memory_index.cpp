@@ -146,6 +146,7 @@ int main(int argc, char **argv)
                           .is_use_opq(use_opq)
                           .is_pq_dist_build(use_pq_build)
                           .with_num_pq_chunks(build_PQ_bytes)
+                          .with_filtered_index(file_exists(label_file))
                           .build();
 
         auto index_factory = diskann::IndexFactory(config);

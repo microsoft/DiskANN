@@ -19,6 +19,8 @@ class IndexFactory
 
     DISKANN_DLLEXPORT static std::unique_ptr<AbstractGraphStore> construct_graphstore(
         const GraphStoreStrategy stratagy, const size_t size, const size_t reserve_graph_degree);
+    
+    DISKANN_DLLEXPORT static std::unique_ptr<AbstractFilterStore> construct_graphstore(const size_t size);
 
   private:
     void check_config();

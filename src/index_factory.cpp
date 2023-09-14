@@ -88,6 +88,17 @@ std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(const Gra
     }
 }
 
+template <typename LabelT>
+std::unique_ptr<AbstractFilterStore<T>> IndexFactory::construct_filterstore(const size_t num_points, const bool is_filtered_index)
+{
+    if(is_filtered_index){
+        return std::make_unique<diskann::InMemFilterStore<LabelT>>((location_t)num_points);
+    }
+    else{
+        return nullptr;
+    }
+}
+
 template <typename data_type, typename tag_type, typename label_type>
 std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
 {
@@ -99,8 +110,10 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
     auto graph_store =
         construct_graphstore(_config->graph_strategy, num_points + _config->num_frozen_pts, max_reserve_degree);
+    auto filter_store = 
+        construct_filterstore(num_points,_config->filtered_index);
     return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, std::move(data_store),
-                                                                             std::move(graph_store));
+                                                                             std::move(graph_store), std::move(filter_store));
 }
 
 std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &data_type, const std::string &tag_type,
@@ -166,5 +179,10 @@ template DISKANN_DLLEXPORT std::unique_ptr<AbstractDataStore<int8_t>> IndexFacto
     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
 template DISKANN_DLLEXPORT std::unique_ptr<AbstractDataStore<float>> IndexFactory::construct_datastore(
     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
+
+template DISKANN_DLLEXPORT std::unique_ptr<AbstractFilterStore<uint16_t>> IndexFactory::construct_filterstore(
+    size_t num_points);
+template DISKANN_DLLEXPORT std::unique_ptr<AbstractFilterStore<uint32_t>> IndexFactory::construct_filterstore(
+    size_t num_points);
 
 } // namespace diskann

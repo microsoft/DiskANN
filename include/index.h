@@ -20,6 +20,7 @@
 #include "scratch.h"
 #include "in_mem_data_store.h"
 #include "in_mem_graph_store.h"
+#include "in_mem_filter_store.h"
 #include "abstract_index.h"
 
 #define OVERHEAD_FACTOR 1.1
@@ -57,10 +58,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const size_t num_frozen_pts = 0, const bool dynamic_index = false,
                             const bool enable_tags = false, const bool concurrent_consolidate = false,
                             const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false);
+                            const bool use_opq = false, const bool filtered_index = false);
 
     DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store,
-                            std::unique_ptr<AbstractGraphStore> graph_store);
+                            std::unique_ptr<AbstractGraphStore> graph_store, std::unique_ptr<AbstractFilterStore> filter_store);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -81,9 +82,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
 
-    DISKANN_DLLEXPORT bool detect_common_filters(uint32_t point_id, bool search_invocation,
-                                                 const std::vector<LabelT> &incoming_labels);
-
+    
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
                                  const std::vector<TagT> &tags = std::vector<TagT>());
@@ -99,15 +98,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                  IndexFilterParams &build_params);
 
     // Filtered Support
-    DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
-                                                const size_t num_points_to_load,
+    DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const size_t num_points_to_load,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
-    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
-
-    // Get converted integer label from string to int map (_label_map)
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
-
+   
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.
     DISKANN_DLLEXPORT void set_start_points(const T *data, size_t data_count);
@@ -176,6 +170,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // memory should be allocated for vec before calling this function
     DISKANN_DLLEXPORT int get_vector_by_tag(TagT &tag, T *vec);
 
+    DISKANN_DLLEXPORT bool is_filtered_index() const;
+
     DISKANN_DLLEXPORT void print_status();
 
     DISKANN_DLLEXPORT void count_nodes_at_bfs_levels();
@@ -233,9 +229,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // determines navigating node of the graph by calculating medoid of datafopt
     uint32_t calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
-
-    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
+    //std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
@@ -243,12 +237,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids,
-                                                         InMemQueryScratch<T> *scratch, bool use_filter,
+                                                         InMemQueryScratch<T> *scratch,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
-                                    InMemQueryScratch<T> *scratch, bool use_filter = false,
-                                    uint32_t filteredLindex = 0);
+                                    InMemQueryScratch<T> *scratch, uint32_t filteredLindex = 0);
 
     void prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, std::vector<uint32_t> &pruned_list,
                          InMemQueryScratch<T> *scratch);
@@ -360,17 +353,18 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _deletes_enabled = false;
 
     // Filter Support
+    std::unique_ptr<FilterDataStore<LabelT>> _filter_store;
 
     bool _filtered_index = false;
-    std::vector<std::vector<LabelT>> _pts_to_labels;
-    tsl::robin_set<LabelT> _labels;
-    std::string _labels_file;
-    std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
-    std::unordered_map<uint32_t, uint32_t> _medoid_counts;
-    bool _use_universal_label = false;
-    LabelT _universal_label = 0;
+    //std::vector<std::vector<LabelT>> _pts_to_labels;
+    //tsl::robin_set<LabelT> _labels;
+    // not required to save labels file check the affect std::string _labels_file;
+    //std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
+    //std::unordered_map<uint32_t, uint32_t> _medoid_counts;
+    //bool _use_universal_label = false;
+    //LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
-    std::unordered_map<std::string, LabelT> _label_map;
+    //std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;
