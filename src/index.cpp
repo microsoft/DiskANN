@@ -327,6 +327,34 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                     label_writer << std::endl;
                 }
                 label_writer.close();
+
+                // write compacted raw_labels if data hence _pts_to_labels was also compacted
+                if (compact_before_save && _dynamic_index)
+                {
+                    _label_map = load_label_map(std::string(filename) + "_labels_map.txt");
+                    std::unordered_map<LabelT, std::string> mapped_to_raw_labels;
+                    // invert label map
+                    for (const auto &[key, value] : _label_map)
+                    {
+                        mapped_to_raw_labels.insert({value, key});
+                    }
+
+                    // write updated labels
+                    std::ofstream raw_label_writer(std::string(filename) + "_raw_labels.txt");
+                    assert(raw_label_writer.is_open());
+                    for (uint32_t i = 0; i < _nd + _num_frozen_pts; i++)
+                    {
+                        for (uint32_t j = 0; j + 1 < _pts_to_labels[i].size(); j++)
+                        {
+                            raw_label_writer << mapped_to_raw_labels[_pts_to_labels[i][j]] << ",";
+                        }
+                        if (_pts_to_labels[i].size() != 0)
+                            raw_label_writer << mapped_to_raw_labels[_pts_to_labels[i][_pts_to_labels[i].size() - 1]];
+
+                        raw_label_writer << std::endl;
+                    }
+                    raw_label_writer.close();
+                }
             }
         }
 
