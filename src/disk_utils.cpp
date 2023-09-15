@@ -615,7 +615,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                               double sampling_rate, double ram_budget, std::string mem_index_path,
                               std::string medoids_file, std::string centroids_file, size_t build_pq_bytes, bool use_opq,
                               uint32_t num_threads, bool use_filters, const std::string &label_file,
-                              const std::string &labels_to_medoids_file, const std::string &universal_label,
+                              const std::string &disk_labels_to_medoids_file, const std::string &universal_label,
                               const uint32_t Lf)
 {
     size_t base_num, base_dim;
@@ -642,12 +642,11 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             _index.build(base_file.c_str(), base_num);
         else
         {
-            // if (universal_label != "")
-            //{ //  indicates no universal label
-            //     LabelT unv_label_as_num = 0;
-            //     _index.set_universal_label(unv_label_as_num);
-            // }
-            _index.build_filtered_index(base_file.c_str(), label_file, universal_label, base_num);
+            if (universal_label != "")
+            {
+                _index.set_universal_labels({universal_label});
+            }
+            _index.build_filtered_index(base_file.c_str(), label_file, base_num);
         }
         _index.save(mem_index_path.c_str());
 
@@ -655,9 +654,9 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         {
             // need to copy the labels_to_medoids file to the specified input
             // file
-            std::remove(labels_to_medoids_file.c_str());
+            std::remove(disk_labels_to_medoids_file.c_str());
             std::string mem_labels_to_medoid_file = mem_index_path + "_labels_to_medoids.txt";
-            copy_file(mem_labels_to_medoid_file, labels_to_medoids_file);
+            copy_file(mem_labels_to_medoid_file, disk_labels_to_medoids_file);
             std::remove(mem_labels_to_medoid_file.c_str());
         }
 
@@ -712,12 +711,11 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         else
         {
             diskann::extract_shard_labels(label_file, shard_ids_file, shard_labels_file);
-            // if (universal_label != "")
-            //{ //  indicates no universal label
-            //     LabelT unv_label_as_num = 0;
-            //     _index.set_universal_label(unv_label_as_num);
-            // }
-            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, universal_label, shard_base_pts);
+            if (universal_label != "")
+            {
+                _index.set_universal_labels({universal_label});
+            }
+            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts);
         }
         _index.save(shard_index_file.c_str());
         // copy universal label file from first shard to the final destination
@@ -738,7 +736,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     timer.reset();
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index", merged_index_prefix + "_subshard-",
                           "_ids_uint32.bin", num_parts, R, mem_index_path, medoids_file, use_filters,
-                          labels_to_medoids_file);
+                          disk_labels_to_medoids_file);
     diskann::cout << timer.elapsed_seconds_for_step("merging indices") << std::endl;
 
     // delete tempFiles
@@ -1152,22 +1150,24 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string data_file_to_use = base_file;
     std::string labels_file_original = label_file;
     std::string index_prefix_path(indexFilePath);
-    std::string labels_file_to_use = index_prefix_path + "_label_formatted.txt";
+    // std::string labels_file_to_use = index_prefix_path + "_label_formatted.txt";
     std::string pq_pivots_path_base = codebook_prefix;
     std::string pq_pivots_path = file_exists(pq_pivots_path_base) ? pq_pivots_path_base + "_pq_pivots.bin"
                                                                   : index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path = index_prefix_path + "_pq_compressed.bin";
+
     std::string mem_index_path = index_prefix_path + "_mem.index";
     std::string disk_index_path = index_prefix_path + "_disk.index";
-    std::string medoids_path = disk_index_path + "_medoids.bin";
-    std::string centroids_path = disk_index_path + "_centroids.bin";
-
-    std::string labels_to_medoids_path = disk_index_path + "_labels_to_medoids.txt";
     std::string mem_labels_file = mem_index_path + "_labels.txt";
     std::string disk_labels_file = disk_index_path + "_labels.txt";
     std::string mem_univ_label_file = mem_index_path + "_universal_label.txt";
     std::string disk_univ_label_file = disk_index_path + "_universal_label.txt";
+    std::string mem_labels_int_map_file = mem_index_path + "_labels_map.txt";
     std::string disk_labels_int_map_file = disk_index_path + "_labels_map.txt";
+
+    std::string medoids_path = disk_index_path + "_medoids.bin";
+    std::string centroids_path = disk_index_path + "_centroids.bin";
+    std::string disk_labels_to_medoids_path = disk_index_path + "_labels_to_medoids.txt";
     std::string dummy_remap_file = disk_index_path + "_dummy_remap.txt"; // remap will be used if we break-up points of
                                                                          // high label-density to create copies
 
@@ -1232,19 +1232,20 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string augmented_data_file, augmented_labels_file;
     if (use_filters)
     {
-        convert_labels_string_to_int(labels_file_original, labels_file_to_use, disk_labels_int_map_file,
+        /*convert_labels_string_to_int(labels_file_original, labels_file_to_use, disk_labels_int_map_file,
                                      universal_label);
+        */
         augmented_data_file = index_prefix_path + "_augmented_data.bin";
         augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
         if (filter_threshold != 0)
         {
             dummy_remap_file = index_prefix_path + "_dummy_remap.txt";
-            breakup_dense_points<T>(data_file_to_use, labels_file_to_use, filter_threshold, augmented_data_file,
+            breakup_dense_points<T>(data_file_to_use, labels_file_original, filter_threshold, augmented_data_file,
                                     augmented_labels_file,
                                     dummy_remap_file); // RKNOTE: This has large memory footprint,
                                                        // need to make this streaming
             data_file_to_use = augmented_data_file;
-            labels_file_to_use = augmented_labels_file;
+            labels_file_original = augmented_labels_file;
         }
     }
 
@@ -1287,10 +1288,10 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
 #endif
 
     timer.reset();
-    diskann::build_merged_vamana_index<T, LabelT>(data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
-                                                  indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
-                                                  build_pq_bytes, use_opq, num_threads, use_filters, labels_file_to_use,
-                                                  labels_to_medoids_path, universal_label, Lf);
+    diskann::build_merged_vamana_index<T, LabelT>(
+        data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val, indexing_ram_budget, mem_index_path, medoids_path,
+        centroids_path, build_pq_bytes, use_opq, num_threads, use_filters, labels_file_original,
+        disk_labels_to_medoids_path, universal_label, Lf);
     diskann::cout << timer.elapsed_seconds_for_step("building merged vamana index") << std::endl;
 
     timer.reset();
@@ -1315,16 +1316,22 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     gen_random_slice<T>(data_file_to_use.c_str(), sample_base_prefix, sample_sampling_rate);
     if (use_filters)
     {
-        copy_file(labels_file_to_use, disk_labels_file);
+        // copy labels file
+        copy_file(mem_labels_file, disk_labels_file);
         std::remove(mem_labels_file.c_str());
+        // copy universal label
         if (universal_label != "")
         {
             copy_file(mem_univ_label_file, disk_univ_label_file);
             std::remove(mem_univ_label_file.c_str());
         }
+        // copy map file
+        copy_file(mem_labels_int_map_file, disk_labels_int_map_file);
+        std::remove(mem_labels_int_map_file.c_str());
+
         std::remove(augmented_data_file.c_str());
         std::remove(augmented_labels_file.c_str());
-        std::remove(labels_file_to_use.c_str());
+        // std::remove(labels_file_to_use.c_str());
     }
 
     std::remove(mem_index_path.c_str());

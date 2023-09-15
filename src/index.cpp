@@ -533,17 +533,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         label_num_pts = _filter_store->load_labels(labels_file);
         assert(label_num_pts == data_file_num_pts);
         _filter_store->load_medoids(labels_to_medoids);
-
-        std::string universal_label_file(filename);
-        universal_label_file += "_universal_label.txt";
-        if (file_exists(universal_label_file))
-        {
-            LabelT universal_label;
-            std::ifstream universal_label_reader(universal_label_file);
-            universal_label_reader >> universal_label;
-            _filter_store->set_universal_label(universal_label); // this is the mapped universal label and not raw
-            universal_label_reader.close();
-        }
+        _filter_store->load_universal_labels(std::string(filename) + "_universal_label.txt");
     }
 #endif
     _nd = data_file_num_pts - _num_frozen_pts;
@@ -916,12 +906,12 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     else
     {
         std::vector<uint32_t> filter_specific_start_nodes;
-        for (auto &x : _filter_store->get_labels_by_point_id(location))
+        for (auto &x : _filter_store->get_labels_by_point(location))
             filter_specific_start_nodes.emplace_back(_filter_store->get_medoid_by_label(x));
 
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
-                               _filter_store->get_labels_by_point_id(location), false);
+                               _filter_store->get_labels_by_point(location), false);
     }
 
     auto &pool = scratch->pool();
@@ -1004,11 +994,11 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     uint32_t a = iter->id;
                     uint32_t b = iter2->id;
-                    for (auto &x : _filter_store->get_labels_by_point_id(b))
+                    for (auto &x : _filter_store->get_labels_by_point(b))
                     {
-                        if (std::find(_filter_store->get_labels_by_point_id(a).begin(),
-                                      _filter_store->get_labels_by_point_id(a).end(),
-                                      x) == _filter_store->get_labels_by_point_id(a).end())
+                        if (std::find(_filter_store->get_labels_by_point(a).begin(),
+                                      _filter_store->get_labels_by_point(a).end(),
+                                      x) == _filter_store->get_labels_by_point(a).end())
                         {
                             prune_allowed = false;
                         }
@@ -1639,13 +1629,11 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     }
     else
     {
-        /*  if (filter_params.universal_label != "")
-          {
-              LabelT unv_label_as_num = 0;
-              this->set_universal_label(unv_label_as_num);
-          }*/
-        this->build_filtered_index(data_file.c_str(), filter_params.label_file, filter_params.universal_label,
-                                   points_to_load);
+        if (filter_params.universal_label != "")
+        {
+            this->set_universal_labels({filter_params.universal_label});
+        }
+        this->build_filtered_index(data_file.c_str(), filter_params.label_file, points_to_load);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
@@ -1684,19 +1672,18 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::set_universal_label(const LabelT &label)
+void Index<T, TagT, LabelT>::set_universal_labels(const std::vector<std::string> &labels)
 {
-    _filter_store->set_universal_label(label);
+    _filter_store->set_universal_labels(labels);
 }
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const std::string &raw_label_file,
-                                                  const std::string &raw_universal_label,
                                                   const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
     // _label_to_medoid_id.clear();
-    size_t num_points_labels = _filter_store->load_raw_labels(raw_label_file, raw_universal_label);
+    size_t num_points_labels = _filter_store->load_raw_labels(raw_label_file);
     _filter_store->calculate_best_medoids(num_points_to_load, 25);
     this->build(filename, num_points_to_load, tags);
 }

@@ -14,7 +14,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     bool detect_common_filters(uint32_t point_id, bool search_invocation,
                                const std::vector<label_type> &incoming_labels) override;
 
-    const std::vector<label_type> &get_labels_by_point_id(const location_t point_id);
+    const std::vector<label_type> &get_labels_by_point(const location_t point_id);
     const tsl::robin_set<label_type> &get_all_label_set();
     // Throws: out of range exception
     void add_label_to_point(const location_t point_id, label_type label);
@@ -26,12 +26,15 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     bool label_has_medoid(const label_type &label);
     void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates);
 
-    // TODO: in future we may accept a set or vector of universal labels
-    void set_universal_label(label_type universal_label);
-    const label_type get_universal_label() const;
+    // TODO: in future we will support multiple universal labels, for now the size will be 1
+    void set_universal_labels(const std::vector<std::string> &raw_universal_labels);
 
-    // ideally takes raw label file and then genrate internal mapping file and keep the info of mapping
-    size_t load_raw_labels(const std::string &raw_labels_file, const std::string &universal_label);
+    // TODO: will support this in future
+    void set_universal_labels_with_category(const std::unordered_map<std ::string, std::string> category_label_map);
+    // const label_type get_universal_labels() const;
+
+    // Takes raw label file and generates internal mapping and loads the mapped labels
+    size_t load_raw_labels(const std::string &raw_labels_file);
 
     void save_labels(const std::string &save_path, const size_t total_points);
     void save_medoids(const std::string &save_path);
@@ -39,10 +42,11 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     void save_universal_label(const std::string &save_path);
 
   protected:
-    // This is for internal use and only loads already parsed file
+    // These are for internal use and will be called while search.
     size_t load_labels(const std::string &labels_file);
     size_t load_medoids(const std::string &labels_to_medoid_file);
     void load_label_map(const std::string &labels_map_file);
+    void load_universal_labels(const std::string &universal_labels);
 
   private:
     size_t _num_points;
@@ -55,8 +59,9 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     std::unordered_map<uint32_t, uint32_t> _medoid_counts; // medoids only happen for filtered index
     // universal label
     bool _use_universal_label = false;
-    label_type _universal_label = 0; // this is the internal mapping, may not always be true in future
-    tsl::robin_set<label_type> _universal_labels_set;
+    tsl::robin_set<std::string> _raw_universal_label_set;
+    std::set<label_type> _mapped_universal_label_set;
+    //  this map is populated while we do the mapping internally. map internal_map -> raw_labels
 
     // populates pts_to labels and _labels from given label file
     size_t parse_label_file(const std::string &label_file);
