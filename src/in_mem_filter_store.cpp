@@ -14,9 +14,9 @@ bool InMemFilterStore<label_type>::detect_common_filters(uint32_t point_id, bool
                                                          const std::vector<label_type> &incoming_labels)
 {
     auto &curr_node_labels = _pts_to_labels[point_id];
-    std::set<label_type> common_filters;
+    std::vector<label_type> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
-                          curr_node_labels.end(), std::inserter(common_filters, common_filters.begin()));
+                          curr_node_labels.end(), std::back_inserter(common_filters));
     if (common_filters.size() > 0)
     {
         // This is to reduce the repetitive calls. If common_filters size is > 0 ,
@@ -25,31 +25,31 @@ bool InMemFilterStore<label_type>::detect_common_filters(uint32_t point_id, bool
     }
     if (_use_universal_label)
     {
-
+        label_type universal_label = 0;
         if (!search_invocation)
         {
             // if the universal labels matches add to common filters
-            std::set_intersection(incoming_labels.begin(), incoming_labels.end(), _mapped_universal_label_set.begin(),
+            /*std::set_intersection(incoming_labels.begin(), incoming_labels.end(), _mapped_universal_label_set.begin(),
                                   _mapped_universal_label_set.end(),
                                   std::inserter(common_filters, common_filters.begin()));
 
             std::set_intersection(curr_node_labels.begin(), curr_node_labels.end(), _mapped_universal_label_set.begin(),
                                   _mapped_universal_label_set.end(),
-                                  std::inserter(common_filters, common_filters.begin()));
+                                  std::inserter(common_filters, common_filters.begin()));*/
 
-            /* if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) != incoming_labels.end()
-             || std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
-             {
-                 common_filters.push_back(_universal_label);
-             }*/
+            if (std::find(incoming_labels.begin(), incoming_labels.end(), universal_label) != incoming_labels.end() ||
+                std::find(curr_node_labels.begin(), curr_node_labels.end(), universal_label) != curr_node_labels.end())
+            {
+                common_filters.push_back(universal_label);
+            }
         }
         else
         {
-            std::set_intersection(curr_node_labels.begin(), curr_node_labels.end(), _mapped_universal_label_set.begin(),
-                                  _mapped_universal_label_set.end(),
-                                  std::inserter(common_filters, common_filters.begin()));
-            /*   if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) !=
-               curr_node_labels.end()) common_filters.push_back(_universal_label);*/
+            /*std::set_intersection(curr_node_labels.begin(), curr_node_labels.end(),
+               _mapped_universal_label_set.begin(), _mapped_universal_label_set.end(), std::inserter(common_filters,
+               common_filters.begin()));*/
+            if (std::find(curr_node_labels.begin(), curr_node_labels.end(), universal_label) != curr_node_labels.end())
+                common_filters.push_back(universal_label);
         }
     }
     return (common_filters.size() > 0);
@@ -96,6 +96,12 @@ void InMemFilterStore<label_type>::set_universal_labels(const std::vector<std::s
     if (universal_labels.size() != 1)
     {
         throw diskann::ANNException("Error: currently only one universal label is supporterd", -1);
+    }
+
+    if (universal_labels[0] == "")
+    {
+        std::cout << "universal label passed as empty string in set_universal_label" << std::endl;
+        return;
     }
 
     _use_universal_label = true;
