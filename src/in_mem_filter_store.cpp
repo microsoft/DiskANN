@@ -216,6 +216,7 @@ void InMemFilterStore<label_type>::load_universal_labels(const std::string &univ
                 throw std::runtime_error("ERROR: Invalid universal label " + line);
             }
             _mapped_universal_label_set.insert(universal_label);
+            _use_universal_label = true;
         }
         universal_label_reader.close();
     }
@@ -276,6 +277,7 @@ template <typename label_type> void InMemFilterStore<label_type>::save_medoids(c
 
 template <typename label_type> void InMemFilterStore<label_type>::save_label_map(const std::string &save_path)
 {
+    std::remove(save_path.c_str());
     std::ofstream map_writer(save_path);
     for (auto mp : _label_map)
     {
