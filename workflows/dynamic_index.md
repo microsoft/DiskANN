@@ -27,7 +27,7 @@ Additional options are added to support this in `apps/test_streaming_scenario` a
 
 ---
 > Note
-* The index does not support mixed points, that is, either all points do not have filters or all points have filters. 
+* The index does not support mixed points, that is, either all points do not have labels or all points have labels. 
 * You can search the built filter index (one built with filters) without filters as well.
 ---
 
@@ -72,9 +72,9 @@ The arguments are as follows:
 12. **--consolidate_interval**: Granularity at which insert and delete functions are called.
 13. **--start_point_norm**: Set the starting node to a random point on a sphere of this radius.  A reasonable choice is to set this to the average norm of the data stream.
 
-** to build with filters add these
+** To build with filters add these optional parameters.
 
-14. **--label_file**: Filter data for each point, in `.txt` format. Line `i` of the file consists of a comma-separated list of filters corresponding to point `i` in the file passed via `--data_file`.
+14. **--label_file**: Filter data for each point, in `.txt` format. Line `i` of the file consists of a comma-separated list of labels corresponding to point `i` in the file passed via `--data_file`.
 15. **--FilteredLbuild**: If building a filtered index, we maintain a separate search list from the one provided by `--Lbuild/-L`.
 16. **--num_start_points**: number of frozen points in this case should be more then number of unique labels. 
 17. **--universal_label**: Optionally, the the filter data may contain a "wild-card" filter corresponding to all filters. This is referred to as a universal label. Note that if a point has the universal label, then the filter data must only have the universal label on the line corresponding to said point.
