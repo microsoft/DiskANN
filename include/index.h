@@ -369,7 +369,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Filter Support
 
     bool _filtered_index = false;
-    std::vector<std::vector<LabelT>> _tag_to_labels;
+    std::vector<std::vector<LabelT>> _location_to_labels;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;

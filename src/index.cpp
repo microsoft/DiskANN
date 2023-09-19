@@ -96,7 +96,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
         this->enable_delete(); // enable delete by default for dynamic index
         if (_filtered_index)
         {
-            _tag_to_labels.resize(total_internal_points);
+            _location_to_labels.resize(total_internal_points);
         }
     }
 
@@ -311,24 +311,24 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                 universal_label_writer.close();
             }
 
-            if (_tag_to_labels.size() > 0)
+            if (_location_to_labels.size() > 0)
             {
                 std::ofstream label_writer(std::string(filename) + "_labels.txt");
                 assert(label_writer.is_open());
                 for (uint32_t i = 0; i < _nd + _num_frozen_pts; i++)
                 {
-                    for (uint32_t j = 0; j + 1 < _tag_to_labels[i].size(); j++)
+                    for (uint32_t j = 0; j + 1 < _location_to_labels[i].size(); j++)
                     {
-                        label_writer << _tag_to_labels[i][j] << ",";
+                        label_writer << _location_to_labels[i][j] << ",";
                     }
-                    if (_tag_to_labels[i].size() != 0)
-                        label_writer << _tag_to_labels[i][_tag_to_labels[i].size() - 1];
+                    if (_location_to_labels[i].size() != 0)
+                        label_writer << _location_to_labels[i][_location_to_labels[i].size() - 1];
 
                     label_writer << std::endl;
                 }
                 label_writer.close();
 
-                // write compacted raw_labels if data hence _tag_to_labels was also compacted
+                // write compacted raw_labels if data hence _location_to_labels was also compacted
                 if (compact_before_save && _dynamic_index)
                 {
                     _label_map = load_label_map(std::string(filename) + "_labels_map.txt");
@@ -344,12 +344,12 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                     assert(raw_label_writer.is_open());
                     for (uint32_t i = 0; i < _nd + _num_frozen_pts; i++)
                     {
-                        for (uint32_t j = 0; j + 1 < _tag_to_labels[i].size(); j++)
+                        for (uint32_t j = 0; j + 1 < _location_to_labels[i].size(); j++)
                         {
-                            raw_label_writer << mapped_to_raw_labels[_tag_to_labels[i][j]] << ",";
+                            raw_label_writer << mapped_to_raw_labels[_location_to_labels[i][j]] << ",";
                         }
-                        if (_tag_to_labels[i].size() != 0)
-                            raw_label_writer << mapped_to_raw_labels[_tag_to_labels[i][_tag_to_labels[i].size() - 1]];
+                        if (_location_to_labels[i].size() != 0)
+                            raw_label_writer << mapped_to_raw_labels[_location_to_labels[i][_location_to_labels[i].size() - 1]];
 
                         raw_label_writer << std::endl;
                     }
@@ -764,7 +764,7 @@ template <typename T, typename TagT, typename LabelT>
 bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
 {
-    auto &curr_node_labels = _tag_to_labels[point_id];
+    auto &curr_node_labels = _location_to_labels[point_id];
     std::vector<LabelT> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
                           curr_node_labels.end(), std::back_inserter(common_filters));
@@ -1024,12 +1024,12 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     else
     {
         std::vector<uint32_t> filter_specific_start_nodes;
-        for (auto &x : _tag_to_labels[location])
+        for (auto &x : _location_to_labels[location])
             filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
 
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
-                               _tag_to_labels[location], false);
+                               _location_to_labels[location], false);
 
         // combine candidate pools obtained with filter and unfiltered criteria.
         std::set<Neighbor> best_candidate_pool;
@@ -1137,11 +1137,11 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     uint32_t a = iter->id;
                     uint32_t b = iter2->id;
-                    if (_tag_to_labels.size() < b || _tag_to_labels.size() < a)
+                    if (_location_to_labels.size() < b || _location_to_labels.size() < a)
                         continue;
-                    for (auto &x : _tag_to_labels[b])
+                    for (auto &x : _location_to_labels[b])
                     {
-                        if (std::find(_tag_to_labels[a].begin(), _tag_to_labels[a].end(), x) == _tag_to_labels[a].end())
+                        if (std::find(_location_to_labels[a].begin(), _location_to_labels[a].end(), x) == _location_to_labels[a].end())
                         {
                             prune_allowed = false;
                         }
@@ -1844,7 +1844,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     {
         line_cnt++;
     }
-    _tag_to_labels.resize(line_cnt, std::vector<LabelT>());
+    _location_to_labels.resize(line_cnt, std::vector<LabelT>());
 
     infile.clear();
     infile.seekg(0, std::ios::beg);
@@ -1865,14 +1865,8 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             _labels.insert(token_as_num);
         }
 
-        /*if (lbls.size() <= 0)
-        {
-            diskann::cout << "No label found";
-            exit(-1);
-        }*/
-
         std::sort(lbls.begin(), lbls.end());
-        _tag_to_labels[line_cnt] = lbls;
+        _location_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
     num_points = (size_t)line_cnt;
@@ -1909,7 +1903,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
     for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
     {
-        for (auto label : _tag_to_labels[point_id])
+        for (auto label : _location_to_labels[point_id])
         {
             if (label != _universal_label)
             {
@@ -2604,7 +2598,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
                 if (_filtered_index)
                 {
-                    _tag_to_labels[new_location[old]].swap(_tag_to_labels[old]);
+                    _location_to_labels[new_location[old]].swap(_location_to_labels[old]);
                 }
 
                 _data_store->copy_vectors(old, new_location[old], 1);
@@ -2637,7 +2631,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         for (size_t old = _nd; old < _max_points; old++)
         {
-            _tag_to_labels[old].clear();
+            _location_to_labels[old].clear();
         }
     }
 
@@ -2756,7 +2750,7 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
             _graph_store->swap_neighbours(new_location_start + loc_offset, old_location_start + loc_offset);
             if (_dynamic_index && _filtered_index)
             {
-                _tag_to_labels[new_location_start + loc_offset].swap(_tag_to_labels[old_location_start + loc_offset]);
+                _location_to_labels[new_location_start + loc_offset].swap(_location_to_labels[old_location_start + loc_offset]);
             }
         }
         // If ranges are overlapping, make sure not to clear the newly copied
@@ -2777,8 +2771,8 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
             _graph_store->swap_neighbours(new_location_start + loc_offset - 1u, old_location_start + loc_offset - 1u);
             if (_dynamic_index && _filtered_index)
             {
-                _tag_to_labels[new_location_start + loc_offset - 1u].swap(
-                    _tag_to_labels[old_location_start + loc_offset - 1u]);
+                _location_to_labels[new_location_start + loc_offset - 1u].swap(
+                    _location_to_labels[old_location_start + loc_offset - 1u]);
             }
         }
 
@@ -2917,7 +2911,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
             return -1;
         }
 
-        _tag_to_labels[location] = labels;
+        _location_to_labels[location] = labels;
 
         for (LabelT label : labels)
         {
@@ -2934,7 +2928,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                 auto fz_location = (int)(_max_points) + _frozen_pts_used; // as first _fz_point
                 _labels.insert(label);
                 _label_to_medoid_id[label] = (uint32_t)fz_location;
-                _tag_to_labels[fz_location] = {label};
+                _location_to_labels[fz_location] = {label};
                 _data_store->set_vector((location_t)fz_location, point);
                 _frozen_pts_used++;
             }
