@@ -349,7 +349,8 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                             raw_label_writer << mapped_to_raw_labels[_location_to_labels[i][j]] << ",";
                         }
                         if (_location_to_labels[i].size() != 0)
-                            raw_label_writer << mapped_to_raw_labels[_location_to_labels[i][_location_to_labels[i].size() - 1]];
+                            raw_label_writer
+                                << mapped_to_raw_labels[_location_to_labels[i][_location_to_labels[i].size() - 1]];
 
                         raw_label_writer << std::endl;
                     }
@@ -1141,7 +1142,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                         continue;
                     for (auto &x : _location_to_labels[b])
                     {
-                        if (std::find(_location_to_labels[a].begin(), _location_to_labels[a].end(), x) == _location_to_labels[a].end())
+                        if (std::find(_location_to_labels[a].begin(), _location_to_labels[a].end(), x) ==
+                            _location_to_labels[a].end())
                         {
                             prune_allowed = false;
                         }
@@ -2750,7 +2752,8 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
             _graph_store->swap_neighbours(new_location_start + loc_offset, old_location_start + loc_offset);
             if (_dynamic_index && _filtered_index)
             {
-                _location_to_labels[new_location_start + loc_offset].swap(_location_to_labels[old_location_start + loc_offset]);
+                _location_to_labels[new_location_start + loc_offset].swap(
+                    _location_to_labels[old_location_start + loc_offset]);
             }
         }
         // If ranges are overlapping, make sure not to clear the newly copied
