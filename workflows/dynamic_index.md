@@ -79,7 +79,7 @@ The arguments are as follows:
 14. **--label_file**: Filter data for each point, in `.txt` format. Line `i` of the file consists of a comma-separated list of labels corresponding to point `i` in the file passed via `--data_file`.
 15. **--FilteredLbuild**: If building a filtered index, we maintain a separate search list from the one provided by `--Lbuild/-L`.
 16. **--num_start_points**: number of frozen points in this case should be more then number of unique labels. 
-17. **--universal_label**: Optionally, the the filter data may contain a "wild-card" filter corresponding to all filters. This is referred to as a universal label. Note that if a point has the universal label, then the filter data must only have the universal label on the line corresponding to said point.
+17. **--universal_label**: Optionally, the label data may contain a special "universal" label. A point with the universal label can be matched against a query with any label. Note that if a point has the universal label, then the filter data must only have the universal label on the line corresponding.
 18. **--label_type**: Optionally, type of label to be use its either uint or short, defaulted to `uint`.
 
 To search the generated index, use the `apps/search_memory_index` program:
