@@ -27,7 +27,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates);
 
     // TODO: in future we may accept a set or vector of universal labels
-    void set_universal_label(label_type universal_label);
+    // void set_universal_label(label_type universal_label);
     void set_universal_labels(const std::vector<std::string> &raw_universal_labels);
     // const label_type get_universal_label() const;
 
@@ -58,7 +58,6 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
 
     // universal label
     bool _use_universal_label = false;
-    label_type _universal_label = 0; // this is the internal mapping, may not always be true in future
     tsl::robin_set<label_type> _universal_labels_set;
     std::set<std::string> _raw_universal_labels;
 

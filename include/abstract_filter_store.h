@@ -30,7 +30,7 @@ template <typename label_type> class AbstractFilterStore
                                                           const uint32_t num_candidates) = 0;
 
     // TODO: in future we may accept a set or vector of universal labels
-    DISKANN_DLLEXPORT virtual void set_universal_label(label_type universal_label) = 0;
+    // DISKANN_DLLEXPORT virtual void set_universal_label(label_type universal_label) = 0;
     DISKANN_DLLEXPORT virtual void set_universal_labels(const std::vector<std::string> &universal_labels) = 0;
     // DISKANN_DLLEXPORT virtual const label_type get_universal_label() const = 0;
 
