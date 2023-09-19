@@ -792,7 +792,8 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
                 common_filters.push_back(_universal_label);
         }
     }
-    tl.unlock();
+    if (_dynamic_index)
+        tl.unlock();
     return (common_filters.size() > 0);
 }
 
