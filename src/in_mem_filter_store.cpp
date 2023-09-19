@@ -271,6 +271,11 @@ template <typename label_type> void InMemFilterStore<label_type>::save_medoids(c
 
 template <typename label_type> void InMemFilterStore<label_type>::save_label_map(const std::string &save_path)
 {
+    if (_label_map.empty())
+    {
+        diskann::cout << "Warning: not saving label map as it is empty." << std::endl;
+        return;
+    }
     std::ofstream map_writer(save_path);
     for (auto mp : _label_map)
     {
