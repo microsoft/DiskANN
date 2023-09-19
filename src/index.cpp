@@ -906,12 +906,12 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     else
     {
         std::vector<uint32_t> filter_specific_start_nodes;
-        for (auto &x : _filter_store->get_labels_by_point(location))
+        for (auto &x : _filter_store->get_labels_by_location(location))
             filter_specific_start_nodes.emplace_back(_filter_store->get_medoid_by_label(x));
 
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
-                               _filter_store->get_labels_by_point(location), false);
+                               _filter_store->get_labels_by_location(location), false);
     }
 
     auto &pool = scratch->pool();
@@ -994,11 +994,11 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     uint32_t a = iter->id;
                     uint32_t b = iter2->id;
-                    for (auto &x : _filter_store->get_labels_by_point(b))
+                    for (auto &x : _filter_store->get_labels_by_location(b))
                     {
-                        if (std::find(_filter_store->get_labels_by_point(a).begin(),
-                                      _filter_store->get_labels_by_point(a).end(),
-                                      x) == _filter_store->get_labels_by_point(a).end())
+                        if (std::find(_filter_store->get_labels_by_location(a).begin(),
+                                      _filter_store->get_labels_by_location(a).end(),
+                                      x) == _filter_store->get_labels_by_location(a).end())
                         {
                             prune_allowed = false;
                         }

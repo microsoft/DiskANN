@@ -14,10 +14,10 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     bool detect_common_filters(uint32_t point_id, bool search_invocation,
                                const std::vector<label_type> &incoming_labels) override;
 
-    const std::vector<label_type> &get_labels_by_point(const location_t point_id);
+    const std::vector<label_type> &get_labels_by_location(const location_t point_id);
     const tsl::robin_set<label_type> &get_all_label_set();
     // Throws: out of range exception
-    void add_label_to_point(const location_t point_id, label_type label);
+    void add_label_to_location(const location_t point_id, label_type label);
     // returns internal mapping for given raw_label
     label_type get_converted_label(const std::string &raw_label);
 
@@ -48,7 +48,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
 
   private:
     size_t _num_points;
-    std::vector<std::vector<label_type>> _pts_to_labels;
+    std::vector<std::vector<label_type>> _location_to_labels;
     tsl::robin_set<label_type> _labels;
     std::unordered_map<std::string, label_type> _label_map;
 

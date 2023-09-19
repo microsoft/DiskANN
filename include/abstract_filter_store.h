@@ -16,10 +16,10 @@ template <typename label_type> class AbstractFilterStore
     DISKANN_DLLEXPORT virtual bool detect_common_filters(uint32_t point_id, bool search_invocation,
                                                          const std::vector<label_type> &incoming_labels) = 0;
 
-    DISKANN_DLLEXPORT virtual const std::vector<label_type> &get_labels_by_point(const location_t point_id) = 0;
+    DISKANN_DLLEXPORT virtual const std::vector<label_type> &get_labels_by_location(const location_t point_id) = 0;
     DISKANN_DLLEXPORT virtual const tsl::robin_set<label_type> &get_all_label_set() = 0;
     // Throws: out of range exception
-    DISKANN_DLLEXPORT virtual void add_label_to_point(const location_t point_id, label_type label) = 0;
+    DISKANN_DLLEXPORT virtual void add_label_to_location(const location_t point_id, label_type label) = 0;
     // returns internal mapping for given raw_label
     DISKANN_DLLEXPORT virtual label_type get_converted_label(const std::string &raw_label) = 0;
 

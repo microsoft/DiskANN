@@ -6,14 +6,14 @@ namespace diskann
 template <typename label_type>
 InMemFilterStore<label_type>::InMemFilterStore(const size_t num_points) : AbstractFilterStore<label_type>(num_points)
 {
-    _pts_to_labels.resize(num_points);
+    _location_to_labels.resize(num_points);
 }
 
 template <typename label_type>
 bool InMemFilterStore<label_type>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                          const std::vector<label_type> &incoming_labels)
 {
-    auto &curr_node_labels = _pts_to_labels[point_id];
+    auto &curr_node_labels = _location_to_labels[point_id];
     std::vector<label_type> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
                           curr_node_labels.end(), std::back_inserter(common_filters));
@@ -41,9 +41,9 @@ bool InMemFilterStore<label_type>::detect_common_filters(uint32_t point_id, bool
 }
 
 template <typename label_type>
-const std::vector<label_type> &InMemFilterStore<label_type>::get_labels_by_point(const location_t point_id)
+const std::vector<label_type> &InMemFilterStore<label_type>::get_labels_by_location(const location_t point_id)
 {
-    return _pts_to_labels[point_id];
+    return _location_to_labels[point_id];
 }
 
 template <typename label_type> const tsl::robin_set<label_type> &InMemFilterStore<label_type>::get_all_label_set()
@@ -69,9 +69,9 @@ template <typename label_type> bool InMemFilterStore<label_type>::label_has_medo
 }
 
 template <typename label_type>
-void InMemFilterStore<label_type>::add_label_to_point(const location_t point_id, label_type label)
+void InMemFilterStore<label_type>::add_label_to_location(const location_t point_id, label_type label)
 {
-    _pts_to_labels[point_id].emplace_back(label);
+    _location_to_labels[point_id].emplace_back(label);
 }
 
 template <typename label_type> void InMemFilterStore<label_type>::set_universal_label(label_type universal_label)
@@ -213,18 +213,18 @@ template <typename label_type>
 void InMemFilterStore<label_type>::save_labels(const std::string &save_path, const size_t total_points)
 {
 
-    if (_pts_to_labels.size() > 0)
+    if (_location_to_labels.size() > 0)
     {
         std::ofstream label_writer(save_path);
         assert(label_writer.is_open());
         for (uint32_t i = 0; i < total_points; i++)
         {
-            for (uint32_t j = 0; j < (_pts_to_labels[i].size() - 1); j++)
+            for (uint32_t j = 0; j < (_location_to_labels[i].size() - 1); j++)
             {
-                label_writer << _pts_to_labels[i][j] << ",";
+                label_writer << _location_to_labels[i][j] << ",";
             }
-            if (_pts_to_labels[i].size() != 0)
-                label_writer << _pts_to_labels[i][_pts_to_labels[i].size() - 1];
+            if (_location_to_labels[i].size() != 0)
+                label_writer << _location_to_labels[i][_location_to_labels[i].size() - 1];
             label_writer << std::endl;
         }
         label_writer.close();
@@ -302,7 +302,7 @@ void InMemFilterStore<label_type>::calculate_best_medoids(const size_t num_point
 
     for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
     {
-        for (auto label : _pts_to_labels[point_id])
+        for (auto label : _location_to_labels[point_id])
         {
             if (_universal_labels_set.count(label) == 0)
             {
@@ -368,7 +368,7 @@ template <typename label_type> size_t InMemFilterStore<label_type>::parse_label_
     {
         line_cnt++;
     }
-    _pts_to_labels.resize(line_cnt, std::vector<label_type>());
+    _location_to_labels.resize(line_cnt, std::vector<label_type>());
 
     infile.clear();
     infile.seekg(0, std::ios::beg);
@@ -394,7 +394,7 @@ template <typename label_type> size_t InMemFilterStore<label_type>::parse_label_
             exit(-1);
         }
         std::sort(lbls.begin(), lbls.end());
-        _pts_to_labels[line_cnt] = lbls;
+        _location_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
     diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
