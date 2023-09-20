@@ -765,9 +765,6 @@ template <typename T, typename TagT, typename LabelT>
 bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
 {
-    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
-    if (_dynamic_index)
-        tl.lock();
     auto &curr_node_labels = _location_to_labels[point_id];
     std::vector<LabelT> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
@@ -792,8 +789,6 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
                 common_filters.push_back(_universal_label);
         }
     }
-    if (_dynamic_index)
-        tl.unlock();
     return (common_filters.size() > 0);
 }
 
@@ -1028,17 +1023,9 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     }
     else
     {
-
-        // protects reads on _location_to_labels and _label_to_medoid_id
-        std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
-        if (_dynamic_index)
-            tl.lock();
-
         std::vector<uint32_t> filter_specific_start_nodes;
         for (auto &x : _location_to_labels[location])
             filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
-        if (_dynamic_index)
-            tl.unlock();
 
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
@@ -1148,10 +1135,6 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 bool prune_allowed = true;
                 if (_filtered_index)
                 {
-                    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
-                    if (_dynamic_index)
-                        tl.lock();
-
                     uint32_t a = iter->id;
                     uint32_t b = iter2->id;
                     if (_location_to_labels.size() < b || _location_to_labels.size() < a)
@@ -1166,9 +1149,6 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                         if (!prune_allowed)
                             break;
                     }
-
-                    if (_dynamic_index)
-                        tl.unlock();
                 }
                 if (!prune_allowed)
                     continue;
