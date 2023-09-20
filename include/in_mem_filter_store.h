@@ -3,6 +3,7 @@
 
 namespace diskann
 {
+
 // This class is responsible for filter actions in index, and should not be used outside.
 template <typename label_type> class InMemFilterStore : public AbstractFilterStore<label_type>
 {
@@ -12,7 +13,8 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
 
     // needs some internal lock
     bool detect_common_filters(uint32_t point_id, bool search_invocation,
-                               const std::vector<label_type> &incoming_labels) override;
+                               const std::vector<label_type> &incoming_labels,
+                               const FilterMatchStrategy filter_match_strategy) override;
 
     const std::vector<label_type> &get_labels_by_location(const location_t point_id);
     const tsl::robin_set<label_type> &get_all_label_set();
@@ -65,6 +67,9 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     size_t parse_label_file(const std::string &label_file);
     void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
                                       const std::string &mapFileName, const std::string &unv_label);
+
+    bool detect_common_filters_by_set_intersection(uint32_t point_id, bool search_invocation,
+                                                   const std::vector<label_type> &incoming_labels);
 };
 
 } // namespace diskann

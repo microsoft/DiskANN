@@ -5,6 +5,11 @@
 
 namespace diskann
 {
+
+enum class FilterMatchStrategy
+{
+    SET_INTERSECTION
+};
 // This class is responsible for filter actions in index, and should not be used outside.
 template <typename label_type> class AbstractFilterStore
 {
@@ -13,8 +18,9 @@ template <typename label_type> class AbstractFilterStore
     virtual ~AbstractFilterStore() = default;
 
     // needs some internal lock + abstract implementation
-    DISKANN_DLLEXPORT virtual bool detect_common_filters(uint32_t point_id, bool search_invocation,
-                                                         const std::vector<label_type> &incoming_labels) = 0;
+    DISKANN_DLLEXPORT virtual bool detect_common_filters(
+        uint32_t point_id, bool search_invocation, const std::vector<label_type> &incoming_labels,
+        const FilterMatchStrategy strategy = FilterMatchStrategy::SET_INTERSECTION) = 0;
 
     DISKANN_DLLEXPORT virtual const std::vector<label_type> &get_labels_by_location(const location_t point_id) = 0;
     DISKANN_DLLEXPORT virtual const tsl::robin_set<label_type> &get_all_label_set() = 0;

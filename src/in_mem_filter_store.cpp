@@ -11,39 +11,16 @@ InMemFilterStore<label_type>::InMemFilterStore(const size_t num_points) : Abstra
 
 template <typename label_type>
 bool InMemFilterStore<label_type>::detect_common_filters(uint32_t point_id, bool search_invocation,
-                                                         const std::vector<label_type> &incoming_labels)
+                                                         const std::vector<label_type> &incoming_labels,
+                                                         const FilterMatchStrategy filter_match_strategy)
 {
-    auto &curr_node_labels = _location_to_labels[point_id];
-    std::set<label_type> common_filters;
-    std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
-                          curr_node_labels.end(), std::inserter(common_filters, common_filters.end()));
-    if (common_filters.size() > 0)
+    switch (filter_match_strategy)
     {
-        // This is to reduce the repetitive calls. If common_filters size is > 0 ,
-        // we dont need to check further for universal label
-        return true;
+    case FilterMatchStrategy::SET_INTERSECTION:
+        return this->detect_common_filters_by_set_intersection(point_id, search_invocation, incoming_labels);
+    default:
+        throw diskann::ANNException("Error: the provided filter match strategy is not supported.", -1);
     }
-    if (_use_universal_label)
-    {
-        if (!search_invocation)
-        {
-            std::set_intersection(incoming_labels.begin(), incoming_labels.end(), _universal_labels_set.begin(),
-                                  _universal_labels_set.end(), std::inserter(common_filters, common_filters.end()));
-            std::set_intersection(curr_node_labels.begin(), curr_node_labels.end(), _universal_labels_set.begin(),
-                                  _universal_labels_set.end(), std::inserter(common_filters, common_filters.end()));
-            /*if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) != incoming_labels.end()
-               || std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) !=
-               curr_node_labels.end()) common_filters.push_back(_universal_label);*/
-        }
-        else
-        {
-            std::set_intersection(curr_node_labels.begin(), curr_node_labels.end(), _universal_labels_set.begin(),
-                                  _universal_labels_set.end(), std::inserter(common_filters, common_filters.end()));
-            /*if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) !=
-               curr_node_labels.end()) common_filters.push_back(_universal_label);*/
-        }
-    }
-    return (common_filters.size() > 0);
 }
 
 template <typename label_type>
@@ -463,6 +440,43 @@ void InMemFilterStore<label_type>::convert_labels_string_to_int(const std::strin
         map_writer << mp.first << "\t" << mp.second << std::endl;
     }
     map_writer.close();
+}
+
+template <typename label_type>
+bool InMemFilterStore<label_type>::detect_common_filters_by_set_intersection(
+    uint32_t point_id, bool search_invocation, const std::vector<label_type> &incoming_labels)
+{
+    auto &curr_node_labels = _location_to_labels[point_id];
+    std::set<label_type> common_filters;
+    std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
+                          curr_node_labels.end(), std::inserter(common_filters, common_filters.end()));
+    if (common_filters.size() > 0)
+    {
+        // This is to reduce the repetitive calls. If common_filters size is > 0 ,
+        // we dont need to check further for universal label
+        return true;
+    }
+    if (_use_universal_label)
+    {
+        if (!search_invocation)
+        {
+            std::set_intersection(incoming_labels.begin(), incoming_labels.end(), _universal_labels_set.begin(),
+                                  _universal_labels_set.end(), std::inserter(common_filters, common_filters.end()));
+            std::set_intersection(curr_node_labels.begin(), curr_node_labels.end(), _universal_labels_set.begin(),
+                                  _universal_labels_set.end(), std::inserter(common_filters, common_filters.end()));
+            /*if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) != incoming_labels.end()
+               || std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) !=
+               curr_node_labels.end()) common_filters.push_back(_universal_label);*/
+        }
+        else
+        {
+            std::set_intersection(curr_node_labels.begin(), curr_node_labels.end(), _universal_labels_set.begin(),
+                                  _universal_labels_set.end(), std::inserter(common_filters, common_filters.end()));
+            /*if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) !=
+               curr_node_labels.end()) common_filters.push_back(_universal_label);*/
+        }
+    }
+    return (common_filters.size() > 0);
 }
 
 template DISKANN_DLLEXPORT class InMemFilterStore<uint32_t>;
