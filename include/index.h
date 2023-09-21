@@ -369,6 +369,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Filter Support
 
     bool _filtered_index = false;
+    // Location to label is only updated during insert_point(), all other reads are protected by
+    // default as a location can only be released at end of consolidate deletes
     std::vector<std::vector<LabelT>> _location_to_labels;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
@@ -424,11 +426,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_timed_mutex // Ensure only one consolidate or compact_data is
         _consolidate_lock;  // ever active
     std::shared_timed_mutex // RW lock for _tag_to_location,
-        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points
+        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points, _label_to_medoid_id
     std::shared_timed_mutex // RW Lock on _delete_set and _data_compacted
         _delete_lock;       // variable
 
-    // Per node lock, cardinality=_max_points
+    // Per node lock, cardinality=_max_points + _num_frozen_points
     std::vector<non_recursive_mutex> _locks;
 
     static const float INDEX_GROWTH_FACTOR;

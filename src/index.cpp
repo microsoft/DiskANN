@@ -1023,9 +1023,15 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     }
     else
     {
+        std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
+        if (_dynamic_index)
+            tl.lock();
         std::vector<uint32_t> filter_specific_start_nodes;
         for (auto &x : _location_to_labels[location])
             filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
+
+        if (_dynamic_index)
+            tl.unlock();
 
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch->aligned_query(), filteredLindex, filter_specific_start_nodes, scratch, true,
@@ -2100,6 +2106,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     std::vector<uint32_t> init_ids = get_init_ids();
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
+    if (_dynamic_index)
+        tl.lock();
 
     if (_label_to_medoid_id.find(filter_label) != _label_to_medoid_id.end())
     {
@@ -2111,6 +2120,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                       << std::endl; // RKNOTE: If universal label found start there
         throw diskann::ANNException("No filtered medoid found. exitting ", -1);
     }
+    if (_dynamic_index)
+        tl.unlock();
+
     filter_vec.emplace_back(filter_label);
 
     _data_store->get_dist_fn()->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
