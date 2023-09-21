@@ -43,6 +43,11 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     void save_label_map(const std::string &save_path) override;
     void save_universal_label(const std::string &save_path) override;
 
+    // The function is static so it remains the source of truth across the code. Returns label map
+    static std::unordered_map<std::string, uint32_t> convert_labels_string_to_int(
+        const std::string &inFileName, const std::string &outFileName, const std::string &mapFileName,
+        const std::set<std::string> &raw_universal_labels);
+
   protected:
     // This is for internal use and only loads already parsed file
     size_t load_labels(const std::string &labels_file) override;
@@ -67,8 +72,6 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
 
     // populates pts_to labels and _labels from given label file
     size_t parse_label_file(const std::string &label_file);
-    void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
-                                      const std::string &mapFileName);
 
     bool detect_common_filters_by_set_intersection(uint32_t point_id, bool search_invocation,
                                                    const std::vector<label_type> &incoming_labels);

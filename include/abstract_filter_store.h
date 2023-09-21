@@ -63,8 +63,6 @@ template <typename label_type> class AbstractFilterStore
 
     // populates pts_to labels and _labels from given label file
     virtual size_t parse_label_file(const std::string &label_file) = 0;
-    virtual void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
-                                              const std::string &mapFileName) = 0;
 
     // mark Index as friend so it can access protected loads
     template <typename T, typename TagT, typename LabelT> friend class Index;
