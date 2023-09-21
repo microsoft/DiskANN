@@ -30,7 +30,7 @@ Additional options are added to support this in `apps/test_streaming_scenario` a
 * The index does not support mixed points, that is, either all points do not have labels or all points have labels. 
 * You can search the built filter index (one built with filters) without filters as well.
  
-> WARNING: Deleting points in case of filtered build may cause the quality of Index to degrade and affect recall rate.
+> WARNING: Deleting points in case of filtered build may cause the quality of Index to degrade and affect recall.
 ---
 
 `apps/test_insert_deletes_consolidate` to try inserting, lazy deletes and consolidate_delete 
