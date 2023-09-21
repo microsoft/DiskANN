@@ -44,6 +44,9 @@ template <typename label_type> class AbstractFilterStore
     DISKANN_DLLEXPORT virtual size_t load_raw_labels(const std::string &raw_labels_file) = 0;
 
     DISKANN_DLLEXPORT virtual void save_labels(const std::string &save_path, const size_t total_points) = 0;
+    // For dynamic filtered build, we compact the data and hence location_to_labels, we need the compacted version of
+    // raw labels to compute GT correctly.
+    DISKANN_DLLEXPORT virtual void save_raw_labels(const std::string &save_path, const size_t total_points) = 0;
     DISKANN_DLLEXPORT virtual void save_medoids(const std::string &save_path) = 0;
     DISKANN_DLLEXPORT virtual void save_label_map(const std::string &save_path) = 0;
     DISKANN_DLLEXPORT virtual void save_universal_label(const std::string &save_path) = 0;
@@ -61,8 +64,9 @@ template <typename label_type> class AbstractFilterStore
     // populates pts_to labels and _labels from given label file
     virtual size_t parse_label_file(const std::string &label_file) = 0;
     virtual void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
-                                              const std::string &mapFileName, const std::string &unv_label) = 0;
+                                              const std::string &mapFileName) = 0;
 
+    // mark Index as friend so it can access protected loads
     template <typename T, typename TagT, typename LabelT> friend class Index;
 };
 
