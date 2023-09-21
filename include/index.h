@@ -374,7 +374,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::vector<std::vector<LabelT>> _location_to_labels;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
-    std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
+    std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
 
     bool _use_universal_label = false;
@@ -426,7 +426,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_timed_mutex // Ensure only one consolidate or compact_data is
         _consolidate_lock;  // ever active
     std::shared_timed_mutex // RW lock for _tag_to_location,
-        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points, _label_to_medoid_id
+        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points, _label_to_start_id
     std::shared_timed_mutex // RW Lock on _delete_set and _data_compacted
         _delete_lock;       // variable
 

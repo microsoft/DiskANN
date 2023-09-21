@@ -289,14 +289,14 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     {
         if (_filtered_index)
         {
-            if (_label_to_medoid_id.size() > 0)
+            if (_label_to_start_id.size() > 0)
             {
                 std::ofstream medoid_writer(std::string(filename) + "_labels_to_medoids.txt");
                 if (medoid_writer.fail())
                 {
                     throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
                 }
-                for (auto iter : _label_to_medoid_id)
+                for (auto iter : _label_to_start_id)
                 {
                     medoid_writer << iter.first << ", " << iter.second << std::endl;
                 }
@@ -596,7 +596,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             std::string line, token;
             uint32_t line_cnt = 0;
 
-            _label_to_medoid_id.clear();
+            _label_to_start_id.clear();
 
             while (std::getline(medoid_stream, line))
             {
@@ -615,7 +615,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
                         medoid = token_as_num;
                     cnt++;
                 }
-                _label_to_medoid_id[label] = medoid;
+                _label_to_start_id[label] = medoid;
                 line_cnt++;
             }
         }
@@ -1028,7 +1028,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
             tl.lock();
         std::vector<uint32_t> filter_specific_start_nodes;
         for (auto &x : _location_to_labels[location])
-            filter_specific_start_nodes.emplace_back(_label_to_medoid_id[x]);
+            filter_specific_start_nodes.emplace_back(_label_to_start_id[x]);
 
         if (_dynamic_index)
             tl.unlock();
@@ -1898,7 +1898,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                                                   const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
-    _label_to_medoid_id.clear();
+    _label_to_start_id.clear();
     size_t num_points_labels = 0;
 
     parse_label_file(label_file,
@@ -1954,7 +1954,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                 best_medoid = cur_cnd;
             }
         }
-        _label_to_medoid_id[curr_label] = best_medoid;
+        _label_to_start_id[curr_label] = best_medoid;
         _medoid_counts[best_medoid]++;
     }
 
@@ -2110,9 +2110,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     if (_dynamic_index)
         tl.lock();
 
-    if (_label_to_medoid_id.find(filter_label) != _label_to_medoid_id.end())
+    if (_label_to_start_id.find(filter_label) != _label_to_start_id.end())
     {
-        init_ids.emplace_back(_label_to_medoid_id[filter_label]);
+        init_ids.emplace_back(_label_to_start_id[filter_label]);
     }
     else
     {
@@ -2517,11 +2517,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         if (_filtered_index && _dynamic_index)
         {
             //  update medoid id's as frozen points are treated as medoid
-            for (auto &[label, medoid_id] : _label_to_medoid_id)
+            for (auto &[label, medoid_id] : _label_to_start_id)
             {
                 /*  if (label == _universal_label)
                       continue;*/
-                _label_to_medoid_id[label] = (uint32_t)_nd + (medoid_id - (uint32_t)_max_points);
+                _label_to_start_id[label] = (uint32_t)_nd + (medoid_id - (uint32_t)_max_points);
             }
         }
     }
@@ -2817,11 +2817,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     // update medoid id's as frozen points are treated as medoid
     if (_filtered_index && _dynamic_index)
     {
-        for (auto &[label, medoid_id] : _label_to_medoid_id)
+        for (auto &[label, medoid_id] : _label_to_start_id)
         {
             /*if (label == _universal_label)
                 continue;*/
-            _label_to_medoid_id[label] = (uint32_t)_max_points + (medoid_id - (uint32_t)_nd);
+            _label_to_start_id[label] = (uint32_t)_max_points + (medoid_id - (uint32_t)_nd);
         }
     }
 }
@@ -2940,7 +2940,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 
                 auto fz_location = (int)(_max_points) + _frozen_pts_used; // as first _fz_point
                 _labels.insert(label);
-                _label_to_medoid_id[label] = (uint32_t)fz_location;
+                _label_to_start_id[label] = (uint32_t)fz_location;
                 _location_to_labels[fz_location] = {label};
                 _data_store->set_vector((location_t)fz_location, point);
                 _frozen_pts_used++;

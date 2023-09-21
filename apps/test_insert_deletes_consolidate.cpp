@@ -94,15 +94,16 @@ std::string get_save_filename(const std::string &save_path, size_t points_to_ski
 
 template <typename T, typename TagT, typename LabelT>
 void insert_till_next_checkpoint(diskann::AbstractIndex &index, size_t start, size_t end, int32_t thread_count, T *data,
-                                 size_t aligned_dim, std::vector<std::vector<LabelT>> &pts_to_labels)
+                                 size_t aligned_dim, std::vector<std::vector<LabelT>> &location_to_labels)
 {
     diskann::Timer insert_timer;
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
     for (int64_t j = start; j < (int64_t)end; j++)
     {
-        if (!pts_to_labels.empty())
+        if (!location_to_labels.empty())
         {
-            index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j), pts_to_labels[j - start]);
+            index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j),
+                               location_to_labels[j - start]);
         }
         else
         {
@@ -254,7 +255,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                   << " points since the data file has only that many" << std::endl;
     }
 
-    std::vector<std::vector<LabelT>> pts_to_labels;
+    std::vector<std::vector<LabelT>> location_to_labels;
     if (concurrent)
     {
         // handle labels
@@ -266,7 +267,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
         {
             convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
             auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
-            pts_to_labels = std::get<0>(parse_result);
+            location_to_labels = std::get<0>(parse_result);
         }
 
         int32_t sub_threads = (params.num_threads + 1) / 2;
@@ -284,7 +285,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
             auto insert_task = std::async(std::launch::async, [&]() {
                 load_aligned_bin_part(data_path, data, start, end - start);
                 insert_till_next_checkpoint<T, TagT, LabelT>(*index, start, end, sub_threads, data, aligned_dim,
-                                                             pts_to_labels);
+                                                             location_to_labels);
             });
             insert_task.wait();
 
@@ -316,7 +317,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
         {
             convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
             auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
-            pts_to_labels = std::get<0>(parse_result);
+            location_to_labels = std::get<0>(parse_result);
         }
 
         size_t last_snapshot_points_threshold = 0;
@@ -330,7 +331,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
             load_aligned_bin_part(data_path, data, start, end - start);
             insert_till_next_checkpoint<T, TagT, LabelT>(*index, start, end, (int32_t)params.num_threads, data,
-                                                         aligned_dim, pts_to_labels);
+                                                         aligned_dim, location_to_labels);
 
             if (checkpoints_per_snapshot > 0 && --num_checkpoints_till_snapshot == 0)
             {
