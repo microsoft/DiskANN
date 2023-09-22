@@ -44,12 +44,12 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     void save_universal_label(const std::string &save_path) override;
 
     // The function is static so it remains the source of truth across the code. Returns label map
-    static std::unordered_map<std::string, uint32_t> convert_labels_string_to_int(
+    DISKANN_DLLEXPORT static std::unordered_map<std::string, label_type> convert_labels_string_to_int(
         const std::string &inFileName, const std::string &outFileName, const std::string &mapFileName,
         const std::set<std::string> &raw_universal_labels);
 
   protected:
-    // This is for internal use and only loads already parsed file
+    // This is for internal use and only loads already parsed file, used by index in during load().
     size_t load_labels(const std::string &labels_file) override;
     size_t load_medoids(const std::string &labels_to_medoid_file) override;
     void load_label_map(const std::string &labels_map_file) override;
@@ -67,10 +67,10 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
 
     // universal label
     bool _use_universal_label = false;
-    tsl::robin_set<label_type> _universal_labels_set;
+    tsl::robin_set<label_type> _mapped_universal_labels;
     std::set<std::string> _raw_universal_labels;
 
-    // populates pts_to labels and _labels from given label file
+    // populates _loaction_to labels and _labels from given label file
     size_t parse_label_file(const std::string &label_file);
 
     bool detect_common_filters_by_set_intersection(uint32_t point_id, bool search_invocation,

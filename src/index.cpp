@@ -290,11 +290,16 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     {
         if (_filtered_index)
         {
-            // we can encapsulate all this into one save
             _filter_store->save_medoids(std::string(filename) + "_labels_to_medoids.txt");
             _filter_store->save_label_map(std::string(filename) + "_labels_map.txt");
             _filter_store->save_universal_label(std::string(filename) + "_universal_label.txt");
             _filter_store->save_labels(std::string(filename) + "_labels.txt", _nd + _num_frozen_pts);
+            // if data was compacted we need a compacted version of corresponding raw labels to compute GT
+            if (compact_before_save && _dynamic_index)
+            {
+                _filter_store->load_label_map(std::string(filename) + "_labels_map.txt");
+                _filter_store->save_raw_labels(std::string(filename) + "_raw_labels.txt", _nd + _num_frozen_pts);
+            }
         }
 
         std::string graph_file = std::string(filename);
