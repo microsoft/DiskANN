@@ -13,8 +13,7 @@ diskann::IndexWriteParameters dynamic_index_write_parameters(const uint32_t comp
                                                              const bool saturate_graph,
                                                              const uint32_t max_occlusion_size, const float alpha,
                                                              const uint32_t num_threads,
-                                                             const uint32_t filter_complexity,
-                                                             const uint32_t num_frozen_points)
+                                                             const uint32_t filter_complexity)
 {
     return diskann::IndexWriteParametersBuilder(complexity, graph_degree)
         .with_saturate_graph(saturate_graph)
@@ -22,17 +21,14 @@ diskann::IndexWriteParameters dynamic_index_write_parameters(const uint32_t comp
         .with_alpha(alpha)
         .with_num_threads(num_threads)
         .with_filter_list_size(filter_complexity)
-        .with_num_frozen_points(num_frozen_points)
         .build();
 }
 
 template <class DT>
-diskann::Index<DT, DynamicIdType, filterT> dynamic_index_builder(const diskann::Metric m,
-                                                                 const diskann::IndexWriteParameters &write_params,
-                                                                 const size_t dimensions, const size_t max_vectors,
-                                                                 const uint32_t initial_search_complexity,
-                                                                 const uint32_t initial_search_threads,
-                                                                 const bool concurrent_consolidation)
+diskann::Index<DT, DynamicIdType, filterT> dynamic_index_builder(
+    const diskann::Metric m, const diskann::IndexWriteParameters &write_params, const size_t dimensions,
+    const size_t max_vectors, const uint32_t initial_search_complexity, const uint32_t initial_search_threads,
+    const bool concurrent_consolidation, const uint32_t num_frozen_points)
 {
     const uint32_t _initial_search_threads = initial_search_threads != 0 ? initial_search_threads : omp_get_num_procs();
 
@@ -41,7 +37,7 @@ diskann::Index<DT, DynamicIdType, filterT> dynamic_index_builder(const diskann::
         m, dimensions, max_vectors,
         std::make_shared<diskann::IndexWriteParameters>(write_params),     // index write params
         std::make_shared<diskann::IndexSearchParams>(index_search_params), // index_search_params
-        write_params.num_frozen_points,                                    // frozen_points
+        num_frozen_points,                                                 // frozen_points
         true,                                                              // dynamic_index
         true,                                                              // enable_tags
         concurrent_consolidation,
@@ -60,9 +56,9 @@ DynamicMemoryIndex<DT>::DynamicMemoryIndex(const diskann::Metric m, const size_t
                                            const uint32_t initial_search_threads, const bool concurrent_consolidation)
     : _initial_search_complexity(initial_search_complexity != 0 ? initial_search_complexity : complexity),
       _write_parameters(dynamic_index_write_parameters(complexity, graph_degree, saturate_graph, max_occlusion_size,
-                                                       alpha, num_threads, filter_complexity, num_frozen_points)),
+                                                       alpha, num_threads, filter_complexity)),
       _index(dynamic_index_builder<DT>(m, _write_parameters, dimensions, max_vectors, _initial_search_complexity,
-                                       initial_search_threads, concurrent_consolidation))
+                                       initial_search_threads, concurrent_consolidation, num_frozen_points))
 {
 }
 

@@ -22,6 +22,17 @@ The program then simultaneously inserts newer points drawn from the file and del
 in chunks of `consolidate_interval` points so that the number of active points in the index is approximately `active_window`.
 It terminates when the end of data file is reached, and the final index has `active_window + consolidate_interval` number of points.
 
+The index also supports filters on steaming index, you can use `insert_point` function overloads to either insert points as before or insert points with labels.
+Additional options are added to support this in `apps/test_streaming_scenario` and `apps/test_streaming_scenario` please refer to program arguments for more details.
+
+---
+> Note
+* The index does not support mixed points, that is, either all points do not have labels or all points have labels. 
+* You can search the built filter index (one built with filters) without filters as well.
+ 
+> WARNING: Deleting points in case of filtered build may cause the quality of Index to degrade and affect recall.
+---
+
 `apps/test_insert_deletes_consolidate` to try inserting, lazy deletes and consolidate_delete 
 ---------------------------------------------------------------------------------------------
 
@@ -63,7 +74,13 @@ The arguments are as follows:
 12. **--consolidate_interval**: Granularity at which insert and delete functions are called.
 13. **--start_point_norm**: Set the starting node to a random point on a sphere of this radius.  A reasonable choice is to set this to the average norm of the data stream.
 
+** To build with filters add these optional parameters.
 
+14. **--label_file**: Filter data for each point, in `.txt` format. Line `i` of the file consists of a comma-separated list of labels corresponding to point `i` in the file passed via `--data_file`.
+15. **--FilteredLbuild**: If building a filtered index, we maintain a separate search list from the one provided by `--Lbuild/-L`.
+16. **--num_start_points**: number of frozen points in this case should be more then number of unique labels. 
+17. **--universal_label**: Optionally, the label data may contain a special "universal" label. A point with the universal label can be matched against a query with any label. Note that if a point has the universal label, then the filter data must only have the universal label on the line corresponding.
+18. **--label_type**: Optionally, type of label to be use its either uint or short, defaulted to `uint`.
 
 To search the generated index, use the `apps/search_memory_index` program:
 ---------------------------------------------------------------------------
@@ -83,6 +100,9 @@ The arguments are as follows:
 10. **--dynamic** (default false): whether the index being searched is dynamic or not.
 11. **--tags** (default false): whether to search with tags. This should be used if point *i* in the ground truth file does not correspond the point in the *i*th position in the loaded index.
 
+** to search with filters add these
+
+12. **--filter_label**: Filter for each query. For each query, a search is performed with this filter.
 
 Example with BIGANN:
 --------------------
@@ -126,7 +146,13 @@ gt_file=data/sift/gt100_learn-conc-${deletes}-${inserts}
 are inserted, start deleting the first 10000 points while inserting points 40000--50000.  Then delete points 10000--20000 while inserting
 points 50000--60000 and so until the index is left with points 60000-100000.
 
+
+Generate labels for filtered build like this. Generating 50 unique labels zipf's distributed for 100K point dataset.
 ```
+~/DiskANN/build/apps/utils/generate_synthetic_labels  --num_labels 50 --num_points 100000  --output_file data/zipf_labels_50_100K.txt --distribution_type zipf
+```
+
+```bash
 type='float'
 data='data/sift/sift_learn.fbin'
 query='data/sift/sift_query.fbin'
@@ -139,8 +165,23 @@ active=20000
 cons_int=10000
 index=${index_prefix}.after-streaming-act${active}-cons${cons_int}-max${inserts}
 gt=data/sift/gt100_learn-act${active}-cons${cons_int}-max${inserts}
+filter_label=1
 
+## filter options
+universal_label = '0'
+label_file = 'data/zipf_labels_50_100K.txt'
+num_start_points = 50
+gt_filtered= data/sift/gt100_learn-act${active}-cons${cons_int}-max${inserts}_wlabel_${filter_label}
+
+
+# Without Filters (build and search)
 ./apps/test_streaming_scenario  --data_type ${type} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 600 --alpha 1.2 --insert_threads ${ins_thr} --consolidate_threads ${cons_thr}  --max_points_to_insert ${inserts}  --active_window ${active} --consolidate_interval ${cons_int} --start_point_norm 508;
 ./apps/utils/compute_groundtruth --data_type ${type} --dist_fn l2 --base_file ${index}.data  --query_file ${query}  --K 100 --gt_file ${gt} --tags_file  ${index}.tags
 ./apps/search_memory_index  --data_type ${type} --dist_fn l2 --index_path_prefix ${index} --result_path ${result} --query_file ${query}  --gt_file ${gt}  -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
+
+# With filters (build and search)
+
+./apps/test_streaming_scenario  --data_type ${type} --num_start_points ${num_start_points} --label_file ${label_file} --universal_label {universal_label} --dist_fn l2 --data_path ${data}  --index_path_prefix ${index_prefix} -R 64 -L 600 --alpha 1.2 --insert_threads ${ins_thr} --consolidate_threads ${cons_thr}  --max_points_to_insert ${inserts}  --active_window ${active} --consolidate_interval ${cons_int} --start_point_norm 508;
+./apps/utils/compute_groundtruth_for_filters --data_type ${type} --dist_fn l2 --base_file ${index}.data  --query_file ${query}  --K 100 --gt_file ${gt_filtered} --label_file  ${label_file} --universal_label {universal_label} --filter_label {filter_label}
+./apps/search_memory_index  --data_type ${type} --filter_label {filter_label} --dist_fn l2 --index_path_prefix ${index} --result_path ${result} --query_file ${query}  --gt_file ${gt_filtered}  -K 10 -L 20 40 60 80 100 -T 64 --dynamic true --tags 1
 ```

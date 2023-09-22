@@ -153,6 +153,7 @@ inline int delete_file(const std::string &fileName)
     }
 }
 
+// generates formatted_label and _labels_map file.
 inline void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
                                          const std::string &mapFileName, const std::string &unv_label)
 {
@@ -160,7 +161,7 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
     std::ofstream label_writer(outFileName);
     std::ifstream label_reader(inFileName);
     if (unv_label != "")
-        string_int_map[unv_label] = 0;
+        string_int_map[unv_label] = 0; // if universal label is provided map it to 0 always
     std::string line, token;
     while (std::getline(label_reader, line))
     {
@@ -173,7 +174,7 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
             if (string_int_map.find(token) == string_int_map.end())
             {
                 uint32_t nextId = (uint32_t)string_int_map.size() + 1;
-                string_int_map[token] = nextId;
+                string_int_map[token] = nextId; // nextId can never be 0
             }
             lbls.push_back(string_int_map[token]);
         }
