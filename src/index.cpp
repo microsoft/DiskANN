@@ -2123,7 +2123,7 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = std::stoul(token);
+            LabelT token_as_num = (LabelT)std::stoul(token);
             simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
             bm.set(token_as_num);
             _labels.insert(token_as_num);

@@ -579,15 +579,16 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::string map_file, uint32_t &num_pts,
+void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::istringstream &file_iss,
+                                                      uint32_t &num_pts,
                                                       uint32_t &num_total_labels)
 {
-    std::ifstream infile(map_file);
+//    std::ifstream infile(map_file);
     std::string line, token;
     num_pts = 0;
     num_total_labels = 0;
 
-    while (std::getline(infile, line))
+    while (std::getline(file_iss, line))
     {
         std::istringstream iss(line);
         while (getline(iss, token, ','))
@@ -601,7 +602,7 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::string map_file, uint
 
     diskann::cout << "Labels file metadata: num_points: " << num_pts << ", #total_labels: " << num_total_labels
                   << std::endl;
-    infile.close();
+//    infile.close();
 }
 
 template <typename T, typename LabelT>
@@ -624,24 +625,36 @@ inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, uint32_t
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points_labels)
 {
-    std::ifstream infile(label_file);
+    std::ifstream infile(label_file, std::ios::binary);
     if (infile.fail())
     {
         throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
     }
+    infile.seekg(0, std::ios::end);
+    size_t file_size = infile.tellg();
 
+    std::string buffer(file_size, ' ');
+
+    infile.seekg(0, std::ios::beg);
+    infile.read(&buffer[0], file_size);
+    infile.close();
+
+    std::istringstream file_iss(buffer);
+    
     std::string line, token;
     uint32_t line_cnt = 0;
 
     uint32_t num_pts_in_label_file;
     uint32_t num_total_labels;
-    get_label_file_metadata(label_file, num_pts_in_label_file, num_total_labels);
+    get_label_file_metadata(file_iss, num_pts_in_label_file, num_total_labels);
+
+    file_iss.seekg(0, std::ios::beg);
 
     _pts_to_label_offsets = new uint32_t[num_pts_in_label_file];
     _pts_to_labels = new uint32_t[num_pts_in_label_file + num_total_labels];
     uint32_t counter = 0;
 
-    while (std::getline(infile, line))
+    while (std::getline(file_iss, line))
     {
         std::istringstream iss(line);
         std::vector<uint32_t> lbls(0);
@@ -679,7 +692,7 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
         }
         line_cnt++;
     }
-    infile.close();
+//    infile.close();
     num_points_labels = line_cnt;
 }
 
