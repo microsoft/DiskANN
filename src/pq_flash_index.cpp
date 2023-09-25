@@ -587,7 +587,7 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &fileCon
         while (lbl_pos < next_pos && lbl_pos != std::string::npos)
         {
             next_lbl_pos = fileContent.find(',', lbl_pos);
-            if (next_lbl_pos == std::string::npos)  // the last label
+            if (next_lbl_pos == std::string::npos) // the last label
             {
                 next_lbl_pos = next_pos;
             }
@@ -635,14 +635,14 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
     size_t file_size = infile.tellg();
 
     std::string buffer(file_size, ' ');
-    
+
     infile.seekg(0, std::ios::beg);
     infile.read(&buffer[0], file_size);
     infile.close();
 
     std::string line;
     uint32_t line_cnt = 0;
-    
+
     uint32_t num_pts_in_label_file;
     uint32_t num_total_labels;
     get_label_file_metadata(buffer, num_pts_in_label_file, num_total_labels);
@@ -676,14 +676,14 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
             {
                 next_lbl_pos = next_pos;
             }
-            
+
             if (next_lbl_pos > next_pos) // the last label in one line, just read to the end
             {
                 next_lbl_pos = next_pos;
             }
 
             label_str.assign(buffer.c_str() + lbl_pos, next_lbl_pos - lbl_pos);
-            if (label_str[label_str.length() - 1] == '\t')  // '\t' won't exist in label file?
+            if (label_str[label_str.length() - 1] == '\t') // '\t' won't exist in label file?
             {
                 label_str.erase(label_str.length() - 1);
             }
@@ -692,7 +692,7 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
             _pts_to_labels[labels_seen_so_far++] = (LabelT)token_as_num;
             num_lbls_in_cur_pt++;
 
-            //move to next label
+            // move to next label
             lbl_pos = next_lbl_pos + 1;
         }
 
