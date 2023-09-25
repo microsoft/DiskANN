@@ -578,6 +578,8 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     }
 }
 
+
+// test commit
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
                                                       uint32_t &num_total_labels)
