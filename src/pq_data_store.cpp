@@ -75,7 +75,7 @@ template <typename data_t> void PQDataStore<data_t>::populate_data(const std::st
                                     _pq_distance_fn->is_opq());
 
     // REFACTOR TODO: Not sure of the alignment. Just copying from index.cpp
-    alloc_aligned(((void **)&_quantized_data), file_num_points * _num_chunks * sizeof(uint8_t), 8);
+    alloc_aligned(((void **)&_quantized_data), file_num_points * _num_chunks * sizeof(uint8_t), 1);
     copy_aligned_data_from_file<uint8_t>(compressed_file.c_str(), _quantized_data, file_num_points, _num_chunks,
                                          _num_chunks);
 #ifdef EXEC_ENV_OLS
