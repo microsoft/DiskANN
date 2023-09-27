@@ -630,6 +630,11 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
         throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
     }
 
+    const unsigned int bufsize = 1024 * 1024 * 1024;
+    std::vector<char> buf;
+    buf.resize(bufsize);
+    infile.rdbuf()->pubsetbuf(buf.data(), bufsize);
+
     std::string line, token;
     uint32_t line_cnt = 0;
 
