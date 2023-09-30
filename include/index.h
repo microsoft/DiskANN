@@ -57,7 +57,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const size_t num_frozen_pts = 0, const bool dynamic_index = false,
                             const bool enable_tags = false, const bool concurrent_consolidate = false,
                             const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false);
+                            const bool use_opq = false, const bool filtered_index = false);
 
     DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store,
                             std::unique_ptr<AbstractGraphStore> graph_store);
@@ -96,7 +96,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Based on filter params builds a filtered or unfiltered index
     DISKANN_DLLEXPORT void build(const std::string &data_file, const size_t num_points_to_load,
-                                 IndexFilterParams &build_params);
+                                 IndexFilterParams &filter_params);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
@@ -140,6 +140,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
+
+    // Will fail if tag already in the index or if tag=0.
+    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag, const std::vector<LabelT> &label);
 
     // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
@@ -202,6 +205,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                float *distances) override;
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
+    virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;
 
     virtual int _lazy_delete(const TagType &tag) override;
 
@@ -217,6 +221,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
                                      float *distances, DataVector &res_vectors) override;
+
+    virtual void _set_universal_label(const LabelType universal_label) override;
 
     // No copy/assign.
     Index(const Index<T, TagT, LabelT> &) = delete;
@@ -342,6 +348,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // needed for a dynamic index. The frozen points have consecutive locations.
     // See also _start below.
     size_t _num_frozen_pts = 0;
+    size_t _frozen_pts_used = 0;
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;
@@ -362,11 +369,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Filter Support
 
     bool _filtered_index = false;
-    std::vector<std::vector<LabelT>> _pts_to_labels;
+    // Location to label is only updated during insert_point(), all other reads are protected by
+    // default as a location can only be released at end of consolidate deletes
+    std::vector<std::vector<LabelT>> _location_to_labels;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
-    std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
+    std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
+
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
@@ -416,11 +426,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_timed_mutex // Ensure only one consolidate or compact_data is
         _consolidate_lock;  // ever active
     std::shared_timed_mutex // RW lock for _tag_to_location,
-        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points
+        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points, _label_to_start_id
     std::shared_timed_mutex // RW Lock on _delete_set and _data_compacted
         _delete_lock;       // variable
 
-    // Per node lock, cardinality=_max_points
+    // Per node lock, cardinality=_max_points + _num_frozen_points
     std::vector<non_recursive_mutex> _locks;
 
     static const float INDEX_GROWTH_FACTOR;

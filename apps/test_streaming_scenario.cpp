@@ -13,6 +13,7 @@
 #include <index_factory.h>
 
 #include "utils.h"
+#include "filter_utils.h"
 #include "program_options_utils.hpp"
 
 #ifndef _WINDOWS
@@ -84,9 +85,9 @@ std::string get_save_filename(const std::string &save_path, size_t active_window
     return final_path;
 }
 
-template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
+template <typename T, typename TagT, typename LabelT>
 void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, size_t insert_threads, T *data,
-                       size_t aligned_dim)
+                       size_t aligned_dim, std::vector<std::vector<LabelT>> &pts_to_labels)
 {
     try
     {
@@ -97,7 +98,18 @@ void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, 
 #pragma omp parallel for num_threads((int32_t)insert_threads) schedule(dynamic) reduction(+ : num_failed)
         for (int64_t j = start; j < (int64_t)end; j++)
         {
-            if (index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j)) != 0)
+            int insert_result = -1;
+            if (pts_to_labels.size() > 0)
+            {
+                insert_result = index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j),
+                                                   pts_to_labels[j - start]);
+            }
+            else
+            {
+                insert_result = index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j));
+            }
+
+            if (insert_result != 0)
             {
                 std::cerr << "Insert failed " << j << std::endl;
                 num_failed++;
@@ -113,6 +125,7 @@ void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, 
     catch (std::system_error &e)
     {
         std::cout << "Exiting after catching exception in insertion task: " << e.what() << std::endl;
+        exit(-1);
     }
 }
 
@@ -167,23 +180,23 @@ void delete_and_consolidate(diskann::AbstractIndex &index, diskann::IndexWritePa
     }
 }
 
-template <typename T>
+template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t>
 void build_incremental_index(const std::string &data_path, const uint32_t L, const uint32_t R, const float alpha,
                              const uint32_t insert_threads, const uint32_t consolidate_threads,
                              size_t max_points_to_insert, size_t active_window, size_t consolidate_interval,
-                             const float start_point_norm, uint32_t num_start_pts, const std::string &save_path)
+                             const float start_point_norm, uint32_t num_start_pts, const std::string &save_path,
+                             const std::string &label_file, const std::string &universal_label, const uint32_t Lf)
 {
     const uint32_t C = 500;
     const bool saturate_graph = false;
-    using TagT = uint32_t;
-    using LabelT = uint32_t;
+    bool has_labels = label_file != "";
 
     diskann::IndexWriteParameters params = diskann::IndexWriteParametersBuilder(L, R)
                                                .with_max_occlusion_size(C)
                                                .with_alpha(alpha)
                                                .with_saturate_graph(saturate_graph)
                                                .with_num_threads(insert_threads)
-                                               .with_num_frozen_points(num_start_pts)
+                                               .with_filter_list_size(Lf)
                                                .build();
 
     auto index_search_params = diskann::IndexSearchParams(L, insert_threads);
@@ -192,10 +205,24 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                                                       .with_alpha(alpha)
                                                       .with_saturate_graph(saturate_graph)
                                                       .with_num_threads(consolidate_threads)
+                                                      .with_filter_list_size(Lf)
                                                       .build();
 
     size_t dim, aligned_dim;
     size_t num_points;
+
+    std::vector<std::vector<LabelT>> pts_to_labels;
+
+    const auto save_path_inc =
+        get_save_filename(save_path + ".after-streaming-", active_window, consolidate_interval, max_points_to_insert);
+    std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
+    std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
+    if (has_labels)
+    {
+        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
+        auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
+        pts_to_labels = std::get<0>(parse_result);
+    }
 
     diskann::get_bin_metadata(data_path, num_points, dim);
     diskann::cout << "metadata: file " << data_path << " has " << num_points << " points in " << dim << " dims"
@@ -208,8 +235,10 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
                             .is_dynamic_index(true)
                             .is_enable_tags(true)
                             .is_use_opq(false)
+                            .is_filtered(has_labels)
                             .with_num_pq_chunks(0)
                             .is_pq_dist_build(false)
+                            .with_num_frozen_pts(num_start_pts)
                             .with_tag_type(diskann_type_to_name<TagT>())
                             .with_label_type(diskann_type_to_name<LabelT>())
                             .with_data_type(diskann_type_to_name<T>())
@@ -221,6 +250,12 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
     auto index = index_factory.create_instance();
+
+    if (universal_label != "")
+    {
+        LabelT u_label = 0;
+        index->set_universal_label(u_label);
+    }
 
     if (max_points_to_insert == 0)
     {
@@ -255,7 +290,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     auto insert_task = std::async(std::launch::async, [&]() {
         load_aligned_bin_part(data_path, data, 0, active_window);
-        insert_next_batch(*index, (size_t)0, active_window, params.num_threads, data, aligned_dim);
+        insert_next_batch<T, TagT, LabelT>(*index, (size_t)0, active_window, params.num_threads, data, aligned_dim,
+                                           pts_to_labels);
     });
     insert_task.wait();
 
@@ -265,7 +301,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         auto end = std::min(start + consolidate_interval, max_points_to_insert);
         auto insert_task = std::async(std::launch::async, [&]() {
             load_aligned_bin_part(data_path, data, start, end - start);
-            insert_next_batch(*index, start, end, params.num_threads, data, aligned_dim);
+            insert_next_batch<T, TagT, LabelT>(*index, start, end, params.num_threads, data, aligned_dim,
+                                               pts_to_labels);
         });
         insert_task.wait();
 
@@ -285,8 +322,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
         delete_tasks[delete_tasks.size() - 1].wait();
 
     std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
-    const auto save_path_inc =
-        get_save_filename(save_path + ".after-streaming-", active_window, consolidate_interval, max_points_to_insert);
+
     index->save(save_path_inc.c_str(), true);
 
     diskann::aligned_free(data);
@@ -294,9 +330,8 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, data_path, index_path_prefix;
-    uint32_t insert_threads, consolidate_threads;
-    uint32_t R, L, num_start_pts;
+    std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
+    uint32_t insert_threads, consolidate_threads, R, L, num_start_pts, Lf, unique_labels_supported;
     float alpha, start_point_norm;
     size_t max_points_to_insert, active_window, consolidate_interval;
 
@@ -352,6 +387,22 @@ int main(int argc, char **argv)
             "Set the number of random start (frozen) points to use when "
             "inserting and searching");
 
+        optional_configs.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
+                                       "Input label file in txt format for Filtered Index search. "
+                                       "The file should contain comma separated filters for each node "
+                                       "with each line corresponding to a graph node");
+        optional_configs.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
+                                       "Universal label, if using it, only in conjunction with labels_file");
+        optional_configs.add_options()("FilteredLbuild,Lf", po::value<uint32_t>(&Lf)->default_value(0),
+                                       "Build complexity for filtered points, higher value "
+                                       "results in better graphs");
+        optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
+                                       "Storage type of Labels <uint/ushort>, default value is uint which "
+                                       "will consume memory 4 bytes per filter");
+        optional_configs.add_options()("unique_labels_supported",
+                                       po::value<uint32_t>(&unique_labels_supported)->default_value(0),
+                                       "Number of unique labels supported by the dynamic index.");
+
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
 
@@ -363,13 +414,6 @@ int main(int argc, char **argv)
             return 0;
         }
         po::notify(vm);
-        if (start_point_norm == 0)
-        {
-            std::cout << "When beginning_index_size is 0, use a start point with "
-                         "appropriate norm"
-                      << std::endl;
-            return -1;
-        }
     }
     catch (const std::exception &ex)
     {
@@ -377,22 +421,92 @@ int main(int argc, char **argv)
         return -1;
     }
 
+    // Validate arguments
+    if (start_point_norm == 0)
+    {
+        std::cout << "When beginning_index_size is 0, use a start point with "
+                     "appropriate norm"
+                  << std::endl;
+        return -1;
+    }
+
+    if (label_type != std::string("ushort") && label_type != std::string("uint"))
+    {
+        std::cerr << "Invalid label type. Supported types are uint and ushort" << std::endl;
+        return -1;
+    }
+
+    if (data_type != std::string("int8") && data_type != std::string("uint8") && data_type != std::string("float"))
+    {
+        std::cerr << "Invalid data type. Supported types are int8, uint8 and float" << std::endl;
+        return -1;
+    }
+
+    // TODO: Are additional distance functions supported?
+    if (dist_fn != std::string("l2") && dist_fn != std::string("mips"))
+    {
+        std::cerr << "Invalid distance function. Supported functions are l2 and mips" << std::endl;
+        return -1;
+    }
+
+    if (num_start_pts < unique_labels_supported)
+    {
+        num_start_pts = unique_labels_supported;
+    }
+
     try
     {
-        if (data_type == std::string("int8"))
-            build_incremental_index<int8_t>(data_path, L, R, alpha, insert_threads, consolidate_threads,
-                                            max_points_to_insert, active_window, consolidate_interval, start_point_norm,
-                                            num_start_pts, index_path_prefix);
-        else if (data_type == std::string("uint8"))
-            build_incremental_index<uint8_t>(data_path, L, R, alpha, insert_threads, consolidate_threads,
-                                             max_points_to_insert, active_window, consolidate_interval,
-                                             start_point_norm, num_start_pts, index_path_prefix);
+        if (data_type == std::string("uint8"))
+        {
+            if (label_type == std::string("ushort"))
+            {
+                build_incremental_index<uint8_t, uint32_t, uint16_t>(
+                    data_path, L, R, alpha, insert_threads, consolidate_threads, max_points_to_insert, active_window,
+                    consolidate_interval, start_point_norm, num_start_pts, index_path_prefix, label_file,
+                    universal_label, Lf);
+            }
+            else if (label_type == std::string("uint"))
+            {
+                build_incremental_index<uint8_t, uint32_t, uint32_t>(
+                    data_path, L, R, alpha, insert_threads, consolidate_threads, max_points_to_insert, active_window,
+                    consolidate_interval, start_point_norm, num_start_pts, index_path_prefix, label_file,
+                    universal_label, Lf);
+            }
+        }
+        else if (data_type == std::string("int8"))
+        {
+            if (label_type == std::string("ushort"))
+            {
+                build_incremental_index<int8_t, uint32_t, uint16_t>(
+                    data_path, L, R, alpha, insert_threads, consolidate_threads, max_points_to_insert, active_window,
+                    consolidate_interval, start_point_norm, num_start_pts, index_path_prefix, label_file,
+                    universal_label, Lf);
+            }
+            else if (label_type == std::string("uint"))
+            {
+                build_incremental_index<int8_t, uint32_t, uint32_t>(
+                    data_path, L, R, alpha, insert_threads, consolidate_threads, max_points_to_insert, active_window,
+                    consolidate_interval, start_point_norm, num_start_pts, index_path_prefix, label_file,
+                    universal_label, Lf);
+            }
+        }
         else if (data_type == std::string("float"))
-            build_incremental_index<float>(data_path, L, R, alpha, insert_threads, consolidate_threads,
-                                           max_points_to_insert, active_window, consolidate_interval, start_point_norm,
-                                           num_start_pts, index_path_prefix);
-        else
-            std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+        {
+            if (label_type == std::string("ushort"))
+            {
+                build_incremental_index<float, uint32_t, uint16_t>(
+                    data_path, L, R, alpha, insert_threads, consolidate_threads, max_points_to_insert, active_window,
+                    consolidate_interval, start_point_norm, num_start_pts, index_path_prefix, label_file,
+                    universal_label, Lf);
+            }
+            else if (label_type == std::string("uint"))
+            {
+                build_incremental_index<float, uint32_t, uint32_t>(
+                    data_path, L, R, alpha, insert_threads, consolidate_threads, max_points_to_insert, active_window,
+                    consolidate_interval, start_point_norm, num_start_pts, index_path_prefix, label_file,
+                    universal_label, Lf);
+            }
+        }
     }
     catch (const std::exception &e)
     {
