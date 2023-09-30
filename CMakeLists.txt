@@ -58,28 +58,21 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 include(FetchContent)
 
 if(USE_TCMALLOC)
-    if(MSVC)
-        FetchContent_Declare(
-            tcmalloc
-            GIT_REPOSITORY https://github.com/google/tcmalloc.git
-            GIT_TAG        origin/master  # or specify a particular version or commit
-        )
+    FetchContent_Declare(
+        tcmalloc
+        GIT_REPOSITORY https://github.com/google/tcmalloc.git
+        GIT_TAG        origin/master  # or specify a particular version or commit
+    )
 
-        FetchContent_GetProperties(tcmalloc)
-        if(NOT tcmalloc_POPULATED)
-            FetchContent_Populate(tcmalloc)
-            add_subdirectory(${tcmalloc_SOURCE_DIR} ${tcmalloc_BINARY_DIR})
-        endif()
-    endif()
+    FetchContent_MakeAvailable(tcmalloc)
 endif()
 
 # It's necessary to include tcmalloc headers only if calling into MallocExtension interface.
 # For using tcmalloc in DiskANN tools, it's enough to just link with tcmalloc.
 if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
-    include_directories(${PROJECT_SOURCE_DIR}/gperftools/src)
-
+     include_directories(${tcmalloc_SOURCE_DIR}/src)
     if (MSVC)
-        include_directories(${PROJECT_SOURCE_DIR}/gperftools/src/windows)
+        include_directories(${tcmalloc_SOURCE_DIR}/src/windows)
     endif()
 endif()
 
@@ -228,17 +221,14 @@ add_definitions(-DMKL_ILP64)
 # is enabled.
 if(USE_TCMALLOC)
     if (MSVC)
-        if (NOT EXISTS "${PROJECT_SOURCE_DIR}/gperftools/gperftools.sln")
-            message(FATAL_ERROR "The gperftools submodule was not found. "
-                    "Please check-out git submodules by doing 'git submodule init' followed by 'git submodule update'")
-        endif()
+        # Adjust the paths to point to the fetched tcmalloc content
 
-        set(TCMALLOC_LINK_LIBRARY "${PROJECT_SOURCE_DIR}/gperftools/x64/Release-Patch/libtcmalloc_minimal.lib")
+        set(TCMALLOC_LINK_LIBRARY "${tcmalloc_BINARY_DIR}/x64/Release-Patch/libtcmalloc_minimal.lib")
         set(TCMALLOC_WINDOWS_RUNTIME_FILES
-            "${PROJECT_SOURCE_DIR}/gperftools/x64/Release-Patch/libtcmalloc_minimal.dll"
-            "${PROJECT_SOURCE_DIR}/gperftools/x64/Release-Patch/libtcmalloc_minimal.pdb")
+            "${tcmalloc_BINARY_DIR}/x64/Release-Patch/libtcmalloc_minimal.dll"
+            "${tcmalloc_BINARY_DIR}/x64/Release-Patch/libtcmalloc_minimal.pdb")
 
-        # Tell CMake how to build the tcmalloc linker library from the submodule.
+        # Tell CMake how to build the tcmalloc linker library.
         add_custom_target(build_libtcmalloc_minimal DEPENDS ${TCMALLOC_LINK_LIBRARY})
         add_custom_command(OUTPUT ${TCMALLOC_LINK_LIBRARY}
                            COMMAND ${CMAKE_VS_MSBUILD_COMMAND} gperftools.sln /m /nologo
@@ -246,7 +236,7 @@ if(USE_TCMALLOC)
                                /property:Platform="x64"
                                /p:PlatformToolset=v${MSVC_TOOLSET_VERSION}
                                /p:WindowsTargetPlatformVersion=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}
-                           WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/gperftools)
+                           WORKING_DIRECTORY ${tcmalloc_SOURCE_DIR})
 
         add_library(libtcmalloc_minimal_for_exe STATIC IMPORTED)
         add_library(libtcmalloc_minimal_for_dll STATIC IMPORTED)
