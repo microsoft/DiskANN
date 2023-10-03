@@ -127,11 +127,11 @@ int main(int argc, char **argv)
                                       .with_num_threads(num_threads)
                                       .build();
 
-        auto build_params = diskann::IndexBuildParamsBuilder(index_build_params)
-                                .with_universal_label(universal_label)
-                                .with_label_file(label_file)
-                                .with_save_path_prefix(index_path_prefix)
-                                .build();
+        auto filter_params = diskann::IndexFilterParamsBuilder()
+                                 .with_universal_label(universal_label)
+                                 .with_label_file(label_file)
+                                 .with_save_path_prefix(index_path_prefix)
+                                 .build();
         auto config = diskann::IndexConfigBuilder()
                           .with_metric(metric)
                           .with_dimension(data_dim)
@@ -150,7 +150,7 @@ int main(int argc, char **argv)
 
         auto index_factory = diskann::IndexFactory(config);
         auto index = index_factory.create_instance();
-        index->build(data_path, data_num, build_params);
+        index->build(data_path, data_num, filter_params);
         index->save(index_path_prefix.c_str());
         index.reset();
         return 0;

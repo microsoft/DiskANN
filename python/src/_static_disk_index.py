@@ -138,12 +138,13 @@ class StaticDiskIndex:
             )
             complexity = k_neighbors
 
-        return self._index.search(
+        neighbors, distances = self._index.search(
             query=_query,
             knn=k_neighbors,
             complexity=complexity,
             beam_width=beam_width,
         )
+        return QueryResponse(identifiers=neighbors, distances=distances)
 
     def batch_search(
         self,
@@ -187,7 +188,7 @@ class StaticDiskIndex:
             complexity = k_neighbors
 
         num_queries, dim = _queries.shape
-        return self._index.batch_search(
+        neighbors, distances = self._index.batch_search(
             queries=_queries,
             num_queries=num_queries,
             knn=k_neighbors,
@@ -195,3 +196,4 @@ class StaticDiskIndex:
             beam_width=beam_width,
             num_threads=num_threads,
         )
+        return QueryResponseBatch(identifiers=neighbors, distances=distances)

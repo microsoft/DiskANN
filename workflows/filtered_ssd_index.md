@@ -21,7 +21,7 @@ To generate an SSD-friendly index, use the `apps/build_disk_index` program.
 11. **--build_PQ_bytes** (default is 0): Set to a positive value less than the dimensionality of the data to enable faster index build with PQ based distance comparisons. 
 12. **--use_opq**: use the flag to use OPQ rather than PQ compression. OPQ is more space efficient for some high dimensional datasets, but also needs a bit more build time.
 13. **--label_file**: Filter data for each point, in `.txt` format. Line `i` of the file consists of a comma-separated list of filters corresponding to point `i` in the file passed via `--data_file`.
-14. **--universal_label**: Optionally, the the filter data may contain a "wild-card" filter corresponding to all filters. This is referred to as a universal label. Note that if a point has the universal label, then the filter data must only have the universal label on the line corresponding to said point.
+14. **--universal_label**: Optionally, the label data may contain a special "universal" label. A point with the universal label can be matched against a query with any label. Note that if a point has the universal label, then the filter data must only have the universal label on the line corresponding.
 15. **--FilteredLbuild**: If building a filtered index, we maintain a separate search list from the one provided by `--Lbuild`. 
 16. **--filter_threshold**: Threshold to break up the existing nodes to generate new graph internally by breaking dense points where each node will have a maximum F labels. Default value is zero where no break up happens for the dense points.
 

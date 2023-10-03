@@ -27,6 +27,9 @@ jobs:
   dynamic:
     name: Dynamic
     uses: ./.github/workflows/dynamic.yml
+  dynamic-labels:
+    name: Dynamic Labels
+    uses: ./.github/workflows/dynamic-labels.yml
   python:
     name: Python
     uses: ./.github/workflows/build-python.yml

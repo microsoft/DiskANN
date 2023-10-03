@@ -17,7 +17,7 @@ diskann::Index<DT, StaticIdType, filterT> static_index_builder(const diskann::Me
     {
         throw std::runtime_error("initial_search_complexity must be a positive uint32_t");
     }
-    auto index_search_params = diskann::IndexSearchParams(initial_search_complexity, omp_get_num_threads());
+    auto index_search_params = diskann::IndexSearchParams(initial_search_complexity, omp_get_num_procs());
     return diskann::Index<DT>(m, dimensions, num_points,
                               nullptr,                                                           // index write params
                               std::make_shared<diskann::IndexSearchParams>(index_search_params), // index search params
@@ -36,7 +36,7 @@ StaticMemoryIndex<DT>::StaticMemoryIndex(const diskann::Metric m, const std::str
                                          const uint32_t initial_search_complexity)
     : _index(static_index_builder<DT>(m, num_points, dimensions, initial_search_complexity))
 {
-    const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_threads();
+    const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_procs();
     _index.load(index_prefix.c_str(), _num_threads, initial_search_complexity);
 }
 
@@ -56,7 +56,7 @@ NeighborsAndDistances<StaticIdType> StaticMemoryIndex<DT>::batch_search(
     py::array_t<DT, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries, const uint64_t knn,
     const uint64_t complexity, const uint32_t num_threads)
 {
-    const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_threads();
+    const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_procs();
     py::array_t<StaticIdType> ids({num_queries, knn});
     py::array_t<float> dists({num_queries, knn});
     std::vector<DT *> empty_vector;

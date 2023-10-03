@@ -309,7 +309,8 @@ class DynamicMemoryIndex:
                 f"k_neighbors={k_neighbors} asked for, but list_size={complexity} was smaller. Increasing {complexity} to {k_neighbors}"
             )
             complexity = k_neighbors
-        return self._index.search(query=_query, knn=k_neighbors, complexity=complexity)
+        neighbors, distances = self._index.search(query=_query, knn=k_neighbors, complexity=complexity)
+        return QueryResponse(identifiers=neighbors, distances=distances)
 
     def batch_search(
         self,
@@ -351,13 +352,14 @@ class DynamicMemoryIndex:
             complexity = k_neighbors
 
         num_queries, dim = queries.shape
-        return self._index.batch_search(
+        neighbors, distances = self._index.batch_search(
             queries=_queries,
             num_queries=num_queries,
             knn=k_neighbors,
             complexity=complexity,
             num_threads=num_threads,
         )
+        return QueryResponseBatch(identifiers=neighbors, distances=distances)
 
     def save(self, save_path: str, index_prefix: str = "ann"):
         """

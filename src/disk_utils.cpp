@@ -649,11 +649,12 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                                                   .with_num_threads(num_threads)
                                                   .build();
         using TagT = uint32_t;
-        diskann::Index<T, TagT, LabelT> _index(
-            compareMetric, base_dim, base_num, std::make_shared<diskann::IndexWriteParameters>(paras), nullptr,
-            paras.num_frozen_points, false, false, false, build_pq_bytes > 0, build_pq_bytes, use_opq);
+        diskann::Index<T, TagT, LabelT> _index(compareMetric, base_dim, base_num,
+                                               std::make_shared<diskann::IndexWriteParameters>(paras), nullptr,
+                                               defaults::NUM_FROZEN_POINTS_STATIC, false, false, false,
+                                               build_pq_bytes > 0, build_pq_bytes, use_opq, use_filters);
         if (!use_filters)
-            _index.build(base_file.c_str(), base_num, paras);
+            _index.build(base_file.c_str(), base_num);
         else
         {
             if (universal_label != "")
@@ -661,7 +662,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                 LabelT unv_label_as_num = 0;
                 _index.set_universal_label(unv_label_as_num);
             }
-            _index.build_filtered_index(base_file.c_str(), label_file, base_num, paras);
+            _index.build_filtered_index(base_file.c_str(), label_file, base_num);
         }
         _index.save(mem_index_path.c_str());
 
@@ -706,18 +707,22 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         std::string shard_index_file = merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
 
-        diskann::IndexWriteParameters paras =
-            diskann::IndexWriteParametersBuilder(L, (2 * R / 3)).with_filter_list_size(Lf).build();
+        diskann::IndexWriteParameters low_degree_params = diskann::IndexWriteParametersBuilder(L, 2 * R / 3)
+                                                              .with_filter_list_size(Lf)
+                                                              .with_saturate_graph(false)
+                                                              .with_num_threads(num_threads)
+                                                              .build();
 
         uint64_t shard_base_dim, shard_base_pts;
         get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
 
-        diskann::Index<T> _index(
-            compareMetric, shard_base_dim, shard_base_pts, std::make_shared<diskann::IndexWriteParameters>(paras),
-            nullptr, paras.num_frozen_points, false, false, false, build_pq_bytes > 0, build_pq_bytes, use_opq);
+        diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts,
+                                 std::make_shared<diskann::IndexWriteParameters>(low_degree_params), nullptr,
+                                 defaults::NUM_FROZEN_POINTS_STATIC, false, false, false, build_pq_bytes > 0,
+                                 build_pq_bytes, use_opq);
         if (!use_filters)
         {
-            _index.build(shard_base_file.c_str(), shard_base_pts, paras);
+            _index.build(shard_base_file.c_str(), shard_base_pts);
         }
         else
         {
@@ -727,7 +732,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                 LabelT unv_label_as_num = 0;
                 _index.set_universal_label(unv_label_as_num);
             }
-            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
+            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts);
         }
         _index.save(shard_index_file.c_str());
         // copy universal label file from first shard to the final destination
