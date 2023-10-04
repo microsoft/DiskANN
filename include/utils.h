@@ -57,7 +57,7 @@ typedef int FileHandle;
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 60
 
-inline bool file_exists(const std::string &name, bool dirCheck = false)
+inline bool file_exists_impl(const std::string &name, bool dirCheck = false)
 {
     int val;
 #ifndef _WINDOWS
@@ -92,6 +92,29 @@ inline bool file_exists(const std::string &name, bool dirCheck = false)
         // the file entry exists. If reqd, check if this is a directory.
         return dirCheck ? buffer.st_mode & S_IFDIR : true;
     }
+}
+
+inline bool file_exists(const std::string &name, bool dirCheck = false)
+{
+#ifdef EXEC_ENV_OLS
+    bool exists = file_exists_impl(name, dirCheck);
+    if (exists)
+    {
+        return true;
+    }
+    if (!dirCheck)
+    {
+        // try with .enc extension
+        std::string enc_name = name + ENCRYPTED_EXTENSION;
+        return file_exists_impl(enc_name, dirCheck);
+    }
+    else
+    {
+        return exists;
+    }
+#else
+    return file_exists_impl(name, dirCheck);
+#endif
 }
 
 inline void open_file_to_write(std::ofstream &writer, const std::string &filename)
