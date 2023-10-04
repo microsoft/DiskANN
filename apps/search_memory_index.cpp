@@ -131,7 +131,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
     std::vector<float> latency_stats(query_num, 0);
     std::vector<uint32_t> cmp_stats;
-    if (not tags)
+    if (not tags || filtered_search)
     {
         cmp_stats = std::vector<uint32_t>(query_num, 0);
     }
@@ -221,7 +221,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
         float avg_cmps = (float)std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) / (float)query_num;
 
-        if (tags)
+        if (tags && !filtered_search)
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(20) << (float)mean_latency
                       << std::setw(15) << (float)latency_stats[(uint64_t)(0.999 * query_num)];

@@ -29,9 +29,27 @@ const std::vector<label_type> &InMemFilterStore<label_type>::get_labels_by_locat
     return _location_to_labels[point_id];
 }
 
+template <typename label_type>
+void InMemFilterStore<label_type>::set_labels_to_location(const location_t location,
+                                                          const std::vector<label_type> &labels)
+{
+    _location_to_labels[location] = labels;
+}
+
+template <typename label_type>
+void InMemFilterStore<label_type>::swap_labels(const location_t location_first, const location_t location_second)
+{
+    _location_to_labels[location_first].swap(_location_to_labels[location_second]);
+}
+
 template <typename label_type> const tsl::robin_set<label_type> &InMemFilterStore<label_type>::get_all_label_set()
 {
     return _labels;
+}
+
+template <typename label_type> void InMemFilterStore<label_type>::add_to_label_set(label_type &label)
+{
+    _labels.insert(label);
 }
 
 template <typename label_type>
@@ -44,6 +62,12 @@ template <typename label_type>
 const uint32_t &InMemFilterStore<label_type>::get_medoid_by_label(const label_type &label)
 {
     return _label_to_medoid_id[label];
+}
+
+template <typename label_type>
+const std::unordered_map<label_type, uint32_t> &InMemFilterStore<label_type>::get_labels_to_medoids()
+{
+    return _label_to_medoid_id;
 }
 
 template <typename label_type> bool InMemFilterStore<label_type>::label_has_medoid(const label_type &label)

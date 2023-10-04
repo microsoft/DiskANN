@@ -17,7 +17,10 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
                                const FilterMatchStrategy filter_match_strategy) override;
 
     const std::vector<label_type> &get_labels_by_location(const location_t point_id) override;
+    void set_labels_to_location(const location_t location, const std::vector<label_type> &labels);
+    void swap_labels(const location_t location_first, const location_t location_second) override;
     const tsl::robin_set<label_type> &get_all_label_set() override;
+    void add_to_label_set(label_type &label) override;
     // Throws: out of range exception
     void add_label_to_location(const location_t point_id, label_type label) override;
     // returns internal mapping for given raw_label
@@ -25,6 +28,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
 
     void update_medoid_by_label(const label_type &label, const uint32_t new_medoid) override;
     const uint32_t &get_medoid_by_label(const label_type &label) override;
+    const std::unordered_map<label_type, uint32_t> &get_labels_to_medoids() override;
     bool label_has_medoid(const label_type &label) override;
     void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates) override;
 

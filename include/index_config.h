@@ -239,13 +239,13 @@ class IndexConfigBuilder
     bool _pq_dist_build = false;
     bool _concurrent_consolidate = false;
     bool _use_opq = false;
-    bool _filtered_index = false;
+    bool _filtered_index{defaults::HAS_LABELS};
 
     size_t _num_pq_chunks = 0;
-    size_t _num_frozen_pts = 0;
+    size_t _num_frozen_pts{defaults::NUM_FROZEN_POINTS_STATIC};
 
-    std::string _label_type = "uint32";
-    std::string _tag_type = "uint32";
+    std::string _label_type{"uint32"};
+    std::string _tag_type{"uint32"};
     std::string _data_type;
 
     std::shared_ptr<IndexWriteParameters> _index_write_params;

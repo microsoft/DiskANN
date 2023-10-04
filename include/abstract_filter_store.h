@@ -23,7 +23,12 @@ template <typename label_type> class AbstractFilterStore
         const FilterMatchStrategy strategy = FilterMatchStrategy::SET_INTERSECTION) = 0;
 
     DISKANN_DLLEXPORT virtual const std::vector<label_type> &get_labels_by_location(const location_t point_id) = 0;
+    DISKANN_DLLEXPORT virtual void set_labels_to_location(const location_t location,
+                                                          const std::vector<label_type> &labels) = 0;
+    DISKANN_DLLEXPORT virtual void swap_labels(const location_t location_first, const location_t location_second) = 0;
+
     DISKANN_DLLEXPORT virtual const tsl::robin_set<label_type> &get_all_label_set() = 0;
+    DISKANN_DLLEXPORT virtual void add_to_label_set(label_type &label) = 0;
     // Throws: out of range exception
     DISKANN_DLLEXPORT virtual void add_label_to_location(const location_t point_id, label_type label) = 0;
     // returns internal mapping for given raw_label
@@ -31,6 +36,7 @@ template <typename label_type> class AbstractFilterStore
 
     DISKANN_DLLEXPORT virtual void update_medoid_by_label(const label_type &label, const uint32_t new_medoid) = 0;
     DISKANN_DLLEXPORT virtual const uint32_t &get_medoid_by_label(const label_type &label) = 0;
+    DISKANN_DLLEXPORT virtual const std::unordered_map<label_type, uint32_t> &get_labels_to_medoids() = 0;
     DISKANN_DLLEXPORT virtual bool label_has_medoid(const label_type &label) = 0;
     DISKANN_DLLEXPORT virtual void calculate_best_medoids(const size_t num_points_to_load,
                                                           const uint32_t num_candidates) = 0;
