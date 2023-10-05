@@ -204,10 +204,12 @@ template <typename label_type> void InMemFilterStore<label_type>::load_label_map
     }
     else
     {
-        throw diskann::ANNException(
-            "Can't load label map file please make sure it was generate, either by filter_store->load_raw_labels() "
-            "then index->save() or  convert_labels_string_to_int() method in case of dynamic index",
-            -1);
+        // TODO: throw exception from here and also make sure filtered_index is set appropriately for both build and
+        // search of index.
+        diskann::cout << "Warning: Can't load label map file please make sure it was generate, either by "
+                         "filter_store->load_raw_labels() "
+                         "then index->save() or  convert_labels_string_to_int() method in case of dynamic index"
+                      << std::endl;
     }
 }
 
