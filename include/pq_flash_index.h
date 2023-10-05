@@ -102,9 +102,9 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
   private:
     DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, uint32_t label_id);
-    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
-    DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file, size_t &num_pts_labels);
-    DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file, uint32_t &num_pts, uint32_t &num_total_labels);
+    std::unordered_map<std::string, LabelT> load_label_map(std::basic_istream<char> &infile);
+    DISKANN_DLLEXPORT void parse_label_file(std::basic_istream<char> &infile, size_t &num_pts_labels);
+    DISKANN_DLLEXPORT void get_label_file_metadata(std::basic_istream<char> &infile, uint32_t &num_pts, uint32_t &num_total_labels);
     DISKANN_DLLEXPORT inline int32_t get_filter_number(const LabelT &filter_label);
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
                                                   const uint32_t nthreads);
