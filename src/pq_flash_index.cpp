@@ -541,10 +541,9 @@ void PQFlashIndex<T, LabelT>::generate_random_labels(std::vector<LabelT> &labels
 }
 
 template <typename T, typename LabelT>
-std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(const std::string &labels_map_file)
+std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(std::basic_istream<char> &map_reader)
 {
     std::unordered_map<std::string, LabelT> string_to_int_mp;
-    std::ifstream map_reader(labels_map_file);
     std::string line, token;
     LabelT token_as_num;
     std::string label_str;
@@ -574,10 +573,9 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::string map_file, uint32_t &num_pts,
+void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::basic_istream<char> &infile, uint32_t &num_pts,
                                                       uint32_t &num_total_labels)
 {
-    std::ifstream infile(map_file);
     std::string line, token;
     num_pts = 0;
     num_total_labels = 0;
@@ -596,7 +594,7 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::string map_file, uint
 
     diskann::cout << "Labels file metadata: num_points: " << num_pts << ", #total_labels: " << num_total_labels
                   << std::endl;
-    infile.close();
+    infile.seekg(0);
 }
 
 template <typename T, typename LabelT>
@@ -617,20 +615,14 @@ inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, uint32_t
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points_labels)
+void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile, size_t &num_points_labels)
 {
-    std::ifstream infile(label_file);
-    if (infile.fail())
-    {
-        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
-    }
-
     std::string line, token;
     uint32_t line_cnt = 0;
 
     uint32_t num_pts_in_label_file;
     uint32_t num_total_labels;
-    get_label_file_metadata(label_file, num_pts_in_label_file, num_total_labels);
+    get_label_file_metadata(infile, num_pts_in_label_file, num_total_labels);
 
     _pts_to_label_offsets = new uint32_t[num_pts_in_label_file];
     _pts_to_labels = new uint32_t[num_pts_in_label_file + num_total_labels];
@@ -674,7 +666,6 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
         }
         line_cnt++;
     }
-    infile.close();
     num_points_labels = line_cnt;
 }
 
@@ -768,14 +759,44 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     this->num_points = npts_u64;
     this->n_chunks = nchunks_u64;
+#ifdef EXEC_ENV_OLS
+    if (files.fileExists(labels_file))
+    {
+        FileContent      &labels_content = files.getContent(labels_file);
+        std::stringstream infile(
+            std::string((const char *) labels_content._content, labels_content._size));
+#else
     if (file_exists(labels_file))
     {
-        parse_label_file(labels_file, num_pts_in_label_file);
+        std::ifstream infile(labels_file);
+        if (infile.fail())
+        {
+            throw diskann::ANNException(std::string("Failed to open file ") + labels_file, -1);
+        }
+#endif
+        parse_label_file(infile, num_pts_in_label_file);
         assert(num_pts_in_label_file == this->num_points);
-        _label_map = load_label_map(labels_map_file);
+
+#ifdef EXEC_ENV_OLS
+        FileContent      &labels_map_content = files.getContent(labels_map_file);
+        std::stringstream map_reader(
+            std::string((const char *) labels_map_content._content, labels_map_content._size));
+#else
+        std::ifstream map_reader(labels_map_file);
+#endif
+        _label_map = load_label_map(map_reader);
+
+#ifdef EXEC_ENV_OLS
+        if (files.fileExists(labels_to_medoids))
+        {
+            FileContent      &medoids_content = files.getContent(labels_to_medoids);
+            std::stringstream medoid_stream(
+                std::string((const char *) medoids_content._content, medoids_content._size));
+#else
         if (file_exists(labels_to_medoids))
         {
             std::ifstream medoid_stream(labels_to_medoids);
+#endif
             assert(medoid_stream.is_open());
             std::string line, token;
 
@@ -804,20 +825,37 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
                 throw FileException(labels_to_medoids, e, __FUNCSIG__, __FILE__, __LINE__);
             }
         }
+
         std::string univ_label_file = std ::string(disk_index_file) + "_universal_label.txt";
+#ifdef EXEC_ENV_OLS
+        if (files.fileExists(univ_label_file))
+        {
+            FileContent      &univ_label_content = files.getContent(univ_label_file);
+            std::stringstream universal_label_reader(
+                std::string((const char *) univ_label_content._content, univ_label_content._size));
+#else
         if (file_exists(univ_label_file))
         {
             std::ifstream universal_label_reader(univ_label_file);
+#endif
             assert(universal_label_reader.is_open());
             std::string univ_label;
             universal_label_reader >> univ_label;
-            universal_label_reader.close();
             LabelT label_as_num = (LabelT)std::stoul(univ_label);
             set_universal_label(label_as_num);
         }
+
+#ifdef EXEC_ENV_OLS
+        if (files.fileExists(dummy_map_file))
+        {
+            FileContent      &dummy_map_content = files.getContent(dummy_map_file);
+            std::stringstream dummy_map_stream(
+                std::string((const char *) dummy_map_content._content, dummy_map_content._size));
+#else
         if (file_exists(dummy_map_file))
         {
             std::ifstream dummy_map_stream(dummy_map_file);
+#endif
             assert(dummy_map_stream.is_open());
             std::string line, token;
 
@@ -844,7 +882,6 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
                 _real_to_dummy_map[real_id].emplace_back(dummy_id);
             }
-            dummy_map_stream.close();
             diskann::cout << "Loaded dummy map" << std::endl;
         }
     }
@@ -868,15 +905,18 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     }
 
     std::string disk_pq_pivots_path = this->disk_index_file + "_pq_pivots.bin";
-    if (file_exists(disk_pq_pivots_path))
+#ifdef EXEC_ENV_OLS
+    if (files.fileExists(disk_pq_pivots_path))
     {
         use_disk_index_pq = true;
-#ifdef EXEC_ENV_OLS
-        // giving 0 chunks to make the pq_table infer from the
+        // giving 0 chunks to make the _pq_table infer from the
         // chunk_offsets file the correct value
         disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0);
 #else
-        // giving 0 chunks to make the pq_table infer from the
+    if (file_exists(disk_pq_pivots_path))
+    {
+        _use_disk_index_pq = true;
+        // giving 0 chunks to make the _pq_table infer from the
         // chunk_offsets file the correct value
         disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0);
 #endif
