@@ -89,7 +89,8 @@ void InMemFilterStore<label_type>::add_label_to_location(const location_t point_
 // }
 
 template <typename label_type>
-void InMemFilterStore<label_type>::set_universal_labels(const std::vector<std::string> &raw_universal_labels)
+void InMemFilterStore<label_type>::set_universal_labels(const std::vector<std::string> &raw_universal_labels,
+                                                        bool dynamic_index)
 {
     for (auto label : raw_universal_labels)
     {
@@ -104,6 +105,13 @@ void InMemFilterStore<label_type>::set_universal_labels(const std::vector<std::s
     }
     if (!_raw_universal_labels.empty())
         _use_universal_label = true;
+    // populate the mapped universal label set for dynamic index
+    if (dynamic_index && _use_universal_label)
+    {
+        // WARNING: Please change as we have unified mapping logic from raw univ labels => mapped univ labels
+        // we are able to make above assumption that mapping is always consistent and not random.
+        _mapped_universal_labels.insert(0);
+    }
 }
 
 // template <typename label_type> const label_type InMemFilterStore<label_type>::get_universal_label() const
@@ -178,18 +186,28 @@ size_t InMemFilterStore<label_type>::load_medoids(const std::string &labels_to_m
 
 template <typename label_type> void InMemFilterStore<label_type>::load_label_map(const std::string &labels_map_file)
 {
-    std::ifstream map_reader(labels_map_file);
-    std::string line, token;
-    label_type token_as_num;
-    std::string label_str;
-    while (std::getline(map_reader, line))
+    if (file_exists(labels_map_file))
     {
-        std::istringstream iss(line);
-        getline(iss, token, '\t');
-        label_str = token;
-        getline(iss, token, '\t');
-        token_as_num = (label_type)std::stoul(token);
-        _label_map[label_str] = token_as_num;
+        std::ifstream map_reader(labels_map_file);
+        std::string line, token;
+        label_type token_as_num;
+        std::string label_str;
+        while (std::getline(map_reader, line))
+        {
+            std::istringstream iss(line);
+            getline(iss, token, '\t');
+            label_str = token;
+            getline(iss, token, '\t');
+            token_as_num = (label_type)std::stoul(token);
+            _label_map[label_str] = token_as_num;
+        }
+    }
+    else
+    {
+        throw diskann::ANNException(
+            "Can't load label map file please make sure it was generate, either by filter_store->load_raw_labels() "
+            "then index->save() or  convert_labels_string_to_int() method in case of dynamic index",
+            -1);
     }
 }
 
@@ -226,7 +244,7 @@ void InMemFilterStore<label_type>::save_labels(const std::string &save_path, con
         assert(label_writer.is_open());
         for (uint32_t i = 0; i < total_points; i++)
         {
-            for (uint32_t j = 0; j < (_location_to_labels[i].size() - 1); j++)
+            for (uint32_t j = 0; j + 1 < _location_to_labels[i].size(); j++)
             {
                 label_writer << _location_to_labels[i][j] << ",";
             }

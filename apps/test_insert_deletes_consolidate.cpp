@@ -189,8 +189,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
     if (universal_label != "")
     {
-        std::vector<std::string> unv_labels = {universal_label};
-        index->set_universal_labels(unv_labels);
+        index->set_universal_labels({universal_label}, /*dynamic index*/ true);
     }
 
     if (points_to_skip > num_points)

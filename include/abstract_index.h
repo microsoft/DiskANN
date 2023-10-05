@@ -103,7 +103,8 @@ class AbstractIndex
     // memory should be allocated for vec before calling this function
     template <typename tag_type, typename data_type> int get_vector_by_tag(tag_type &tag, data_type *vec);
 
-    virtual void set_universal_labels(const std::vector<std::string> &raw_universal_labels) = 0;
+    virtual void set_universal_labels(const std::vector<std::string> &raw_universal_labels,
+                                      bool dynamic_index = false) = 0;
 
   private:
     virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;

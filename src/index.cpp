@@ -1715,9 +1715,9 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
 // }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::set_universal_labels(const std::vector<std::string> &raw_labels)
+void Index<T, TagT, LabelT>::set_universal_labels(const std::vector<std::string> &raw_labels, bool dynamic_index)
 {
-    _filter_store->set_universal_labels(raw_labels);
+    _filter_store->set_universal_labels(raw_labels, dynamic_index);
 }
 
 template <typename T, typename TagT, typename LabelT>

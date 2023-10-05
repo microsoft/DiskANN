@@ -33,7 +33,8 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates) override;
 
     // takes raw universal labels and map them internally.
-    void set_universal_labels(const std::vector<std::string> &raw_universal_labels) override;
+    void set_universal_labels(const std::vector<std::string> &raw_universal_labels,
+                              bool dyanmic_index = false) override;
     // const label_type get_universal_label() const;
 
     // ideally takes raw label file and then genrate internal mapping file and keep the info of mapping

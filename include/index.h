@@ -105,7 +105,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     // DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
-    DISKANN_DLLEXPORT void set_universal_labels(const std::vector<std::string> &raw_labels);
+    DISKANN_DLLEXPORT void set_universal_labels(const std::vector<std::string> &raw_labels, bool dynamic_index = false);
 
     // Get converted integer label from string to int map (_label_map)
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
