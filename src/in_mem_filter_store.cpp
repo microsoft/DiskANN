@@ -451,11 +451,7 @@ template <typename label_type> size_t InMemFilterStore<label_type>::parse_label_
             lbls.push_back(token_as_num);
             _labels.insert(token_as_num);
         }
-        if (lbls.size() <= 0)
-        {
-            diskann::cout << "No label found on line: " << line << std::endl;
-            exit(-1);
-        }
+
         std::sort(lbls.begin(), lbls.end());
         _location_to_labels[line_cnt] = lbls;
         line_cnt++;
