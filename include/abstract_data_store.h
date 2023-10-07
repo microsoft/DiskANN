@@ -80,10 +80,11 @@ template <typename data_t> class AbstractDataStore
     // num_points) to zero
     virtual void copy_vectors(const location_t from_loc, const location_t to_loc, const location_t num_points) = 0;
 
-    //With the PQ Data Store PR, we have also changed iterate_to_fixed_point to NOT take the query
-    //from the scratch object. Therefore every data store has to implement preprocess_query which
-    //at the least will be to copy the query into the scratch object. So making this pure virtual.
-    virtual void preprocess_query(const data_t *aligned_query, AbstractScratch<data_t> *query_scratch = nullptr) const = 0;
+    // With the PQ Data Store PR, we have also changed iterate_to_fixed_point to NOT take the query
+    // from the scratch object. Therefore every data store has to implement preprocess_query which
+    // at the least will be to copy the query into the scratch object. So making this pure virtual.
+    virtual void preprocess_query(const data_t *aligned_query,
+                                  AbstractScratch<data_t> *query_scratch = nullptr) const = 0;
     // distance functions.
     virtual float get_distance(const data_t *query, const location_t loc) const = 0;
     virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,
@@ -98,10 +99,10 @@ template <typename data_t> class AbstractDataStore
     // in the dataset
     virtual location_t calculate_medoid() const = 0;
 
-    //REFACTOR PQ TODO: Each data store knows about its distance function, so this is 
-    //redundant. However, we don't have an OptmizedDataStore yet, and to preserve code 
-    //compability, we are exposing this function. 
-    virtual Distance<data_t>* get_dist_fn() const = 0;
+    // REFACTOR PQ TODO: Each data store knows about its distance function, so this is
+    // redundant. However, we don't have an OptmizedDataStore yet, and to preserve code
+    // compability, we are exposing this function.
+    virtual Distance<data_t> *get_dist_fn() const = 0;
 
     // search helpers
     // if the base data is aligned per the request of the metric, this will tell

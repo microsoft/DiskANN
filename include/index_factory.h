@@ -3,8 +3,6 @@
 #include "in_mem_graph_store.h"
 #include "pq_data_store.h"
 
-
-
 namespace diskann
 {
 class IndexFactory
@@ -13,15 +11,13 @@ class IndexFactory
     DISKANN_DLLEXPORT explicit IndexFactory(const IndexConfig &config);
     DISKANN_DLLEXPORT std::unique_ptr<AbstractIndex> create_instance();
 
-
     DISKANN_DLLEXPORT static std::unique_ptr<AbstractGraphStore> construct_graphstore(
         const GraphStoreStrategy stratagy, const size_t size, const size_t reserve_graph_degree);
 
     template <typename T>
     DISKANN_DLLEXPORT static std::shared_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy,
                                                                                        size_t num_points,
-                                                                                       size_t dimension, 
-        Metric m);
+                                                                                       size_t dimension, Metric m);
     // For now PQDataStore incorporates within itself all variants of quantization that we support. In the
     // future it may be necessary to introduce an AbstractPQDataStore class to spearate various quantization
     // flavours.
@@ -33,7 +29,7 @@ class IndexFactory
     template <typename T> static Distance<T> *construct_inmem_distance_fn(Metric m);
 
   private:
-   void check_config();
+    void check_config();
 
     template <typename data_type, typename tag_type, typename label_type>
     std::unique_ptr<AbstractIndex> create_instance();

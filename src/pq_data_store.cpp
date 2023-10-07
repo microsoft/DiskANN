@@ -18,7 +18,8 @@ PQDataStore<data_t>::PQDataStore(size_t dim, location_t num_points, size_t num_p
     : AbstractDataStore<data_t>(num_points, dim), _quantized_data(nullptr), _num_chunks(num_pq_chunks),
       _distance_metric(distance_fn->get_metric())
 {
-    if (num_pq_chunks > dim) {
+    if (num_pq_chunks > dim)
+    {
         throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
     _distance_fn = std::move(distance_fn);
@@ -213,7 +214,7 @@ template <typename data_t> size_t PQDataStore<data_t>::get_alignment_factor() co
     return 1;
 }
 
-template <typename data_t> Distance<data_t>* PQDataStore<data_t>::get_dist_fn() const
+template <typename data_t> Distance<data_t> *PQDataStore<data_t>::get_dist_fn() const
 {
     return _distance_fn.get();
 }

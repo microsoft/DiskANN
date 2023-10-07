@@ -68,8 +68,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
                             const bool use_opq = false, const bool filtered_index = false);
 
-
-
     DISKANN_DLLEXPORT ~Index();
 
     // Saves graph, data, metadata and associated tags.
@@ -255,10 +253,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
-    //The query to use is placed in scratch->aligned_query
+    // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
-                                                         const std::vector<uint32_t> &init_ids,
-                                                         bool use_filter,
+                                                         const std::vector<uint32_t> &init_ids, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
@@ -339,7 +336,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Data
     std::shared_ptr<AbstractDataStore<T>> _data_store;
-
 
     // Graph related data structures
     std::unique_ptr<AbstractGraphStore> _graph_store;

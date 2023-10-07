@@ -39,7 +39,6 @@ template <typename data_t> location_t AbstractDataStore<data_t>::resize(const lo
     }
 }
 
-
 template DISKANN_DLLEXPORT class AbstractDataStore<float>;
 template DISKANN_DLLEXPORT class AbstractDataStore<int8_t>;
 template DISKANN_DLLEXPORT class AbstractDataStore<uint8_t>;

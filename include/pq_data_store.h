@@ -7,16 +7,16 @@
 
 namespace diskann
 {
-    //REFACTOR TODO: By default, the PQDataStore is an in-memory datastore because both Vamana and 
-    //DiskANN treat it the same way. But with DiskPQ, that may need to change. 
+// REFACTOR TODO: By default, the PQDataStore is an in-memory datastore because both Vamana and
+// DiskANN treat it the same way. But with DiskPQ, that may need to change.
 template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
 {
 
   public:
     PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks, std::unique_ptr<Distance<data_t>> distance_fn,
                 std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn);
-    PQDataStore(const PQDataStore&) = delete;
-    PQDataStore &operator=(const PQDataStore&) = delete;
+    PQDataStore(const PQDataStore &) = delete;
+    PQDataStore &operator=(const PQDataStore &) = delete;
     ~PQDataStore();
 
     // Load quantized vectors from a set of files. Here filename is treated
@@ -67,7 +67,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     // We are returning the distance function that is used for full precision
     // vectors here, not the PQ distance function. This is because the callers
     // all are expecting a Distance<T> not QuantizedDistance<T>.
-    virtual Distance<data_t>* get_dist_fn() const override;
+    virtual Distance<data_t> *get_dist_fn() const override;
 
     virtual location_t calculate_medoid() const override;
 

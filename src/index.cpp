@@ -30,8 +30,8 @@ namespace diskann
 // (bin), and initialize max_points
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store,
-                              std::unique_ptr<AbstractGraphStore> graph_store, 
-                                  std::shared_ptr<AbstractDataStore<T>> pq_data_store)
+                              std::unique_ptr<AbstractGraphStore> graph_store,
+                              std::shared_ptr<AbstractDataStore<T>> pq_data_store)
     : _dist_metric(index_config.metric), _dim(index_config.dimension), _max_points(index_config.max_points),
       _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
       _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
@@ -142,10 +142,13 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
                          defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
-    if (_pq_dist) {
-        _pq_data_store =
-            IndexFactory::construct_pq_datastore<T>(DataStoreStrategy::MEMORY, max_points + num_frozen_pts, dim, m, num_pq_chunks, use_opq);
-    } else {
+    if (_pq_dist)
+    {
+        _pq_data_store = IndexFactory::construct_pq_datastore<T>(DataStoreStrategy::MEMORY, max_points + num_frozen_pts,
+                                                                 dim, m, num_pq_chunks, use_opq);
+    }
+    else
+    {
         _pq_data_store = _data_store;
     }
 }
@@ -784,8 +787,8 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
-    InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, 
-    bool use_filter, const std::vector<LabelT> &filter_labels, bool search_invocation)
+    InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
+    const std::vector<LabelT> &filter_labels, bool search_invocation)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -1143,7 +1146,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     }
 
     // If using _pq_build, over-write the PQ distances with actual distances
-    //REFACTOR PQ: TODO: How to get rid of this!?
+    // REFACTOR PQ: TODO: How to get rid of this!?
     if (_pq_dist)
     {
         for (auto &ngh : pool)
@@ -1629,15 +1632,15 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    //REFACTOR PQ TODO: We can remove this if and add a check in the InMemDataStore
-    //to not populate_data if it has been called once. 
+    // REFACTOR PQ TODO: We can remove this if and add a check in the InMemDataStore
+    // to not populate_data if it has been called once.
     if (_pq_dist)
     {
 #ifdef EXEC_ENV_OLS
-        std::stringstream ss; 
+        std::stringstream ss;
         ss << "PQ Build is not supported in DLVS environment (i.e. if EXEC_ENV_OLS is defined)" << std::endl;
         diskann::cerr << ss.str() << std::endl;
-        throw ANNException(ss.str(),-1, __FUNCSIG__, __FILE__, __LINE__);
+        throw ANNException(ss.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 #else
         // REFACTOR TODO: Both in the previous code and in the current PQDataStore,
         // we are writing the PQ files in the same path as the input file. Now we
@@ -1957,8 +1960,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     _data_store->preprocess_query(query, scratch);
 
-    auto retval =
-        iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
+    auto retval = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
@@ -2228,7 +2230,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
     size_t res = calculate_entry_point();
 
-    //REFACTOR PQ: Not sure if we should do this for both stores. 
+    // REFACTOR PQ: Not sure if we should do this for both stores.
     if (_pq_dist)
     {
         // copy the PQ data corresponding to the point returned by

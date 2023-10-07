@@ -182,7 +182,7 @@ template <typename data_t> void InMemDataStore<data_t>::prefetch_vector(const lo
 template <typename data_t>
 void InMemDataStore<data_t>::preprocess_query(const data_t *query, AbstractScratch<data_t> *query_scratch) const
 {
-    if (query_scratch != nullptr )
+    if (query_scratch != nullptr)
     {
         memcpy(query_scratch->aligned_query_T(), query, sizeof(data_t) * this->get_dims());
     }
@@ -218,7 +218,7 @@ float InMemDataStore<data_t>::get_distance(const location_t loc1, const location
                                  (uint32_t)this->_aligned_dim);
 }
 
-template<typename data_t>
+template <typename data_t>
 void InMemDataStore<data_t>::get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
                                           std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const
 {
@@ -389,7 +389,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::calculate_medoid()
     return min_idx;
 }
 
-template <typename data_t> Distance<data_t>* InMemDataStore<data_t>::get_dist_fn() const
+template <typename data_t> Distance<data_t> *InMemDataStore<data_t>::get_dist_fn() const
 {
     return this->_distance_fn.get();
 }
