@@ -605,9 +605,9 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &fileCon
         while (lbl_pos < next_pos && lbl_pos != std::string::npos)
         {
             next_lbl_pos = fileContent.find(',', lbl_pos);
-            if (next_lbl_pos == std::string::npos)
+            if (next_lbl_pos == std::string::npos) // the last label
             {
-                break;
+                next_lbl_pos = next_pos;
             }
 
             num_total_labels++;
@@ -689,9 +689,9 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
         while (lbl_pos < next_pos && lbl_pos != std::string::npos)
         {
             next_lbl_pos = buffer.find(',', lbl_pos);
-            if (next_lbl_pos == std::string::npos)
+            if (next_lbl_pos == std::string::npos) // the last label in the whole file
             {
-                break;
+                next_lbl_pos = next_pos;
             }
 
             if (next_lbl_pos > next_pos) // the last label in one line
