@@ -735,7 +735,7 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
 template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_universal_label(const LabelT &label)
 {
     _use_universal_label = true;
-    _universal_filter_num = (uint32_t)temp_filter_num;
+    _universal_filter_num = (uint32_t)label;
 }
 
 #ifdef EXEC_ENV_OLS
