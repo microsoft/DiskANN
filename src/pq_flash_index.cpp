@@ -734,16 +734,8 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
 
 template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_universal_label(const LabelT &label)
 {
-    int32_t temp_filter_num = get_filter_number(label);
-    if (temp_filter_num == -1)
-    {
-        diskann::cout << "Error, could not find universal label." << std::endl;
-    }
-    else
-    {
-        _use_universal_label = true;
-        _universal_filter_num = (uint32_t)temp_filter_num;
-    }
+    _use_universal_label = true;
+    _universal_filter_num = (uint32_t)temp_filter_num;
 }
 
 #ifdef EXEC_ENV_OLS
@@ -1199,22 +1191,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  const uint32_t io_limit, const bool use_reorder_data,
                                                  QueryStats *stats)
 {
-    int32_t filter_num = 0;
-    if (use_filter)
-    {
-        filter_num = get_filter_number(filter_label);
-        if (filter_num < 0)
-        {
-            if (!_use_universal_label)
-            {
-                return;
-            }
-            else
-            {
-                filter_num = _universal_filter_num;
-            }
-        }
-    }
+    int32_t filter_num = filter_label;
 
     if (beam_width > MAX_N_SECTOR_READS)
         throw ANNException("Beamwidth can not be higher than MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__, __LINE__);
