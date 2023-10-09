@@ -17,5 +17,6 @@ using TagType = std::any;
 using LabelType = std::any;
 using TagVector = AnyWrapper::AnyVector;
 using DataVector = AnyWrapper::AnyVector;
+using Labelvector = AnyWrapper::AnyVector;
 using TagRobinSet = AnyWrapper::AnyRobinSet;
 } // namespace diskann

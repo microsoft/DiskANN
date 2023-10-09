@@ -6,6 +6,11 @@ jobs:
   python-release-wheels:
     name: Python
     uses: ./.github/workflows/build-python.yml
+  build-documentation:
+    strategy:
+      fail-fast: true
+    name: DiskANN Build Documentation
+    uses: ./.github/workflows/build-python-pdoc.yml
   release:
     runs-on: ubuntu-latest
     needs: python-release-wheels
