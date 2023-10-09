@@ -666,7 +666,7 @@ void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile,
         }
         line_cnt++;
     }
-    infile.close();
+    infile.seekg(0);
     num_points_labels = line_cnt;
 }
 
@@ -797,8 +797,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         if (file_exists(labels_to_medoids))
         {
             std::ifstream medoid_stream(labels_to_medoids);
-#endif
             assert(medoid_stream.is_open());
+#endif
             std::string line, token;
 
             _filter_to_medoid_ids.clear();
@@ -838,11 +838,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         if (file_exists(univ_label_file))
         {
             std::ifstream universal_label_reader(univ_label_file);
-#endif
             assert(universal_label_reader.is_open());
+#endif
             std::string univ_label;
             universal_label_reader >> univ_label;
-            universal_label_reader.close();
             LabelT label_as_num = (LabelT)std::stoul(univ_label);
             set_universal_label(label_as_num);
         }
@@ -857,8 +856,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         if (file_exists(dummy_map_file))
         {
             std::ifstream dummy_map_stream(dummy_map_file);
-#endif
             assert(dummy_map_stream.is_open());
+#endif
             std::string line, token;
 
             while (std::getline(dummy_map_stream, line))
@@ -884,7 +883,6 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
                 _real_to_dummy_map[real_id].emplace_back(dummy_id);
             }
-            dummy_map_stream.close();
             diskann::cout << "Loaded dummy map" << std::endl;
         }
     }
@@ -1096,7 +1094,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     {
         uint64_t dumr, dumc;
         float *norm_val;
-        diskann::load_bin<float>(files, norm_val, dumr, dumc);
+        diskann::load_bin<float>(files, norm_file, norm_val, dumr, dumc);
 #else
     if (file_exists(norm_file) && metric == diskann::Metric::INNER_PRODUCT)
     {
