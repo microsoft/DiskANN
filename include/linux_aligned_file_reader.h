@@ -3,6 +3,7 @@
 
 #pragma once
 #ifndef _WINDOWS
+#ifndef __APPLE__
 
 #include "aligned_file_reader.h"
 
@@ -36,4 +37,5 @@ class LinuxAlignedFileReader : public AlignedFileReader
     void read(std::vector<AlignedRead> &read_reqs, IOContext &ctx, bool async = false);
 };
 
+#endif
 #endif

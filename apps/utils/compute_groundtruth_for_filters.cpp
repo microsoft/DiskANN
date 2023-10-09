@@ -15,11 +15,16 @@
 #include <cstring>
 #include <queue>
 #include <omp.h>
-#include <mkl.h>
 #include <boost/program_options.hpp>
 #include <unordered_map>
 #include <tsl/robin_map.h>
 #include <tsl/robin_set.h>
+
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
+#else
+#include <mkl.h>
+#endif
 
 #ifdef _WINDOWS
 #include <malloc.h>

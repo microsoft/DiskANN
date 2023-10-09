@@ -8,6 +8,7 @@
 #include "common_includes.h"
 
 #ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
 #else
 #include <malloc.h>
 #endif
@@ -32,6 +33,191 @@ typedef int FileHandle;
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
 #include "memory_mapped_files.h"
+#endif
+
+#ifdef __APPLE__
+#define _MM_HINT_T0 1
+#define _MM_HINT_T1 2
+#endif
+
+#ifdef __APPLE__
+static inline __attribute__((always_inline)) void _mm_prefetch(char const *p, int i)
+{
+    switch (i)
+    {
+    case _MM_HINT_T0:
+        __builtin_prefetch(p, 0, 3);
+        break;
+    case _MM_HINT_T1:
+        __builtin_prefetch(p, 0, 2);
+        break;
+    }
+}
+
+#define LAPACK_COL_MAJOR 1
+#define LAPACK_ROW_MAJOR 0
+typedef __CLPK_integer clp_int;
+
+inline void _sge_trans(int matrix_layout, clp_int m, clp_int n, const float *in, clp_int ldin, float *out,
+                       clp_int ldout)
+{
+    clp_int i, j, x, y;
+
+    if (matrix_layout == LAPACK_COL_MAJOR)
+    {
+        x = n;
+        y = m;
+    }
+    else
+    {
+        x = m;
+        y = n;
+    }
+    for (i = 0; i < MIN(y, ldin); i++)
+    {
+        for (j = 0; j < MIN(x, ldout); j++)
+        {
+            out[(size_t)i * ldout + j] = in[(size_t)j * ldin + i];
+        }
+    }
+}
+inline clp_int sgesdd_rm_work(char jobz, clp_int m, clp_int n, float *a, clp_int lda, float *s, float *u, clp_int ldu,
+                              float *vt, clp_int ldvt, float *work, clp_int lwork, clp_int *iwork)
+{
+    clp_int info = 0;
+    clp_int nrows_u = ((jobz == 'a') || (jobz == 's') || ((jobz == 'o') && m < n)) ? m : 1;
+    clp_int ncols_u = ((jobz == 'a') || ((jobz == 'o') && m < n)) ? m : ((jobz == 's') ? MIN(m, n) : 1);
+    clp_int nrows_vt = ((jobz == 'a') || ((jobz == 'o') && m >= n)) ? n : ((jobz == 's') ? MIN(m, n) : 1);
+
+    clp_int lda_t = MAX(1, m);
+    clp_int ldu_t = MAX(1, nrows_u);
+    clp_int ldvt_t = MAX(1, nrows_vt);
+    float *a_t = NULL;
+    float *u_t = NULL;
+    float *vt_t = NULL;
+
+    // check leading dimensions
+    if (lda < n)
+    {
+        info = -6;
+        return info;
+    }
+    if (ldu < ncols_u)
+    {
+        info = -9;
+        return info;
+    }
+    if (ldvt < n)
+    {
+        info = -11;
+        return info;
+    }
+
+    // query for optimal work size if lwork = -1
+    if (lwork == -1)
+    {
+        sgesdd_(&jobz, &m, &n, a, &lda_t, s, u, &ldu_t, vt, &ldvt_t, work, &lwork, iwork, &info);
+        return (info < 0) ? (info - 1) : info;
+    }
+
+    // setup temp arrays
+    a_t = (float *)malloc(sizeof(float) * lda_t * MAX(1, n));
+    if (a_t == NULL)
+    {
+        info = -1011;
+        return info;
+    }
+    if ((jobz == 'a') || (jobz == 's') || ((jobz == 'o') && (m < n)))
+    {
+        u_t = (float *)malloc(sizeof(float) * ldu_t * MAX(1, ncols_u));
+        if (u_t == NULL)
+        {
+            info = -1011;
+            free(a_t);
+            return info;
+        }
+    }
+    if ((jobz == 'a') || (jobz == 's') || ((jobz == 'o') && (m >= n)))
+    {
+        vt_t = (float *)malloc(sizeof(float) * ldvt_t * MAX(1, n));
+        if (vt_t == NULL)
+        {
+            info = -1011;
+            free(a_t);
+            if ((jobz == 'a') || (jobz == 's') || ((jobz == 'o') && (m < n)))
+            {
+                free(u_t);
+            }
+            return info;
+        }
+    }
+
+    _sge_trans(LAPACK_ROW_MAJOR, m, n, a, lda, a_t, lda_t);
+    sgesdd_(&jobz, &m, &n, a_t, &lda_t, s, u_t, &ldu_t, vt_t, &ldvt_t, work, &lwork, iwork, &info);
+
+    if (info < 0)
+    {
+        info = info - 1;
+    }
+    /* Transpose output matrices */
+    _sge_trans(LAPACK_COL_MAJOR, m, n, a_t, lda_t, a, lda);
+    if ((jobz == 'a') || (jobz == 's') || ((jobz == 'o') && (m < n)))
+    {
+        _sge_trans(LAPACK_COL_MAJOR, nrows_u, ncols_u, u_t, ldu_t, u, ldu);
+    }
+    if ((jobz == 'a') || (jobz == 's') || ((jobz == 'o') && (m >= n)))
+    {
+        _sge_trans(LAPACK_COL_MAJOR, nrows_vt, n, vt_t, ldvt_t, vt, ldvt);
+    }
+    /* Release memory and exit */
+    if ((jobz == 'a') || (jobz == 's') || ((jobz == 'o') && (m >= n)))
+    {
+        free(vt_t);
+    }
+    if ((jobz == 'a') || (jobz == 's') || ((jobz == 'o') && (m < n)))
+    {
+        free(u_t);
+    }
+    free(a_t);
+    return info;
+}
+
+inline clp_int LAPACKE_sgesdd(int matrix_layout, char jobz, clp_int m, clp_int n, float *a, clp_int lda, float *s,
+                              float *u, clp_int ldu, float *vt, clp_int ldvt)
+{
+    // internal SGESDD vars
+    clp_int info = 0;
+    clp_int lwork = -1;
+    clp_int *iwork = NULL;
+    float *work = NULL;
+    float work_query;
+
+    // allocate space for iwork
+    iwork = (clp_int *)malloc(sizeof(clp_int) * MAX(1, 8 * MIN(m, n)));
+    if (iwork == NULL)
+        throw;
+    /* Query optimal working array(s) size */
+    info = sgesdd_rm_work(jobz, m, n, a, lda, s, u, ldu, vt, ldvt, &work_query, lwork, iwork);
+    if (info != 0)
+    {
+        free(iwork);
+        info = -1010;
+        return info;
+    }
+
+    lwork = (clp_int)work_query;
+    /* Allocate memory for work arrays */
+    work = (float *)malloc(sizeof(float) * lwork);
+    if (work == NULL)
+        throw;
+
+    /* Call middle-level interface */
+    info = sgesdd_rm_work(jobz, m, n, a, lda, s, u, ldu, vt, ldvt, work, lwork, iwork);
+    /* Release memory and exit */
+    free(work);
+    free(iwork);
+    return info;
+}
 #endif
 
 // taken from
@@ -130,6 +316,8 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
         char buff[1024];
 #ifdef _WINDOWS
         auto ret = std::to_string(strerror_s(buff, 1024, errno));
+#elif __APPLE__
+        auto ret = std::to_string(strerror_r(errno, buff, 1024));
 #else
         auto ret = std::string(strerror_r(errno, buff, 1024));
 #endif
@@ -595,7 +783,7 @@ inline void prune_truthset_for_range(const std::string &bin_file, float range,
 }
 
 inline void load_range_truthset(const std::string &bin_file, std::vector<std::vector<uint32_t>> &groundtruth,
-                                uint64_t &gt_num)
+                                size_t &gt_num)
 {
     size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream reader(bin_file, read_blk_size);
@@ -704,9 +892,12 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
         char buff[1024];
 #ifdef _WINDOWS
         auto ret = std::to_string(strerror_s(buff, 1024, errno));
+#elif __APPLE__
+        auto ret = std::to_string(strerror_r(errno, buff, 1024));
 #else
         auto ret = std::string(strerror_r(errno, buff, 1024));
 #endif
+
         std::string error_message =
             std::string("Failed to open file") + filename + " for write because " + buff + ", ret=" + ret;
         diskann::cerr << error_message << std::endl;

@@ -115,8 +115,8 @@ int main(int argc, char **argv)
         desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
         desc.add_options()("output_file", po::value<std::string>(&output_file)->required(),
                            "File name for saving the random vectors");
-        desc.add_options()("ndims,D", po::value<uint64_t>(&ndims)->required(), "Dimensoinality of the vector");
-        desc.add_options()("npts,N", po::value<uint64_t>(&npts)->required(), "Number of vectors");
+        desc.add_options()("ndims,D", po::value<size_t>(&ndims)->required(), "Dimensoinality of the vector");
+        desc.add_options()("npts,N", po::value<size_t>(&npts)->required(), "Number of vectors");
         desc.add_options()("norm", po::value<float>(&norm)->required(), "Norm of the vectors");
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);

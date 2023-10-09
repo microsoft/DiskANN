@@ -1,7 +1,11 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
+#else
 #include "mkl.h"
+#endif
 
 #include "pq.h"
 #include "partition.h"
@@ -13,6 +17,11 @@
 
 namespace diskann
 {
+
+#ifdef __APPLE__
+typedef long long int MKL_INT;
+#endif
+
 FixedChunkPQTable::FixedChunkPQTable()
 {
 }
@@ -41,7 +50,7 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
 {
 #endif
 
-    uint64_t nr, nc;
+    size_t nr, nc;
     std::string rotmat_file = std::string(pq_table_file) + "_rotation_matrix.bin";
 
 #ifdef EXEC_ENV_OLS
@@ -276,7 +285,7 @@ void FixedChunkPQTable::populate_chunk_inner_products(const float *query_vec, fl
     }
 }
 
-void aggregate_coords(const std::vector<uint32_t> &ids, const uint8_t *all_coords, const size_t ndims, uint8_t *out)
+void aggregate_coords(const std::vector<uint32_t> &ids, const uint8_t *all_coords, const uint64_t ndims, uint8_t *out)
 {
     for (size_t i = 0; i < ids.size(); i++)
     {
@@ -310,7 +319,7 @@ void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_n
 
 // Need to replace calls to these functions with calls to vector& based
 // functions above
-void aggregate_coords(const uint32_t *ids, const size_t n_ids, const uint8_t *all_coords, const size_t ndims,
+void aggregate_coords(const uint32_t *ids, const uint64_t n_ids, const uint8_t *all_coords, const uint64_t ndims,
                       uint8_t *out)
 {
     for (size_t i = 0; i < n_ids; i++)
@@ -675,9 +684,17 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
 
         // compute the SVD of the correlation matrix to help determine the new
         // rotation matrix
+
+#ifdef __APPLE__
+        uint32_t errcode = (uint32_t)LAPACKE_sgesdd(LAPACK_ROW_MAJOR, 'A', (clp_int)dim, (clp_int)dim,
+                                                    correlation_matrix.get(), (clp_int)dim, singular_values.get(),
+                                                    Umat.get(), (clp_int)dim, Vmat_T.get(), (clp_int)dim);
+
+#else
         uint32_t errcode = (uint32_t)LAPACKE_sgesdd(LAPACK_ROW_MAJOR, 'A', (MKL_INT)dim, (MKL_INT)dim,
                                                     correlation_matrix.get(), (MKL_INT)dim, singular_values.get(),
                                                     Umat.get(), (MKL_INT)dim, Vmat_T.get(), (MKL_INT)dim);
+#endif
 
         if (errcode > 0)
         {
@@ -964,7 +981,7 @@ void generate_disk_quantized_data(const std::string &data_file_to_use, const std
 template <typename T>
 void generate_quantized_data(const std::string &data_file_to_use, const std::string &pq_pivots_path,
                              const std::string &pq_compressed_vectors_path, diskann::Metric compareMetric,
-                             const double p_val, const size_t num_pq_chunks, const bool use_opq,
+                             const double p_val, const uint64_t num_pq_chunks, const bool use_opq,
                              const std::string &codebook_prefix)
 {
     size_t train_size, train_dim;
@@ -1040,20 +1057,20 @@ template DISKANN_DLLEXPORT void generate_quantized_data<int8_t>(const std::strin
                                                                 const std::string &pq_pivots_path,
                                                                 const std::string &pq_compressed_vectors_path,
                                                                 diskann::Metric compareMetric, const double p_val,
-                                                                const size_t num_pq_chunks, const bool use_opq,
+                                                                const uint64_t num_pq_chunks, const bool use_opq,
                                                                 const std::string &codebook_prefix);
 
 template DISKANN_DLLEXPORT void generate_quantized_data<uint8_t>(const std::string &data_file_to_use,
                                                                  const std::string &pq_pivots_path,
                                                                  const std::string &pq_compressed_vectors_path,
                                                                  diskann::Metric compareMetric, const double p_val,
-                                                                 const size_t num_pq_chunks, const bool use_opq,
+                                                                 const uint64_t num_pq_chunks, const bool use_opq,
                                                                  const std::string &codebook_prefix);
 
 template DISKANN_DLLEXPORT void generate_quantized_data<float>(const std::string &data_file_to_use,
                                                                const std::string &pq_pivots_path,
                                                                const std::string &pq_compressed_vectors_path,
                                                                diskann::Metric compareMetric, const double p_val,
-                                                               const size_t num_pq_chunks, const bool use_opq,
+                                                               const uint64_t num_pq_chunks, const bool use_opq,
                                                                const std::string &codebook_prefix);
 } // namespace diskann
