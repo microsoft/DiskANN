@@ -212,7 +212,8 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     memory_in_bytes += sizeof(uint32_t) * _nhood_cache_buf;
     // Allocate space for coordinate cache
     size_t coord_cache_buf_len = num_cached_nodes * _aligned_dim;
-    memory_in_bytes += diskann::alloc_aligned((void **)&_coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+    memory_in_bytes +=
+        diskann::alloc_aligned((void **)&_coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(_coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
     size_t BLOCK_SIZE = 8;
@@ -1037,7 +1038,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #else
             diskann::load_aligned_bin<float>(centroids_file, _centroid_data, num_centroids, tmp_dim, aligned_tmp_dim);
 #endif
-            memory_in_bytes += sizeof(float) * num_centroids * aligned_tmp_dim; 
+            memory_in_bytes += sizeof(float) * num_centroids * aligned_tmp_dim;
             if (aligned_tmp_dim != _aligned_dim || num_centroids != _num_medoids)
             {
                 std::stringstream stream;
@@ -1183,7 +1184,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     {
         context.SetState(State::FailureException);
         throw ANNException("Beamwidth can not be higher than defaults::MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__,
-            __LINE__);
+                           __LINE__);
     }
 
     Timer query_timer, io_timer, cpu_timer;

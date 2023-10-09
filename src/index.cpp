@@ -620,7 +620,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
                 line_cnt++;
             }
 
-            _memory_in_bytes += (sizeof(LabelT) + sizeof(uint32_t)) * _label_to_medoid_id.size();
+            _memory_in_bytes += (sizeof(LabelT) + sizeof(uint32_t)) * _label_to_start_id.size();
         }
 
         std::string universal_label_file(filename);
@@ -2212,7 +2212,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     {
         return std::make_pair(0, 0);
     }
-    
+
     _data_store->get_dist_fn()->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
     auto retval = iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, true, filter_vec, true);
 

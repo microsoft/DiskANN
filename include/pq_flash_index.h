@@ -176,6 +176,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _data_dim = 0;
     uint64_t _aligned_dim = 0;
     uint64_t _disk_bytes_per_point = 0; // Number of bytes
+    uint64_t memory_in_bytes = 0;
 
     std::string _disk_index_file;
     std::vector<std::pair<uint32_t, uint32_t>> _node_visit_counter;
