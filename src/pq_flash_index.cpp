@@ -209,7 +209,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     // Allocate space for neighborhood cache
     _nhood_cache_buf = new uint32_t[num_cached_nodes * (_max_degree + 1)];
     memset(_nhood_cache_buf, 0, num_cached_nodes * (_max_degree + 1));
-    memory_in_bytes += sizeof(uint32_t) * _nhood_cache_buf;
+    memory_in_bytes += sizeof(uint32_t) * num_cached_nodes * (_max_degree + 1);
     // Allocate space for coordinate cache
     size_t coord_cache_buf_len = num_cached_nodes * _aligned_dim;
     memory_in_bytes +=
@@ -243,8 +243,9 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
             if (read_status[i] == true)
             {
                 _coord_cache.insert(std::make_pair(nodes_to_read[i], coord_buffers[i]));
+                memory_in_bytes += _disk_bytes_per_point;
                 _nhood_cache.insert(std::make_pair(nodes_to_read[i], nbr_buffers[i]));
-                // add memory usage disk_bytes_per_point
+                memory_in_bytes += nbr_buffers[i].first * sizeof(uint32_t);
             }
         }
     }
@@ -862,9 +863,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     }
 
 #ifdef EXEC_ENV_OLS
-    memory_in_bytes += pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
+    memory_in_bytes += _pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
 #else
-    memory_in_bytes += pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
+    memory_in_bytes += _pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
 #endif
 
     diskann::cout << "Loaded PQ centroids and in-memory compressed vectors. #points: " << _num_points
@@ -1163,21 +1164,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     auto filter_label = context.GetLabel();
     auto io_limit = context.GetIOLimit();
     int32_t filter_num = 0;
-    if (use_filter)
-    {
-        filter_num = get_filter_number(filter_label);
-        if (filter_num < 0)
-        {
-            if (!_use_universal_label)
-            {
-                return;
-            }
-            else
-            {
-                filter_num = _universal_filter_num;
-            }
-        }
-    }
 
     uint64_t num_sector_per_nodes = DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
     if (beam_width > num_sector_per_nodes * defaults::MAX_N_SECTOR_READS)

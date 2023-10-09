@@ -135,8 +135,7 @@ uint64_t FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size
     diskann::cout << "Loaded PQ Pivots: #ctrs: " << NUM_PQ_CENTROIDS << ", #dims: " << this->ndims
                   << ", #chunks: " << this->n_chunks << std::endl;
 
-#ifdef EXEC_ENV_OLS
-    if (files.fileExists(rotmat_file))
+    if (file_exists(rotmat_file))
     {
 #ifdef EXEC_ENV_OLS
         memory_in_bytes += diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr, nc);
