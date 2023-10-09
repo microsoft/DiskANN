@@ -787,6 +787,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         parse_label_file(infile, num_pts_in_label_file);
         assert(num_pts_in_label_file == this->_num_points);
 
+#ifndef EXEC_ENV_OLS
+        infile.close();
+#endif
+
 #ifdef EXEC_ENV_OLS
         FileContent      &content = files.getContent(labels_map_file);
         std::stringstream map_reader(
@@ -795,6 +799,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         std::ifstream map_reader(labels_map_file);
 #endif
         _label_map = load_label_map(map_reader);
+
+#ifndef EXEC_ENV_OLS
+        map_reader.close();
+#endif
 
 #ifdef EXEC_ENV_OLS
         if (files.fileExists(labels_to_medoids))
@@ -806,8 +814,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         if (file_exists(labels_to_medoids))
         {
             std::ifstream medoid_stream(labels_to_medoids);
-#endif
             assert(medoid_stream.is_open());
+#endif
             std::string line, token;
 
             _filter_to_medoid_ids.clear();
@@ -847,11 +855,13 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         if (file_exists(univ_label_file))
         {
             std::ifstream universal_label_reader(univ_label_file);
-#endif
             assert(universal_label_reader.is_open());
+#endif
             std::string univ_label;
             universal_label_reader >> univ_label;
+#ifndef EXEC_ENV_OLS
             universal_label_reader.close();
+#endif
             LabelT label_as_num = (LabelT)std::stoul(univ_label);
             set_universal_label(label_as_num);
         }
@@ -866,8 +876,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         if (file_exists(dummy_map_file))
         {
             std::ifstream dummy_map_stream(dummy_map_file);
-#endif
             assert(dummy_map_stream.is_open());
+#endif
             std::string line, token;
 
             while (std::getline(dummy_map_stream, line))
@@ -893,7 +903,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
                 _real_to_dummy_map[real_id].emplace_back(dummy_id);
             }
+#ifndef EXEC_ENV_OLS
             dummy_map_stream.close();
+#endif
             diskann::cout << "Loaded dummy map" << std::endl;
         }
     }
