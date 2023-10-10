@@ -445,10 +445,17 @@ inline void alloc_aligned(void **ptr, size_t size, size_t align)
     *ptr = nullptr;
     if (IS_ALIGNED(size, align) == 0)
         report_misalignment_of_requested_size(align);
-#ifndef _WINDOWS
-    *ptr = ::aligned_alloc(align, size);
-#else
+#ifdef _WINDOWS
     *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
+#elif __APPLE__
+    int err = posix_memalign(ptr, align, size);
+    if (err)
+    {
+        std::cout << err << std::endl;
+        throw;
+    }
+#else
+    *ptr = ::aligned_alloc(align, size);
 #endif
     if (*ptr == nullptr)
         report_memory_allocation_failure();

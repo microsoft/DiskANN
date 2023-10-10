@@ -65,6 +65,15 @@ template <class T> T *aligned_malloc(const size_t n, const size_t alignment)
 {
 #ifdef _WINDOWS
     return (T *)_aligned_malloc(sizeof(T) * n, alignment);
+#elif __APPLE__
+    void *ptr;
+    int err = posix_memalign(&ptr, alignment, sizeof(T) * n);
+    if (err)
+    {
+        std::cout << err << std::endl;
+        throw;
+    }
+    return (T *)ptr;
 #else
     return static_cast<T *>(aligned_alloc(alignment, sizeof(T) * n));
 #endif
