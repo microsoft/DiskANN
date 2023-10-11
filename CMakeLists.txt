@@ -75,6 +75,23 @@ if (MSVC)
     set(OPENMP_WINDOWS_RUNTIME_FILES
         "${DISKANN_MSVC_PACKAGES}/intelopenmp.redist.win/runtimes/win-x64/native/libiomp5md.dll"
         "${DISKANN_MSVC_PACKAGES}/intelopenmp.redist.win/runtimes/win-x64/native/libiomp5md.pdb")
+elseif(APPLE)
+    execute_process(
+        COMMAND brew --prefix libomp
+        OUTPUT_VARIABLE LIBOMP_ROOT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    set(OpenMP_ROOT "${LIBOMP_ROOT}")
+    find_package(OpenMP)
+
+    if (OPENMP_FOUND)
+        set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+        link_libraries(OpenMP::OpenMP_CXX)
+    else()
+        message(FATAL_ERROR "No OpenMP support")
+    endif()
 else()
     find_package(OpenMP)
 
@@ -142,7 +159,6 @@ elseif(APPLE)
     find_library(ACCELERATE_LIBRARY Accelerate)
     message(STATUS "Found Accelerate (${ACCELERATE_LIBRARY})")
     set(DISKANN_ACCEL_LINK_OPTIONS ${ACCELERATE_LIBRARY})
-    link_libraries(OpenMP::OpenMP_CXX)
 else()
     # expected path for manual intel mkl installs
     set(POSSIBLE_OMP_PATHS "/opt/intel/oneapi/compiler/latest/linux/compiler/lib/intel64_lin/libiomp5.so;/usr/lib/x86_64-linux-gnu/libiomp5.so;/opt/intel/lib/intel64_lin/libiomp5.so")
@@ -249,7 +265,12 @@ if (MSVC)
 
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS libtcmalloc_minimal_for_exe)
 elseif(APPLE)
-    set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-L/opt/homebrew/Cellar/gperftools/2.10/lib -ltcmalloc")
+    execute_process(
+        COMMAND brew --prefix gperftools
+        OUTPUT_VARIABLE GPERFTOOLS_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-L${GPERFTOOLS_PREFIX}/lib -ltcmalloc")
 elseif(NOT PYBIND AND NOT APPLE)
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-ltcmalloc")
 endif()
