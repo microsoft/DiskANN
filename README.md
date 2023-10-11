@@ -89,6 +89,28 @@ msbuild.exe diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property
 * This will also build gperftools submodule for libtcmalloc_minimal dependency.
 * Generated binaries are stored in the x64/Release or x64/Debug directories.
 
+## macOS Build
+
+### Prerequisites
+* Apple Silicon. The code should still work on Intel-based Macs, but there are no guarantees.
+* macOS >= 12.0
+* XCode Command Line Tools (install with `xcode-select --install`)
+* [homebrew](https://brew.sh/)
+
+### Install Required Packages
+```zsh
+brew install cmake
+brew install boost
+brew install gperftools
+brew install libomp
+```
+
+### Build DiskANN
+```zsh
+# same as ubuntu instructions
+mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j
+```
+
 ## Usage:
 
 Please see the following pages on using the compiled code:
