@@ -122,6 +122,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                                    uint32_t &num_total_labels);
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
                                                   const uint32_t nthreads);
+    void reset_stream_for_reading(std::basic_istream<char> &infile);
 
     // sector # on disk where node_id is present with in the graph part
     DISKANN_DLLEXPORT uint64_t get_node_sector(uint64_t node_id);

@@ -603,6 +603,13 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
 }
 
 template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::reset_stream_for_reading(std::basic_istream<char> &infile)
+{
+    infile.clear();
+    infile.seekg(0);
+}
+
+template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::basic_istream<char> &infile, uint32_t &num_pts,
                                                       uint32_t &num_total_labels)
 {
@@ -624,7 +631,7 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(std::basic_istream<char> &
 
     diskann::cout << "Labels file metadata: num_points: " << num_pts << ", #total_labels: " << num_total_labels
                   << std::endl;
-    infile.seekg(0);
+    reset_stream_for_reading(infile);
 }
 
 template <typename T, typename LabelT>
@@ -685,8 +692,8 @@ void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile,
         }
         line_cnt++;
     }
-    infile.seekg(0);
     num_points_labels = line_cnt;
+    reset_stream_for_reading(infile);
 }
 
 template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_universal_label(const LabelT &label)
