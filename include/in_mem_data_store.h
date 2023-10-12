@@ -21,7 +21,7 @@ namespace diskann
 template <typename data_t> class InMemDataStore : public AbstractDataStore<data_t>
 {
   public:
-    InMemDataStore(const location_t capacity, const size_t dim, std::shared_ptr<Distance<data_t>> distance_fn);
+    InMemDataStore(const location_t capacity, const size_t dim, std::unique_ptr<Distance<data_t>> distance_fn);
     virtual ~InMemDataStore();
 
     virtual location_t load(const std::string &filename) override;
@@ -73,7 +73,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     // but this gives us perf benefits as the datastore can do distance
     // computations during search and compute norms of vectors internally without
     // have to copy data back and forth.
-    std::shared_ptr<Distance<data_t>> _distance_fn;
+    std::unique_ptr<Distance<data_t>> _distance_fn;
 
     // in case we need to save vector norms for optimization
     std::shared_ptr<float[]> _pre_computed_norms;

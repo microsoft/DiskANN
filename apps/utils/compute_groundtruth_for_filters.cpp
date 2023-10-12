@@ -415,11 +415,6 @@ inline void parse_label_file_into_vec(size_t &line_cnt, const std::string &map_f
             lbls.push_back(token);
             labels.insert(token);
         }
-        if (lbls.size() <= 0)
-        {
-            std::cout << "No label found";
-            exit(-1);
-        }
         std::sort(lbls.begin(), lbls.end());
         pts_to_labels.push_back(lbls);
     }

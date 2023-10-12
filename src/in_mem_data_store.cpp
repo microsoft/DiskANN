@@ -11,8 +11,8 @@ namespace diskann
 
 template <typename data_t>
 InMemDataStore<data_t>::InMemDataStore(const location_t num_points, const size_t dim,
-                                       std::shared_ptr<Distance<data_t>> distance_fn)
-    : AbstractDataStore<data_t>(num_points, dim), _distance_fn(distance_fn)
+                                       std::unique_ptr<Distance<data_t>> distance_fn)
+    : AbstractDataStore<data_t>(num_points, dim), _distance_fn(std::move(distance_fn))
 {
     _aligned_dim = ROUND_UP(dim, _distance_fn->get_required_alignment());
     alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));

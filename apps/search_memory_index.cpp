@@ -74,7 +74,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       .with_metric(metric)
                       .with_dimension(query_dim)
                       .with_max_points(0)
-                      .with_data_load_store_strategy(diskann::MEMORY)
+                      .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
+                      .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
                       .with_data_type(diskann_type_to_name<T>())
                       .with_label_type(diskann_type_to_name<LabelT>())
                       .with_tag_type(diskann_type_to_name<TagT>())
@@ -130,7 +131,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
     std::vector<float> latency_stats(query_num, 0);
     std::vector<uint32_t> cmp_stats;
-    if (not tags)
+    if (not tags || filtered_search)
     {
         cmp_stats = std::vector<uint32_t>(query_num, 0);
     }
@@ -220,7 +221,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
         float avg_cmps = (float)std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) / (float)query_num;
 
-        if (tags)
+        if (tags && !filtered_search)
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(20) << (float)mean_latency
                       << std::setw(15) << (float)latency_stats[(uint64_t)(0.999 * query_num)];
