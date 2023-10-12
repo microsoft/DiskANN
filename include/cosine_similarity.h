@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-#ifdef __x86_64__
+#ifndef __APPLE__
 #include <immintrin.h>
 #include <smmintrin.h>
 #include <tmmintrin.h>

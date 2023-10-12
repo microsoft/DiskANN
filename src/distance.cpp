@@ -7,6 +7,7 @@
 #include <tmmintrin.h>
 #include <intrin.h>
 #include <cosine_similarity.h>
+#include "simd_utils.h"
 #elif __APPLE__
 #include <Accelerate/Accelerate.h>
 #include <arm_neon.h>
