@@ -618,7 +618,7 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &file_co
     std::string label_str;
     size_t cur_pos = 0, next_pos = 0;
 
-    while(cur_pos < file_size && cur_pos != std::string::npos)
+    while (cur_pos < file_size && cur_pos != std::string::npos)
     {
         next_pos = file_content.find('\n', cur_pos);
         if (next_pos == std::string::npos)
