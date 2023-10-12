@@ -334,7 +334,7 @@ void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::strin
               });
     node_list.clear();
     node_list.shrink_to_fit();
-    num_nodes_to_cache = std::min<uint64_t>(num_nodes_to_cache, this->_node_visit_counter.size());
+    num_nodes_to_cache = std::min((size_t)num_nodes_to_cache, this->_node_visit_counter.size());
     node_list.reserve(num_nodes_to_cache);
     for (uint64_t i = 0; i < num_nodes_to_cache; i++)
     {
@@ -422,13 +422,13 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
         diskann::cout << "Level: " << lvl << std::flush;
         bool finish_flag = false;
 
-        uint64_t BLOCK_SIZE = 1024;
-        uint64_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
+        size_t BLOCK_SIZE = 1024;
+        size_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
         for (size_t block = 0; block < nblocks && !finish_flag; block++)
         {
             diskann::cout << "." << std::flush;
             size_t start = block * BLOCK_SIZE;
-            size_t end = (std::min<size_t>)((block + 1) * BLOCK_SIZE, nodes_to_expand.size());
+            size_t end = (std::min)((block + 1) * BLOCK_SIZE, nodes_to_expand.size());
 
             std::vector<uint32_t> nodes_to_read;
             std::vector<T *> coord_buffers(end - start, nullptr);

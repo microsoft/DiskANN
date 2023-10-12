@@ -424,7 +424,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
         {
             // Gopal. random_shuffle() is deprecated.
             std::shuffle(final_nhood.begin(), final_nhood.end(), urng);
-            nnbrs = std::min<uint32_t>(final_nhood.size(), (uint64_t)max_degree);
+            nnbrs = (uint32_t)(std::min)(final_nhood.size(), (size_t)max_degree);
             // write into merged ofstream
             merged_vamana_writer.write((char *)&nnbrs, sizeof(uint32_t));
             merged_vamana_writer.write((char *)final_nhood.data(), nnbrs * sizeof(uint32_t));
@@ -463,7 +463,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
 
     // Gopal. random_shuffle() is deprecated.
     std::shuffle(final_nhood.begin(), final_nhood.end(), urng);
-    nnbrs = std::min<uint32_t>(final_nhood.size(), (uint64_t)max_degree);
+    nnbrs = (uint32_t)(std::min)(final_nhood.size(), (size_t)max_degree);
     // write into merged ofstream
     merged_vamana_writer.write((char *)&nnbrs, sizeof(uint32_t));
     if (nnbrs > 0)
