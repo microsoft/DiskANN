@@ -7,7 +7,7 @@ runs:
     - name: Prepare and Execute Build
       if: ${{ runner.os == 'macOS' }}
       run: |
-        sudo scripts/dev/install-dev-deps-macos.zsh
+        NOINTERACTIVE=1 brew install boost clang-format libomp gperftools
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUNIT_TEST=True
         cmake --build build -- -j
         cmake --install build --prefix="dist"
