@@ -10,7 +10,6 @@
 #include "simd_utils.h"
 #elif __APPLE__
 #include <Accelerate/Accelerate.h>
-#include <arm_neon.h>
 #else
 #include <immintrin.h>
 #include "simd_utils.h"
