@@ -3,6 +3,16 @@ description: 'Prepares DiskANN build environment and executes build'
 runs:
   using: "composite"
   steps:
+    # ------------ macOS Build ---------------
+    - name: Prepare and Execute Build
+      if: ${{ runner.os == 'macOS' }}
+      run: |
+        sudo scripts/dev/install-dev-deps-macos.zsh
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUNIT_TEST=True
+        cmake --build build -- -j
+        cmake --install build --prefix="dist"
+      shell: zsh
+    # ------------ End macOS Build ---------------
     # ------------ Linux Build ---------------
     - name: Prepare and Execute Build
       if: ${{ runner.os == 'Linux' }}
