@@ -154,6 +154,7 @@ if (MSVC)
         "${DISKANN_MKL_LIB_PATH}/mkl_intel_ilp64.lib"
         "${DISKANN_MKL_LIB_PATH}/mkl_core.lib"
         "${DISKANN_MKL_LIB_PATH}/mkl_intel_thread.lib")
+    add_definitions(-DMKL_ILP64)
 elseif(APPLE)
     # no mkl on non-intel devices
     find_library(ACCELERATE_LIBRARY Accelerate)
