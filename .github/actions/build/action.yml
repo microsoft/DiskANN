@@ -11,7 +11,7 @@ runs:
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DUNIT_TEST=True
         cmake --build build -- -j
         cmake --install build --prefix="dist"
-      shell: zsh
+      shell: zsh {0}
     # ------------ End macOS Build ---------------
     # ------------ Linux Build ---------------
     - name: Prepare and Execute Build
