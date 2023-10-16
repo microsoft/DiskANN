@@ -1872,41 +1872,70 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
 {
     // Format of Label txt file: filters with comma separators
 
-    std::ifstream infile(label_file);
+    std::ifstream infile(label_file, std::ios::binary);
     if (infile.fail())
     {
         throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
     }
 
-    std::string line, token;
+    infile.seekg(0, std::ios::end);
+    size_t file_size = infile.tellg();
+
+    std::string buffer(file_size, ' ');
+
+    infile.seekg(0, std::ios::beg);
+    infile.read(&buffer[0], file_size);
+
+    std::string label_str;
+    size_t cur_pos = 0;
+    size_t next_pos = 0;
     uint32_t line_cnt = 0;
 
-    while (std::getline(infile, line))
+    // Find total number of points in the labels file to reserve _locations_to_labels
+    while (cur_pos < file_size && cur_pos != std::string::npos)
     {
+        next_pos = buffer.find('\n', cur_pos);
+        if (next_pos == std::string::npos)
+            break;
+        cur_pos = next_pos + 1;
         line_cnt++;
     }
+    cur_pos = 0;
+    next_pos = 0;
     _location_to_labels.resize(line_cnt, std::vector<LabelT>());
-
-    infile.clear();
-    infile.seekg(0, std::ios::beg);
     line_cnt = 0;
-
-    while (std::getline(infile, line))
+    while (cur_pos < file_size && cur_pos != std::string::npos)
     {
-        std::istringstream iss(line);
-        std::vector<LabelT> lbls(0);
-        getline(iss, token, '\t');
-        std::istringstream new_iss(token);
-        while (getline(new_iss, token, ','))
+        next_pos = buffer.find('\n', cur_pos);
+        if (next_pos == std::string::npos)
         {
-            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = (LabelT)std::stoul(token);
+            break;
+        }
+        size_t lbl_pos = cur_pos;
+        size_t next_lbl_pos = 0;
+        std::vector<LabelT> lbls(0);
+        while (lbl_pos < next_pos && lbl_pos != std::string::npos)
+        {
+            next_lbl_pos = buffer.find(',', lbl_pos);
+            if (next_lbl_pos == std::string::npos) // the last label in the whole file
+            {
+                next_lbl_pos = next_pos;
+            }
+            if (next_lbl_pos > next_pos) // the last label in one line, just read to the end
+            {
+                next_lbl_pos = next_pos;
+            }
+            label_str.assign(buffer.c_str() + lbl_pos, next_lbl_pos - lbl_pos);
+            if (label_str[label_str.length() - 1] == '\t') // '\t' won't exist in label file?
+            {
+                label_str.erase(label_str.length() - 1);
+            }
+            LabelT token_as_num = (LabelT)std::stoul(label_str);
             lbls.push_back(token_as_num);
             _labels.insert(token_as_num);
+            // move to next label
+            lbl_pos = next_lbl_pos + 1;
         }
-
-        std::sort(lbls.begin(), lbls.end());
         _location_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
