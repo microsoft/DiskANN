@@ -2086,6 +2086,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             // move to next label
             lbl_pos = next_lbl_pos + 1;
         }
+        cur_pos = next_pos + 1;
         _pts_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
