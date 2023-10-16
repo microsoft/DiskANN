@@ -485,6 +485,7 @@ template <typename label_type> size_t InMemFilterStore<label_type>::parse_label_
             // move to next label
             lbl_pos = next_lbl_pos + 1;
         }
+        cur_pos = next_pos + 1;
         _location_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
