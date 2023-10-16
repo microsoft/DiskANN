@@ -578,6 +578,16 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     }
 }
 
+template <typename T, typename LabelT>
+bool PQFlashIndex<T, LabelT>::is_label_valid(const std::string& filter_label)
+{
+    if (_label_map.find(filter_label) != _label_map.end())
+    {
+        return return true;
+    }
+
+    return false;
+}
 
 // test commit
 template <typename T, typename LabelT>
