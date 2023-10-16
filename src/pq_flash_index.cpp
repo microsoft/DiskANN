@@ -779,8 +779,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #ifdef EXEC_ENV_OLS
     if (files.fileExists(labels_file))
     {
-        FileContent &content = files.getContent(labels_file);
-        std::stringstream infile(std::string((const char *)content._content, content._size));
+        FileContent &content_labels = files.getContent(labels_file);
+        std::stringstream infile(std::string((const char *)content_labels._content, content_labels._size));
 #else
     if (file_exists(labels_file))
     {
@@ -798,8 +798,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #endif
 
 #ifdef EXEC_ENV_OLS
-        FileContent &content = files.getContent(labels_map_file);
-        std::stringstream map_reader(std::string((const char *)content._content, content._size));
+        FileContent &content_labels_map = files.getContent(labels_map_file);
+        std::stringstream map_reader(std::string((const char *)content_labels_map._content, content_labels_map._size));
 #else
         std::ifstream map_reader(labels_map_file);
 #endif
@@ -812,8 +812,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #ifdef EXEC_ENV_OLS
         if (files.fileExists(labels_to_medoids))
         {
-            FileContent &content = files.getContent(labels_to_medoids);
-            std::stringstream medoid_stream(std::string((const char *)content._content, content._size));
+            FileContent &content_labels_to_meoids = files.getContent(labels_to_medoids);
+            std::stringstream medoid_stream(
+                std::string((const char *)content_labels_to_meoids._content, content_labels_to_meoids._size));
 #else
         if (file_exists(labels_to_medoids))
         {
@@ -852,8 +853,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #ifdef EXEC_ENV_OLS
         if (files.fileExists(univ_label_file))
         {
-            FileContent &content = files.getContent(univ_label_file);
-            std::stringstream universal_label_reader(std::string((const char *)content._content, content._size));
+            FileContent &content_univ_label = files.getContent(univ_label_file);
+            std::stringstream universal_label_reader(
+                std::string((const char *)content_univ_label._content, content_univ_label._size));
 #else
         if (file_exists(univ_label_file))
         {
@@ -872,8 +874,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #ifdef EXEC_ENV_OLS
         if (files.fileExists(dummy_map_file))
         {
-            FileContent &content = files.getContent(dummy_map_file);
-            std::stringstream dummy_map_stream(std::string((const char *)content._content, content._size));
+            FileContent &content_dummy_map = files.getContent(dummy_map_file);
+            std::stringstream dummy_map_stream(
+                std::string((const char *)content_dummy_map._content, content_dummy_map._size));
 #else
         if (file_exists(dummy_map_file))
         {
