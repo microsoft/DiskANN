@@ -583,7 +583,7 @@ bool PQFlashIndex<T, LabelT>::is_label_valid(const std::string& filter_label)
 {
     if (_label_map.find(filter_label) != _label_map.end())
     {
-        return return true;
+        return true;
     }
 
     return false;
