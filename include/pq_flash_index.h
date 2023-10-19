@@ -86,6 +86,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
 
+    DISKANN_DLLEXPORT bool is_label_valid(const std::string& filter_label);
+
     DISKANN_DLLEXPORT uint32_t range_search(const T *query1, const double range, const uint64_t min_l_search,
                                             const uint64_t max_l_search, std::vector<uint64_t> &indices,
                                             std::vector<float> &distances, const uint64_t min_beam_width,
