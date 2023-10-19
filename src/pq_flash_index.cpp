@@ -610,7 +610,7 @@ void PQFlashIndex<T, LabelT>::reset_stream_for_reading(std::basic_istream<char> 
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string& fileContent, uint32_t &num_pts,
+void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
                                                       uint32_t &num_total_labels)
 {
     num_pts = 0;
