@@ -680,7 +680,6 @@ void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile,
 
     infile.seekg(0, std::ios::beg);
     infile.read(&buffer[0], file_size);
-    infile.close();
 
     std::string line;
     uint32_t line_cnt = 0;
@@ -842,7 +841,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #else
     if (file_exists(labels_file))
     {
-        std::ifstream infile(labels_file);
+        std::ifstream infile(labels_file, std::ios::binary);
         if (infile.fail())
         {
             throw diskann::ANNException(std::string("Failed to open file ") + labels_file, -1);
