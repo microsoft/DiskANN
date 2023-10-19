@@ -567,10 +567,9 @@ void PQFlashIndex<T, LabelT>::generate_random_labels(std::vector<LabelT> &labels
 }
 
 template <typename T, typename LabelT>
-std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(const std::string &labels_map_file)
+std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(std::basic_istream<char> &map_reader)
 {
     std::unordered_map<std::string, LabelT> string_to_int_mp;
-    std::ifstream map_reader(labels_map_file);
     std::string line, token;
     LabelT token_as_num;
     std::string label_str;
@@ -604,7 +603,14 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
+void PQFlashIndex<T, LabelT>::reset_stream_for_reading(std::basic_istream<char> &infile)
+{
+    infile.clear();
+    infile.seekg(0);
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string& fileContent, uint32_t &num_pts,
                                                       uint32_t &num_total_labels)
 {
     num_pts = 0;
@@ -665,13 +671,8 @@ inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, LabelT l
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points_labels)
+void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile, size_t &num_points_labels)
 {
-    std::ifstream infile(label_file, std::ios::binary);
-    if (infile.fail())
-    {
-        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
-    }
     infile.seekg(0, std::ios::end);
     size_t file_size = infile.tellg();
 
@@ -750,6 +751,7 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
     }
 
     num_points_labels = line_cnt;
+    reset_stream_for_reading(infile);
 }
 
 template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_universal_label(const LabelT &label)
@@ -832,15 +834,51 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     this->_num_points = npts_u64;
     this->_n_chunks = nchunks_u64;
+#ifdef EXEC_ENV_OLS
+    if (files.fileExists(labels_file))
+    {
+        FileContent &content_labels = files.getContent(labels_file);
+        std::stringstream infile(std::string((const char *)content_labels._content, content_labels._size));
+#else
     if (file_exists(labels_file))
     {
-        parse_label_file(labels_file, num_pts_in_label_file);
+        std::ifstream infile(labels_file);
+        if (infile.fail())
+        {
+            throw diskann::ANNException(std::string("Failed to open file ") + labels_file, -1);
+        }
+#endif
+        parse_label_file(infile, num_pts_in_label_file);
         assert(num_pts_in_label_file == this->_num_points);
-        _label_map = load_label_map(labels_map_file);
+
+#ifndef EXEC_ENV_OLS
+        infile.close();
+#endif
+
+#ifdef EXEC_ENV_OLS
+        FileContent &content_labels_map = files.getContent(labels_map_file);
+        std::stringstream map_reader(std::string((const char *)content_labels_map._content, content_labels_map._size));
+#else
+        std::ifstream map_reader(labels_map_file);
+#endif
+        _label_map = load_label_map(map_reader);
+
+#ifndef EXEC_ENV_OLS
+        map_reader.close();
+#endif
+
+#ifdef EXEC_ENV_OLS
+        if (files.fileExists(labels_to_medoids))
+        {
+            FileContent &content_labels_to_meoids = files.getContent(labels_to_medoids);
+            std::stringstream medoid_stream(
+                std::string((const char *)content_labels_to_meoids._content, content_labels_to_meoids._size));
+#else
         if (file_exists(labels_to_medoids))
         {
             std::ifstream medoid_stream(labels_to_medoids);
             assert(medoid_stream.is_open());
+#endif
             std::string line, token;
 
             _filter_to_medoid_ids.clear();
@@ -869,20 +907,40 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             }
         }
         std::string univ_label_file = std ::string(_disk_index_file) + "_universal_label.txt";
+
+#ifdef EXEC_ENV_OLS
+        if (files.fileExists(univ_label_file))
+        {
+            FileContent &content_univ_label = files.getContent(univ_label_file);
+            std::stringstream universal_label_reader(
+                std::string((const char *)content_univ_label._content, content_univ_label._size));
+#else
         if (file_exists(univ_label_file))
         {
             std::ifstream universal_label_reader(univ_label_file);
             assert(universal_label_reader.is_open());
+#endif
             std::string univ_label;
             universal_label_reader >> univ_label;
+#ifndef EXEC_ENV_OLS
             universal_label_reader.close();
+#endif
             LabelT label_as_num = (LabelT)std::stoul(univ_label);
             set_universal_label(label_as_num);
         }
+
+#ifdef EXEC_ENV_OLS
+        if (files.fileExists(dummy_map_file))
+        {
+            FileContent &content_dummy_map = files.getContent(dummy_map_file);
+            std::stringstream dummy_map_stream(
+                std::string((const char *)content_dummy_map._content, content_dummy_map._size));
+#else
         if (file_exists(dummy_map_file))
         {
             std::ifstream dummy_map_stream(dummy_map_file);
             assert(dummy_map_stream.is_open());
+#endif
             std::string line, token;
 
             while (std::getline(dummy_map_stream, line))
@@ -908,7 +966,9 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
                 _real_to_dummy_map[real_id].emplace_back(dummy_id);
             }
+#ifndef EXEC_ENV_OLS
             dummy_map_stream.close();
+#endif
             diskann::cout << "Loaded dummy map" << std::endl;
         }
     }
@@ -933,14 +993,17 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     }
 
     std::string disk_pq_pivots_path = this->_disk_index_file + "_pq_pivots.bin";
-    if (file_exists(disk_pq_pivots_path))
+#ifdef EXEC_ENV_OLS
+    if (files.fileExists(disk_pq_pivots_path))
     {
         _use_disk_index_pq = true;
-#ifdef EXEC_ENV_OLS
         // giving 0 chunks to make the _pq_table infer from the
         // chunk_offsets file the correct value
         _disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0);
 #else
+    if (file_exists(disk_pq_pivots_path))
+    {
+        _use_disk_index_pq = true;
         // giving 0 chunks to make the _pq_table infer from the
         // chunk_offsets file the correct value
         _disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0);
@@ -1113,11 +1176,19 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     std::string norm_file = std::string(_disk_index_file) + "_max_base_norm.bin";
 
+#ifdef EXEC_ENV_OLS
+    if (files.fileExists(norm_file) && metric == diskann::Metric::INNER_PRODUCT)
+    {
+        uint64_t dumr, dumc;
+        float *norm_val;
+        diskann::load_bin<float>(files, norm_val, dumr, dumc);
+#else
     if (file_exists(norm_file) && metric == diskann::Metric::INNER_PRODUCT)
     {
         uint64_t dumr, dumc;
         float *norm_val;
         diskann::load_bin<float>(norm_file, norm_val, dumr, dumc);
+#endif
         this->_max_base_norm = norm_val[0];
         diskann::cout << "Setting re-scaling factor of base vectors to " << this->_max_base_norm << std::endl;
         delete[] norm_val;

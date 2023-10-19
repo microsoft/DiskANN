@@ -27,6 +27,7 @@ struct IndexConfig
     bool pq_dist_build;
     bool concurrent_consolidate;
     bool use_opq;
+    bool filtered_index;
 
     size_t num_pq_chunks;
     size_t num_frozen_pts;
@@ -43,15 +44,15 @@ struct IndexConfig
   private:
     IndexConfig(DataStoreStrategy data_strategy, GraphStoreStrategy graph_strategy, Metric metric, size_t dimension,
                 size_t max_points, size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
-                bool pq_dist_build, bool concurrent_consolidate, bool use_opq, const std::string &data_type,
-                const std::string &tag_type, const std::string &label_type,
+                bool pq_dist_build, bool concurrent_consolidate, bool use_opq, bool filtered_index,
+                std::string &data_type, const std::string &tag_type, const std::string &label_type,
                 std::shared_ptr<IndexWriteParameters> index_write_params,
                 std::shared_ptr<IndexSearchParams> index_search_params)
         : data_strategy(data_strategy), graph_strategy(graph_strategy), metric(metric), dimension(dimension),
           max_points(max_points), dynamic_index(dynamic_index), enable_tags(enable_tags), pq_dist_build(pq_dist_build),
-          concurrent_consolidate(concurrent_consolidate), use_opq(use_opq), num_pq_chunks(num_pq_chunks),
-          num_frozen_pts(num_frozen_points), label_type(label_type), tag_type(tag_type), data_type(data_type),
-          index_write_params(index_write_params), index_search_params(index_search_params)
+          concurrent_consolidate(concurrent_consolidate), use_opq(use_opq), filtered_index(filtered_index),
+          num_pq_chunks(num_pq_chunks), num_frozen_pts(num_frozen_points), label_type(label_type), tag_type(tag_type),
+          data_type(data_type), index_write_params(index_write_params), index_search_params(index_search_params)
     {
     }
 
@@ -120,6 +121,12 @@ class IndexConfigBuilder
     IndexConfigBuilder &is_use_opq(bool use_opq)
     {
         this->_use_opq = use_opq;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_filtered(bool is_filtered)
+    {
+        this->_filtered_index = is_filtered;
         return *this;
     }
 
@@ -212,7 +219,8 @@ class IndexConfigBuilder
 
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
                            _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build, _concurrent_consolidate,
-                           _use_opq, _data_type, _tag_type, _label_type, _index_write_params, _index_search_params);
+                           _use_opq, _filtered_index, _data_type, _tag_type, _label_type, _index_write_params,
+                           _index_search_params);
     }
 
     IndexConfigBuilder(const IndexConfigBuilder &) = delete;
@@ -231,12 +239,13 @@ class IndexConfigBuilder
     bool _pq_dist_build = false;
     bool _concurrent_consolidate = false;
     bool _use_opq = false;
+    bool _filtered_index{defaults::HAS_LABELS};
 
     size_t _num_pq_chunks = 0;
-    size_t _num_frozen_pts = 0;
+    size_t _num_frozen_pts{defaults::NUM_FROZEN_POINTS_STATIC};
 
-    std::string _label_type = "uint32";
-    std::string _tag_type = "uint32";
+    std::string _label_type{"uint32"};
+    std::string _tag_type{"uint32"};
     std::string _data_type;
 
     std::shared_ptr<IndexWriteParameters> _index_write_params;

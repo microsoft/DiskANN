@@ -8,6 +8,7 @@ struct IndexFilterParams
   public:
     std::string save_path_prefix;
     std::string label_file;
+    std::string tags_file;
     std::string universal_label;
     uint32_t filter_threshold = 0;
 
@@ -63,6 +64,7 @@ class IndexFilterParamsBuilder
   private:
     std::string _save_path_prefix;
     std::string _label_file;
+    std::string _tags_file;
     std::string _universal_label;
     uint32_t _filter_threshold = 0;
 };
