@@ -553,7 +553,7 @@ int aux_main(const std::string &input_file,
             }
           }
         } else if (submode == 3) {
-          if (mode != "subcentroids_random") {
+          if (mode != "subcentroids-random") {
 			diskann::cout << "Error: submode 3 only works with "
 							 "multicentroids-random"
 						  << std::endl;
