@@ -145,7 +145,7 @@ PQScratch<T>::PQScratch(size_t graph_degree, size_t aligned_dim)
 }
 
 template<typename T>
-void PQScratch<T>::initialize(size_t dim, const T *query, const float norm = 1.0f)
+void PQScratch<T>::initialize(size_t dim, const T *query, const float norm)
 {
     for (size_t d = 0; d < dim; ++d)
     {
