@@ -130,8 +130,7 @@ template <typename T> void SSDThreadData<T>::clear()
     scratch.reset();
 }
 
-template<typename T>
-PQScratch<T>::PQScratch(size_t graph_degree, size_t aligned_dim)
+template <typename T> PQScratch<T>::PQScratch(size_t graph_degree, size_t aligned_dim)
 {
     diskann::alloc_aligned((void **)&aligned_pq_coord_scratch,
                            (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
@@ -144,8 +143,7 @@ PQScratch<T>::PQScratch(size_t graph_degree, size_t aligned_dim)
     memset(rotated_query, 0, aligned_dim * sizeof(float));
 }
 
-template<typename T>
-void PQScratch<T>::initialize(size_t dim, const T *query, const float norm)
+template <typename T> void PQScratch<T>::initialize(size_t dim, const T *query, const float norm)
 {
     for (size_t d = 0; d < dim; ++d)
     {
@@ -156,7 +154,6 @@ void PQScratch<T>::initialize(size_t dim, const T *query, const float norm)
     }
 }
 
-
 template DISKANN_DLLEXPORT class InMemQueryScratch<int8_t>;
 template DISKANN_DLLEXPORT class InMemQueryScratch<uint8_t>;
 template DISKANN_DLLEXPORT class InMemQueryScratch<float>;
@@ -165,7 +162,12 @@ template DISKANN_DLLEXPORT class SSDQueryScratch<int8_t>;
 template DISKANN_DLLEXPORT class SSDQueryScratch<uint8_t>;
 template DISKANN_DLLEXPORT class SSDQueryScratch<float>;
 
+template DISKANN_DLLEXPORT class PQScratch<int8_t>;
+template DISKANN_DLLEXPORT class PQScratch<uint8_t>;
+template DISKANN_DLLEXPORT class PQScratch<float>;
+
 template DISKANN_DLLEXPORT class SSDThreadData<int8_t>;
 template DISKANN_DLLEXPORT class SSDThreadData<uint8_t>;
 template DISKANN_DLLEXPORT class SSDThreadData<float>;
+
 } // namespace diskann
