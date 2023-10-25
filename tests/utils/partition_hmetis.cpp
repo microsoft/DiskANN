@@ -405,6 +405,7 @@ int aux_main(const std::string &input_file,
                   0.33 * centroids[kth_closest_center * dim + i];
             }
           }
+          // (subcluster_counts does not get filled in this case)
         }
       }
       // subcentroids do not get saved to a file
@@ -493,7 +494,7 @@ int aux_main(const std::string &input_file,
       } else if (mode == "multicentroids" || mode == "multicentroids-random" ||
                  mode == "multicentroids-neighbors") {
 
-        constexpr int submode = 3;
+        constexpr int submode = 1;
 
         std::unique_ptr<float[]> queries_float =
             std::make_unique<float[]>(num_queries * dim);
@@ -523,6 +524,13 @@ int aux_main(const std::string &input_file,
             }
           }
         } else if (submode == 2) {
+          if (mode == "multicentroids-neighbors" ||
+              mode == "multicentroids-random") {
+            diskann::cout << "Error: submode 2 only works with multicentroids "
+                             "as it needs subcluster_counts[] to be filled out"
+                          << std::endl;
+              return -1;
+          }
           // 2: order shards by sum_subcentroid 1/distance
           // (actually, better: sum (# pts in subcluster) / distance)
           for (size_t query_id = 0; query_id < num_queries; ++query_id) {
