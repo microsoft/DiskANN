@@ -2055,11 +2055,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             lbls.push_back(token_as_num);
             _labels.insert(token_as_num);
         }
-        if (lbls.size() <= 0)
-        {
-            diskann::cout << "No label found";
-            exit(-1);
-        }
+
         std::sort(lbls.begin(), lbls.end());
         _pts_to_labels[line_cnt] = lbls;
         line_cnt++;
