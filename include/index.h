@@ -247,7 +247,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // determines navigating node of the graph by calculating medoid of datafopt
     uint32_t calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
+    void parse_label_file(std::basic_istream<char> &label_file, size_t &num_pts);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
@@ -339,6 +339,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                       IndexSearchContext<LabelT> &context);
 
   private:
+    void reset_stream_for_reading(std::basic_istream<char> &infile);
+
     // Distance functions
     Metric _dist_metric = diskann::L2;
     std::shared_ptr<Distance<T>> _distance;
