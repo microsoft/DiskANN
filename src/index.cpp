@@ -134,6 +134,10 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
         _location_to_tag.reserve(total_internal_points);
         _tag_to_location.reserve(total_internal_points);
     }
+
+    // add missing param
+    _indexingAlpha = 1.2f;
+
 }
 
 template <typename T, typename TagT, typename LabelT>
