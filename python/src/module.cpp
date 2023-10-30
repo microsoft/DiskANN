@@ -25,19 +25,18 @@ using namespace pybind11::literals;
 struct Variant
 {
     std::string disk_builder_name;
-    std::string memory_builder_name;
     std::string dynamic_memory_index_name;
     std::string static_memory_index_name;
     std::string static_disk_index_name;
 };
 
-const Variant FloatVariant{"build_disk_float_index", "build_memory_float_index", "DynamicMemoryFloatIndex",
+const Variant FloatVariant{"build_disk_float_index", "DynamicMemoryFloatIndex",
                            "StaticMemoryFloatIndex", "StaticDiskFloatIndex"};
 
-const Variant UInt8Variant{"build_disk_uint8_index", "build_memory_uint8_index", "DynamicMemoryUInt8Index",
+const Variant UInt8Variant{"build_disk_uint8_index", "DynamicMemoryUInt8Index",
                            "StaticMemoryUInt8Index", "StaticDiskUInt8Index"};
 
-const Variant Int8Variant{"build_disk_int8_index", "build_memory_int8_index", "DynamicMemoryInt8Index",
+const Variant Int8Variant{"build_disk_int8_index", "DynamicMemoryInt8Index",
                           "StaticMemoryInt8Index", "StaticDiskInt8Index"};
 
 template <typename T> inline void add_variant(py::module_ &m, const Variant &variant)
@@ -45,10 +44,6 @@ template <typename T> inline void add_variant(py::module_ &m, const Variant &var
     m.def(variant.disk_builder_name.c_str(), &diskannpy::build_disk_index<T>, "distance_metric"_a, "data_file_path"_a,
           "index_prefix_path"_a, "complexity"_a, "graph_degree"_a, "final_index_ram_limit"_a, "indexing_ram_budget"_a,
           "num_threads"_a, "pq_disk_bytes"_a);
-
-    m.def(variant.memory_builder_name.c_str(), &diskannpy::build_memory_index<T>, "distance_metric"_a,
-          "data_file_path"_a, "index_output_path"_a, "graph_degree"_a, "complexity"_a, "alpha"_a, "num_threads"_a,
-          "use_pq_build"_a, "num_pq_bytes"_a, "use_opq"_a, "filter_complexity"_a = 0, "use_tags"_a = false);
 
     py::class_<diskannpy::StaticMemoryIndex<T>>(m, variant.static_memory_index_name.c_str())
         .def(py::init<const diskann::Metric, const std::string &, const size_t, const size_t, const uint32_t,
@@ -121,6 +116,11 @@ PYBIND11_MODULE(_diskannpy, m)
     default_values.attr("USE_PQ_BUILD") = false;
     default_values.attr("NUM_PQ_BYTES") = (uint32_t)0;
     default_values.attr("USE_OPQ") = false;
+
+    m.def("build_memory_index", &diskannpy::build_memory_index, "vector_dtype"_a, "distance_metric"_a,
+      "data_file_path"_a, "index_output_path"_a, "graph_degree"_a, "complexity"_a, "alpha"_a, "num_threads"_a,
+      "use_pq_build"_a, "num_pq_bytes"_a, "use_opq"_a, "use_tags"_a = false, "label_path"_a = "",
+      "universal_label"_a = "", "filter_complexity"_a = 0);
 
     add_variant<float>(m, FloatVariant);
     add_variant<uint8_t>(m, UInt8Variant);

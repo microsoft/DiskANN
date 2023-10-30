@@ -1,10 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <cstdint>
+#include "abstract_index.h"
 #include "builder.h"
 #include "common.h"
 #include "disk_utils.h"
 #include "index.h"
+#include "index_factory.h"
 #include "parameters.h"
 
 namespace diskannpy
@@ -31,28 +34,48 @@ template void build_disk_index<uint8_t>(diskann::Metric, const std::string &, co
 template void build_disk_index<int8_t>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
                                        double, double, uint32_t, uint32_t);
 
-template <typename T, typename TagT, typename LabelT>
-void build_memory_index(const diskann::Metric metric, const std::string &vector_bin_path,
+void build_memory_index(const std::string &vector_dtype, const diskann::Metric metric, const std::string &vector_bin_path,
                         const std::string &index_output_path, const uint32_t graph_degree, const uint32_t complexity,
                         const float alpha, const uint32_t num_threads, const bool use_pq_build,
-                        const size_t num_pq_bytes, const bool use_opq, const uint32_t filter_complexity,
-                        const bool use_tags)
+                        const size_t num_pq_bytes, const bool use_opq, const bool use_tags,
+                        const std::string &label_path, const std::string &universal_label,
+                        const uint32_t filter_complexity)
 {
-    diskann::IndexWriteParameters index_build_params = diskann::IndexWriteParametersBuilder(complexity, graph_degree)
+    auto index_build_params = diskann::IndexWriteParametersBuilder(complexity, graph_degree)
                                                            .with_filter_list_size(filter_complexity)
                                                            .with_alpha(alpha)
                                                            .with_saturate_graph(false)
                                                            .with_num_threads(num_threads)
                                                            .build();
-    diskann::IndexSearchParams index_search_params =
-        diskann::IndexSearchParams(index_build_params.search_list_size, num_threads);
+    auto filter_params = diskann::IndexFilterParamsBuilder()
+                             .with_universal_label(universal_label)
+                             .with_label_file(label_path)
+                             .with_save_path_prefix(index_output_path)
+                             .build();
+
     size_t data_num, data_dim;
     diskann::get_bin_metadata(vector_bin_path, data_num, data_dim);
 
-    diskann::Index<T, TagT, LabelT> index(metric, data_dim, data_num,
-                                          std::make_shared<diskann::IndexWriteParameters>(index_build_params),
-                                          std::make_shared<diskann::IndexSearchParams>(index_search_params), 0,
-                                          use_tags, use_tags, false, use_pq_build, num_pq_bytes, use_opq);
+    auto config = diskann::IndexConfigBuilder()
+                      .with_metric(metric)
+                      .with_dimension(data_dim)
+                      .with_max_points(data_num)
+                      .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
+                      .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
+                      .with_data_type(vector_dtype)
+                      .with_tag_type("uint32") // fixed type
+                      .with_label_type("uint32") // fixed type
+                      .is_dynamic_index(false)
+                      .with_index_write_params(index_build_params)
+                      .is_concurrent_consolidate(false)
+                      .is_enable_tags(use_tags)
+                      .is_filtered(!label_path.empty())
+                      .is_use_opq(use_opq)
+                      .is_pq_dist_build(use_pq_build)
+                      .with_num_pq_chunks(num_pq_bytes)
+                      .build();
+
+    auto index = diskann::IndexFactory(config).create_instance();
 
     if (use_tags)
     {
@@ -61,27 +84,19 @@ void build_memory_index(const diskann::Metric metric, const std::string &vector_
         {
             throw std::runtime_error("tags file not found at expected path: " + tags_file);
         }
-        TagT *tags_data;
+        uint32_t *tags_data;
         size_t tag_dims = 1;
         diskann::load_bin(tags_file, tags_data, data_num, tag_dims);
-        std::vector<TagT> tags(tags_data, tags_data + data_num);
-        index.build(vector_bin_path.c_str(), data_num, tags);
+        std::vector<uint32_t> tags(tags_data, tags_data + data_num);
+        index->build(vector_bin_path, data_num, tags);
     }
     else
     {
-        index.build(vector_bin_path.c_str(), data_num);
+        index->build(vector_bin_path, data_num, filter_params);
     }
 
-    index.save(index_output_path.c_str());
+    index->save(index_output_path.c_str());
+    index.reset();
 }
-
-template void build_memory_index<float>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
-                                        float, uint32_t, bool, size_t, bool, uint32_t, bool);
-
-template void build_memory_index<int8_t>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
-                                         float, uint32_t, bool, size_t, bool, uint32_t, bool);
-
-template void build_memory_index<uint8_t>(diskann::Metric, const std::string &, const std::string &, uint32_t, uint32_t,
-                                          float, uint32_t, bool, size_t, bool, uint32_t, bool);
 
 } // namespace diskannpy
