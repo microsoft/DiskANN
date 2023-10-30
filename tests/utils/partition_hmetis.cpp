@@ -478,8 +478,8 @@ int aux_main(const std::string &input_file,
             num_shards_to_order, closest_centroids_ivf.get());
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
           query_to_shards.emplace_back();
+          int GT_cumsum_for_histogram = 0;
           for (int i = 0; i < num_shards_to_order; ++i) {
-            int          GT_cumsum_for_histogram = 0;
             const size_t shard_id =
                 closest_centroids_ivf[query_id * num_shards_to_order + i];
             query_to_shards[query_id].emplace_back(
