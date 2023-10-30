@@ -137,7 +137,7 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
 
     // add missing param
     _indexingAlpha = 1.2f;
-    _indexingRange = (std::uint32_t)_dim;
+    _indexingRange = 32;
 }
 
 template <typename T, typename TagT, typename LabelT>
