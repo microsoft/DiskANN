@@ -668,6 +668,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     // initialize_q_s().
     if (_query_scratch.size() == 0)
     {
+        _indexingQueueSize = search_l;
         initialize_query_scratch(num_threads, search_l, search_l, (uint32_t)_max_range_of_loaded_graph, _indexingMaxC,
                                  _dim, _bitmask_buf._bitmask_size);
     }
@@ -2123,7 +2124,7 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = std::stoul(token);
+            LabelT token_as_num = (LabelT) std::stoul(token);
             simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
             bm.set(token_as_num);
             _labels.insert(token_as_num);
