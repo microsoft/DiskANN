@@ -485,6 +485,16 @@ int aux_main(const std::string &input_file,
                 shard_id, shard_to_count_of_GT_pts[query_id][shard_id]);
             // shard_to_count_of_GT_pts[query_id][shard_id] will be(come) 0 if
             // wasn't present
+            if (query_id == 5) {
+              // histogram to stare at
+              diskann::cout << "query_id 5, shard_id " << shard_id << ", count "
+                            << shard_to_count_of_GT_pts[query_id][shard_id]
+                            << ", dist = "
+                            << math_utils::calc_distance(
+                                   queries_float.get() + query_id * dim,
+                                   centroids.get() + shard_id * dim, dim)
+                            << std::endl;
+            }
           }
         }
 
