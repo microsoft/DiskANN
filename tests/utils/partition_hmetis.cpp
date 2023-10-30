@@ -479,17 +479,22 @@ int aux_main(const std::string &input_file,
         for (size_t query_id = 0; query_id < num_queries; ++query_id) {
           query_to_shards.emplace_back();
           for (int i = 0; i < num_shards_to_order; ++i) {
+            int          GT_cumsum_for_histogram = 0;
             const size_t shard_id =
                 closest_centroids_ivf[query_id * num_shards_to_order + i];
             query_to_shards[query_id].emplace_back(
                 shard_id, shard_to_count_of_GT_pts[query_id][shard_id]);
             // shard_to_count_of_GT_pts[query_id][shard_id] will be(come) 0 if
             // wasn't present
-            if (query_id == 5) {
+            if (query_id == 5 || query_id == 7) {
               // histogram to stare at
-              diskann::cout << "query_id 5, shard_id " << shard_id << ", count "
+              GT_cumsum_for_histogram += shard_to_count_of_GT_pts[query_id][shard_id];
+              diskann::cout << "query_id " << query_id << ", i " << std::setw(3)
+                            << i << ", shard_id " << std::setw(3) << shard_id
+                            << ", count " << std::setw(3)
                             << shard_to_count_of_GT_pts[query_id][shard_id]
-                            << ", dist = "
+                            << ", cumsum = " << std::setw(3)
+                            << GT_cumsum_for_histogram << ", dist = "
                             << math_utils::calc_distance(
                                    queries_float.get() + query_id * dim,
                                    centroids.get() + shard_id * dim, dim)
