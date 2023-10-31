@@ -810,7 +810,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         }
 #endif
         parse_label_file(infile, num_pts_in_label_file);
-        assert(num_pts_in_label_file == this->_num_points);
+        assert(num_pts_in_label_file == this->num_points);
 
 #ifndef EXEC_ENV_OLS
         infile.close();
