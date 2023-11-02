@@ -138,6 +138,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
 
+    // Filter support search
+    template <typename IndexType>
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> conjunctive_search_by_postprocessing(const T *query, const std::vector<LabelT> &filter_labels,
+                                                                        const size_t K, const uint32_t L,
+                                                                        IndexType *indices, float *distances);
+
+
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
@@ -199,10 +206,17 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) override;
+
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query,
                                                                const std::string &filter_label_raw, const size_t K,
                                                                const uint32_t L, std::any &indices,
                                                                float *distances) override;
+
+    virtual std::pair<uint32_t, uint32_t> _conjunctive_search_by_postprocessing(const DataType &query,
+                                                               const label_set &raw_filter_labels, const size_t K,
+                                                               const uint32_t L, std::any &indices,
+                                                               float *distances) override;
+
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
     virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;
@@ -376,6 +390,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
+    std::unordered_map<LabelT, uint32_t> _label_counts;
 
     bool _use_universal_label = false;
     LabelT _universal_label = 0;

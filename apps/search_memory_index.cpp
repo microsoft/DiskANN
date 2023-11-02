@@ -17,6 +17,7 @@
 #include <unistd.h>
 #endif
 
+#include "filter_utils.h"
 #include "index.h"
 #include "memory_mapper.h"
 #include "utils.h"
@@ -30,7 +31,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
                         const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
-                        const std::vector<std::string> &query_filters, const float fail_if_recall_below)
+                        const std::vector<label_set> &query_filters, const float fail_if_recall_below)
 {
     using TagT = uint32_t;
     // Load the query file
@@ -165,12 +166,20 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search)
             {
-                std::string raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+                auto raw_filters = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
 
+                if (raw_filters.size() == 1) {
+                auto raw_filter = *(raw_filters.begin());
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
                                                          query_result_ids[test_id].data() + i * recall_at,
                                                          query_result_dists[test_id].data() + i * recall_at);
                 cmp_stats[i] = retval.second;
+                } else {
+                auto retval = index->conjunctive_search_by_postprocessing(query + i * query_aligned_dim, raw_filters, recall_at, L,
+                                                         query_result_ids[test_id].data() + i * recall_at,
+                                                         query_result_dists[test_id].data() + i * recall_at);
+                cmp_stats[i] = retval.second;
+                }
             }
             else if (metric == diskann::FAST_L2)
             {
@@ -392,14 +401,19 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    std::vector<std::string> query_filters;
+    std::vector<label_set> query_filters;
     if (filter_label != "")
     {
-        query_filters.push_back(filter_label);
+        label_set single_filter_set;
+        single_filter_set.insert(filter_label);
+        query_filters.push_back(single_filter_set);
     }
     else if (query_filters_file != "")
     {
-        query_filters = read_file_to_vector_of_strings(query_filters_file);
+        tsl::robin_map<std::string, uint32_t> label_counts;
+        label_set unique_labels;
+        std::tie(query_filters, label_counts, unique_labels) = diskann::parse_label_file(query_filters_file);
+//        query_filters = read_file_to_vector_of_strings(query_filters_file);
     }
 
     try

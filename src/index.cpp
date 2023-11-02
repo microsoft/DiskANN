@@ -1870,6 +1870,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             LabelT token_as_num = (LabelT)std::stoul(token);
             lbls.push_back(token_as_num);
             _labels.insert(token_as_num);
+            _label_counts[token_as_num]++;
         }
 
         std::sort(lbls.begin(), lbls.end());
@@ -2171,11 +2172,87 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     if (pos < K)
     {
-        diskann::cerr << "Found fewer than K elements for query" << std::endl;
+//        diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
 
     return retval;
 }
+
+
+template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_conjunctive_search_by_postprocessing(const DataType &query,
+                                                                           const label_set &raw_labels, const size_t K,
+                                                                           const uint32_t L, std::any &indices,
+                                                                           float *distances)
+{
+    std::vector<LabelT> converted_labels;
+    for (auto &raw_label : raw_labels)
+        converted_labels.push_back(this->get_converted_label(raw_label));
+
+    if (typeid(uint64_t *) == indices.type())
+    {
+        auto ptr = std::any_cast<uint64_t *>(indices);
+        return this->conjunctive_search_by_postprocessing(std::any_cast<T *>(query), converted_labels, K, L, ptr, distances);
+    }
+    else if (typeid(uint32_t *) == indices.type())
+    {
+        auto ptr = std::any_cast<uint32_t *>(indices);
+        return this->conjunctive_search_by_postprocessing(std::any_cast<T *>(query), converted_labels, K, L, ptr, distances);
+    }
+    else
+    {
+        throw ANNException("Error: Id type can only be uint64_t or uint32_t.", -1);
+    }
+}
+
+template <typename T, typename TagT, typename LabelT>
+template <typename IdType>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::conjunctive_search_by_postprocessing(const T *query, const std::vector<LabelT> &filter_labels,
+                                                                          const size_t K, const uint32_t L,
+                                                                          IdType *indices, float *distances)
+{   
+    std::vector<IdType> intermediate_indices(L, 0);
+    std::vector<float> intermediate_distances(L, std::numeric_limits<float>::max());
+    if (filter_labels.size() == 0) {
+        throw diskann::ANNException("ERROR: No filter labels found. Run unfiltered search", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    LabelT first_filter = _label_counts[filter_labels[0]] < _label_counts[filter_labels[1]] ? filter_labels[0] : filter_labels[1];
+    auto ret = search_with_filters(query, first_filter, L, L, intermediate_indices.data(), intermediate_distances.data());
+
+    size_t pos = 0;
+    for (size_t i = 0; i < L; ++i)
+    {
+        uint32_t idx = intermediate_indices[i];
+        if (idx < _max_points)
+        {
+            bool pass_flag = true;
+            // NOTE: need to handle universal labels correctness
+            for (uint32_t fctr = 0; fctr < filter_labels.size() && pass_flag; fctr++) {
+                if (filter_labels[fctr] == first_filter)
+                    continue;
+                if (std::find(_location_to_labels[idx].begin(), _location_to_labels[idx].end(), filter_labels[fctr]) == _location_to_labels[idx].end())
+                    pass_flag = false;
+            }
+            if (pass_flag)
+            {
+                indices[pos] = (IdType)idx;
+                if (distances != nullptr)
+                {
+                    distances[pos] = intermediate_distances[i];
+                }
+                pos++;
+            }
+        }
+        if (pos == K)
+            break;
+    }
+    if (pos < K)
+    {
+//        diskann::cerr << "Found fewer than K elements for query" << std::endl;
+    }
+    return ret;
+}
+
 
 template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::_search_with_tags(const DataType &query, const uint64_t K, const uint32_t L,
@@ -3467,6 +3544,49 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
     uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 
+
+
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const float *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const float *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const uint8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const uint8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const int8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const int8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+// TagT==uint32_t
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const float *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const float *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const uint8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const uint8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const int8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const int8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+
+
+
+
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search<uint64_t>(
     const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search<uint32_t>(
@@ -3530,4 +3650,46 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
+
+
+
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const float *query, const std::vector<uint16_t> &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const float *query, const std::vector<uint16_t> &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const uint8_t *query, const std::vector<uint16_t> &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const uint8_t *query, const std::vector<uint16_t> &filter_labels, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const int8_t *query, const std::vector<uint16_t> &filter_labels, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const int8_t *query, const std::vector<uint16_t> &filter_labels, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+// TagT==uint32_t
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const float *query, const std::vector<uint16_t> &filter_labels, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const float *query, const std::vector<uint16_t> &filter_labels, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const uint8_t *query, const std::vector<uint16_t> &filter_labels, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const uint8_t *query, const std::vector<uint16_t> &filter_labels, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint64_t>(const int8_t *query, const std::vector<uint16_t> &filter_labels, const size_t K, const uint32_t L, uint64_t *indices,
+              float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::conjunctive_search_by_postprocessing<
+    uint32_t>(const int8_t *query, const std::vector<uint16_t> &filter_labels, const size_t K, const uint32_t L, uint32_t *indices,
+              float *distances);
+
+
 } // namespace diskann
