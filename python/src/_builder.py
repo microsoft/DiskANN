@@ -258,7 +258,7 @@ def build_memory_index(
     _assert_is_nonnegative_uint32(filter_complexity, "filter_complexity")
     _assert(index_prefix != "", "index_prefix cannot be an empty string")
     _assert(
-        filter_labels is not None and filter_complexity > 0,
+        filter_labels is None or filter_complexity > 0,
         "if filter_labels is provided, filter_complexity must not be 0"
     )
 
