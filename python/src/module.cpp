@@ -48,8 +48,8 @@ template <typename T> inline void add_variant(py::module_ &m, const Variant &var
 
     m.def(variant.memory_builder_name.c_str(), &diskannpy::build_memory_index<T>, "distance_metric"_a,
           "data_file_path"_a, "index_output_path"_a, "graph_degree"_a, "complexity"_a, "alpha"_a, "num_threads"_a,
-          "use_pq_build"_a, "num_pq_bytes"_a, "use_opq"_a, "use_tags"_a = false,
-          "filter_labels_file"_a = "", "universal_label"_a = "", "filter_complexity"_a = 0);
+          "use_pq_build"_a, "num_pq_bytes"_a, "use_opq"_a, "use_tags"_a = false, "filter_labels_file"_a = "",
+          "universal_label"_a = "", "filter_complexity"_a = 0);
 
     py::class_<diskannpy::StaticMemoryIndex<T>>(m, variant.static_memory_index_name.c_str())
         .def(py::init<const diskann::Metric, const std::string &, const size_t, const size_t, const uint32_t,
