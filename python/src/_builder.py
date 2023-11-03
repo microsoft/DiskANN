@@ -174,8 +174,10 @@ def build_memory_index(
     num_pq_bytes: int = defaults.NUM_PQ_BYTES,
     use_opq: bool = defaults.USE_OPQ,
     vector_dtype: Optional[VectorDType] = None,
-    filter_complexity: int = defaults.FILTER_COMPLEXITY,
     tags: Union[str, VectorIdentifierBatch] = "",
+    filter_labels_file: str = "",
+    universal_label: int = 0,
+    filter_complexity: int = defaults.FILTER_COMPLEXITY,
     index_prefix: str = "ann",
 ) -> None:
     """
@@ -299,8 +301,10 @@ def build_memory_index(
         use_pq_build=use_pq_build,
         num_pq_bytes=num_pq_bytes,
         use_opq=use_opq,
-        filter_complexity=filter_complexity,
         use_tags=use_tags,
+        filter_labels_file=filter_labels_file,
+        universal_label="0", # a string that must be a number for some inexplicable reason.
+        filter_complexity=filter_complexity,
     )
 
     _write_index_metadata(
