@@ -43,8 +43,7 @@ class StaticMemoryIndex:
         distance_metric: Optional[DistanceMetric] = None,
         vector_dtype: Optional[VectorDType] = None,
         dimensions: Optional[int] = None,
-        enable_filters: bool = False,
-        universal_label: str = ""
+        enable_filters: bool = False
     ):
         """
         ### Parameters
@@ -79,7 +78,6 @@ class StaticMemoryIndex:
         """
         index_prefix = _valid_index_prefix(index_directory, index_prefix)
         self._labels_map = {}
-        self._universal_label = universal_label
         if enable_filters:
             try:
                 with open(index_prefix + "_labels_map.txt", "r") as labels_map_if:
@@ -141,7 +139,7 @@ class StaticMemoryIndex:
                     f"A filter label of {filter_label} was provided, but this class was not initialized with filters "
                     "enabled, e.g. StaticDiskMemory(..., enable_filters=True)"
                 )
-            if filter_label != self._universal_label and filter_label not in self._labels_map:
+            if filter_label not in self._labels_map:
                 raise ValueError(
                     f"A filter label of {filter_label} was provided, but the external(str)->internal(np.uint32) labels map "
                     f"does not include that label."
@@ -165,7 +163,7 @@ class StaticMemoryIndex:
         if filter_label == "":
             neighbors, distances = self._index.search(query=_query, knn=k_neighbors, complexity=complexity)
         else:
-            filter = 0 if filter_label == self._universal_label else self._labels_map[filter_label]
+            filter = self._labels_map[filter_label]
             neighbors, distances = self._index.search_with_filter(
                 query=query,
                 knn=k_neighbors,

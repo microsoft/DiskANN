@@ -197,17 +197,17 @@ class TestFilteredStaticMemoryIndex(unittest.TestCase):
         vectors: np.ndarray = random_vectors(10000, 10, dtype=np.float32, seed=54321)
         query_vectors: np.ndarray = random_vectors(10, 10, dtype=np.float32)
         temp = mkdtemp()
+        labels = []
+        for idx in range(0, vectors.shape[0]):
+            label_list = []
+            if idx % 3 == 0:
+                label_list.append("even_by_3")
+            if idx % 5 == 0:
+                label_list.append("even_by_5")
+            if len(label_list) == 0:
+                label_list = ["neither"]
+            labels.append(label_list)
         try:
-            with open(os.path.join(temp, "labels.txt"), "w") as labels:
-                for idx in range(0, vectors.shape[0]):
-                    if idx % 2 == 0:
-                        label = "evensies"
-                    else:
-                        label = "oddsies"
-                    if idx % 3 == 0:
-                        label += ",evenly_by_three"
-                    print(label, file=labels)
-
             dap.build_memory_index(
                 data=vectors,
                 distance_metric="l2",
@@ -215,7 +215,7 @@ class TestFilteredStaticMemoryIndex(unittest.TestCase):
                 complexity=64,
                 graph_degree=32,
                 num_threads=16,
-                filter_labels_file=os.path.join(temp, "labels.txt"),
+                filter_labels=labels,
                 universal_label="all",
                 filter_complexity=128,
             )
@@ -223,21 +223,15 @@ class TestFilteredStaticMemoryIndex(unittest.TestCase):
                 index_directory=temp,
                 num_threads=16,
                 initial_search_complexity=64,
-                enable_filters=True,
-                universal_label="all"
+                enable_filters=True
             )
 
             k = 50
             probable_superset, _ = index.search(query_vectors[0], k_neighbors=k*2, complexity=128)
-            response = index.search(query_vectors[0], k_neighbors=k, complexity=64, filter_label="evensies")
-            self.assertIsInstance(response, dap.QueryResponse)
-            ids_1, dists_1 = response
-            self.assertTrue(all(id % 2 == 0 for id in ids_1))
-            ids_2, dists = index.search(query_vectors[0], k_neighbors=k, complexity=64, filter_label="oddsies")
-            self.assertTrue(all(id % 2 != 0 for id in ids_2))
-            self.assertTrue(np.intersect1d(ids_1, ids_2).shape[0] == 0)
-            ids_3, dists = index.search(query_vectors[0], k_neighbors=k, complexity=64, filter_label="evenly_by_three")
-            self.assertTrue(all(id % 3 == 0 for id in ids_3))
+            ids_1, _ = index.search(query_vectors[0], k_neighbors=k, complexity=64, filter_label="even_by_3")
+            self.assertTrue(all(id % 3 == 0 for id in ids_1))
+            ids_2, _ = index.search(query_vectors[0], k_neighbors=k, complexity=64, filter_label="even_by_5")
+            self.assertTrue(all(id % 5 == 0 for id in ids_2))
 
             in_superset = np.intersect1d(probable_superset, np.append(ids_1, ids_2)).shape[0]
             self.assertTrue(in_superset/k*2 > 0.98)

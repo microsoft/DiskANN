@@ -144,7 +144,7 @@ class DynamicMemoryIndex:
             f"The file {tags_file} does not exist in {index_directory}",
         )
         vector_dtype, dap_metric, num_vectors, dimensions = _ensure_index_metadata(
-            index_prefix_path, vector_dtype, distance_metric, max_vectors, dimensions
+            index_prefix_path, vector_dtype, distance_metric, max_vectors, dimensions, warn_size_exceeded=True
         )
 
         index = cls(
