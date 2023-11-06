@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+import json
 import os
 import warnings
 from typing import Hashable, Optional
@@ -78,12 +79,15 @@ class StaticMemoryIndex:
         """
         index_prefix = _valid_index_prefix(index_directory, index_prefix)
         self._labels_map = {}
+        self._labels_metadata = {}
         if enable_filters:
             try:
                 with open(index_prefix + "_labels_map.txt", "r") as labels_map_if:
                     for line in labels_map_if:
                         (key, val) = line.split("\t")
                         self._labels_map[key] = int(val)
+                with open(f"{index_prefix}_label_metadata.json", "r") as labels_metadata_if:
+                    self._labels_metadata = json.load(labels_metadata_if)
             except: # noqa: E722
                 # exceptions are basically presumed to be either file not found or file not formatted correctly
                 raise RuntimeException("Filter labels file was unable to be processed.")
@@ -144,6 +148,7 @@ class StaticMemoryIndex:
                     f"A filter label of {filter_label} was provided, but the external(str)->internal(np.uint32) labels map "
                     f"does not include that label."
                 )
+            k_neighbors = min(k_neighbors, self._labels_metadata[filter_label])
         _query = _castable_dtype_or_raise(query, expected=self._vector_dtype)
         _assert(len(_query.shape) == 1, "query vector must be 1-d")
         _assert(

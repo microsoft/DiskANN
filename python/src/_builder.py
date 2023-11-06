@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -295,13 +296,18 @@ def build_memory_index(
 
     filter_labels_file = ""
     if filter_labels is not None:
+        label_counts = {}
         filter_labels_file = f"{index_prefix_path}_pylabels.txt"
         with open(filter_labels_file, "w") as labels_file:
-            for label in filter_labels:
-                if len(label) == 0:
+            for labels in filter_labels:
+                for label in labels:
+                    label_counts[label] = 1 if label not in label_counts else label_counts[label] + 1
+                if len(labels) == 0:
                     print("default", file=labels_file)
                 else:
-                    print(",".join(label), file=labels_file)
+                    print(",".join(labels), file=labels_file)
+        with open(f"{index_prefix_path}_label_metadata.json", "w") as label_metadata_file:
+            json.dump(label_counts, label_metadata_file, indent=True)
 
     if isinstance(tags, str) and tags != "":
         use_tags = True
