@@ -139,14 +139,14 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     _indexingAlpha = 1.2f;
     _indexingRange = 60;
 
-    if (_query_scratch.size() == 0)
-    {
-        _indexingQueueSize = 200;
-        std::uint32_t num_threads = 42;
-        _max_range_of_loaded_graph = 60;
-        initialize_query_scratch(num_threads, _indexingQueueSize, _indexingQueueSize, (uint32_t)_max_range_of_loaded_graph, _indexingMaxC,
-            _dim, _bitmask_buf._bitmask_size);
-    }
+    //if (_query_scratch.size() == 0)
+    //{
+    //    _indexingQueueSize = 200;
+    //    std::uint32_t num_threads = 42;
+    //    _max_range_of_loaded_graph = 60;
+    //    initialize_query_scratch(num_threads, _indexingQueueSize, _indexingQueueSize, (uint32_t)_max_range_of_loaded_graph, _indexingMaxC,
+    //        _dim, _bitmask_buf._bitmask_size);
+    //}
 }
 
 template <typename T, typename TagT, typename LabelT>
