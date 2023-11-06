@@ -175,7 +175,7 @@ def build_memory_index(
     use_opq: bool = defaults.USE_OPQ,
     vector_dtype: Optional[VectorDType] = None,
     tags: Union[str, VectorIdentifierBatch] = "",
-    filter_labels: Optional[list[list[Hashable]]] = None,
+    filter_labels: Optional[list[list[str]]] = None,
     universal_label: str = "",
     filter_complexity: int = defaults.FILTER_COMPLEXITY,
     index_prefix: str = "ann",
