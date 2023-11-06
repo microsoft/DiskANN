@@ -101,7 +101,7 @@ class StaticDiskIndex:
             _index = _native_dap.StaticDiskFloatIndex
         self._index = _index(
             distance_metric=dap_metric,
-            index_path_prefix=os.path.join(index_directory, index_prefix),
+            index_path_prefix=index_prefix,
             num_threads=num_threads,
             num_nodes_to_cache=num_nodes_to_cache,
             cache_mechanism=cache_mechanism,
