@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
-from typing import BinaryIO, Hashable, Optional, overload
+from typing import BinaryIO, Optional, overload
 
 import numpy as np
 

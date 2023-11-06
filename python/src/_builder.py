@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Hashable, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 

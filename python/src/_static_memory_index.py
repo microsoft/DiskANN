@@ -4,7 +4,7 @@
 import json
 import os
 import warnings
-from typing import Hashable, Optional
+from typing import Optional
 
 import numpy as np
 
