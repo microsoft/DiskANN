@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -174,8 +175,10 @@ def build_memory_index(
     num_pq_bytes: int = defaults.NUM_PQ_BYTES,
     use_opq: bool = defaults.USE_OPQ,
     vector_dtype: Optional[VectorDType] = None,
-    filter_complexity: int = defaults.FILTER_COMPLEXITY,
     tags: Union[str, VectorIdentifierBatch] = "",
+    filter_labels: Optional[list[list[str]]] = None,
+    universal_label: str = "",
+    filter_complexity: int = defaults.FILTER_COMPLEXITY,
     index_prefix: str = "ann",
 ) -> None:
     """
@@ -223,10 +226,20 @@ def build_memory_index(
       Default is `0`.
     - **use_opq**: Use optimized product quantization during build.
     - **vector_dtype**: Required if the provided `data` is of type `str`, else we use the `data.dtype` if np array.
-    - **filter_complexity**: Complexity to use when using filters. Default is 0.
-    - **tags**: A `str` representing a path to a pre-built tags file on disk, or a `numpy.ndarray` of uint32 ids
-      corresponding to the ordinal position of the vectors provided to build the index. Defaults to "". **This value
-      must be provided if you want to build a memory index intended for use with `diskannpy.DynamicMemoryIndex`**.
+    - **tags**: Tags can be defined either as a path on disk to an existing .tags file, or provided as a np.array of
+      the same length as the number of vectors. Tags are used to identify vectors in the index via your *own*
+      numbering conventions, and is absolutely required for loading DynamicMemoryIndex indices `from_file`.
+    - **filter_labels**: An optional, but exhaustive list of categories for each vector. This is used to filter
+      search results by category. If provided, this must be a list of lists, where each inner list is a list of
+      categories for the corresponding vector. For example, if you have 3 vectors, and the first vector belongs to
+      categories "a" and "b", the second vector belongs to category "b", and the third vector belongs to no categories,
+      you would provide `filter_labels=[["a", "b"], ["b"], []]`. If you do not want to provide categories for a
+      particular vector, you can provide an empty list. If you do not want to provide categories for any vectors,
+      you can provide `None` for this parameter (which is the default)
+    - **universal_label**: An optional label that indicates that this vector should be included in *every* search
+      in which it also meets the knn search criteria.
+    - **filter_complexity**: Complexity to use when using filters. Default is 0. 0 is strictly invalid if you are
+      using filters.
     - **index_prefix**: The prefix of the index files. Defaults to "ann".
     """
     _assert(
@@ -245,6 +258,10 @@ def build_memory_index(
     _assert_is_nonnegative_uint32(num_pq_bytes, "num_pq_bytes")
     _assert_is_nonnegative_uint32(filter_complexity, "filter_complexity")
     _assert(index_prefix != "", "index_prefix cannot be an empty string")
+    _assert(
+        filter_labels is None or filter_complexity > 0,
+        "if filter_labels is provided, filter_complexity must not be 0"
+    )
 
     index_path = Path(index_directory)
     _assert(
@@ -262,6 +279,11 @@ def build_memory_index(
         )
 
     num_points, dimensions = vectors_metadata_from_file(vector_bin_path)
+    if filter_labels is not None:
+        _assert(
+            len(filter_labels) == num_points,
+            "filter_labels must be the same length as the number of points"
+        )
 
     if vector_dtype_actual == np.uint8:
         _builder = _native_dap.build_memory_uint8_index
@@ -271,6 +293,21 @@ def build_memory_index(
         _builder = _native_dap.build_memory_float_index
 
     index_prefix_path = os.path.join(index_directory, index_prefix)
+
+    filter_labels_file = ""
+    if filter_labels is not None:
+        label_counts = {}
+        filter_labels_file = f"{index_prefix_path}_pylabels.txt"
+        with open(filter_labels_file, "w") as labels_file:
+            for labels in filter_labels:
+                for label in labels:
+                    label_counts[label] = 1 if label not in label_counts else label_counts[label] + 1
+                if len(labels) == 0:
+                    print("default", file=labels_file)
+                else:
+                    print(",".join(labels), file=labels_file)
+        with open(f"{index_prefix_path}_label_metadata.json", "w") as label_metadata_file:
+            json.dump(label_counts, label_metadata_file, indent=True)
 
     if isinstance(tags, str) and tags != "":
         use_tags = True
@@ -299,8 +336,10 @@ def build_memory_index(
         use_pq_build=use_pq_build,
         num_pq_bytes=num_pq_bytes,
         use_opq=use_opq,
-        filter_complexity=filter_complexity,
         use_tags=use_tags,
+        filter_labels_file=filter_labels_file,
+        universal_label=universal_label,
+        filter_complexity=filter_complexity,
     )
 
     _write_index_metadata(
