@@ -55,6 +55,6 @@ int test_cblas_snrm2()
 #else
     printf("cblas_snrm2 result: %f \n\n", result);
 #endif
-    
+
     return 0;
 }
