@@ -4,7 +4,6 @@
 #include <chrono>
 
 // A temporary test just to play with OpenBLAS
-// Source of the sample 
 int main(int argc, char **argv)
 {
     printf("Compute alpha*A*B+beta*C using OpenBLAS cblas_dgemm \n");
@@ -18,7 +17,8 @@ int main(int argc, char **argv)
     std::vector<double> B(k * n);
     std::vector<double> C(m * n);
 
-    cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, m, n, k, alpha, A.data(), lda, B.data(), ldb, beta, C.data(), ldc);
+    cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, m, n, k, alpha, A.data(), lda, B.data(), ldb, beta, C.data(),
+                ldc);
 
     printf("Completed Successfully. \n");
 
