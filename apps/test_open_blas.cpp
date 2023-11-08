@@ -9,6 +9,12 @@
 #include <vector>
 #include <cmath>
 
+#ifdef USE_OPENBLAS
+using Flex_INT = blasint;
+#else
+using Flex_INT = MKL_INT;
+#endif
+
 int test_cblas_snrm2();
 
 int test_cblas_sdot();
@@ -45,11 +51,7 @@ int test_cblas_snrm2()
     printf("Testing test_cblas_snrm2... \n");
     std::vector<float> vectorA{1.4, 2.6, 3.7, 0.45, 12, 100.3};
 
-#ifdef USE_OPENBLAS
-    float result = cblas_snrm2((blasint)vectorA.size(), vectorA.data(), (blasint)1);
-#else
-    float result = cblas_snrm2((MKL_INT)vectorA.size(), vectorA.data(), (MKL_INT)1);
-#endif
+    float result = cblas_snrm2((Flex_INT)vectorA.size(), vectorA.data(), (Flex_INT)1);
 
 #ifdef USE_OPENBLAS
     // Expected result from intelMKL: 101.127167
@@ -75,11 +77,7 @@ int test_cblas_sdot()
     std::vector<float> vectorA{1.4, 2.6, 3.7, 0.45, 12, 100.3};
     std::vector<float> vectorB{201.5, 83, 56.0, 2, 0, 89.5};
 
-#ifdef USE_OPENBLAS
-    float result = cblas_sdot((blasint)vectorA.size(), vectorA.data(), (blasint)1, vectorB.data(), (blasint)1);
-#else
-    float result = cblas_sdot((MKL_INT)vectorA.size(), vectorA.data(), (MKL_INT)1, vectorB.data(), (MKL_INT)1);
-#endif
+    float result = cblas_sdot((Flex_INT)vectorA.size(), vectorA.data(), (Flex_INT)1, vectorB.data(), (Flex_INT)1);
 
 #ifdef USE_OPENBLAS
     // Expected result from intelMKL: 9682.849609
