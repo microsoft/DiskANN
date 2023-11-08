@@ -11,6 +11,8 @@
 
 int test_cblas_snrm2();
 
+int test_cblas_sdot();
+
 // A temporary test just to play with OpenBLAS
 int main(int argc, char **argv)
 {
@@ -21,6 +23,10 @@ int main(int argc, char **argv)
 #endif
 
     auto errorCode = test_cblas_snrm2();
+    if (errorCode == 0)
+    {
+        errorCode = test_cblas_sdot();
+    }
 
     if (errorCode == 0)
     {
@@ -36,6 +42,7 @@ int main(int argc, char **argv)
 
 int test_cblas_snrm2()
 {
+    printf("Testing test_cblas_snrm2... \n");
     std::vector<float> vectorA{1.4, 2.6, 3.7, 0.45, 12, 100.3};
 
 #ifdef USE_OPENBLAS
@@ -56,5 +63,36 @@ int test_cblas_snrm2()
     printf("cblas_snrm2 result: %f \n\n", result);
 #endif
 
+    printf("Completed\n-------------------------\n");
+    return 0;
+}
+
+// NOTE: it seems that cblas_sdot of an exactly identical vectors throws an Exception with openBLAS but not with MKL...
+int test_cblas_sdot()
+{
+    printf("Testing test_cblas_sdot... \n");
+
+    std::vector<float> vectorA{1.4, 2.6, 3.7, 0.45, 12, 100.3};
+    std::vector<float> vectorB{201.5, 83, 56.0, 2, 0, 89.5};
+
+#ifdef USE_OPENBLAS
+    float result = cblas_sdot((blasint)vectorA.size(), vectorA.data(), (blasint)1, vectorB.data(), (blasint)1);
+#else
+    float result = cblas_sdot((MKL_INT)vectorA.size(), vectorA.data(), (MKL_INT)1, vectorB.data(), (MKL_INT)1);
+#endif
+
+#ifdef USE_OPENBLAS
+    // Expected result from intelMKL: 9682.849609
+    if (std::fabs(result - 9682.849609) > 1.0e-4f)
+    {
+        printf("OPEN BLAS value (%f) is not matching with Intel MKL value (9682.849609)... \n\n", result);
+        printf("Validation FAILED :( \n");
+        return 1;
+    }
+#else
+    printf("cblas_sdot result: %f \n\n", result);
+#endif
+
+    printf("Completed\n-------------------------\n");
     return 0;
 }
