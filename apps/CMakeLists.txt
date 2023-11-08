@@ -16,6 +16,10 @@ target_link_libraries(search_memory_index ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} $
 add_executable(build_disk_index build_disk_index.cpp)
 target_link_libraries(build_disk_index ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} ${DISKANN_ASYNC_LIB} Boost::program_options)
 
+add_executable(test_open_blas test_open_blas.cpp)
+target_link_libraries(test_open_blas ${PROJECT_NAME} ${OPENBLAS_LIBRARIES})
+target_include_directories(test_open_blas PRIVATE ${OPENBLAS_INCLUDE_DIR})
+
 add_executable(search_disk_index search_disk_index.cpp)
 target_link_libraries(search_disk_index ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
@@ -37,6 +41,7 @@ if (NOT MSVC)
             range_search_disk_index
             test_streaming_scenario
             test_insert_deletes_consolidate
+            test_open_blas
             RUNTIME
     )
 endif()
