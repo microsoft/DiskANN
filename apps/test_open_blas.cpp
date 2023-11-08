@@ -1,26 +1,60 @@
+#ifdef USE_OPENBLAS
 #include <cblas.h>
+#include <openblas_config.h>
+#else
+#include <mkl.h>
+#endif
+
 #include <stdio.h>
 #include <vector>
-#include <chrono>
+#include <cmath>
+
+int test_cblas_snrm2();
 
 // A temporary test just to play with OpenBLAS
 int main(int argc, char **argv)
 {
-    printf("Compute alpha*A*B+beta*C using OpenBLAS cblas_dgemm \n");
+#ifdef USE_OPENBLAS
+    printf("Using Open BLAS.... \n\n");
+#else
+    printf("Using Intel MKL.... \n\n");
+#endif
 
-    int size = 100;
-    int m = size, k = size, n = size;
-    int lda = size, ldb = size, ldc = size;
-    double alpha = 1.0, beta = 2.0;
+    auto errorCode = test_cblas_snrm2();
 
-    std::vector<double> A(m * k);
-    std::vector<double> B(k * n);
-    std::vector<double> C(m * n);
+    if (errorCode == 0)
+    {
+        printf("\n Completed Successfully. \n");
+    }
+    else
+    {
+        printf("\n Completed With ERRORs. \n");
+    }
 
-    cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans, m, n, k, alpha, A.data(), lda, B.data(), ldb, beta, C.data(),
-                ldc);
+    return errorCode;
+}
 
-    printf("Completed Successfully. \n");
+int test_cblas_snrm2()
+{
+    std::vector<float> vectorA{1.4, 2.6, 3.7, 0.45, 12, 100.3};
 
+#ifdef USE_OPENBLAS
+    float result = cblas_snrm2((blasint)vectorA.size(), vectorA.data(), (blasint)1);
+#else
+    float result = cblas_snrm2((MKL_INT)vectorA.size(), vectorA.data(), (MKL_INT)1);
+#endif
+
+#ifdef USE_OPENBLAS
+    // Expected result from intelMKL: 101.127167
+    if (std::fabs(result - 101.127167) > 1.0e-4f)
+    {
+        printf("OPEN BLAS value (%f) is not matching with Intel MKL value (101.127167)... \n\n", result);
+        printf("Validation FAILED :( \n");
+        return 1;
+    }
+#else
+    printf("cblas_snrm2 result: %f \n\n", result);
+#endif
+    
     return 0;
 }

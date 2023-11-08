@@ -28,10 +28,14 @@ target_link_libraries(test_streaming_scenario ${PROJECT_NAME} ${DISKANN_TOOLS_TC
 add_executable(test_insert_deletes_consolidate test_insert_deletes_consolidate.cpp)
 target_link_libraries(test_insert_deletes_consolidate ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
+add_executable(test_open_blas test_open_blas.cpp)
+target_include_directories(test_open_blas PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
+target_link_libraries(test_open_blas ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES})
 if (MSVC AND USE_OPENBLAS)
-    add_executable(test_open_blas test_open_blas.cpp)
     target_link_libraries(test_open_blas ${PROJECT_NAME} ${OPENBLAS_LIBRARIES})
     target_include_directories(test_open_blas PRIVATE ${OPENBLAS_INCLUDE_DIR})
+    # Comment out the following if you don't want to use OpenBLAS:
+    target_compile_definitions(test_open_blas PRIVATE -DUSE_OPENBLAS)
 endif()
 
 if (NOT MSVC)
