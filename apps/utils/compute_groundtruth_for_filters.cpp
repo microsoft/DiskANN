@@ -78,7 +78,7 @@ void compute_l2sq(float *const points_l2sq, const float *const matrix, const int
 #pragma omp parallel for schedule(static, 65536)
     for (int64_t d = 0; d < num_points; ++d)
         points_l2sq[d] = math_utils::flex_cblas_sdot((int64_t)dim, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1,
-                                    matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1);
+                                                     matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1);
 }
 
 void distsq_to_points(const size_t dim,
