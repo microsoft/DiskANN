@@ -22,7 +22,6 @@ using Flex_INT = int;
 using Flex_INT = MKL_INT;
 #endif
 
-
 float flex_cblas_sdot(const int64_t N, const float *X, const int incX, const float *Y, const int incY) noexcept
 {
 #ifdef USE_OPENBLAS
