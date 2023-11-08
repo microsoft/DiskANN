@@ -4,12 +4,42 @@
 #include <limits>
 #include <malloc.h>
 #include <math_utils.h>
-#include <mkl.h>
 #include "logger.h"
 #include "utils.h"
 
+#ifdef USE_OPENBLAS
+#include <cblas.h>
+#else
+#include <mkl.h>
+#endif
+
 namespace math_utils
 {
+
+#ifdef USE_OPENBLAS
+using Flex_INT = int;
+#else
+using Flex_INT = MKL_INT;
+#endif
+
+
+float flex_cblas_sdot(const int64_t N, const float *X, const int incX, const float *Y, const int incY) noexcept
+{
+#ifdef USE_OPENBLAS
+    return sdot(N, X, incX, Y, incY);
+#else
+    return cblas_sdot(N, X, incX, Y, incY);
+#endif
+}
+
+float flex_cblas_snrm2(const Flex_INT N, const float *X, const Flex_INT incX) noexcept
+{
+#ifdef USE_OPENBLAS
+    return snrm2(N, X, incX);
+#else
+    return cblas_snrm2(N, X, incX);
+#endif
+}
 
 float calc_distance(float *vec_1, float *vec_2, size_t dim)
 {
@@ -29,7 +59,7 @@ void compute_vecs_l2sq(float *vecs_l2sq, float *data, const size_t num_points, c
 #pragma omp parallel for schedule(static, 8192)
     for (int64_t n_iter = 0; n_iter < (int64_t)num_points; n_iter++)
     {
-        vecs_l2sq[n_iter] = cblas_snrm2((MKL_INT)dim, (data + (n_iter * dim)), 1);
+        vecs_l2sq[n_iter] = flex_cblas_snrm2((MKL_INT)dim, (data + (n_iter * dim)), 1);
         vecs_l2sq[n_iter] *= vecs_l2sq[n_iter];
     }
 }

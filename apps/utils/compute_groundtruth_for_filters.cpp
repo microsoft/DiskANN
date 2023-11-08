@@ -29,6 +29,7 @@
 
 #include "filter_utils.h"
 #include "utils.h"
+#include "../../src/math_utils.cpp"
 
 // WORKS FOR UPTO 2 BILLION POINTS (as we use INT INSTEAD OF UNSIGNED)
 
@@ -76,7 +77,7 @@ void compute_l2sq(float *const points_l2sq, const float *const matrix, const int
     assert(points_l2sq != NULL);
 #pragma omp parallel for schedule(static, 65536)
     for (int64_t d = 0; d < num_points; ++d)
-        points_l2sq[d] = cblas_sdot((int64_t)dim, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1,
+        points_l2sq[d] = math_utils::flex_cblas_sdot((int64_t)dim, matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1,
                                     matrix + (ptrdiff_t)d * (ptrdiff_t)dim, 1);
 }
 
