@@ -8,4 +8,5 @@
   <package id="intelopenmp.redist.win" version="2022.0.3.3747" />
   <package id="intelopenmp.devel.win" version="2022.0.3.3747" />
   <package id="intelmkl.static.win-x64" version="2022.0.3.171" />
+  <package id="OpenBLAS" version="0.2.14.1" />
 </packages>

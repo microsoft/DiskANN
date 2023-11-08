@@ -22,7 +22,7 @@ RUN git checkout $GIT_COMMIT_ISH
 RUN bash scripts/dev/install-dev-deps-ubuntu.bash || bash /app/fallback/install-dev-deps-ubuntu.bash
 
 RUN mkdir build
-RUN cmake -S . -B build  -DCMAKE_BUILD_TYPE=Release -DUNIT_TEST=True
+RUN cmake -S . -B build  -DCMAKE_BUILD_TYPE=Release -DUNIT_TEST=True -DUSE_OPENBLAS=True
 RUN cmake --build build -- -j
 
 RUN mkdir /app/logs
