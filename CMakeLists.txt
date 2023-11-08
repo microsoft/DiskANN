@@ -123,26 +123,30 @@ endif()
 include_directories(${Boost_INCLUDE_DIR})
 
 # OPEN BLAS
-# TODO: do this based on a configuration
-list(APPEND CMAKE_PREFIX_PATH "${DISKANN_MSVC_PACKAGES}/OpenBLAS/")
-set(BLA_VENDOR OpenBLAS)
-set(CMAKE_C_FLAGS -fopenmp)
-find_package(BLAS)
-if(NOT BLAS_FOUND)
-    # For some reason, find package doesn't work and it falls back to script below:
-    message("OpenBLAS NOT found using find_package. Add it Manually.")
-    set(OPENBLAS_LIB_PATH "${DISKANN_MSVC_PACKAGES}/OpenBLAS/lib/native/lib/x64")
-    set(OPENBLAS_LIBRARIES "${OPENBLAS_LIB_PATH}/libopenblas.dll.a")
+if (MSVC AND USE_OPENBLAS)
+    # TODO: we have not changed the code yet, so we still use IntelMKL for now, but also build and link OpenBLAS
+    message("Using OpenBLAS instead of IntelMKL.")
 
-    set(OPENBLAS_INCLUDE_DIR "${DISKANN_MSVC_PACKAGES}/OpenBLAS/lib/native/include")
-    include_directories(${OPENBLAS_INCLUDE_DIR})
+    list(APPEND CMAKE_PREFIX_PATH "${DISKANN_MSVC_PACKAGES}/OpenBLAS/")
+    set(BLA_VENDOR OpenBLAS)
+    set(CMAKE_C_FLAGS -fopenmp)
+    find_package(BLAS)
+    if(NOT BLAS_FOUND)
+        # For some reason, find package doesn't work and it falls back to script below:
+        message("OpenBLAS NOT found using find_package. Add it Manually.")
+        set(OPENBLAS_LIB_PATH "${DISKANN_MSVC_PACKAGES}/OpenBLAS/lib/native/lib/x64")
+        set(OPENBLAS_LIBRARIES "${OPENBLAS_LIB_PATH}/libopenblas.dll.a")
 
-    set(OPENBLAS_DLL_PATH "${DISKANN_MSVC_PACKAGES}/OpenBLAS/lib/native/bin/x64")
-    set(OPENBLAS_RUNTIME_DLLS
-        "${OPENBLAS_DLL_PATH}/libgcc_s_seh-1.dll"
-        "${OPENBLAS_DLL_PATH}/libgfortran-3.dll"
-        "${OPENBLAS_DLL_PATH}/libopenblas.dll"
-        "${OPENBLAS_DLL_PATH}/libquadmath-0.dll")
+        set(OPENBLAS_INCLUDE_DIR "${DISKANN_MSVC_PACKAGES}/OpenBLAS/lib/native/include")
+        include_directories(${OPENBLAS_INCLUDE_DIR})
+
+        set(OPENBLAS_DLL_PATH "${DISKANN_MSVC_PACKAGES}/OpenBLAS/lib/native/bin/x64")
+        set(OPENBLAS_RUNTIME_DLLS
+            "${OPENBLAS_DLL_PATH}/libgcc_s_seh-1.dll"
+            "${OPENBLAS_DLL_PATH}/libgfortran-3.dll"
+            "${OPENBLAS_DLL_PATH}/libopenblas.dll"
+            "${OPENBLAS_DLL_PATH}/libquadmath-0.dll")
+    endif()
 endif()
 
 #MKL Config
