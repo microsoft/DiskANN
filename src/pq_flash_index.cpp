@@ -1777,7 +1777,7 @@ template <typename T, typename LabelT> std::uint64_t PQFlashIndex<T, LabelT>::ge
 }
 
 template <typename T, typename LabelT>
-size_t PQFlashIndex<T, LabelT>::search_string_range(const std::string& str, char ch, size_t start, size_t end)
+size_t PQFlashIndex<T, LabelT>::search_string_range(const std::string &str, char ch, size_t start, size_t end)
 {
     for (; start != end; start++)
     {
