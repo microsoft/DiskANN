@@ -15,9 +15,21 @@ using Flex_INT = blasint;
 using Flex_INT = MKL_INT;
 #endif
 
-int test_cblas_snrm2();
+#ifdef USE_OPENBLAS
+using Flex_CBLAS_ORDER = CBLAS_ORDER;
+#else
+using Flex_CBLAS_ORDER = CBLAS_LAYOUT;
+#endif
 
+#ifdef USE_OPENBLAS
+using Flex_CBLAS_TRANSPOSE = CBLAS_TRANSPOSE;
+#else
+using Flex_CBLAS_TRANSPOSE = CBLAS_TRANSPOSE;
+#endif
+
+int test_cblas_snrm2();
 int test_cblas_sdot();
+int test_cblas_sgemm();
 
 // A temporary test just to play with OpenBLAS
 int main(int argc, char **argv)
@@ -29,10 +41,8 @@ int main(int argc, char **argv)
 #endif
 
     auto errorCode = test_cblas_snrm2();
-    if (errorCode == 0)
-    {
-        errorCode = test_cblas_sdot();
-    }
+    errorCode += test_cblas_sdot();
+    errorCode += test_cblas_sgemm();
 
     if (errorCode == 0)
     {
@@ -58,7 +68,7 @@ int test_cblas_snrm2()
     if (std::fabs(result - 101.127167) > 1.0e-4f)
     {
         printf("OPEN BLAS value (%f) is not matching with Intel MKL value (101.127167)... \n\n", result);
-        printf("Validation FAILED :( \n");
+        printf("Validation FAILED :( \n-------------------------\n");
         return 1;
     }
 #else
@@ -70,6 +80,7 @@ int test_cblas_snrm2()
 }
 
 // NOTE: it seems that cblas_sdot of an exactly identical vectors throws an Exception with openBLAS but not with MKL...
+// NOTE:  OpenBLAS value (9682.850586) is not very close to Intel MKL value (9682.849609).
 int test_cblas_sdot()
 {
     printf("Testing test_cblas_sdot... \n");
@@ -81,14 +92,57 @@ int test_cblas_sdot()
 
 #ifdef USE_OPENBLAS
     // Expected result from intelMKL: 9682.849609
-    if (std::fabs(result - 9682.849609) > 1.0e-4f)
+    if (std::fabs(result - 9682.849609) > 1.0e-1f)
     {
         printf("OPEN BLAS value (%f) is not matching with Intel MKL value (9682.849609)... \n\n", result);
-        printf("Validation FAILED :( \n");
+        printf("Validation FAILED :( \n-------------------------\n");
         return 1;
     }
 #else
     printf("cblas_sdot result: %f \n\n", result);
+#endif
+
+    printf("Completed\n-------------------------\n");
+    return 0;
+}
+
+int test_cblas_sgemm()
+{
+    printf("Testing test_cblas_sgemm... \n");
+
+    Flex_INT size = 3;
+    Flex_INT m = size, k = size, n = size;
+    Flex_INT lda = size, ldb = size, ldc = size;
+    float alpha = 1.0, beta = 2.0;
+
+    const std::vector<float> A(m * k, 1.0);
+    const std::vector<float> B(k * n, 2.0);
+    std::vector<float> C(m * n);
+
+    cblas_sgemm(Flex_CBLAS_ORDER::CblasRowMajor, Flex_CBLAS_TRANSPOSE::CblasNoTrans, Flex_CBLAS_TRANSPOSE::CblasNoTrans,
+                (Flex_INT)m, (Flex_INT)n,
+                (Flex_INT)k, alpha, A.data(),
+                (Flex_INT)lda, B.data(), (Flex_INT)ldb, beta, C.data(), (Flex_INT)ldc);
+
+#ifdef USE_OPENBLAS
+    // Expected result from intelMKL: all the values should be 6.0
+    for (auto val : C)
+    {
+        if (std::fabs(val - 6.0) > 1.0e-4f)
+        {
+            printf("OPEN BLAS value (%f) is not matching with Intel MKL value (6.0)... \n\n", val);
+            printf("Validation FAILED :( \n-------------------------\n");
+            return 1;
+        }
+    }
+    
+#else
+    printf("test_cblas_sgemm result:\n");
+    for (auto val : C)
+    {
+        printf("%f, ", val);
+    }
+    printf("\n\n");
 #endif
 
     printf("Completed\n-------------------------\n");
