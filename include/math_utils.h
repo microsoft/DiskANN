@@ -8,6 +8,8 @@
 
 namespace math_utils
 {
+float flex_cblas_snrm2(const int64_t N, const float *X, const int64_t incX) noexcept;
+float flex_cblas_sdot(const int64_t N, const float *X, const int incX, const float *Y, const int incY) noexcept;
 
 float calc_distance(float *vec_1, float *vec_2, size_t dim);
 

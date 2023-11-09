@@ -31,12 +31,12 @@ float flex_cblas_sdot(const int64_t N, const float *X, const int incX, const flo
 #endif
 }
 
-float flex_cblas_snrm2(const Flex_INT N, const float *X, const Flex_INT incX) noexcept
+float flex_cblas_snrm2(const int64_t N, const float *X, const int64_t incX) noexcept
 {
 #ifdef USE_OPENBLAS
     return snrm2(N, X, incX);
 #else
-    return cblas_snrm2(N, X, incX);
+    return cblas_snrm2(static_cast<Flex_INT>(N), X, static_cast<Flex_INT>(incX));
 #endif
 }
 
@@ -58,7 +58,7 @@ void compute_vecs_l2sq(float *vecs_l2sq, float *data, const size_t num_points, c
 #pragma omp parallel for schedule(static, 8192)
     for (int64_t n_iter = 0; n_iter < (int64_t)num_points; n_iter++)
     {
-        vecs_l2sq[n_iter] = flex_cblas_snrm2((MKL_INT)dim, (data + (n_iter * dim)), 1);
+        vecs_l2sq[n_iter] = flex_cblas_snrm2(dim, (data + (n_iter * dim)), 1);
         vecs_l2sq[n_iter] *= vecs_l2sq[n_iter];
     }
 }

@@ -21,12 +21,6 @@
 #include <tsl/robin_map.h>
 #include <tsl/robin_set.h>
 
-#ifdef _WINDOWS
-#include <malloc.h>
-#else
-#include <stdlib.h>
-#endif
-
 #include "filter_utils.h"
 #include "utils.h"
 #include "../../src/math_utils.cpp"
