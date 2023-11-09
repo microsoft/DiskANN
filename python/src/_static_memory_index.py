@@ -82,7 +82,7 @@ class StaticMemoryIndex:
         self._labels_metadata = {}
         if enable_filters:
             try:
-                with open(index_prefix_path + "_labels_map.txt", "r") as labels_map_if:
+                with open(f"{index_prefix_path}_labels_map.txt", "r") as labels_map_if:
                     for line in labels_map_if:
                         (key, val) = line.split("\t")
                         self._labels_map[key] = int(val)
