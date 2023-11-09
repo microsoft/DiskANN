@@ -79,9 +79,9 @@ class StaticDiskIndex:
           does not exist, you are required to provide it.
         - **index_prefix**: The prefix of the index files. Defaults to "ann".
         """
-        index_prefix = _valid_index_prefix(index_directory, index_prefix)
+        index_prefix_path = _valid_index_prefix(index_directory, index_prefix)
         vector_dtype, metric, _, _ = _ensure_index_metadata(
-            index_prefix,
+            index_prefix_path,
             vector_dtype,
             distance_metric,
             1,  # it doesn't matter because we don't need it in this context anyway
@@ -101,7 +101,7 @@ class StaticDiskIndex:
             _index = _native_dap.StaticDiskFloatIndex
         self._index = _index(
             distance_metric=dap_metric,
-            index_path_prefix=index_prefix,
+            index_path_prefix=index_prefix_path,
             num_threads=num_threads,
             num_nodes_to_cache=num_nodes_to_cache,
             cache_mechanism=cache_mechanism,
