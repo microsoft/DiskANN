@@ -614,7 +614,7 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &fileCon
         size_t next_lbl_pos = 0;
         while (lbl_pos < next_pos && lbl_pos != std::string::npos)
         {
-            next_lbl_pos = fileContent.find(',', lbl_pos);
+            next_lbl_pos = search_string_range(fileContent, ',', lbl_pos, next_pos);
             if (next_lbl_pos == std::string::npos) // the last label
             {
                 next_lbl_pos = next_pos;
@@ -698,7 +698,7 @@ void PQFlashIndex<T, LabelT>::parse_label_file(const std::string &label_file, si
         size_t next_lbl_pos = 0;
         while (lbl_pos < next_pos && lbl_pos != std::string::npos)
         {
-            next_lbl_pos = buffer.find(',', lbl_pos);
+            next_lbl_pos = search_string_range(buffer, ',', lbl_pos, next_pos);
             if (next_lbl_pos == std::string::npos) // the last label in the whole file
             {
                 next_lbl_pos = next_pos;
@@ -1671,6 +1671,20 @@ template <typename T, typename LabelT> uint64_t PQFlashIndex<T, LabelT>::get_dat
 template <typename T, typename LabelT> diskann::Metric PQFlashIndex<T, LabelT>::get_metric()
 {
     return this->metric;
+}
+
+template <typename T, typename LabelT>
+size_t PQFlashIndex<T, LabelT>::search_string_range(const std::string& str, char ch, size_t start, size_t end)
+{
+    for (; start != end; start++)
+    {
+        if (str[start] == ch)
+        {
+            return start;
+        }
+    }
+
+    return std::string::npos;
 }
 
 #ifdef EXEC_ENV_OLS
