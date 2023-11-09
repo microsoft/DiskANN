@@ -13,5 +13,5 @@ WORKDIR /app
 RUN git clone https://github.com/microsoft/DiskANN.git 
 WORKDIR /app/DiskANN
 RUN mkdir build
-RUN cmake -S . -B build  -DCMAKE_BUILD_TYPE=Release -DUNIT_TEST=True -DUSE_OPENBLAS=True
+RUN cmake -S . -B build  -DCMAKE_BUILD_TYPE=Release -DUNIT_TEST=True
 RUN cmake --build build -- -j
