@@ -13,12 +13,16 @@ namespace math_utils {
   // compute l2-squared norms of data stored in row major num_points * dim,
   // needs
   // to be pre-allocated
-  void compute_vecs_l2sq(float* vecs_l2sq, float* data, const size_t num_points,
+  void compute_vecs_l2sq(float* vecs_l2sq, const float* data, const size_t num_points,
                          const size_t dim);
 
   void rotate_data_randomly(float* data, size_t num_points, size_t dim,
                             float* rot_mat, float*& new_mat,
                             bool transpose_rot = false);
+
+  DISKANN_DLLEXPORT std::unique_ptr<float[]> compute_all_distances(
+      const float* const points, const size_t num_points, const size_t dim,
+      const float* const centers, const size_t num_centers);
 
   // calculate closest center to data of num_points * dim (row major)
   // centers is num_centers * dim (row major)

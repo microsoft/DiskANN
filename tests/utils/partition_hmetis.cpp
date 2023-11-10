@@ -250,7 +250,8 @@ int aux_main(const std::string &input_file,
              const std::string& query_file, const std::string& gt_file,
              const std::string& hmetis_file, const std::string& mode,
              const unsigned K, const unsigned query_fanout,
-             const unsigned num_subcentroids) {
+             const unsigned num_subcentroids,
+             const float sigma) {
 
     // load dataset
     // TODO for later: handle datasets that don't fit in memory
@@ -286,7 +287,7 @@ int aux_main(const std::string &input_file,
 	  points_routed_to_shard[shard_of_point[point_id]].push_back(point_id);
 	}
 
-
+    
     // write shards to disk
     diskann::cout << "Writing shards to disk..." << std::endl;
     int ret = write_shards_to_disk<T>(output_file_prefix, false, points.get(),
@@ -640,6 +641,55 @@ int aux_main(const std::string &input_file,
                          "approximation by MULTIcentroids"
                       << std::endl;
 
+      } else if (mode == "exact_kde") {
+
+          // compute distances from each query to each point
+          // (we're doing worse than brute force, but it's just an experiment)
+          std::unique_ptr<float[]> queries_float =
+            std::make_unique<float[]>(num_queries * dim);
+          diskann::convert_types<T, float>(queries.get(), queries_float.get(),
+                                         num_queries, dim);
+          // now do the same with the points
+          std::unique_ptr<float[]> points_float =
+			std::make_unique<float[]>(num_points * dim);
+          diskann::convert_types<T, float>(points.get(), points_float.get(),
+										 num_points, dim);
+
+          constexpr size_t num_queries_per_batch = 100;
+          for (size_t query_from = 0; query_from < num_queries;
+               query_from += num_queries_per_batch) {
+              const size_t query_to =
+				std::min(query_from + num_queries_per_batch, num_queries);
+              std::unique_ptr<float[]> distances_for_batch =
+                math_utils::compute_all_distances(
+                  queries_float.get() + query_from * dim, query_to - query_from,
+                  dim, points_float.get(), num_points);
+              for (size_t query_id = query_from; query_id < query_to; ++query_id) {
+				query_to_shards.emplace_back();
+                // compute exact KDE values for each shard
+                std::vector<std::pair<float, size_t>> shards_with_scores;
+                for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
+				  // compute score (KDE) of shard_id for query_id
+				  float kde = 0.0;
+                  const float *distances_for_this_query =
+					distances_for_batch.get() + (query_id - query_from) * num_points;
+                  for (const uint32_t point_id : points_routed_to_shard[shard_id]) {
+                    const float dist = distances_for_this_query[point_id];
+					kde += exp(-dist * dist / (2 * sigma * sigma));
+				  }
+				  shards_with_scores.emplace_back(-kde, shard_id);
+				}
+				sort(shards_with_scores.begin(), shards_with_scores.end());
+                for (int i = 0; i < num_shards; ++i) {
+				  const size_t shard_id = shards_with_scores[i].second;
+                  query_to_shards[query_id].emplace_back(
+                      shard_id, shard_to_count_of_GT_pts[query_id][shard_id]);
+                  // shard_to_count_of_GT_pts[query_id][shard_id] will be(come)
+                  // 0 if wasn't present
+                }
+			  }
+          }
+
       } else {
         diskann::cout << "unsupported mode?" << std::endl;
         return -1;
@@ -690,7 +740,7 @@ int aux_main(const std::string &input_file,
                       << std::endl;
 
         // 2. histogram of fanouts
-        const size_t max_interesting_fanout =
+        const size_t max_interesting_fanout = num_shards < 100 ? num_shards : K < 100 ? 100 :
             (mode == "from_ground_truth") ? K : 1.5 * K;
         std::vector<size_t> num_queries_with_fanout(max_interesting_fanout + 1,
                                                     0);
@@ -771,6 +821,7 @@ int aux_main(const std::string &input_file,
 int main(int argc, char** argv) {
   std::string input_file, output_file_prefix, query_file, gt_file, hmetis_file, mode;
   unsigned K, query_fanout, num_subcentroids;
+  float sigma; // for exact_kde
 
   std::string data_type;
 
@@ -796,7 +847,7 @@ int main(int argc, char** argv) {
                              std::string("centroids")),
                          "How to route queries to shards (from_ground_truth / "
                          "centroids / multicentroids / multicentroids-random / "
-                         "multicentroids-neighbors / geomedian)");
+                         "multicentroids-neighbors / geomedian / exact_kde)");
       desc.add_options()("K,recall_at", po::value<unsigned>(&K)->default_value(0),
                          "Number of points returned per query");
       desc.add_options()(
@@ -814,6 +865,9 @@ int main(int argc, char** argv) {
       desc.add_options()("num_subcentroids",
                          po::value<unsigned>(&num_subcentroids)->default_value(0),
                          "The number of subcentroids (for multicentroids modes)");
+      desc.add_options()("sigma",
+						 po::value<float>(&sigma)->default_value(-1.0),
+						 "sigma for exact_kde");
     
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -836,10 +890,10 @@ int main(int argc, char** argv) {
 
   if (mode != "centroids" && mode != "multicentroids" && mode != "geomedian" &&
       mode != "from_ground_truth" && mode != "multicentroids-random" &&
-      mode != "multicentroids-neighbors") {
+      mode != "multicentroids-neighbors" && mode != "exact_kde") {
     diskann::cout
         << "mode must be centroids, multicentroids, multicentroids-random, "
-           "multicentroids-neighbors, geomedian or "
+           "multicentroids-neighbors, geomedian, exact_kde, or "
            "from_ground_truth"
         << std::endl;
     return -1;
@@ -865,19 +919,24 @@ int main(int argc, char** argv) {
 	return -1;
   }
 
+  if (mode == "exact_kde" && sigma < 0) {
+	diskann::cout << "if exact_kde mode, must specify sigma" << std::endl;
+	return -1;
+  }
+
   try {
     if (data_type == std::string("float")) {
       return aux_main<float>(input_file, output_file_prefix, query_file,
                              gt_file, hmetis_file, mode, K, query_fanout,
-                             num_subcentroids);
+                             num_subcentroids, sigma);
     } else if (data_type == std::string("int8")) {
       return aux_main<int8_t>(input_file, output_file_prefix, query_file,
                               gt_file, hmetis_file, mode, K, query_fanout,
-                              num_subcentroids);
+                              num_subcentroids, sigma);
     } else if (data_type == std::string("uint8")) {
       return aux_main<uint8_t>(input_file, output_file_prefix, query_file,
                                gt_file, hmetis_file, mode, K, query_fanout,
-                               num_subcentroids);
+                               num_subcentroids, sigma);
     } else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;

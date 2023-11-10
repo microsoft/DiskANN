@@ -21,7 +21,7 @@ namespace math_utils {
   // compute l2-squared norms of data stored in row major num_points * dim,
   // needs
   // to be pre-allocated
-  void compute_vecs_l2sq(float* vecs_l2sq, float* data, const size_t num_points,
+  void compute_vecs_l2sq(float* vecs_l2sq, const float* data, const size_t num_points,
                          const size_t dim) {
 #pragma omp parallel for schedule(static, 8192)
     for (int64_t n_iter = 0; n_iter < (_s64) num_points; n_iter++) {
@@ -198,6 +198,52 @@ namespace math_utils {
     if (!is_norm_given_for_pts)
       delete[] pts_norms_squared;
   }
+
+  std::unique_ptr<float[]> compute_all_distances(
+      const float* const points, const size_t num_points, const size_t dim,
+      const float* const centers, const size_t num_centers) {
+
+    float* centers_l2sq = new float[num_centers];
+    float* pts_l2sq = new float[num_points];
+
+    compute_vecs_l2sq(pts_l2sq, points, num_points, dim);
+    compute_vecs_l2sq(centers_l2sq, centers, num_centers, dim);
+
+    float* ones_a = new float[num_centers];
+    float* ones_b = new float[num_points];
+
+    for (size_t i = 0; i < num_centers; i++) {
+      ones_a[i] = 1.0;
+    }
+    for (size_t i = 0; i < num_points; i++) {
+      ones_b[i] = 1.0;
+    }
+
+    std::unique_ptr<float[]> dist_matrix = std::make_unique<float[]>(
+		num_points * num_centers);
+
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
+                (MKL_INT) num_centers, (MKL_INT) 1, 1.0f, pts_l2sq,
+                (MKL_INT) 1, ones_a, (MKL_INT) 1, 0.0f, dist_matrix.get(),
+                (MKL_INT) num_centers);
+
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
+                (MKL_INT) num_centers, (MKL_INT) 1, 1.0f, ones_b, (MKL_INT) 1,
+                centers_l2sq, (MKL_INT) 1, 1.0f, dist_matrix.get(),
+                (MKL_INT) num_centers);
+
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT) num_points,
+                (MKL_INT) num_centers, (MKL_INT) dim, -2.0f, points,
+                (MKL_INT) dim, centers, (MKL_INT) dim, 1.0f, dist_matrix.get(),
+                (MKL_INT) num_centers);
+
+    delete[] ones_a;
+    delete[] ones_b;
+    delete[] centers_l2sq;
+    delete[] pts_l2sq;
+    return dist_matrix;
+  }
+
 
   // if to_subtract is 1, will subtract nearest center from each row. Else will
   // add. Output will be in data_load iself.
