@@ -11,6 +11,17 @@
 
 namespace po = boost::program_options;
 
+float sample_random_number(bool normal) {
+  constexpr unsigned                           seed = 3500;  // lucky seed
+  static std::mt19937                          generator(seed);
+  static std::uniform_real_distribution<float> uniform_distribution(0, 1);
+  static std::normal_distribution<float>       normal_distribution(0, 1);
+  if (!normal)
+    return uniform_distribution(generator);
+  else
+    return normal_distribution(generator);
+}
+
 void assign_junk(const size_t dim, float* centroid) {
   for (int i = 0; i < dim; ++i) {
 	centroid[i] = 1e15;  // give it some stupid centroid
@@ -251,7 +262,8 @@ int aux_main(const std::string &input_file,
              const std::string& hmetis_file, const std::string& mode,
              const unsigned K, const unsigned query_fanout,
              const unsigned num_subcentroids,
-             const float sigma) {
+             const float kde_sigma,
+             const float kde_subsampling_rate) {
 
     // load dataset
     // TODO for later: handle datasets that don't fit in memory
@@ -286,6 +298,16 @@ int aux_main(const std::string &input_file,
     for (size_t point_id = 0; point_id < num_points; ++point_id) {
 	  points_routed_to_shard[shard_of_point[point_id]].push_back(point_id);
 	}
+
+    std::vector<std::vector<uint32_t>> points_routed_to_shard_subsampled(
+        num_shards); // subsampled for KDE
+    for (size_t shard_id = 0; shard_id < num_shards; ++shard_id) {
+      for (const uint32_t point_id : points_routed_to_shard[shard_id]) {
+        if (sample_random_number(false) < kde_subsampling_rate) {
+		  points_routed_to_shard_subsampled[shard_id].push_back(point_id);
+		}
+	  }
+    }
 
     
     // write shards to disk
@@ -641,7 +663,9 @@ int aux_main(const std::string &input_file,
                          "approximation by MULTIcentroids"
                       << std::endl;
 
-      } else if (mode == "exact_kde") {
+      } else if (mode == "kde") {
+
+          // this could be made WAY more efficient for small subsampling rates
 
           // compute distances from each query to each point
           // (we're doing worse than brute force, but it's just an experiment)
@@ -673,9 +697,15 @@ int aux_main(const std::string &input_file,
 				  float kde = 0.0;
                   const float *distances_for_this_query =
 					distances_for_batch.get() + (query_id - query_from) * num_points;
-                  for (const uint32_t point_id : points_routed_to_shard[shard_id]) {
+                  for (const uint32_t point_id :
+                       points_routed_to_shard_subsampled[shard_id]) {
                     const float dist = distances_for_this_query[point_id];
-					kde += exp(-dist * dist / (2 * sigma * sigma));
+                    kde += exp(-dist * dist / (2 * kde_sigma * kde_sigma));
+                  }
+                  if (!points_routed_to_shard_subsampled[shard_id].empty()) {
+                    // normalize a bit
+					kde /= points_routed_to_shard_subsampled[shard_id].size();
+                    kde *= points_routed_to_shard[shard_id].size();
 				  }
 				  shards_with_scores.emplace_back(-kde, shard_id);
 				}
@@ -821,7 +851,7 @@ int aux_main(const std::string &input_file,
 int main(int argc, char** argv) {
   std::string input_file, output_file_prefix, query_file, gt_file, hmetis_file, mode;
   unsigned K, query_fanout, num_subcentroids;
-  float sigma; // for exact_kde
+  float kde_sigma, kde_subsampling_rate; // for kde
 
   std::string data_type;
 
@@ -847,7 +877,7 @@ int main(int argc, char** argv) {
                              std::string("centroids")),
                          "How to route queries to shards (from_ground_truth / "
                          "centroids / multicentroids / multicentroids-random / "
-                         "multicentroids-neighbors / geomedian / exact_kde)");
+                         "multicentroids-neighbors / geomedian / kde)");
       desc.add_options()("K,recall_at", po::value<unsigned>(&K)->default_value(0),
                          "Number of points returned per query");
       desc.add_options()(
@@ -865,9 +895,12 @@ int main(int argc, char** argv) {
       desc.add_options()("num_subcentroids",
                          po::value<unsigned>(&num_subcentroids)->default_value(0),
                          "The number of subcentroids (for multicentroids modes)");
-      desc.add_options()("sigma",
-						 po::value<float>(&sigma)->default_value(-1.0),
-						 "sigma for exact_kde");
+      desc.add_options()("kde_sigma",
+						 po::value<float>(&kde_sigma)->default_value(-1.0),
+						 "sigma for kde");
+      desc.add_options()("kde_subsampling_rate",
+                         po::value<float>(&kde_subsampling_rate)->default_value(1.0),
+                         "kde subsampling rate");
     
     po::variables_map vm;
     po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -890,10 +923,10 @@ int main(int argc, char** argv) {
 
   if (mode != "centroids" && mode != "multicentroids" && mode != "geomedian" &&
       mode != "from_ground_truth" && mode != "multicentroids-random" &&
-      mode != "multicentroids-neighbors" && mode != "exact_kde") {
+      mode != "multicentroids-neighbors" && mode != "kde") {
     diskann::cout
         << "mode must be centroids, multicentroids, multicentroids-random, "
-           "multicentroids-neighbors, geomedian, exact_kde, or "
+           "multicentroids-neighbors, geomedian, kde, or "
            "from_ground_truth"
         << std::endl;
     return -1;
@@ -919,8 +952,8 @@ int main(int argc, char** argv) {
 	return -1;
   }
 
-  if (mode == "exact_kde" && sigma < 0) {
-	diskann::cout << "if exact_kde mode, must specify sigma" << std::endl;
+  if (mode == "kde" && kde_sigma < 0) {
+	diskann::cout << "if kde mode, must specify kde_sigma" << std::endl;
 	return -1;
   }
 
@@ -928,15 +961,17 @@ int main(int argc, char** argv) {
     if (data_type == std::string("float")) {
       return aux_main<float>(input_file, output_file_prefix, query_file,
                              gt_file, hmetis_file, mode, K, query_fanout,
-                             num_subcentroids, sigma);
+                             num_subcentroids, kde_sigma, kde_subsampling_rate);
     } else if (data_type == std::string("int8")) {
       return aux_main<int8_t>(input_file, output_file_prefix, query_file,
                               gt_file, hmetis_file, mode, K, query_fanout,
-                              num_subcentroids, sigma);
+                              num_subcentroids, kde_sigma,
+                              kde_subsampling_rate);
     } else if (data_type == std::string("uint8")) {
       return aux_main<uint8_t>(input_file, output_file_prefix, query_file,
                                gt_file, hmetis_file, mode, K, query_fanout,
-                               num_subcentroids, sigma);
+                               num_subcentroids, kde_sigma,
+                               kde_subsampling_rate);
     } else {
       std::cerr << "Unsupported data type. Use float or int8 or uint8"
                 << std::endl;
