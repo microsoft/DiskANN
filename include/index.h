@@ -28,6 +28,14 @@
 
 namespace diskann
 {
+// This struct is used for storing metadata for save_as_one_file version 1.
+struct SaveLoadMetaDataV1
+{
+    uint64_t data_offset;
+    uint64_t delete_list_offset;
+    uint64_t tags_offset;
+    uint64_t graph_offset;
+};
 
 inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree)
 {
@@ -57,7 +65,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const size_t num_frozen_pts = 0, const bool dynamic_index = false,
                             const bool enable_tags = false, const bool concurrent_consolidate = false,
                             const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false, const bool filtered_index = false);
+                            const bool use_opq = false, const bool filtered_index = false,
+                            bool save_as_one_file = false, uint64_t save_as_one_file_version = 1);
 
     DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store,
                             std::unique_ptr<AbstractGraphStore> graph_store);
@@ -313,15 +322,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t save_tags(std::string filename);
     DISKANN_DLLEXPORT size_t save_delete_list(const std::string &filename);
 #ifdef EXEC_ENV_OLS
-    DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader, size_t expected_num_points);
-    DISKANN_DLLEXPORT size_t load_data(AlignedFileReader &reader);
-    DISKANN_DLLEXPORT size_t load_tags(AlignedFileReader &reader);
-    DISKANN_DLLEXPORT size_t load_delete_set(AlignedFileReader &reader);
+    DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader, size_t expected_num_points, size_t offset = 0);
+    DISKANN_DLLEXPORT size_t load_data(AlignedFileReader &reader, size_t offset = 0);
+    DISKANN_DLLEXPORT size_t load_tags(AlignedFileReader &reader, size_t offset = 0);
+    DISKANN_DLLEXPORT size_t load_delete_set(AlignedFileReader &reader, size_t offset = 0);
 #else
-    DISKANN_DLLEXPORT size_t load_graph(const std::string filename, size_t expected_num_points);
-    DISKANN_DLLEXPORT size_t load_data(std::string filename0);
-    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
-    DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
+    DISKANN_DLLEXPORT size_t load_graph(const std::string filename, size_t expected_num_points, size_t offset = 0);
+    DISKANN_DLLEXPORT size_t load_data(std::string filename, size_t offset = 0);
+    DISKANN_DLLEXPORT size_t load_tags(const std::string &filename, size_t offset = 0);
+    DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename, size_t offset = 0);
 #endif
 
   private:
@@ -360,7 +369,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     bool _has_built = false;
     bool _saturate_graph = false;
-    bool _save_as_one_file = false; // plan to support in next version
+    bool _save_as_one_file; // plan to support filtered index in next version.
+    uint64_t _save_as_one_file_version; // Version used for save index as single file.
     bool _dynamic_index = false;
     bool _enable_tags = false;
     bool _normalize_vecs = false; // Using normalied L2 for cosine.

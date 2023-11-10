@@ -719,8 +719,16 @@ inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t
 {
     std::ofstream writer;
     open_file_to_write(writer, filename);
+    diskann::cout << "Writing bin file: " << filename.c_str() << std::endl;
+    size_t bytes_written = save_bin<T>(writer, data, npts, ndims, offset);
+    writer.close();
+    diskann::cout << "Close file " << filename << "." << std::endl;
+    return bytes_written;
+}
 
-    diskann::cout << "Writing bin: " << filename.c_str() << std::endl;
+template <typename T>
+inline size_t save_bin(std::ofstream &writer, T *data, size_t npts, size_t ndims, size_t offset)
+{
     writer.seekp(offset, writer.beg);
     int npts_i32 = (int)npts, ndims_i32 = (int)ndims;
     size_t bytes_written = npts * ndims * sizeof(T) + 2 * sizeof(uint32_t);
@@ -730,7 +738,6 @@ inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t
                   << std::endl;
 
     writer.write((char *)data, npts * ndims * sizeof(T));
-    writer.close();
     diskann::cout << "Finished writing bin." << std::endl;
     return bytes_written;
 }
@@ -944,6 +951,16 @@ inline size_t save_data_in_base_dimensions(const std::string &filename, T *data,
 {
     std::ofstream writer; //(filename, std::ios::binary | std::ios::out);
     open_file_to_write(writer, filename);
+    size_t file_size = save_data_in_base_dimensions(writer, data, npts, ndims, aligned_dim, offset);
+    writer.close();
+
+    return file_size;
+}
+
+template <typename T>
+inline size_t save_data_in_base_dimensions(std::ofstream &writer, T *data, size_t npts, size_t ndims,
+                                           size_t aligned_dim, size_t offset)
+{
     int npts_i32 = (int)npts, ndims_i32 = (int)ndims;
     size_t bytes_written = 2 * sizeof(uint32_t) + npts * ndims * sizeof(T);
     writer.seekp(offset, writer.beg);
@@ -953,7 +970,6 @@ inline size_t save_data_in_base_dimensions(const std::string &filename, T *data,
     {
         writer.write((char *)(data + i * aligned_dim), ndims * sizeof(T));
     }
-    writer.close();
     return bytes_written;
 }
 
@@ -968,11 +984,12 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
         throw diskann::ANNException("Null pointer passed to copy_aligned_data_from_file function", -1, __FUNCSIG__,
                                     __FILE__, __LINE__);
     }
+
     std::ifstream reader;
     reader.exceptions(std::ios::badbit | std::ios::failbit);
     reader.open(bin_file, std::ios::binary);
-    reader.seekg(offset, reader.beg);
 
+    reader.seekg(offset, reader.beg);
     int npts_i32, dim_i32;
     reader.read((char *)&npts_i32, sizeof(int));
     reader.read((char *)&dim_i32, sizeof(int));

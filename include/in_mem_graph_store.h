@@ -15,10 +15,11 @@ class InMemGraphStore : public AbstractGraphStore
 
     // returns tuple of <nodes_read, start, num_frozen_points>
     virtual std::tuple<uint32_t, uint32_t, size_t> load(const std::string &index_path_prefix,
-                                                        const size_t num_points) override;
+                                                        const size_t num_points, size_t offset) override;
     virtual int store(const std::string &index_path_prefix, const size_t num_points, const size_t num_frozen_points,
                       const uint32_t start) override;
-
+    virtual int store(std::ofstream &writer, const size_t num_points, const size_t num_fz_points, const uint32_t start,
+                      size_t offset) override;
     virtual const std::vector<location_t> &get_neighbours(const location_t i) const override;
     virtual void add_neighbour(const location_t i, location_t neighbour_id) override;
     virtual void clear_neighbours(const location_t i) override;
@@ -33,13 +34,13 @@ class InMemGraphStore : public AbstractGraphStore
     virtual uint32_t get_max_observed_degree() override;
 
   protected:
-    virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(const std::string &filename, size_t expected_num_points);
+    virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(const std::string &filename, size_t expected_num_points, size_t offset);
 #ifdef EXEC_ENV_OLS
-    virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(AlignedFileReader &reader, size_t expected_num_points);
+    virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(AlignedFileReader &reader, size_t expected_num_points, size_t offset);
 #endif
 
-    int save_graph(const std::string &index_path_prefix, const size_t active_points, const size_t num_frozen_points,
-                   const uint32_t start);
+    int save_graph(std::ofstream &writer, const size_t active_points, const size_t num_frozen_points,
+                   const uint32_t start, size_t offset);
 
   private:
     size_t _max_range_of_graph = 0;
