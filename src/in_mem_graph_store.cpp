@@ -32,8 +32,8 @@ int InMemGraphStore::store(const std::string &index_path_prefix, const size_t nu
     return file_size;
 }
 
-int InMemGraphStore::store(std::ofstream &writer, const size_t num_points,
-                           const size_t num_frozen_points, const uint32_t start, size_t offset)
+int InMemGraphStore::store(std::ofstream &writer, const size_t num_points, const size_t num_frozen_points,
+                           const uint32_t start, size_t offset)
 {
     return save_graph(writer, num_points, num_frozen_points, start, offset);
 }
@@ -83,7 +83,8 @@ void InMemGraphStore::clear_graph()
 }
 
 #ifdef EXEC_ENV_OLS
-std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileReader &reader, size_t expected_num_points, size_t offset)
+std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileReader &reader, size_t expected_num_points,
+                                                                  size_t offset)
 {
     size_t expected_file_size;
     size_t file_frozen_pts;
@@ -208,8 +209,8 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
     return std::make_tuple(nodes_read, start, file_frozen_pts);
 }
 
-int InMemGraphStore::save_graph(std::ofstream &writer, const size_t num_points,
-                                const size_t num_frozen_points, const uint32_t start, size_t offset)
+int InMemGraphStore::save_graph(std::ofstream &writer, const size_t num_points, const size_t num_frozen_points,
+                                const uint32_t start, size_t offset)
 {
     writer.seekp(offset, writer.beg);
     size_t index_size = 24;

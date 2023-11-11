@@ -14,8 +14,8 @@ class InMemGraphStore : public AbstractGraphStore
     InMemGraphStore(const size_t total_pts, const size_t reserve_graph_degree);
 
     // returns tuple of <nodes_read, start, num_frozen_points>
-    virtual std::tuple<uint32_t, uint32_t, size_t> load(const std::string &index_path_prefix,
-                                                        const size_t num_points, size_t offset) override;
+    virtual std::tuple<uint32_t, uint32_t, size_t> load(const std::string &index_path_prefix, const size_t num_points,
+                                                        size_t offset) override;
     virtual int store(const std::string &index_path_prefix, const size_t num_points, const size_t num_frozen_points,
                       const uint32_t start) override;
     virtual int store(std::ofstream &writer, const size_t num_points, const size_t num_fz_points, const uint32_t start,
@@ -34,9 +34,11 @@ class InMemGraphStore : public AbstractGraphStore
     virtual uint32_t get_max_observed_degree() override;
 
   protected:
-    virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(const std::string &filename, size_t expected_num_points, size_t offset);
+    virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(const std::string &filename, size_t expected_num_points,
+                                                             size_t offset);
 #ifdef EXEC_ENV_OLS
-    virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(AlignedFileReader &reader, size_t expected_num_points, size_t offset);
+    virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(AlignedFileReader &reader, size_t expected_num_points,
+                                                             size_t offset);
 #endif
 
     int save_graph(std::ofstream &writer, const size_t active_points, const size_t num_frozen_points,

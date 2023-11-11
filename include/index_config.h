@@ -46,8 +46,9 @@ struct IndexConfig
   private:
     IndexConfig(DataStoreStrategy data_strategy, GraphStoreStrategy graph_strategy, Metric metric, size_t dimension,
                 size_t max_points, size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
-                bool pq_dist_build, bool concurrent_consolidate, bool use_opq, bool filtered_index, bool save_as_one_file,
-                uint64_t save_as_one_file_version, std::string &data_type, const std::string &tag_type, const std::string &label_type,
+                bool pq_dist_build, bool concurrent_consolidate, bool use_opq, bool filtered_index,
+                bool save_as_one_file, uint64_t save_as_one_file_version, std::string &data_type,
+                const std::string &tag_type, const std::string &label_type,
                 std::shared_ptr<IndexWriteParameters> index_write_params,
                 std::shared_ptr<IndexSearchParams> index_search_params)
         : data_strategy(data_strategy), graph_strategy(graph_strategy), metric(metric), dimension(dimension),
@@ -234,8 +235,8 @@ class IndexConfigBuilder
 
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
                            _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build, _concurrent_consolidate,
-                           _use_opq, _filtered_index, _save_as_one_file, _save_as_one_file_version, _data_type, _tag_type,
-                           _label_type, _index_write_params, _index_search_params);
+                           _use_opq, _filtered_index, _save_as_one_file, _save_as_one_file_version, _data_type,
+                           _tag_type, _label_type, _index_write_params, _index_search_params);
     }
 
     IndexConfigBuilder(const IndexConfigBuilder &) = delete;

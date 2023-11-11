@@ -726,8 +726,7 @@ inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t
     return bytes_written;
 }
 
-template <typename T>
-inline size_t save_bin(std::ofstream &writer, T *data, size_t npts, size_t ndims, size_t offset)
+template <typename T> inline size_t save_bin(std::ofstream &writer, T *data, size_t npts, size_t ndims, size_t offset)
 {
     writer.seekp(offset, writer.beg);
     int npts_i32 = (int)npts, ndims_i32 = (int)ndims;

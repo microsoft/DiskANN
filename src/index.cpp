@@ -34,8 +34,9 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
       _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
       _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
       _pq_dist(index_config.pq_dist_build), _use_opq(index_config.use_opq),
-      _filtered_index(index_config.filtered_index),_save_as_one_file(index_config.save_as_one_file), _save_as_one_file_version(index_config.save_as_one_file_version),
-      _num_pq_chunks(index_config.num_pq_chunks), _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
+      _filtered_index(index_config.filtered_index), _save_as_one_file(index_config.save_as_one_file),
+      _save_as_one_file_version(index_config.save_as_one_file_version), _num_pq_chunks(index_config.num_pq_chunks),
+      _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
 {
     if (_dynamic_index && !_enable_tags)
     {
@@ -495,8 +496,7 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string &filename, size_t off
     if (_enable_tags && !file_exists(filename))
     {
         diskann::cerr << "Tag file " << filename << " does not exist!" << std::endl;
-        throw diskann::ANNException("Tag file " + filename + " does not exist!", -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
+        throw diskann::ANNException("Tag file " + filename + " does not exist!", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 #endif
     if (!_enable_tags)
@@ -720,8 +720,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
                 load_data(filename, metadata.data_offset);
 #endif
 
-                // Load delete list when presents.
-                if (metadata.data_offset != metadata.delete_list_offset)
+                    // Load delete list when presents.
+                    if (metadata.data_offset != metadata.delete_list_offset)
                 {
 #ifdef EXEC_ENV_OLS
                     load_delete_set(reader, metadata.delete_list_offset);
