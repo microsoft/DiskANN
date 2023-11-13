@@ -944,17 +944,6 @@ template <typename T> void save_Tvecs(const char *filename, T *data, size_t npts
         writer.write((char *)cur_pt, ndims * sizeof(T));
     }
 }
-template <typename T>
-inline size_t save_data_in_base_dimensions(const std::string &filename, T *data, size_t npts, size_t ndims,
-                                           size_t aligned_dim, size_t offset = 0)
-{
-    std::ofstream writer; //(filename, std::ios::binary | std::ios::out);
-    open_file_to_write(writer, filename);
-    size_t file_size = save_data_in_base_dimensions(writer, data, npts, ndims, aligned_dim, offset);
-    writer.close();
-
-    return file_size;
-}
 
 template <typename T>
 inline size_t save_data_in_base_dimensions(std::ofstream &writer, T *data, size_t npts, size_t ndims,
@@ -970,6 +959,18 @@ inline size_t save_data_in_base_dimensions(std::ofstream &writer, T *data, size_
         writer.write((char *)(data + i * aligned_dim), ndims * sizeof(T));
     }
     return bytes_written;
+}
+
+template <typename T>
+inline size_t save_data_in_base_dimensions(const std::string &filename, T *data, size_t npts, size_t ndims,
+                                           size_t aligned_dim, size_t offset = 0)
+{
+    std::ofstream writer; //(filename, std::ios::binary | std::ios::out);
+    open_file_to_write(writer, filename);
+    size_t file_size = save_data_in_base_dimensions(writer, data, npts, ndims, aligned_dim, offset);
+    writer.close();
+
+    return file_size;
 }
 
 template <typename T>
