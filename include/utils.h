@@ -714,18 +714,6 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
     }
 }
 
-template <typename T>
-inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t ndims, size_t offset = 0)
-{
-    std::ofstream writer;
-    open_file_to_write(writer, filename);
-    diskann::cout << "Writing bin file: " << filename.c_str() << std::endl;
-    size_t bytes_written = save_bin<T>(writer, data, npts, ndims, offset);
-    writer.close();
-    diskann::cout << "Close file " << filename << "." << std::endl;
-    return bytes_written;
-}
-
 template <typename T> inline size_t save_bin(std::ofstream &writer, T *data, size_t npts, size_t ndims, size_t offset)
 {
     writer.seekp(offset, writer.beg);
@@ -738,6 +726,18 @@ template <typename T> inline size_t save_bin(std::ofstream &writer, T *data, siz
 
     writer.write((char *)data, npts * ndims * sizeof(T));
     diskann::cout << "Finished writing bin." << std::endl;
+    return bytes_written;
+}
+
+template <typename T>
+inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t ndims, size_t offset = 0)
+{
+    std::ofstream writer;
+    open_file_to_write(writer, filename);
+    diskann::cout << "Writing bin file: " << filename.c_str() << std::endl;
+    size_t bytes_written = save_bin<T>(writer, data, npts, ndims, offset);
+    writer.close();
+    diskann::cout << "Close file " << filename << "." << std::endl;
     return bytes_written;
 }
 
