@@ -370,9 +370,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     bool _has_built = false;
     bool _saturate_graph = false;
-    bool _save_as_one_file;             // plan to support filtered index in next version.
-    uint64_t _save_as_one_file_version; // Version used for save index to single file.
-    bool _load_from_one_file; // Whether to load index from single file.
+    bool _save_as_one_file;               // plan to support filtered index in next version.
+    uint64_t _save_as_one_file_version;   // Version used for save index to single file.
+    bool _load_from_one_file;             // Whether to load index from single file.
     uint64_t _load_from_one_file_version; // Version used for save index to single file.
     bool _dynamic_index = false;
     bool _enable_tags = false;
