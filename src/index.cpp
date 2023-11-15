@@ -35,7 +35,9 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
       _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
       _pq_dist(index_config.pq_dist_build), _use_opq(index_config.use_opq),
       _filtered_index(index_config.filtered_index), _save_as_one_file(index_config.save_as_one_file),
-      _save_as_one_file_version(index_config.save_as_one_file_version), _num_pq_chunks(index_config.num_pq_chunks),
+      _save_as_one_file_version(index_config.save_as_one_file_version),
+      _load_from_one_file(index_config.load_from_one_file),
+      _load_from_one_file_version(index_config.load_from_one_file_version), _num_pq_chunks(index_config.num_pq_chunks),
       _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
 {
     if (_dynamic_index && !_enable_tags)
@@ -126,7 +128,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts,
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
                               const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq,
-                              const bool filtered_index, bool save_as_one_file, uint64_t save_as_one_file_version)
+                              const bool filtered_index, bool save_as_one_file, uint64_t save_as_one_file_version,
+                              bool load_from_one_file, uint64_t load_from_one_file_version)
     : Index(IndexConfigBuilder()
                 .with_metric(m)
                 .with_dimension(dim)
@@ -144,6 +147,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .with_data_type(diskann_type_to_name<T>())
                 .with_save_as_single_file(save_as_one_file)
                 .with_save_as_single_file_version(save_as_one_file_version)
+                .with_load_from_single_file(load_from_one_file)
+                .with_load_from_single_file_version(load_from_one_file_version)
                 .build(),
             IndexFactory::construct_datastore<T>(
                 DataStoreStrategy::MEMORY,
@@ -640,7 +645,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
 #endif
-    if (!_save_as_one_file)
+    if (!_load_from_one_file)
     {
         // For DLVS Store, we will not support saving the index in multiple
         // files.
@@ -692,7 +697,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             reader.read((char *)&version, sizeof(uint64_t));
 #endif
 
-            if (version == _save_as_one_file_version)
+            if (version == _load_from_one_file_version)
             {
                 SaveLoadMetaDataV1 metadata;
 

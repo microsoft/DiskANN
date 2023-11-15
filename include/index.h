@@ -66,7 +66,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                             const bool enable_tags = false, const bool concurrent_consolidate = false,
                             const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
                             const bool use_opq = false, const bool filtered_index = false,
-                            bool save_as_one_file = false, uint64_t save_as_one_file_version = 1);
+                            bool save_as_one_file = false, uint64_t save_as_one_file_version = 1,
+                            bool load_from_one_file = false, uint64_t load_from_one_file_version = 1);
 
     DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store,
                             std::unique_ptr<AbstractGraphStore> graph_store);
@@ -370,7 +371,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _has_built = false;
     bool _saturate_graph = false;
     bool _save_as_one_file;             // plan to support filtered index in next version.
-    uint64_t _save_as_one_file_version; // Version used for save index as single file.
+    uint64_t _save_as_one_file_version; // Version used for save index to single file.
+    bool _load_from_one_file; // Whether to load index from single file.
+    uint64_t _load_from_one_file_version; // Version used for save index to single file.
     bool _dynamic_index = false;
     bool _enable_tags = false;
     bool _normalize_vecs = false; // Using normalied L2 for cosine.
