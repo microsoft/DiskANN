@@ -635,15 +635,17 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                                                   .with_num_threads(num_threads)
                                                   .build();
         using TagT = uint32_t;
-        diskann::Index<T, TagT, LabelT> _index(
-            compareMetric, base_dim, base_num, std::make_shared<diskann::IndexWriteParameters>(paras), nullptr,
-            paras.num_frozen_points, false, false, false, build_pq_bytes > 0, build_pq_bytes, use_opq, use_filters);
+        diskann::Index<T, TagT, LabelT> _index(compareMetric, base_dim, base_num,
+                                               std::make_shared<diskann::IndexWriteParameters>(paras), nullptr,
+                                               defaults::NUM_FROZEN_POINTS_STATIC, false, false, false,
+                                               build_pq_bytes > 0, build_pq_bytes, use_opq, use_filters);
         if (!use_filters)
             _index.build(base_file.c_str(), base_num);
         else
         {
             if (universal_label != "")
-            {
+            { //  indicates no universal label
+              // LabelT unv_label_as_num = 0;
                 _index.set_universal_labels({universal_label});
             }
             _index.build_filtered_index(base_file.c_str(), label_file, base_num);
@@ -702,7 +704,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts,
                                  std::make_shared<diskann::IndexWriteParameters>(low_degree_params), nullptr,
-                                 low_degree_params.num_frozen_points, false, false, false, build_pq_bytes > 0,
+                                 defaults::NUM_FROZEN_POINTS_STATIC, false, false, false, build_pq_bytes > 0,
                                  build_pq_bytes, use_opq, use_filters);
         if (!use_filters)
         {
@@ -712,7 +714,8 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         {
             diskann::extract_shard_labels(label_file, shard_ids_file, shard_labels_file);
             if (universal_label != "")
-            {
+            { //  indicates no universal label
+              // LabelT unv_label_as_num = 0;
                 _index.set_universal_labels({universal_label});
             }
             _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts);
@@ -1158,6 +1161,11 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
 
     std::string mem_index_path = index_prefix_path + "_mem.index";
     std::string disk_index_path = index_prefix_path + "_disk.index";
+
+    std::string medoids_path = disk_index_path + "_medoids.bin";
+    std::string centroids_path = disk_index_path + "_centroids.bin";
+
+    std::string disk_labels_to_medoids_path = disk_index_path + "_labels_to_medoids.txt";
     std::string mem_labels_file = mem_index_path + "_labels.txt";
     std::string disk_labels_file = disk_index_path + "_labels.txt";
     std::string mem_univ_label_file = mem_index_path + "_universal_label.txt";
@@ -1232,9 +1240,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string augmented_data_file, augmented_labels_file;
     if (use_filters)
     {
-        /*convert_labels_string_to_int(labels_file_original, labels_file_to_use, disk_labels_int_map_file,
-                                     universal_label);
-        */
+        /* convert_labels_string_to_int(labels_file_original, labels_file_to_use, disk_labels_int_map_file,
+                                      universal_label);*/
         augmented_data_file = index_prefix_path + "_augmented_data.bin";
         augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
         if (filter_threshold != 0)
@@ -1331,7 +1338,6 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
 
         std::remove(augmented_data_file.c_str());
         std::remove(augmented_labels_file.c_str());
-        // std::remove(labels_file_to_use.c_str());
     }
 
     std::remove(mem_index_path.c_str());

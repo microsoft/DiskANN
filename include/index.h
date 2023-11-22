@@ -97,14 +97,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Based on filter params builds a filtered or unfiltered index
     DISKANN_DLLEXPORT void build(const std::string &data_file, const size_t num_points_to_load,
-                                 IndexFilterParams &build_params);
+                                 IndexFilterParams &filter_params);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
                                                 const size_t num_points_to_load,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
-    DISKANN_DLLEXPORT void set_universal_labels(const std::vector<std::string> &labels);
+    // DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
+    DISKANN_DLLEXPORT void set_universal_labels(const std::vector<std::string> &raw_labels, bool dynamic_index = false);
 
     // Get converted integer label from string to int map (_label_map)
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
@@ -141,6 +142,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
+
+    // Will fail if tag already in the index or if tag=0.
+    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag, const std::vector<LabelT> &label);
 
     // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
@@ -203,6 +207,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                float *distances) override;
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
+    virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;
 
     virtual int _lazy_delete(const TagType &tag) override;
 
@@ -346,6 +351,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // needed for a dynamic index. The frozen points have consecutive locations.
     // See also _start below.
     size_t _num_frozen_pts = 0;
+    size_t _frozen_pts_used = 0;
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;
@@ -419,11 +425,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_timed_mutex // Ensure only one consolidate or compact_data is
         _consolidate_lock;  // ever active
     std::shared_timed_mutex // RW lock for _tag_to_location,
-        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points
+        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points, _label_to_start_id
     std::shared_timed_mutex // RW Lock on _delete_set and _data_compacted
         _delete_lock;       // variable
 
-    // Per node lock, cardinality=_max_points
+    // Per node lock, cardinality=_max_points + _num_frozen_points
     std::vector<non_recursive_mutex> _locks;
 
     static const float INDEX_GROWTH_FACTOR;
