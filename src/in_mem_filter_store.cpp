@@ -244,28 +244,6 @@ void InMemFilterStore<label_type>::load_universal_labels(const std::string &univ
 }
 
 template <typename label_type>
-void InMemFilterStore<label_type>::load_universal_labels(const std::string &universal_label_file)
-{
-    if (file_exists(universal_label_file))
-    {
-        std::ifstream universal_label_reader(universal_label_file);
-        std::string line;
-        while (std::getline(universal_label_reader, line))
-        {
-            std::istringstream iss(line);
-            label_type universal_label;
-            if (!(iss >> universal_label))
-            {
-                throw std::runtime_error("ERROR: Invalid universal label " + line);
-            }
-            _mapped_universal_label_set.insert(universal_label);
-            _use_universal_label = true;
-        }
-        universal_label_reader.close();
-    }
-}
-
-template <typename label_type>
 void InMemFilterStore<label_type>::save_labels(const std::string &save_path, const size_t total_points)
 {
 
