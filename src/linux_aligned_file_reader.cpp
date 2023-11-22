@@ -147,10 +147,14 @@ void LinuxAlignedFileReader::register_thread()
     if (ret != 0)
     {
         lk.unlock();
-        assert(errno != EAGAIN);
-        assert(errno != ENOMEM);
-        std::cerr << "io_setup() failed; returned " << ret << ", errno=" << errno << ":" << ::strerror(errno)
-                  << std::endl;
+        if (ret == -EAGAIN)
+        {
+            std::cerr << "io_setup() failed with EAGAIN: Consider increasing /proc/sys/fs/aio-max-nr" << std::endl;
+        }
+        else
+        {
+            std::cerr << "io_setup() failed; returned " << ret << ": " << ::strerror(-ret) << std::endl;
+        }
     }
     else
     {
