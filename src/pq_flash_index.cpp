@@ -9,6 +9,8 @@
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
+#elif __APPLE__
+#include "apple_aligned_file_reader.h"
 #else
 #include "linux_aligned_file_reader.h"
 #endif
@@ -284,7 +286,7 @@ void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::strin
         this->_node_visit_counter[i].second = 0;
     }
 
-    uint64_t sample_num, sample_dim, sample_aligned_dim;
+    size_t sample_num, sample_dim, sample_aligned_dim;
     T *samples;
 
 #ifdef EXEC_ENV_OLS
@@ -332,7 +334,7 @@ void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::strin
               });
     node_list.clear();
     node_list.shrink_to_fit();
-    num_nodes_to_cache = std::min(num_nodes_to_cache, this->_node_visit_counter.size());
+    num_nodes_to_cache = std::min((size_t)num_nodes_to_cache, this->_node_visit_counter.size());
     node_list.reserve(num_nodes_to_cache);
     for (uint64_t i = 0; i < num_nodes_to_cache; i++)
     {
@@ -420,8 +422,8 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
         diskann::cout << "Level: " << lvl << std::flush;
         bool finish_flag = false;
 
-        uint64_t BLOCK_SIZE = 1024;
-        uint64_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
+        size_t BLOCK_SIZE = 1024;
+        size_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
         for (size_t block = 0; block < nblocks && !finish_flag; block++)
         {
             diskann::cout << "." << std::flush;
@@ -1184,7 +1186,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #else
     if (file_exists(norm_file) && metric == diskann::Metric::INNER_PRODUCT)
     {
-        uint64_t dumr, dumc;
+        size_t dumr, dumc;
         float *norm_val;
         diskann::load_bin<float>(norm_file, norm_val, dumr, dumc);
 #endif
@@ -1324,7 +1326,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     // sector scratch
     char *sector_scratch = query_scratch->sector_scratch;
-    uint64_t &sector_scratch_idx = query_scratch->sector_idx;
+    size_t &sector_scratch_idx = query_scratch->sector_idx;
     const uint64_t num_sectors_per_node =
         _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
 
@@ -1346,7 +1348,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     };
     Timer query_timer, io_timer, cpu_timer;
 
-    tsl::robin_set<uint64_t> &visited = query_scratch->visited;
+    tsl::robin_set<size_t> &visited = query_scratch->visited;
     NeighborPriorityQueue &retset = query_scratch->retset;
     retset.reserve(l_search);
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;

@@ -15,11 +15,16 @@
 #include <cstring>
 #include <queue>
 #include <omp.h>
-#include <mkl.h>
 #include <boost/program_options.hpp>
 #include <unordered_map>
 #include <tsl/robin_map.h>
 #include <tsl/robin_set.h>
+
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
+#else
+#include <mkl.h>
+#endif
 
 #ifdef _WINDOWS
 #include <malloc.h>
@@ -61,6 +66,15 @@ template <class T> T *aligned_malloc(const size_t n, const size_t alignment)
 {
 #ifdef _WINDOWS
     return (T *)_aligned_malloc(sizeof(T) * n, alignment);
+#elif __APPLE__
+    void *ptr;
+    int err = posix_memalign(&ptr, alignment, sizeof(T) * n);
+    if (err)
+    {
+        std::cout << err << std::endl;
+        throw;
+    }
+    return (T *)ptr;
 #else
     return static_cast<T *>(aligned_alloc(alignment, sizeof(T) * n));
 #endif
