@@ -683,6 +683,10 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     timer.reset();
     for (int p = 0; p < num_parts; p++)
     {
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+        MallocExtension::instance()->ReleaseFreeMemory();
+#endif
+
         std::string shard_base_file = merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
 
         std::string shard_ids_file = merged_index_prefix + "_subshard-" + std::to_string(p) + "_ids_uint32.bin";
