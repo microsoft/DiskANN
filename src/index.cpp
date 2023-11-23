@@ -938,9 +938,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Find which of the nodes in des have not been visited before
         id_scratch.clear();
         dist_scratch.clear();
+        if (_dynamic_index)
         {
-            if (_dynamic_index)
-                _locks[n].lock();
+            LockGuard guard(_locks[n]);
             for (auto id : _graph_store->get_neighbours(n))
             {
                 assert(id < _max_points + _num_frozen_pts);
@@ -957,8 +957,28 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     id_scratch.push_back(id);
                 }
             }
-            if (_dynamic_index)
-                _locks[n].unlock();
+        }
+        else
+        {
+            _locks[n].lock();
+            auto nbrs = _graph_store->get_neighbours(n);
+            _locks[n].unlock();
+            for (auto id : nbrs)
+            {
+                assert(id < _max_points + _num_frozen_pts);
+
+                if (use_filter)
+                {
+                    // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
+                    if (!detect_common_filters(id, search_invocation, filter_labels))
+                        continue;
+                }
+
+                if (is_not_visited(id))
+                {
+                    id_scratch.push_back(id);
+                }
+            }
         }
 
         // Mark nodes visited
