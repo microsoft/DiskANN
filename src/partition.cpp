@@ -31,13 +31,22 @@
 // #define SAVE_INFLATED_PQ true
 
 template <typename T>
-void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate)
+void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate, const std::string label_file, const std::string unv_to_skip)
 {
     size_t read_blk_size = 64 * 1024 * 1024;
     cached_ifstream base_reader(base_file.c_str(), read_blk_size);
     std::ofstream sample_writer(std::string(output_prefix + "_data.bin").c_str(), std::ios::binary);
     std::ofstream sample_id_writer(std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
 
+    bool use_label = false;
+    std::ifstream label_reader;
+    std::ofstream label_writer;
+    if (label_file != "") {
+        label_reader.open(label_file);
+        label_writer.open(output_prefix + "_labels.txt");
+        use_label = true;
+    }
+    
     std::random_device rd; // Will be used to obtain a seed for the random number engine
     auto x = rd();
     std::mt19937 generator(x); // Standard mersenne_twister_engine seeded with rd()
@@ -64,6 +73,14 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
     for (size_t i = 0; i < npts; i++)
     {
         base_reader.read((char *)cur_row.get(), sizeof(T) * nd);
+        std::string cur_labels;
+        std::getline(label_reader, cur_labels);
+        cur_labels.erase(std::remove_if(cur_labels.begin(), cur_labels.end(), [](char c) {
+        return c == '\n' || c == '\r';
+    }), cur_labels.end());        
+        if (cur_labels == unv_to_skip)
+            continue;
+        
         float sample = distribution(generator);
         if (sample < sampling_rate)
         {
@@ -71,6 +88,7 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
             uint32_t cur_i_u32 = (uint32_t)i;
             sample_id_writer.write((char *)&cur_i_u32, sizeof(uint32_t));
             num_sampled_pts_u32++;
+            label_writer << cur_labels << std::endl;
         }
     }
     sample_writer.seekp(0, std::ios::beg);
@@ -604,11 +622,11 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
 // Instantations of supported templates
 
 template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(const std::string base_file, const std::string output_prefix,
-                                                         double sampling_rate);
+                                                         double sampling_rate, const std::string label_file, const std::string unv_to_skip);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(const std::string base_file, const std::string output_prefix,
-                                                          double sampling_rate);
+                                                          double sampling_rate, const std::string label_file, const std::string unv_to_skip);
 template void DISKANN_DLLEXPORT gen_random_slice<float>(const std::string base_file, const std::string output_prefix,
-                                                        double sampling_rate);
+                                                        double sampling_rate, const std::string label_file, const std::string unv_to_skip);
 
 template void DISKANN_DLLEXPORT gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims, double p_val,
                                                         float *&sampled_data, size_t &slice_size);

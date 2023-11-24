@@ -16,7 +16,7 @@
 #include "windows_customizations.h"
 
 template <typename T>
-void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate);
+void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate, const std::string label_file = "", const std::string unv_to_skip = "");
 
 template <typename T>
 void gen_random_slice(const std::string data_file, double p_val, float *&sampled_data, size_t &slice_size,
