@@ -288,17 +288,33 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
     if (use_filters)
     {
         std::unordered_map<uint32_t, std::vector<uint32_t>> global_label_to_medoids;
+        std::unordered_map<std::string, uint32_t> global_string_to_label;
+        uint32_t global_label;
 
         for (size_t i = 0; i < nshards; i++)
         {
-            std::ifstream mapping_reader;
-            std::string map_file = vamana_names[i] + "_labels_to_medoids.txt";
+            std::ifstream medoid_reader, mapping_reader;
+            std::string medoid_file = vamana_names[i] + "_labels_to_medoids.txt";
+            std::string map_file = vamana_names[i] + "_labels_map.txt";
+            medoid_reader.open(medoid_file);
             mapping_reader.open(map_file);
+            std::unordered_map<uint32_t, std::string> shard_label_to_string;
 
-            std::string line, token;
-            uint32_t line_cnt = 0;
-
+            std::string line, token, label_str;
+            uint32_t line_cnt = 0, label_uint;
             while (std::getline(mapping_reader, line))
+            {
+                std::istringstream iss(line);
+                getline(iss, token, '\t');
+                label_str = token;
+                getline(iss, token, '\t');
+                label_uint = (uint32_t)std::stoul(token);
+                shard_label_to_string[label_uint] = label_str;
+                if(global_string_to_label.find(label_str) == global_string_to_label.end()){
+                    global_string_to_label[label_str] = label_uint;
+                }
+            }
+            while (std::getline(medoid_reader, line))
             {
                 std::istringstream iss(line);
                 uint32_t cnt = 0;
@@ -317,7 +333,8 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
                         medoid = token_as_num;
                     cnt++;
                 }
-                global_label_to_medoids[label].push_back(idmaps[i][medoid]);
+                global_label = global_string_to_label[shard_label_to_string[label]];
+                global_label_to_medoids[global_label].push_back(idmaps[i][medoid]);
                 line_cnt++;
             }
             mapping_reader.close();
@@ -646,7 +663,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             if (universal_label != "")
             { //  indicates no universal label
               // LabelT unv_label_as_num = 0;
-                _index.set_universal_labels({universal_label});
+                _index.set_universal_labels(universal_label);
             }
             _index.build_filtered_index(base_file.c_str(), label_file, base_num);
         }
@@ -716,7 +733,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             if (universal_label != "")
             { //  indicates no universal label
               // LabelT unv_label_as_num = 0;
-                _index.set_universal_labels({universal_label});
+                _index.set_universal_labels(universal_label);
             }
             _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts);
         }

@@ -33,8 +33,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates) override;
 
     // takes raw universal labels and map them internally.
-    void set_universal_labels(const std::vector<std::string> &raw_universal_labels,
-                              bool dyanmic_index = false) override;
+    void set_universal_labels(const std::string &raw_universal_labels) override;
     // const label_type get_universal_label() const;
 
     // ideally takes raw label file and then genrate internal mapping file and keep the info of mapping
@@ -51,7 +50,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     // The function is static so it remains the source of truth across the code. Returns label map
     DISKANN_DLLEXPORT static std::unordered_map<std::string, label_type> convert_labels_string_to_int(
         const std::string &inFileName, const std::string &outFileName, const std::string &mapFileName,
-        const std::set<std::string> &raw_universal_labels);
+        const std::string &raw_universal_labels);
 
   protected:
     // This is for internal use and only loads already parsed file, used by index in during load().
@@ -72,8 +71,8 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
 
     // universal label
     bool _use_universal_label = false;
-    tsl::robin_set<label_type> _mapped_universal_labels;
-    std::set<std::string> _raw_universal_labels;
+    label_type _mapped_universal_label;
+    std::string _raw_universal_label;
 
     // populates _loaction_to labels and _labels from given label file
     size_t parse_label_file(const std::string &label_file);

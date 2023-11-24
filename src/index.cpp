@@ -1667,7 +1667,7 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     {
         if (filter_params.universal_label != "")
         {
-            this->set_universal_labels({filter_params.universal_label});
+            this->set_universal_labels(filter_params.universal_label);
         }
         this->build_filtered_index(data_file.c_str(), filter_params.label_file, points_to_load);
     }
@@ -1697,12 +1697,6 @@ std::unordered_map<std::string, LabelT> Index<T, TagT, LabelT>::load_label_map(c
 }
 
 template <typename T, typename TagT, typename LabelT>
-LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
-{
-    return _filter_store->get_converted_label(raw_label);
-}
-
-template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points)
 {
     num_points = _filter_store->load_labels(label_file);
@@ -1715,9 +1709,9 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
 // }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::set_universal_labels(const std::vector<std::string> &raw_labels, bool dynamic_index)
+void Index<T, TagT, LabelT>::set_universal_labels(const std::string &raw_label)
 {
-    _filter_store->set_universal_labels(raw_labels, dynamic_index);
+    _filter_store->set_universal_labels(raw_label);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1833,7 +1827,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
                                                                            const uint32_t L, std::any &indices,
                                                                            float *distances)
 {
-    auto converted_label = this->get_converted_label(raw_label);
+    auto converted_label = _filter_store->get_converted_label(raw_label);
     if (typeid(uint64_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint64_t *>(indices);

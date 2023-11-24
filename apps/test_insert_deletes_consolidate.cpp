@@ -189,7 +189,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
     if (universal_label != "")
     {
-        index->set_universal_labels({universal_label}, /*dynamic index*/ true);
+        index->set_universal_labels(universal_label);
     }
 
     if (points_to_skip > num_points)
@@ -265,7 +265,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
         if (has_labels)
         {
             diskann::InMemFilterStore<LabelT>::convert_labels_string_to_int(label_file, labels_file_to_use,
-                                                                            mem_labels_int_map_file, {universal_label});
+                                                                            mem_labels_int_map_file, universal_label);
             auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
             location_to_labels = std::get<0>(parse_result);
         }
@@ -316,7 +316,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
         if (has_labels)
         {
             diskann::InMemFilterStore<LabelT>::convert_labels_string_to_int(label_file, labels_file_to_use,
-                                                                            mem_labels_int_map_file, {universal_label});
+                                                                            mem_labels_int_map_file, universal_label);
             auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
             location_to_labels = std::get<0>(parse_result);
         }

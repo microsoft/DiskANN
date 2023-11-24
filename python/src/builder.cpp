@@ -41,7 +41,7 @@ std::string prepare_filtered_label_map(diskann::Index<T, TagT, LabelT> &index, c
     if (!universal_label.empty())
     {
         uint32_t unv_label_as_num = 0;
-        index.set_universal_label(unv_label_as_num);
+        index.set_universal_label(universal_label);
     }
     return labels_file_to_use;
 }
