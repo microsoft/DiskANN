@@ -7,13 +7,13 @@
 #   Specify root of the Boost library if Boost cannot be auto-detected. On Windows, a fallback to a
 #   downloaded nuget version will be used if Boost cannot be found.
 #
-# RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS:
+# DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS:
 #   This is a work-in-progress feature, not completed yet. The core DiskANN library will be split into
 #   build-related and search-related functionality. In build-related functionality, when using tcmalloc,
 #   it's possible to release memory that's free but reserved by tcmalloc. Setting this to true enables
 #   such behavior.
 #   Contact for this feature: gopalrs.
-set(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS ON)
+set(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS ON)
 
 # Some variables like MSVC are defined only after project(), so put that first.
 cmake_minimum_required(VERSION 3.15)
@@ -55,7 +55,7 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # It's necessary to include tcmalloc headers only if calling into MallocExtension interface.
 # For using tcmalloc in DiskANN tools, it's enough to just link with tcmalloc.
-if (RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
+if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
     include_directories(${PROJECT_SOURCE_DIR}/gperftools/src)
 
     if (MSVC)
@@ -93,7 +93,9 @@ if (MSVC)
     set(Boost_USE_STATIC_LIBS ON)
 endif()
 
-find_package(Boost COMPONENTS program_options)
+if(NOT MSVC)
+    find_package(Boost COMPONENTS program_options)
+endif()
 
 # For Windows, fall back to nuget version if find_package didn't find it.
 if (MSVC AND NOT Boost_FOUND)
@@ -204,7 +206,7 @@ add_definitions(-DMKL_ILP64)
 # Section for tcmalloc. The DiskANN tools are always linked to tcmalloc. For Windows, they also need to
 # force-include the _tcmalloc symbol for enabling tcmalloc.
 #
-# The DLL itself needs to be linked to tcmalloc only if RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS
+# The DLL itself needs to be linked to tcmalloc only if DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS
 # is enabled.
 if (MSVC)
     if (NOT EXISTS "${PROJECT_SOURCE_DIR}/gperftools/gperftools.sln")
@@ -246,7 +248,7 @@ elseif(NOT PYBIND)
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-ltcmalloc")
 endif()
 
-if (RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
+if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
     add_definitions(-DRELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
 
     if (MSVC)
