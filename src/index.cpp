@@ -1827,6 +1827,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
                                                                            const uint32_t L, std::any &indices,
                                                                            float *distances)
 {
+    // Add documentation 
+    // rename to get_numeric_label
     auto converted_label = _filter_store->get_converted_label(raw_label);
     if (typeid(uint64_t *) == indices.type())
     {
@@ -2646,7 +2648,7 @@ int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType t
     try
     {
         return this->insert_point(std::any_cast<const T *>(point), std::any_cast<const TagT>(tag),
-                                  labels.get<const std::vector<LabelT>>());
+                                  labels.get<const std::vector<std::string>>());
     }
     catch (const std::bad_any_cast &anycast_e)
     {
@@ -2661,12 +2663,12 @@ int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType t
 template <typename T, typename TagT, typename LabelT>
 int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 {
-    std::vector<LabelT> no_labels{0};
+    std::vector<std::string> no_labels;
     return insert_point(point, tag, no_labels);
 }
 
 template <typename T, typename TagT, typename LabelT>
-int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const std::vector<LabelT> &labels)
+int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const std::vector<std::string> &labels)
 {
 
     assert(_has_built);
@@ -2695,8 +2697,9 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         }
 
         _filter_store->set_labels_to_location(location, labels);
-        for (LabelT label : labels)
+        for (std::string label_str : labels)
         {
+            LabelT label = _filter_store->get_converted_label(label_str);
             if (_filter_store->get_all_label_set().find(label) == _filter_store->get_all_label_set().end())
             {
                 if (_frozen_pts_used >= _num_frozen_pts)
@@ -2711,7 +2714,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                 _filter_store->add_to_label_set(label);
                 _filter_store->update_medoid_by_label(label, (uint32_t)fz_location);
                 std::vector<LabelT> fz_label = {label};
-                _filter_store->set_labels_to_location((location_t)fz_location, {label});
+                _filter_store->set_labels_to_location((location_t)fz_location, {label_str});
                 //_label_to_start_id[label] = (uint32_t)fz_location;
                 //_location_to_labels[fz_location] = {label};
                 _data_store->set_vector((location_t)fz_location, point);

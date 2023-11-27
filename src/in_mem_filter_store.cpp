@@ -31,8 +31,12 @@ const std::vector<label_type> &InMemFilterStore<label_type>::get_labels_by_locat
 
 template <typename label_type>
 void InMemFilterStore<label_type>::set_labels_to_location(const location_t location,
-                                                          const std::vector<label_type> &labels)
+                                                          const std::vector<std::string> &label_str)
 {
+    std::vector<label_type> labels;
+    for(int i=0; i<label_str.size(); i++){
+        labels.push_back(this->get_converted_label(label_str[i]));
+    }
     _location_to_labels[location] = labels;
 }
 

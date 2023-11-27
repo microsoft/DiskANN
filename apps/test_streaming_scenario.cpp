@@ -87,7 +87,7 @@ std::string get_save_filename(const std::string &save_path, size_t active_window
 
 template <typename T, typename TagT, typename LabelT>
 void insert_next_batch(diskann::AbstractIndex &index, size_t start, size_t end, size_t insert_threads, T *data,
-                       size_t aligned_dim, std::vector<std::vector<LabelT>> &pts_to_labels)
+                       size_t aligned_dim, std::vector<std::vector<std::string>> &pts_to_labels)
 {
     try
     {
@@ -211,17 +211,14 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
     size_t dim, aligned_dim;
     size_t num_points;
 
-    std::vector<std::vector<LabelT>> pts_to_labels;
+    std::vector<std::vector<std::string>> pts_to_labels;
 
     const auto save_path_inc =
         get_save_filename(save_path + ".after-streaming-", active_window, consolidate_interval, max_points_to_insert);
-    std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
+
     if (has_labels)
     {
-        diskann::InMemFilterStore<LabelT>::convert_labels_string_to_int(label_file, labels_file_to_use,
-                                                                        mem_labels_int_map_file, universal_label);
-        auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
+        auto parse_result = diskann::parse_raw_label_file(label_file);
         pts_to_labels = std::get<0>(parse_result);
     }
 

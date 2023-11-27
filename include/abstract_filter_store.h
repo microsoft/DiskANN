@@ -24,7 +24,7 @@ template <typename label_type> class AbstractFilterStore
 
     DISKANN_DLLEXPORT virtual const std::vector<label_type> &get_labels_by_location(const location_t point_id) = 0;
     DISKANN_DLLEXPORT virtual void set_labels_to_location(const location_t location,
-                                                          const std::vector<label_type> &labels) = 0;
+                                                          const std::vector<std::string> &labels) = 0;
     DISKANN_DLLEXPORT virtual void swap_labels(const location_t location_first, const location_t location_second) = 0;
 
     DISKANN_DLLEXPORT virtual const tsl::robin_set<label_type> &get_all_label_set() = 0;

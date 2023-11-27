@@ -269,11 +269,10 @@ parse_label_file_return_values parse_label_file(path label_data_path, std::strin
  * 1. a vector of vectors of labels, where the outer vector is indexed by point id
  * 2. a set of all labels
  */
-template <typename LabelT>
-std::tuple<std::vector<std::vector<LabelT>>, tsl::robin_set<LabelT>> parse_formatted_label_file(std::string label_file)
+std::tuple<std::vector<std::vector<std::string>>, tsl::robin_set<std::string>> parse_raw_label_file(std::string label_file)
 {
-    std::vector<std::vector<LabelT>> pts_to_labels;
-    tsl::robin_set<LabelT> labels;
+    std::vector<std::vector<std::string>> pts_to_labels;
+    tsl::robin_set<std::string> labels;
 
     // Format of Label txt file: filters with comma separators
     std::ifstream infile(label_file);
@@ -289,7 +288,7 @@ std::tuple<std::vector<std::vector<LabelT>>, tsl::robin_set<LabelT>> parse_forma
     {
         line_cnt++;
     }
-    pts_to_labels.resize(line_cnt, std::vector<LabelT>());
+    pts_to_labels.resize(line_cnt, std::vector<std::string>({}));
 
     infile.clear();
     infile.seekg(0, std::ios::beg);
@@ -298,16 +297,15 @@ std::tuple<std::vector<std::vector<LabelT>>, tsl::robin_set<LabelT>> parse_forma
     while (std::getline(infile, line))
     {
         std::istringstream iss(line);
-        std::vector<LabelT> lbls(0);
+        std::vector<std::string> lbls(0);
         getline(iss, token, '\t');
         std::istringstream new_iss(token);
         while (getline(new_iss, token, ','))
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = static_cast<LabelT>(std::stoul(token));
-            lbls.push_back(token_as_num);
-            labels.insert(token_as_num);
+            lbls.push_back(token);
+            labels.insert(token);
         }
         if (lbls.size() <= 0)
         {
@@ -322,12 +320,6 @@ std::tuple<std::vector<std::vector<LabelT>>, tsl::robin_set<LabelT>> parse_forma
 
     return std::make_tuple(pts_to_labels, labels);
 }
-
-template DISKANN_DLLEXPORT std::tuple<std::vector<std::vector<uint32_t>>, tsl::robin_set<uint32_t>>
-parse_formatted_label_file(path label_file);
-
-template DISKANN_DLLEXPORT std::tuple<std::vector<std::vector<uint16_t>>, tsl::robin_set<uint16_t>>
-parse_formatted_label_file(path label_file);
 
 template DISKANN_DLLEXPORT void generate_label_indices<float>(path input_data_path, path final_index_path_prefix,
                                                               label_set all_labels, uint32_t R, uint32_t L, float alpha,

@@ -79,8 +79,8 @@ class AbstractIndex
                                                       float *distances);
 
     // insert points with labels, labels should be present for filtered index
-    template <typename data_type, typename tag_type, typename label_type>
-    int insert_point(const data_type *point, const tag_type tag, const std::vector<label_type> &labels);
+    template <typename data_type, typename tag_type>
+    int insert_point(const data_type *point, const tag_type tag, const std::vector<std::string> &labels);
 
     // insert point for unfiltered index build. do not use with filtered index
     template <typename data_type, typename tag_type> int insert_point(const data_type *point, const tag_type tag);

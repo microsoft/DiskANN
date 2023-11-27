@@ -310,9 +310,10 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
                 getline(iss, token, '\t');
                 label_uint = (uint32_t)std::stoul(token);
                 shard_label_to_string[label_uint] = label_str;
-                if(global_string_to_label.find(label_str) == global_string_to_label.end()){
-                    global_string_to_label[label_str] = label_uint;
-                }
+                // Calculate global_string_to_label in entire large file 
+                // if(global_string_to_label.find(label_str) == global_string_to_label.end()){
+                //     global_string_to_label[label_str] = label_uint;
+                // }
             }
             while (std::getline(medoid_reader, line))
             {
