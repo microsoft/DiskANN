@@ -7,12 +7,13 @@
 #   Specify root of the Boost library if Boost cannot be auto-detected. On Windows, a fallback to a
 #   downloaded nuget version will be used if Boost cannot be found.
 #
-# DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS:
+# RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS:
 #   This is a work-in-progress feature, not completed yet. The core DiskANN library will be split into
 #   build-related and search-related functionality. In build-related functionality, when using tcmalloc,
 #   it's possible to release memory that's free but reserved by tcmalloc. Setting this to true enables
 #   such behavior.
 #   Contact for this feature: gopalrs.
+set(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS ON)
 
 # Some variables like MSVC are defined only after project(), so put that first.
 cmake_minimum_required(VERSION 3.15)
@@ -54,7 +55,7 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # It's necessary to include tcmalloc headers only if calling into MallocExtension interface.
 # For using tcmalloc in DiskANN tools, it's enough to just link with tcmalloc.
-if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
+if (RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
     include_directories(${PROJECT_SOURCE_DIR}/gperftools/src)
 
     if (MSVC)
@@ -203,7 +204,7 @@ add_definitions(-DMKL_ILP64)
 # Section for tcmalloc. The DiskANN tools are always linked to tcmalloc. For Windows, they also need to
 # force-include the _tcmalloc symbol for enabling tcmalloc.
 #
-# The DLL itself needs to be linked to tcmalloc only if DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS
+# The DLL itself needs to be linked to tcmalloc only if RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS
 # is enabled.
 if (MSVC)
     if (NOT EXISTS "${PROJECT_SOURCE_DIR}/gperftools/gperftools.sln")
@@ -219,13 +220,13 @@ if (MSVC)
     # Tell CMake how to build the tcmalloc linker library from the submodule.
     add_custom_target(build_libtcmalloc_minimal DEPENDS ${TCMALLOC_LINK_LIBRARY})
     add_custom_command(OUTPUT ${TCMALLOC_LINK_LIBRARY}
-                       COMMAND ${CMAKE_VS_MSBUILD_COMMAND} gperftools.sln /m /nologo
-                           /t:libtcmalloc_minimal /p:Configuration="Release-Patch"
-                           /property:Platform="x64"
-                           /p:PlatformToolset=v${MSVC_TOOLSET_VERSION}
-                           /p:WindowsTargetPlatformVersion=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}
-                       WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/gperftools)
-
+                    COMMAND ${CMAKE_VS_MSBUILD_COMMAND} gperftools.sln /m /nologo
+                        /t:libtcmalloc_minimal /p:Configuration="Release-Patch"
+                        /property:Platform="x64"
+                        /p:PlatformToolset=v${MSVC_TOOLSET_VERSION}
+                        /p:WindowsTargetPlatformVersion=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}
+                    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/gperftools)
+ 
     add_library(libtcmalloc_minimal_for_exe STATIC IMPORTED)
     add_library(libtcmalloc_minimal_for_dll STATIC IMPORTED)
 
@@ -245,7 +246,7 @@ elseif(NOT PYBIND)
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-ltcmalloc")
 endif()
 
-if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
+if (RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
     add_definitions(-DRELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
 
     if (MSVC)

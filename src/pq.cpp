@@ -2,7 +2,9 @@
 // Licensed under the MIT license.
 
 #include "mkl.h"
-
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#include "gperftools/malloc_extension.h"
+#endif
 #include "pq.h"
 #include "partition.h"
 #include "math_utils.h"
@@ -925,6 +927,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
 // This code should only be available in the "build" DLL.
 #if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
     MallocExtension::instance()->ReleaseFreeMemory();
+    diskann::cout << "tc malloc haha" << std::endl;
 #endif
     compressed_file_writer.close();
 #ifdef SAVE_INFLATED_PQ
