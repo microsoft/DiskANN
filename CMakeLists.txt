@@ -13,7 +13,7 @@
 #   it's possible to release memory that's free but reserved by tcmalloc. Setting this to true enables
 #   such behavior.
 #   Contact for this feature: gopalrs.
-set(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS ON)
+
 
 # Some variables like MSVC are defined only after project(), so put that first.
 cmake_minimum_required(VERSION 3.15)
@@ -22,6 +22,7 @@ project(diskann)
 set(CMAKE_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS ON)
 
 if(NOT MSVC)
 	set(CMAKE_CXX_COMPILER g++)
