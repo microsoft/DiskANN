@@ -294,6 +294,7 @@ else()
     else()
         # -Ofast is not supported in a python extension module
         set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG -fPIC")
+        unset(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
     endif()
 endif()
 
