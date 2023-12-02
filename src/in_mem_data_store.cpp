@@ -37,13 +37,13 @@ template <typename data_t> size_t InMemDataStore<data_t>::get_alignment_factor()
     return _distance_fn->get_required_alignment();
 }
 
-template <typename data_t> location_t InMemDataStore<data_t>::load(const std::string &filename)
+template <typename data_t> location_t InMemDataStore<data_t>::load(const std::string &filename, size_t offset)
 {
-    return load_impl(filename);
+    return load_impl(filename, offset);
 }
 
 #ifdef EXEC_ENV_OLS
-template <typename data_t> location_t InMemDataStore<data_t>::load_impl(AlignedFileReader &reader)
+template <typename data_t> location_t InMemDataStore<data_t>::load_impl(AlignedFileReader &reader, size_t offset)
 {
     size_t file_dim, file_num_points;
 
@@ -69,7 +69,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(AlignedF
 }
 #endif
 
-template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const std::string &filename)
+template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const std::string &filename, size_t offset)
 {
     size_t file_dim, file_num_points;
     if (!file_exists(filename))
@@ -80,7 +80,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
         aligned_free(_data);
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-    diskann::get_bin_metadata(filename, file_num_points, file_dim);
+    diskann::get_bin_metadata(filename, file_num_points, file_dim, offset);
 
     if (file_dim != this->_dim)
     {
@@ -97,14 +97,20 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
         this->resize((location_t)file_num_points);
     }
 
-    copy_aligned_data_from_file<data_t>(filename.c_str(), _data, file_num_points, file_dim, _aligned_dim);
+    copy_aligned_data_from_file<data_t>(filename.c_str(), _data, file_num_points, file_dim, _aligned_dim, offset);
 
     return (location_t)file_num_points;
 }
 
-template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string &filename, const location_t num_points)
+template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string &filename, const location_t num_pts)
 {
-    return save_data_in_base_dimensions(filename, _data, num_points, this->get_dims(), this->get_aligned_dim(), 0U);
+    return save_data_in_base_dimensions(filename, _data, num_pts, this->get_dims(), this->get_aligned_dim(), 0U);
+}
+
+template <typename data_t>
+size_t InMemDataStore<data_t>::save(std::ofstream &writer, const location_t num_pts, size_t offset)
+{
+    return save_data_in_base_dimensions(writer, _data, num_pts, this->get_dims(), this->get_aligned_dim(), offset);
 }
 
 template <typename data_t> void InMemDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
