@@ -6,7 +6,7 @@
 
 namespace diskann
 {
-template <typename data_t> struct PQScratch;
+template <typename data_t> class PQScratch;
 
 template <typename data_t> class QuantizedDistance
 {

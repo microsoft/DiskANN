@@ -13,7 +13,7 @@
 namespace diskann
 {
 
-template <typename data_t> struct AbstractScratch;
+template <typename data_t> class AbstractScratch;
 
 template <typename data_t> class AbstractDataStore
 {

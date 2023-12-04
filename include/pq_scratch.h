@@ -6,8 +6,9 @@
 namespace diskann
 {
 
-template <typename T> struct PQScratch
+template <typename T> class PQScratch
 {
+  public:
     float *aligned_pqtable_dist_scratch = nullptr; // MUST BE AT LEAST [256 * NCHUNKS]
     float *aligned_dist_scratch = nullptr;         // MUST BE AT LEAST diskann MAX_DEGREE
     uint8_t *aligned_pq_coord_scratch = nullptr;   // AT LEAST  [N_CHUNKS * MAX_DEGREE]

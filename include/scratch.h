@@ -19,7 +19,7 @@
 
 namespace diskann
 {
-template <typename T> struct PQScratch;
+template <typename T> class PQScratch;
 
 //
 // AbstractScratch space for in-memory index based search
