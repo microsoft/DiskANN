@@ -2,7 +2,9 @@
 // Licensed under the MIT license.
 
 #include "mkl.h"
-
+#if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#include "gperftools/malloc_extension.h"
+#endif
 #include "pq.h"
 #include "partition.h"
 #include "math_utils.h"
@@ -133,11 +135,13 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
     diskann::cout << "Loaded PQ Pivots: #ctrs: " << NUM_PQ_CENTROIDS << ", #dims: " << this->ndims
                   << ", #chunks: " << this->n_chunks << std::endl;
 
-    if (file_exists(rotmat_file))
-    {
 #ifdef EXEC_ENV_OLS
+    if (files.fileExists(rotmat_file))
+    {
         diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr, nc);
 #else
+    if (file_exists(rotmat_file))
+    {
         diskann::load_bin<float>(rotmat_file, rotmat_tr, nr, nc);
 #endif
         if (nr != this->ndims || nc != this->ndims)
@@ -921,7 +925,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
     }
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
     MallocExtension::instance()->ReleaseFreeMemory();
 #endif
     compressed_file_writer.close();

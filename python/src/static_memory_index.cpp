@@ -52,6 +52,18 @@ NeighborsAndDistances<StaticIdType> StaticMemoryIndex<DT>::search(
 }
 
 template <typename DT>
+NeighborsAndDistances<StaticIdType> StaticMemoryIndex<DT>::search_with_filter(
+    py::array_t<DT, py::array::c_style | py::array::forcecast> &query, const uint64_t knn, const uint64_t complexity,
+    const filterT filter)
+{
+    py::array_t<StaticIdType> ids(knn);
+    py::array_t<float> dists(knn);
+    std::vector<DT *> empty_vector;
+    _index.search_with_filters(query.data(), filter, knn, complexity, ids.mutable_data(), dists.mutable_data());
+    return std::make_pair(ids, dists);
+}
+
+template <typename DT>
 NeighborsAndDistances<StaticIdType> StaticMemoryIndex<DT>::batch_search(
     py::array_t<DT, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries, const uint64_t knn,
     const uint64_t complexity, const uint32_t num_threads)

@@ -47,11 +47,11 @@ def build_memory_index(
     use_pq_build: bool,
     num_pq_bytes: int,
     use_opq: bool,
-    label_file: str,
+    tags: Union[str, VectorIdentifierBatch],
+    filter_labels: Optional[list[list[str]]],
     universal_label: str,
     filter_complexity: int,
-    tags: Optional[VectorIdentifierBatch],
-    index_prefix: str,
+    index_prefix: str
 ) -> None: ...
 @overload
 def build_memory_index(
@@ -66,9 +66,9 @@ def build_memory_index(
     num_pq_bytes: int,
     use_opq: bool,
     vector_dtype: VectorDType,
-    label_file: str,
+    tags: Union[str, VectorIdentifierBatch],
+    filter_labels_file: Optional[list[list[str]]],
     universal_label: str,
     filter_complexity: int,
-    tags: Optional[str],
-    index_prefix: str,
+    index_prefix: str
 ) -> None: ...
