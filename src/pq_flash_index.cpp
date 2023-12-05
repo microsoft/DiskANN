@@ -4,6 +4,8 @@
 #include "common_includes.h"
 
 #include "timer.h"
+#include "pq.h"
+#include "pq_scratch.h"
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
 
@@ -1278,7 +1280,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     auto data = manager.scratch_space();
     IOContext &ctx = data->ctx;
     auto query_scratch = &(data->scratch);
-    auto pq_query_scratch = query_scratch->_pq_scratch;
+    auto pq_query_scratch = query_scratch->pq_scratch();
 
     // reset query scratch
     query_scratch->reset();
@@ -1286,7 +1288,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     // copy query to thread specific aligned and allocated memory (for distance
     // calculations we need aligned data)
     float query_norm = 0;
-    T *aligned_query_T = query_scratch->aligned_query_T;
+    T *aligned_query_T = query_scratch->aligned_query_T();
     float *query_float = pq_query_scratch->aligned_query_float;
     float *query_rotated = pq_query_scratch->rotated_query;
 
@@ -1307,7 +1309,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         {
             aligned_query_T[i] = (T)(aligned_query_T[i] / query_norm);
         }
-        pq_query_scratch->set(this->_data_dim, aligned_query_T);
+        pq_query_scratch->initialize(this->_data_dim, aligned_query_T);
     }
     else
     {
@@ -1315,7 +1317,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         {
             aligned_query_T[i] = query1[i];
         }
-        pq_query_scratch->set(this->_data_dim, aligned_query_T);
+        pq_query_scratch->initialize(this->_data_dim, aligned_query_T);
     }
 
     // pointers to buffers for data
