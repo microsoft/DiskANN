@@ -40,7 +40,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     // const label_type get_universal_label() const;
 
     // ideally takes raw label file and then genrate internal mapping file and keep the info of mapping
-    size_t load_raw_labels(const std::string &raw_labels_file) override;
+    size_t load_raw_labels(const std::string &raw_labels_file, const std::string &raw_universal_label) override;
 
     void save_labels(const std::string &save_path, const size_t total_points) override;
     // For dynamic filtered build, we compact the data and hence location_to_labels, we need the compacted version of
@@ -75,9 +75,13 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     std::unordered_map<uint32_t, uint32_t> _medoid_counts; // medoids only happen for filtered index
 
     // universal label
-    bool _use_universal_label = false;
-    label_type _mapped_universal_label;
-    std::string _raw_universal_label;
+    bool _has_universal_label = false;
+    label_type _universal_label;
+
+    // no need of storing raw universal label ?
+    // 1. _use_universal_label can be used to identify if universal label present or not
+    // 2. from _label_map and _mapped_universal_label, we can know what is raw universal label. Hence seems duplicate
+    //std::string _raw_universal_label;
 
     // populates _loaction_to labels and _labels from given label file
     size_t parse_label_file(const std::string &label_file);

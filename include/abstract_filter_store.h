@@ -47,7 +47,7 @@ template <typename label_type> class AbstractFilterStore
     // DISKANN_DLLEXPORT virtual const label_type get_universal_label() const = 0;
 
     // takes raw label file and then genrate internal mapping file and keep the info of mapping
-    DISKANN_DLLEXPORT virtual size_t load_raw_labels(const std::string &raw_labels_file) = 0;
+    DISKANN_DLLEXPORT virtual size_t load_raw_labels(const std::string &raw_labels_file, const std::string &raw_universal_label) = 0;
 
     DISKANN_DLLEXPORT virtual void save_labels(const std::string &save_path, const size_t total_points) = 0;
     // For dynamic filtered build, we compact the data and hence location_to_labels, we need the compacted version of

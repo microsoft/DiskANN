@@ -85,51 +85,22 @@ void InMemFilterStore<label_type>::add_label_to_location(const location_t point_
     _location_to_labels[point_id].emplace_back(label);
 }
 
-// template <typename label_type> void InMemFilterStore<label_type>::set_universal_label(label_type universal_label)
-//{
-//     _universal_label = universal_label; // remove this when multiple labels are supported
-//     _use_universal_label = true;
-//     //_mapped_universal_labels.insert(universal_label); // when we support multiple universal labels
-// }
-
 template <typename label_type>
 void InMemFilterStore<label_type>::set_universal_labels(const std::string &raw_universal_label)
 {
-    if (!raw_universal_label.empty())
+    if (raw_universal_label.empty())
     {
-        _raw_universal_label = raw_universal_label;
+       std::cout << "Warning: empty universal label passed" << std::endl;
     }
     else
     {
-        std::cout << "Warning: empty universal label passed" << std::endl;
-    }
-    if (!_raw_universal_label.empty())
         _use_universal_label = true;
-    // populate the mapped universal label set for dynamic index
-    if (_use_universal_label)
-    {
-        // WARNING: Please change as we have unified mapping logic from raw univ labels => mapped univ labels
-        // we are able to make above assumption that mapping is always consistent and not random.
-        _mapped_universal_label = 0;
+        _universal_label = _label_map[raw_universal_label];
     }
 }
 
-// template <typename label_type> const label_type InMemFilterStore<label_type>::get_universal_label() const
-//{
-//     // for now there is only one universal label, so return the first one
-//     // return *_mapped_universal_labels.begin();
-//     return _universal_label;
-// }
-
-// template <typename label_type> const label_type InMemFilterStore<label_type>::get_universal_labels() const
-//{
-//     // for now there is only one universal label, so return the first one
-//
-//
-// }
-
 // ideally takes raw label file and then genrate internal mapping and keep the info of mapping
-template <typename label_type> size_t InMemFilterStore<label_type>::load_raw_labels(const std::string &raw_labels_file)
+template <typename label_type> size_t InMemFilterStore<label_type>::load_raw_labels(const std::string &raw_labels_file, const std::string &raw_universal_label)
 {
     std::string raw_label_file_path =
         std::string(raw_labels_file).erase(raw_labels_file.size() - 4); // remove .txt from end
@@ -138,13 +109,7 @@ template <typename label_type> size_t InMemFilterStore<label_type>::load_raw_lab
         raw_label_file_path + "_label_formatted.txt"; // will not be used after parse, can be safely deleted.
     std::string mem_labels_int_map_file = raw_label_file_path + "_labels_map.txt";
     _label_map = InMemFilterStore::convert_labels_string_to_int(raw_labels_file, labels_file_to_use,
-                                                                mem_labels_int_map_file, _raw_universal_label);
-    // now that we have mapped the labels, we can update _mapped_universal_labels i.e the set of all mapped universal
-    // labels
-
-    _mapped_universal_label = _label_map[_raw_universal_label];
-
-    // may cause extra mem usage in build but cleaner API
+                                                                mem_labels_int_map_file, raw_universal_label);
     return parse_label_file(labels_file_to_use);
 }
 
@@ -233,7 +198,7 @@ void InMemFilterStore<label_type>::load_universal_labels(const std::string &univ
             {
                 throw std::runtime_error("ERROR: Invalid universal label " + line);
             }
-            _mapped_universal_label = universal_label;
+            _universal_label = universal_label;
             _use_universal_label = true;
         }
         universal_label_reader.close();
@@ -302,7 +267,7 @@ template <typename label_type> void InMemFilterStore<label_type>::save_universal
         assert(universal_label_writer.is_open());
         // universal_label_writer << _universal_label << std::endl;
 
-        universal_label_writer << _mapped_universal_label << std::endl;
+        universal_label_writer << _universal_label << std::endl;
         universal_label_writer.close();
     }
 }
@@ -354,7 +319,7 @@ label_type InMemFilterStore<label_type>::get_converted_label(const std::string &
     if (_use_universal_label)
     {
         // Not sure why this is here, but when we start getting more labels chnage this
-        return _mapped_universal_label;
+        return _universal_label;
     }
     std::stringstream stream;
     stream << "Unable to find label in the Label Map";
@@ -372,7 +337,7 @@ void InMemFilterStore<label_type>::calculate_best_medoids(const size_t num_point
     {
         for (auto label : _location_to_labels[point_id])
         {
-            if (_mapped_universal_label == label)
+            if (_universal_label == label)
             {
                 label_to_points[label].emplace_back(point_id);
             }
@@ -502,16 +467,6 @@ std::unordered_map<std::string, label_type> InMemFilterStore<label_type>::conver
     const std::string &raw_universal_label)
 {
     std::unordered_map<std::string, label_type> string_int_map;
-    // if any universal label was set before this we add it here
-    // TODO: Please update universal label mapping logic here, when we do so.
-    label_type universal_labels_mapped = 0;
-
-    if (!raw_universal_label.empty())
-    {
-        string_int_map.insert({raw_universal_label, universal_labels_mapped});
-        --universal_labels_mapped;
-    }
-
     std::ofstream label_writer(outFileName);
     std::ifstream label_reader(inFileName);
     std::string line, token;
@@ -526,8 +481,10 @@ std::unordered_map<std::string, label_type> InMemFilterStore<label_type>::conver
             if (string_int_map.find(token) == string_int_map.end())
             {
                 uint32_t nextId =
-                    (uint32_t)string_int_map.size() + 1; // mapped labels, that are not universal label are always > 0.
+                    (uint32_t)string_int_map.size();
                 string_int_map[token] = nextId;
+                if(token == raw_universal_label)
+                    _universal_label = string_int_map[token];
             }
             lbls.push_back(string_int_map[token]);
         }
@@ -574,17 +531,17 @@ bool InMemFilterStore<label_type>::detect_common_filters_by_set_intersection(
     {
         if (!search_invocation)
         {
-            if (std::find(incoming_labels.begin(), incoming_labels.end(), _mapped_universal_label) !=
+            if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) !=
                     incoming_labels.end() ||
-                std::find(curr_node_labels.begin(), curr_node_labels.end(), _mapped_universal_label) !=
+                std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) !=
                     curr_node_labels.end())
-                common_filters.insert(_mapped_universal_label);
+                common_filters.insert(_universal_label);
         }
         else
         {
-            if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _mapped_universal_label) !=
+            if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) !=
                 curr_node_labels.end())
-                common_filters.insert(_mapped_universal_label);
+                common_filters.insert(_universal_label);
         }
     }
     return (common_filters.size() > 0);
