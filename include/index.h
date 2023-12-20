@@ -103,7 +103,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
-                                                const size_t num_points_to_load);
+                                                const size_t num_points_to_load, const std::vector<TagT> &tags = std::vector<TagT>());
 
     // DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
     DISKANN_DLLEXPORT void set_universal_labels(const std::string &raw_labels);

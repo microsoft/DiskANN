@@ -308,7 +308,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     {
         const auto save_path_inc = get_save_filename(save_path + ".after-delete-", points_to_skip,
                                                      points_to_delete_from_beginning, last_point_threshold);
-        std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
+        std::string labels_file_to_use = save_path_inc + "_label_numeric.txt";
         std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
         if (has_labels)
         {

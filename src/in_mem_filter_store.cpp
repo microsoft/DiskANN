@@ -35,7 +35,7 @@ void InMemFilterStore<label_type>::set_labels_to_location(const location_t locat
 {
     std::vector<label_type> labels;
     for(int i=0; i<label_str.size(); i++){
-        labels.push_back(this->get_converted_label(label_str[i]));
+        labels.push_back(this->get_numeric_label(label_str[i]));
     }
     _location_to_labels[location] = labels;
 }
@@ -106,9 +106,9 @@ template <typename label_type> size_t InMemFilterStore<label_type>::load_raw_lab
         std::string(raw_labels_file).erase(raw_labels_file.size() - 4); // remove .txt from end
     // generate a map file
     std::string labels_file_to_use =
-        raw_label_file_path + "_label_formatted.txt"; // will not be used after parse, can be safely deleted.
+        raw_label_file_path + "_label_numeric.txt"; // will not be used after parse, can be safely deleted.
     std::string mem_labels_int_map_file = raw_label_file_path + "_labels_map.txt";
-    _label_map = InMemFilterStore::convert_labels_string_to_int(raw_labels_file, labels_file_to_use,
+    _label_map = InMemFilterStore::convert_label_to_numeric(raw_labels_file, labels_file_to_use,
                                                                 mem_labels_int_map_file, raw_universal_label);
     return parse_label_file(labels_file_to_use);
 }
@@ -178,7 +178,7 @@ template <typename label_type> void InMemFilterStore<label_type>::load_label_map
         // search of index.
         diskann::cout << "Warning: Can't load label map file please make sure it was generate, either by "
                          "filter_store->load_raw_labels() "
-                         "then index->save() or  convert_labels_string_to_int() method in case of dynamic index"
+                         "then index->save() or  convert_label_to_numeric() method in case of dynamic index"
                       << std::endl;
     }
 }
@@ -305,7 +305,7 @@ template <typename label_type> void InMemFilterStore<label_type>::save_label_map
 }
 
 template <typename label_type>
-label_type InMemFilterStore<label_type>::get_converted_label(const std::string &raw_label)
+label_type InMemFilterStore<label_type>::get_numeric_label(const std::string &raw_label)
 {
     if (_label_map.empty())
     {
@@ -462,7 +462,7 @@ template <typename label_type> size_t InMemFilterStore<label_type>::parse_label_
 }
 
 template <typename label_type>
-std::unordered_map<std::string, label_type> InMemFilterStore<label_type>::convert_labels_string_to_int(
+std::unordered_map<std::string, label_type> InMemFilterStore<label_type>::convert_label_to_numeric(
     const std::string &inFileName, const std::string &outFileName, const std::string &mapFileName,
     const std::string &raw_universal_label)
 {

@@ -341,11 +341,11 @@ int main(int argc, char **argv)
     handle_args(argc, argv, data_type, input_data_path, final_index_path_prefix, label_data_path, universal_label,
                 num_threads, R, L, stitched_R, alpha);
 
-    path labels_file_to_use = final_index_path_prefix + "_label_formatted.txt";
+    path labels_file_to_use = final_index_path_prefix + "_label_numeric.txt";
     path labels_map_file = final_index_path_prefix + "_labels_map.txt";
 
     std::string raw_universal_label = universal_label;
-    diskann::InMemFilterStore<uint32_t>::convert_labels_string_to_int(label_data_path, labels_file_to_use,
+    diskann::InMemFilterStore<uint32_t>::convert_label_to_numeric(label_data_path, labels_file_to_use,
                                                                       labels_map_file, raw_universal_label);
 
     // 2. parse label file and create necessary data structures

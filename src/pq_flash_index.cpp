@@ -586,7 +586,7 @@ std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(
 }
 
 template <typename T, typename LabelT>
-LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_label)
+LabelT PQFlashIndex<T, LabelT>::get_numeric_label(const std::string &filter_label)
 {
     if (_label_map.find(filter_label) != _label_map.end())
     {

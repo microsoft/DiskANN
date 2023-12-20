@@ -1716,13 +1716,12 @@ void Index<T, TagT, LabelT>::set_universal_labels(const std::string &raw_label)
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const std::string &raw_label_file,
-                                                  const size_t num_points_to_load)
+                                                  const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
     // _label_to_medoid_id.clear();
     size_t num_points_labels = _filter_store->load_raw_labels(raw_label_file, "");
     _filter_store->calculate_best_medoids(num_points_to_load, 25);
-    std::vector<TagT> tags;
     this->build(filename, num_points_to_load, tags);
 }
 
@@ -1830,7 +1829,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
 {
     // Add documentation 
     // rename to get_numeric_label
-    auto converted_label = _filter_store->get_converted_label(raw_label);
+    auto converted_label = _filter_store->get_numeric_label(raw_label);
     if (typeid(uint64_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint64_t *>(indices);
@@ -2700,7 +2699,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         _filter_store->set_labels_to_location(location, labels);
         for (std::string label_str : labels)
         {
-            LabelT label = _filter_store->get_converted_label(label_str);
+            LabelT label = _filter_store->get_numeric_label(label_str);
             if (_filter_store->get_all_label_set().find(label) == _filter_store->get_all_label_set().end())
             {
                 if (_frozen_pts_used >= _num_frozen_pts)

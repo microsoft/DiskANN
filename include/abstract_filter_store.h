@@ -32,7 +32,7 @@ template <typename label_type> class AbstractFilterStore
     // Throws: out of range exception
     DISKANN_DLLEXPORT virtual void add_label_to_location(const location_t point_id, label_type label) = 0;
     // returns internal mapping for given raw_label
-    DISKANN_DLLEXPORT virtual label_type get_converted_label(const std::string &raw_label) = 0;
+    DISKANN_DLLEXPORT virtual label_type get_numeric_label(const std::string &raw_label) = 0;
 
     DISKANN_DLLEXPORT virtual void update_medoid_by_label(const label_type &label, const uint32_t new_medoid) = 0;
     DISKANN_DLLEXPORT virtual const uint32_t &get_medoid_by_label(const label_type &label) = 0;

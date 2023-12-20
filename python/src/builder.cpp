@@ -35,9 +35,9 @@ template <typename T, typename TagT, typename LabelT>
 std::string prepare_filtered_label_map(diskann::Index<T, TagT, LabelT> &index, const std::string &index_output_path,
                                        const std::string &filter_labels_file, const std::string &universal_label)
 {
-    std::string labels_file_to_use = index_output_path + "_label_formatted.txt";
+    std::string labels_file_to_use = index_output_path + "_label_numeric.txt";
     std::string mem_labels_int_map_file = index_output_path + "_labels_map.txt";
-    convert_labels_string_to_int(filter_labels_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
+    convert_label_to_numeric(filter_labels_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
     if (!universal_label.empty())
     {
         uint32_t unv_label_as_num = 0;

@@ -26,7 +26,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     // Throws: out of range exception
     void add_label_to_location(const location_t point_id, label_type label) override;
     // returns internal mapping for given raw_label
-    label_type get_converted_label(const std::string &raw_label) override;
+    label_type get_numeric_label(const std::string &raw_label) override;
 
     // Mode medoids related function to index class
     void update_medoid_by_label(const label_type &label, const uint32_t new_medoid) override;
@@ -51,7 +51,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     void save_universal_label(const std::string &save_path) override;
 
     // The function is static so it remains the source of truth across the code. Returns label map
-    DISKANN_DLLEXPORT static std::unordered_map<std::string, label_type> convert_labels_string_to_int(
+    DISKANN_DLLEXPORT static std::unordered_map<std::string, label_type> convert_label_to_numeric(
         const std::string &inFileName, const std::string &outFileName, const std::string &mapFileName,
         const std::string &raw_universal_labels);
 
