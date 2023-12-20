@@ -1716,12 +1716,13 @@ void Index<T, TagT, LabelT>::set_universal_labels(const std::string &raw_label)
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const std::string &raw_label_file,
-                                                  const size_t num_points_to_load, const std::vector<TagT> &tags)
+                                                  const size_t num_points_to_load)
 {
     _filtered_index = true;
     // _label_to_medoid_id.clear();
-    size_t num_points_labels = _filter_store->load_raw_labels(raw_label_file);
+    size_t num_points_labels = _filter_store->load_raw_labels(raw_label_file, "");
     _filter_store->calculate_best_medoids(num_points_to_load, 25);
+    std::vector<TagT> tags;
     this->build(filename, num_points_to_load, tags);
 }
 

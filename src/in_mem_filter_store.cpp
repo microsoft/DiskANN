@@ -94,7 +94,7 @@ void InMemFilterStore<label_type>::set_universal_labels(const std::string &raw_u
     }
     else
     {
-        _use_universal_label = true;
+        _has_universal_label = true;
         _universal_label = _label_map[raw_universal_label];
     }
 }
@@ -199,7 +199,7 @@ void InMemFilterStore<label_type>::load_universal_labels(const std::string &univ
                 throw std::runtime_error("ERROR: Invalid universal label " + line);
             }
             _universal_label = universal_label;
-            _use_universal_label = true;
+            _has_universal_label = true;
         }
         universal_label_reader.close();
     }
@@ -261,7 +261,7 @@ void InMemFilterStore<label_type>::save_raw_labels(const std::string &save_path,
 
 template <typename label_type> void InMemFilterStore<label_type>::save_universal_label(const std::string &save_path)
 {
-    if (_use_universal_label)
+    if (_has_universal_label)
     {
         std::ofstream universal_label_writer(save_path);
         assert(universal_label_writer.is_open());
@@ -316,7 +316,7 @@ label_type InMemFilterStore<label_type>::get_converted_label(const std::string &
         return _label_map[raw_label];
     }
     // why is this here
-    if (_use_universal_label)
+    if (_has_universal_label)
     {
         // Not sure why this is here, but when we start getting more labels chnage this
         return _universal_label;
@@ -483,8 +483,6 @@ std::unordered_map<std::string, label_type> InMemFilterStore<label_type>::conver
                 uint32_t nextId =
                     (uint32_t)string_int_map.size();
                 string_int_map[token] = nextId;
-                if(token == raw_universal_label)
-                    _universal_label = string_int_map[token];
             }
             lbls.push_back(string_int_map[token]);
         }
@@ -527,7 +525,7 @@ bool InMemFilterStore<label_type>::detect_common_filters_by_set_intersection(
         // we dont need to check further for universal label
         return true;
     }
-    if (_use_universal_label)
+    if (_has_universal_label)
     {
         if (!search_invocation)
         {
