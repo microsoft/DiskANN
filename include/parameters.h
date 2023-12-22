@@ -139,8 +139,8 @@ enum State : uint8_t
 template <typename LabelT = uint32_t> class IndexSearchContext
 {
   public:
-    IndexSearchContext(uint32_t time_limit_in_microseconds = 0u, uint32_t io_limit = UINT32_MAX)
-        : _time_limit_in_microseconds(time_limit_in_microseconds), _io_limit(io_limit), _result_state(State::Unknown)
+    IndexSearchContext(uint32_t time_limit_in_microseconds = 0u, uint32_t io_limit = UINT32_MAX, bool allowLessThanKResults = false)
+        : _time_limit_in_microseconds(time_limit_in_microseconds), _io_limit(io_limit), _result_state(State::Unknown), _allowLessThankResults(allowLessThanKResults)
     {
         _use_filter = false;
         _label = (LabelT)0;
@@ -198,6 +198,11 @@ template <typename LabelT = uint32_t> class IndexSearchContext
         return _stats;
     }
 
+    bool GetAllowLessThanKResults()
+    {
+        return _allowLessThankResults;
+    }
+
   private:
     uint32_t _time_limit_in_microseconds;
     uint32_t _io_limit;
@@ -206,6 +211,7 @@ template <typename LabelT = uint32_t> class IndexSearchContext
     LabelT _label;
     Timer _timer;
     QueryStats _stats;
+    bool _allowLessThankResults;
 };
 
 } // namespace diskann

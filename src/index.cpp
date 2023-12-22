@@ -2251,9 +2251,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
             break;
     }
 
-    if (pos <= K)
+    if (pos <= K && context.GetAllowLessThanKResults())
     {
         context.SetState(State::Success);
+    }
+    else if(pos < K)
+    {
+        context.SetState(State::Failure);
     }
     else
     {
@@ -2386,9 +2390,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         if (pos == K)
             break;
     }
-    if (pos <= K)
+    if (pos <= K && context.GetAllowLessThanKResults())
     {
         context.SetState(State::Success);
+    }
+    else if(pos < K)
+    {
+        context.SetState(State::Failure);
     }
     else
     {
