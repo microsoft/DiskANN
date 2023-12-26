@@ -64,7 +64,7 @@ template <typename T> class Distance
 
     // Providing a default implementation for the virtual destructor because we
     // don't expect most metric implementations to need it.
-    DISKANN_DLLEXPORT virtual ~Distance();
+    DISKANN_DLLEXPORT virtual ~Distance() = default;
 
   protected:
     diskann::Metric _distance_metric;

@@ -3,6 +3,7 @@
 
 import shutil
 import unittest
+from pathlib import Path
 from tempfile import mkdtemp
 
 import diskannpy as dap
@@ -166,3 +167,32 @@ class TestStaticDiskIndex(unittest.TestCase):
                 ids, dists = index.batch_search(
                     query_vectors, k_neighbors=k, complexity=5, beam_width=2, num_threads=0
                 )
+
+    def test_relative_paths(self):
+        # Issue 483 and 491 both fixed errors that were somehow slipping past our unit tests
+        # os.path.join() acts as a semi-merge if you give it two paths that look absolute.
+        # since our unit tests are using absolute paths via tempfile.mkdtemp(), the double os.path.join() was never
+        # caught by our tests, but was very easy to trip when using relative paths
+        rel_dir = "tmp"
+        Path(rel_dir).mkdir(exist_ok=True)
+        try:
+            tiny_index_vecs = random_vectors(20, 10, dtype=np.float32, seed=12345)
+            dap.build_disk_index(
+                data=tiny_index_vecs,
+                distance_metric="l2",
+                index_directory=rel_dir,
+                graph_degree=16,
+                complexity=32,
+                search_memory_maximum=0.00003,
+                build_memory_maximum=1,
+                num_threads=0,
+                pq_disk_bytes=0,
+            )
+            index = dap.StaticDiskIndex(
+                index_directory=rel_dir,
+                num_threads=16,
+                num_nodes_to_cache=10,
+            )
+
+        finally:
+            shutil.rmtree(rel_dir, ignore_errors=True)

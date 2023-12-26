@@ -77,22 +77,22 @@ class StaticMemoryIndex:
           does not exist, you are required to provide it.
         - **enable_filters**: Indexes built with filters can also be used for filtered search.
         """
-        index_prefix = _valid_index_prefix(index_directory, index_prefix)
+        index_prefix_path = _valid_index_prefix(index_directory, index_prefix)
         self._labels_map = {}
         self._labels_metadata = {}
         if enable_filters:
             try:
-                with open(index_prefix + "_labels_map.txt", "r") as labels_map_if:
+                with open(f"{index_prefix_path}_labels_map.txt", "r") as labels_map_if:
                     for line in labels_map_if:
                         (key, val) = line.split("\t")
                         self._labels_map[key] = int(val)
-                with open(f"{index_prefix}_label_metadata.json", "r") as labels_metadata_if:
+                with open(f"{index_prefix_path}_label_metadata.json", "r") as labels_metadata_if:
                     self._labels_metadata = json.load(labels_metadata_if)
             except: # noqa: E722
                 # exceptions are basically presumed to be either file not found or file not formatted correctly
                 raise RuntimeException("Filter labels file was unable to be processed.")
         vector_dtype, metric, num_points, dims = _ensure_index_metadata(
-            index_prefix,
+            index_prefix_path,
             vector_dtype,
             distance_metric,
             1,  # it doesn't matter because we don't need it in this context anyway
@@ -119,7 +119,7 @@ class StaticMemoryIndex:
             distance_metric=dap_metric,
             num_points=num_points,
             dimensions=dims,
-            index_path=os.path.join(index_directory, index_prefix),
+            index_path=index_prefix_path,
             num_threads=num_threads,
             initial_search_complexity=initial_search_complexity,
         )
