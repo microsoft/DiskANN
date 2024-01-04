@@ -78,8 +78,9 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
     if (_enable_tags)
     {
-        _location_to_tag.reserve(total_internal_points);
-        _tag_to_location.reserve(total_internal_points);
+    //    _location_to_tag.reserve(total_internal_points);
+    //    _tag_to_location.reserve(total_internal_points);
+        _default_tag_manager.set_total_points(total_internal_points);
     }
 
     if (_dynamic_index)
@@ -262,7 +263,7 @@ size_t Index<T, TagT, LabelT>::save_delete_list(const std::string &filename)
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save)
+void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save, tag_manager_base* tag_manager)
 {
     diskann::Timer timer;
 
@@ -273,7 +274,11 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
 
     if (compact_before_save)
     {
-        compact_data();
+        if (tag_manager == nullptr)
+        {
+            tag_manager = &_default_tag_manager;
+        }
+        compact_data(*tag_manager);
         compact_frozen_point();
     }
     else
@@ -431,15 +436,19 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
     }
 
     const size_t num_data_points = file_num_points - _num_frozen_pts;
-    _location_to_tag.reserve(num_data_points);
-    _tag_to_location.reserve(num_data_points);
+    //_location_to_tag.reserve(num_data_points);
+    //_tag_to_location.reserve(num_data_points);
+    _default_tag_manager.set_total_points(num_data_points);
+
     for (uint32_t i = 0; i < (uint32_t)num_data_points; i++)
     {
         TagT tag = *(tag_data + i);
         if (_delete_set->find(i) == _delete_set->end())
         {
-            _location_to_tag.set(i, tag);
-            _tag_to_location[tag] = i;
+        //    _location_to_tag.set(i, tag);
+        //    _tag_to_location[tag] = i;
+
+            _default_tag_manager.add_location_tag(i, tag);
         }
     }
     diskann::cout << "Tags loaded." << std::endl;
@@ -641,8 +650,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     reposition_frozen_point_to_end();
     diskann::cout << "Num frozen points:" << _num_frozen_pts << " _nd: " << _nd << " _start: " << _start
-                  << " size(_location_to_tag): " << _location_to_tag.size()
-                  << " size(_tag_to_location):" << _tag_to_location.size() << " Max points: " << _max_points
+                  << " size(_location_to_tag): " << _default_tag_manager.get_size()
+                  << " size(_tag_to_location):" << _default_tag_manager.get_size() << " Max points: " << _max_points
                   << std::endl;
 
     // For incremental index, _query_scratch is initialized in the constructor.
@@ -714,14 +723,21 @@ int Index<T, TagT, LabelT>::_get_vector_by_tag(TagType &tag, DataType &vec)
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::get_vector_by_tag(TagT &tag, T *vec)
 {
-    std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
-    if (_tag_to_location.find(tag) == _tag_to_location.end())
+    //std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+    //if (_tag_to_location.find(tag) == _tag_to_location.end())
+    //{
+    //    diskann::cout << "Tag " << tag << " does not exist" << std::endl;
+    //    return -1;
+    //}
+
+    //location_t location = _tag_to_location[tag];
+
+    location_t location = _default_tag_manager.get_location(tag);
+    if (location == (std::numeric_limits<std::uint32_t>::max)())
     {
         diskann::cout << "Tag " << tag << " does not exist" << std::endl;
         return -1;
     }
-
-    location_t location = _tag_to_location[tag];
     _data_store->get_vector(location, vec);
 
     return 0;
@@ -1522,8 +1538,9 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
     {
         for (size_t i = 0; i < tags.size(); ++i)
         {
-            _tag_to_location[tags[i]] = (uint32_t)i;
-            _location_to_tag.set(static_cast<uint32_t>(i), tags[i]);
+        //    _tag_to_location[tags[i]] = (uint32_t)i;
+        //    _location_to_tag.set(static_cast<uint32_t>(i), tags[i]);
+            _default_tag_manager.add_location_tag(i, tags[i]);
         }
     }
 
@@ -2382,7 +2399,7 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
             throw ANNException(err, -1, __FUNCSIG__, __FILE__, __LINE__);
         }
 
-        if (_location_to_tag.size() + _delete_set->size() != _nd)
+        if (_default_tag_manager.get_size() + _delete_set->size() != _nd)
         {
             diskann::cerr << "Error: _location_to_tag.size (" << _location_to_tag.size() << ")  + _delete_set->size ("
                           << _delete_set->size() << ") != _nd(" << _nd << ") ";
@@ -2390,11 +2407,11 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
                                         0, 0, 0, 0);
         }
 
-        if (_location_to_tag.size() != _tag_to_location.size())
-        {
-            throw diskann::ANNException("_location_to_tag and _tag_to_location not of same size", -1, __FUNCSIG__,
-                                        __FILE__, __LINE__);
-        }
+        //if (_location_to_tag.size() != _tag_to_location.size())
+        //{
+        //    throw diskann::ANNException("_location_to_tag and _tag_to_location not of same size", -1, __FUNCSIG__,
+        //                                __FILE__, __LINE__);
+        //}
     }
 
     std::unique_lock<std::shared_timed_mutex> update_lock(_update_lock, std::defer_lock);
@@ -2489,7 +2506,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 }
 
 // Should be called after acquiring _update_lock
-template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::compact_data()
+template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::compact_data(tag_manager_base& tagManager)
 {
     if (!_dynamic_index)
         throw ANNException("Can not compact a non-dynamic index", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -2584,7 +2601,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     }
     diskann::cerr << "#dangling references after data compaction: " << num_dangling << std::endl;
 
-    _tag_to_location.clear();
+    /*_tag_to_location.clear();
     for (auto pos = _location_to_tag.find_first(); pos.is_valid(); pos = _location_to_tag.find_next(pos))
     {
         const auto tag = _location_to_tag.get(pos);
@@ -2594,7 +2611,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     for (const auto &iter : _tag_to_location)
     {
         _location_to_tag.set(iter.second, iter.first);
-    }
+    }*/
+    tagManager.reset_location(new_location);
+
     // remove all cleared up old
     for (size_t old = _nd; old < _max_points; ++old)
     {
@@ -2859,14 +2878,24 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 template <typename T, typename TagT, typename LabelT>
 int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const std::vector<LabelT> &labels)
 {
+    if (_default_tag_manager->is_tag_existed(tag))
+    {
+        return -1;
+    }
+    DefaultTagData defaultTagData(_default_tag_manager, tag);
+    insert_point(point, defaultTagData, labels);
+}
 
+template <typename T, typename TagT, typename LabelT>
+int Index<T, TagT, LabelT>::insert_point(const T* point, tag_data& tag_data, const std::vector<LabelT>& label)
+{
     assert(_has_built);
     if (tag == static_cast<TagT>(0))
     {
         throw diskann::ANNException("Do not insert point with tag 0. That is "
-                                    "reserved for points hidden "
-                                    "from the user.",
-                                    -1, __FUNCSIG__, __FILE__, __LINE__);
+            "reserved for points hidden "
+            "from the user.",
+            -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
     std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
@@ -2880,8 +2909,8 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         {
             release_location(location);
             std::cerr << "Error: Can't insert point with tag " + std::to_string(tag) +
-                             " . there are no labels for the point."
-                      << std::endl;
+                " . there are no labels for the point."
+                << std::endl;
             return -1;
         }
 
@@ -2899,10 +2928,10 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                         -1);
                 }
 
-                auto fz_location = (int)(_max_points) + _frozen_pts_used; // as first _fz_point
+                auto fz_location = (int)(_max_points)+_frozen_pts_used; // as first _fz_point
                 _labels.insert(label);
                 _label_to_start_id[label] = (uint32_t)fz_location;
-                _location_to_labels[fz_location] = {label};
+                _location_to_labels[fz_location] = { label };
                 _data_store->set_vector((location_t)fz_location, point);
                 _frozen_pts_used++;
             }
@@ -2940,8 +2969,8 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         if (location == -1)
         {
             throw diskann::ANNException("Cannot reserve location even after "
-                                        "expanding graph. Terminating.",
-                                        -1, __FUNCSIG__, __FILE__, __LINE__);
+                "expanding graph. Terminating.",
+                -1, __FUNCSIG__, __FILE__, __LINE__);
         }
 #else
         return -1;
@@ -2953,14 +2982,16 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     if (_enable_tags)
     {
         // if tags are enabled and tag is already inserted. so we can't reuse that tag.
-        if (_tag_to_location.find(tag) != _tag_to_location.end())
-        {
-            release_location(location);
-            return -1;
-        }
+        //if (_tag_to_location.find(tag) != _tag_to_location.end())
+        //{
+        //    release_location(location);
+        //    return -1;
+        //}
 
-        _tag_to_location[tag] = location;
-        _location_to_tag.set(location, tag);
+        //_tag_to_location[tag] = location;
+        //_location_to_tag.set(location, tag);
+
+        tag_data.set_internal_location(location);
     }
     tl.unlock();
 
@@ -3040,23 +3071,28 @@ void Index<T, TagT, LabelT>::_lazy_delete(TagVector &tags, TagVector &failed_tag
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::lazy_delete(const TagT &tag)
 {
-    std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
-    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
-    _data_compacted = false;
-
-    if (_tag_to_location.find(tag) == _tag_to_location.end())
+    std::uint32_t location = _default_tag_manager.get_location(tag);
+    if (location == (std::numeric_limits<std::uint32_t>::max)())
     {
         diskann::cerr << "Delete tag not found " << tag << std::endl;
         return -1;
     }
-    assert(_tag_to_location[tag] < _max_points);
+    _default_tag_manager.delete_location(location);
 
-    const auto location = _tag_to_location[tag];
+    return lazy_delete_location(location);
+}
+
+template <typename T, typename TagT, typename LabelT>
+int Index<T, TagT, LabelT>::lazy_delete_location(std::uint32_t location)
+{
+    _data_compacted = false;
+    std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+
     _delete_set->insert(location);
-    _location_to_tag.erase(location);
-    _tag_to_location.erase(tag);
+
     return 0;
+
 }
 
 template <typename T, typename TagT, typename LabelT>
