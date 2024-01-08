@@ -21,10 +21,13 @@ class AbstractGraphStore
     virtual ~AbstractGraphStore() = default;
 
     // returns tuple of <nodes_read, start, num_frozen_points>
-    virtual std::tuple<uint32_t, uint32_t, size_t> load(const std::string &index_path_prefix,
-                                                        const size_t num_points) = 0;
+    virtual std::tuple<uint32_t, uint32_t, size_t> load(const std::string &index_path_prefix, const size_t num_points,
+                                                        size_t offset) = 0;
     virtual int store(const std::string &index_path_prefix, const size_t num_points, const size_t num_fz_points,
                       const uint32_t start) = 0;
+
+    virtual int store(std::ofstream &writer, const size_t num_points, const size_t num_fz_points, const uint32_t start,
+                      size_t offset) = 0;
 
     // not synchronised, user should use lock when necvessary.
     virtual const std::vector<location_t> &get_neighbours(const location_t i) const = 0;
