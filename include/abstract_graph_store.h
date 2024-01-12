@@ -7,6 +7,8 @@
 #include <vector>
 #include "types.h"
 
+class AlignedFileReader;
+
 namespace diskann
 {
 
@@ -21,8 +23,14 @@ class AbstractGraphStore
     virtual ~AbstractGraphStore() = default;
 
     // returns tuple of <nodes_read, start, num_frozen_points>
+#ifdef EXEC_ENV_OLS
+    virtual std::tuple<uint32_t, uint32_t, size_t> load(AlignedFileReader &reader, const size_t num_points,
+                                                        size_t offset) = 0;
+#else
     virtual std::tuple<uint32_t, uint32_t, size_t> load(const std::string &index_path_prefix, const size_t num_points,
                                                         size_t offset) = 0;
+#endif
+
     virtual int store(const std::string &index_path_prefix, const size_t num_points, const size_t num_fz_points,
                       const uint32_t start) = 0;
 

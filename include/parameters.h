@@ -16,15 +16,7 @@ class IndexWriteParameters
 
 {
   public:
-    const uint32_t search_list_size; // L
-    const uint32_t max_degree;       // R
-    const bool saturate_graph;
-    const uint32_t max_occlusion_size; // C
-    const float alpha;
-    const uint32_t num_threads;
-    const uint32_t filter_list_size; // Lf
 
-  private:
     IndexWriteParameters(const uint32_t search_list_size, const uint32_t max_degree, const bool saturate_graph,
                          const uint32_t max_occlusion_size, const float alpha, const uint32_t num_threads,
                          const uint32_t filter_list_size)
@@ -33,6 +25,14 @@ class IndexWriteParameters
           filter_list_size(filter_list_size)
     {
     }
+
+    const uint32_t search_list_size; // L
+    const uint32_t max_degree;       // R
+    const bool saturate_graph;
+    const uint32_t max_occlusion_size; // C
+    const float alpha;
+    const uint32_t num_threads;
+    const uint32_t filter_list_size; // Lf
 
     friend class IndexWriteParametersBuilder;
 };

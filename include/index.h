@@ -35,6 +35,8 @@ struct SaveLoadMetaDataV1
     uint64_t delete_list_offset;
     uint64_t tags_offset;
     uint64_t graph_offset;
+
+    SaveLoadMetaDataV1();
 };
 
 inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree)

@@ -4,6 +4,7 @@
 #include "in_mem_graph_store.h"
 #include "utils.h"
 
+
 namespace diskann
 {
 InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t reserve_graph_degree)
@@ -16,11 +17,21 @@ InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t reserve_gr
     }
 }
 
+#ifdef EXEC_ENV_OLS
+std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load(AlignedFileReader &reader,
+                                                             const size_t num_points, size_t offset)
+{
+    
+    return load_impl(reader, num_points, offset);
+}
+#else
 std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load(const std::string &index_path_prefix,
                                                              const size_t num_points, size_t offset)
 {
+
     return load_impl(index_path_prefix, num_points, offset);
 }
+#endif
 int InMemGraphStore::store(const std::string &index_path_prefix, const size_t num_points,
                            const size_t num_frozen_points, const uint32_t start)
 {
@@ -90,7 +101,6 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileRea
     size_t file_frozen_pts;
     uint32_t start;
 
-    auto max_points = get_max_points();
     int header_size = 2 * sizeof(size_t) + 2 * sizeof(uint32_t);
     std::unique_ptr<char[]> header = std::make_unique<char[]>(header_size);
     read_array(reader, header.get(), header_size, offset);
@@ -143,8 +153,8 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileRea
                   << std::endl;
     return std::make_tuple(nodes_read, start, file_frozen_pts);
 }
-#endif
 
+#else
 std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::string &filename,
                                                                   size_t expected_num_points, size_t offset)
 {
@@ -208,6 +218,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
                   << std::endl;
     return std::make_tuple(nodes_read, start, file_frozen_pts);
 }
+#endif
 
 int InMemGraphStore::save_graph(std::ofstream &writer, const size_t num_points, const size_t num_frozen_points,
                                 const uint32_t start, size_t offset)
