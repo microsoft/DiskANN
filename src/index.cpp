@@ -540,7 +540,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         _filter_store->load_medoids(labels_to_medoids);
         _filter_store->load_universal_labels(std::string(filename) + "_universal_label.txt");
     }
-#endif
+    
     _nd = data_file_num_pts - _num_frozen_pts;
     _empty_slots.clear();
     _empty_slots.reserve(_max_points);
