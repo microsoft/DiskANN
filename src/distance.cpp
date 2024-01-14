@@ -61,10 +61,6 @@ template <typename T> size_t Distance<T>::get_required_alignment() const
     return _alignment_factor;
 }
 
-template <typename T> Distance<T>::~Distance()
-{
-}
-
 //
 // Cosine distance functions.
 //
