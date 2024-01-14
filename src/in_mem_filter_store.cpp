@@ -99,6 +99,22 @@ void InMemFilterStore<label_type>::set_universal_labels(const std::string &raw_u
     }
 }
 
+template <typename label_type>
+std::pair<bool,label_type> InMemFilterStore<label_type>::get_universal_label()
+{
+    std::pair<bool, label_type> universal_label;
+    universal_label.second = _universal_label;
+    if(_has_universal_label)
+    {
+        universal_label.first = false;
+    }
+    else
+    {
+        universal_label.second = false;
+    }
+    return universal_label;
+}
+
 // ideally takes raw label file and then genrate internal mapping and keep the info of mapping
 template <typename label_type> size_t InMemFilterStore<label_type>::load_raw_labels(const std::string &raw_labels_file, const std::string &raw_universal_label)
 {
@@ -325,64 +341,6 @@ label_type InMemFilterStore<label_type>::get_numeric_label(const std::string &ra
     stream << "Unable to find label in the Label Map";
     diskann::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-}
-
-template <typename label_type>
-void InMemFilterStore<label_type>::calculate_best_medoids(const size_t num_points_to_load,
-                                                          const uint32_t num_candidates)
-{
-    std::unordered_map<label_type, std::vector<uint32_t>> label_to_points;
-
-    for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
-    {
-        for (auto label : _location_to_labels[point_id])
-        {
-            if (_universal_label == label)
-            {
-                label_to_points[label].emplace_back(point_id);
-            }
-            else
-            {
-                for (typename tsl::robin_set<label_type>::size_type lbl = 0; lbl < _labels.size(); lbl++)
-                {
-                    auto itr = _labels.begin();
-                    std::advance(itr, lbl);
-                    auto &x = *itr;
-                    label_to_points[x].emplace_back(point_id);
-                }
-            }
-        }
-    }
-
-    uint32_t num_cands = num_candidates;
-    for (auto itr = _labels.begin(); itr != _labels.end(); itr++)
-    {
-        uint32_t best_medoid_count = std::numeric_limits<uint32_t>::max();
-        auto &curr_label = *itr;
-        uint32_t best_medoid;
-        auto labeled_points = label_to_points[curr_label];
-        for (uint32_t cnd = 0; cnd < num_cands; cnd++)
-        {
-            uint32_t cur_cnd = labeled_points[rand() % labeled_points.size()];
-            uint32_t cur_cnt = std::numeric_limits<uint32_t>::max();
-            if (_medoid_counts.find(cur_cnd) == _medoid_counts.end())
-            {
-                _medoid_counts[cur_cnd] = 0;
-                cur_cnt = 0;
-            }
-            else
-            {
-                cur_cnt = _medoid_counts[cur_cnd];
-            }
-            if (cur_cnt < best_medoid_count)
-            {
-                best_medoid_count = cur_cnt;
-                best_medoid = cur_cnd;
-            }
-        }
-        _label_to_medoid_id[curr_label] = best_medoid;
-        _medoid_counts[best_medoid]++;
-    }
 }
 
 template <typename label_type> size_t InMemFilterStore<label_type>::parse_label_file(const std::string &label_file)

@@ -245,6 +245,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
+    // Calculate best medoids for filter data
+    void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates);
+
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids,
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
@@ -370,10 +373,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Filter Support
 
     bool _filtered_index = false;
+    std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
+    std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     /*  std::vector<std::vector<LabelT>> _pts_to_labels;
       tsl::robin_set<LabelT> _labels;
-      std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
-      std::unordered_map<uint32_t, uint32_t> _medoid_counts;
       bool _use_universal_label = false;
       LabelT _universal_label = 0;
       std::unordered_map<std::string, LabelT> _label_map;*/

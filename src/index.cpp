@@ -669,6 +669,68 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
     return init_ids;
 }
 
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::calculate_best_medoids(const size_t num_points_to_load,
+                                                          const uint32_t num_candidates)
+{
+    _label_to_medoid_id.clear();
+    std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
+    tsl::robin_set<LabelT> label_set = _filter_store->get_all_label_set();
+                
+    for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
+    {
+        for (auto label : _filter_store->get_labels_by_location(point_id))
+        {
+            std::pair<bool, LabelT> universal_label = _filter_store->get_universal_label();
+            if (universal_label.first == true && universal_label.second == label)
+            {
+                label_to_points[label].emplace_back(point_id);
+            }
+            else
+            {
+                for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < label_set.size(); lbl++)
+                {
+                    auto itr = label_set.begin();
+                    std::advance(itr, lbl);
+                    auto &x = *itr;
+                    label_to_points[x].emplace_back(point_id);
+                }
+            }
+        }
+    }
+
+    uint32_t num_cands = num_candidates;
+    for (auto itr = label_set.begin(); itr != label_set.end(); itr++)
+    {
+        uint32_t best_medoid_count = std::numeric_limits<uint32_t>::max();
+        auto &curr_label = *itr;
+        uint32_t best_medoid;
+        auto labeled_points = label_to_points[curr_label];
+        for (uint32_t cnd = 0; cnd < num_cands; cnd++)
+        {
+            uint32_t cur_cnd = labeled_points[rand() % labeled_points.size()];
+            uint32_t cur_cnt = std::numeric_limits<uint32_t>::max();
+            if (_medoid_counts.find(cur_cnd) == _medoid_counts.end())
+            {
+                _medoid_counts[cur_cnd] = 0;
+                cur_cnt = 0;
+            }
+            else
+            {
+                cur_cnt = _medoid_counts[cur_cnd];
+            }
+            if (cur_cnt < best_medoid_count)
+            {
+                best_medoid_count = cur_cnt;
+                best_medoid = cur_cnd;
+            }
+        }
+        _label_to_medoid_id[curr_label] = best_medoid;
+        _medoid_counts[best_medoid]++;
+    }
+}
+
+
 // Find common filter between a node's labels and a given set of labels, while
 // taking into account universal label
 template <typename T, typename TagT, typename LabelT>
@@ -1719,9 +1781,8 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                                                   const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
-    // _label_to_medoid_id.clear();
     size_t num_points_labels = _filter_store->load_raw_labels(raw_label_file, "");
-    _filter_store->calculate_best_medoids(num_points_to_load, 25);
+    calculate_best_medoids(num_points_to_load, 25);
     this->build(filename, num_points_to_load, tags);
 }
 

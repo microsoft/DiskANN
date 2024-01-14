@@ -38,13 +38,11 @@ template <typename label_type> class AbstractFilterStore
     DISKANN_DLLEXPORT virtual const uint32_t &get_medoid_by_label(const label_type &label) = 0;
     DISKANN_DLLEXPORT virtual const std::unordered_map<label_type, uint32_t> &get_labels_to_medoids() = 0;
     DISKANN_DLLEXPORT virtual bool label_has_medoid(const label_type &label) = 0;
-    DISKANN_DLLEXPORT virtual void calculate_best_medoids(const size_t num_points_to_load,
-                                                          const uint32_t num_candidates) = 0;
 
     // TODO: in future we may accept a set or vector of universal labels
     // DISKANN_DLLEXPORT virtual void set_universal_label(label_type universal_label) = 0;
     DISKANN_DLLEXPORT virtual void set_universal_labels(const std::string &universal_labels) = 0;
-    // DISKANN_DLLEXPORT virtual const label_type get_universal_label() const = 0;
+    DISKANN_DLLEXPORT virtual std::pair<bool,label_type> get_universal_label() = 0;
 
     // takes raw label file and then genrate internal mapping file and keep the info of mapping
     DISKANN_DLLEXPORT virtual size_t load_raw_labels(const std::string &raw_labels_file, const std::string &raw_universal_label) = 0;
