@@ -144,6 +144,7 @@ template <typename LabelT = uint32_t> class IndexSearchContext
     {
         _use_filter = false;
         _label = (LabelT)0;
+        _total_result_returned = 0;
     }
 
     void SetLabel(LabelT label, bool use_filter)
@@ -155,6 +156,16 @@ template <typename LabelT = uint32_t> class IndexSearchContext
     void SetState(State state)
     {
         _result_state = state;
+    }
+
+    void UpdateResultReturned(size_t result_returned)
+    {
+        _total_result_returned = result_returned;
+    }
+
+    size_t GetResultReturned(size_t result_returned)
+    {
+        return _total_result_returned;
     }
 
     State GetState() const
@@ -212,6 +223,7 @@ template <typename LabelT = uint32_t> class IndexSearchContext
     Timer _timer;
     QueryStats _stats;
     bool _allowLessThankResults;
+    size_t _total_result_returned;
 };
 
 } // namespace diskann
