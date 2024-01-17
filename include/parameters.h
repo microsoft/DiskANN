@@ -163,7 +163,7 @@ template <typename LabelT = uint32_t> class IndexSearchContext
         _total_result_returned = result_returned;
     }
 
-    size_t GetResultReturned()
+    size_t GetResultCount()
     {
         return _total_result_returned;
     }
