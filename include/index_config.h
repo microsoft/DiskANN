@@ -221,7 +221,7 @@ class IndexConfigBuilder
 
     IndexConfigBuilder &with_load_from_single_file_version(uint64_t load_from_one_file_version)
     {
-        this->_save_as_one_file_version = load_from_one_file_version;
+        this->_load_from_one_file_version = load_from_one_file_version;
         return *this;
     }
 

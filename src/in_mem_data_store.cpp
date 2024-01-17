@@ -42,12 +42,16 @@ template <typename data_t> location_t InMemDataStore<data_t>::load(const std::st
     return load_impl(filename, offset);
 }
 
+template <typename data_t> location_t InMemDataStore<data_t>::load(AlignedFileReader &reader, size_t offset)
+{
+    return load_impl(reader, offset);
+}
+
 #ifdef EXEC_ENV_OLS
 template <typename data_t> location_t InMemDataStore<data_t>::load_impl(AlignedFileReader &reader, size_t offset)
 {
     size_t file_dim, file_num_points;
-
-    diskann::get_bin_metadata(reader, file_num_points, file_dim);
+    diskann::get_bin_metadata(reader, file_num_points, file_dim, offset);
 
     if (file_dim != this->_dim)
     {
@@ -63,7 +67,8 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(AlignedF
     {
         this->resize((location_t)file_num_points);
     }
-    copy_aligned_data_from_file<data_t>(reader, _data, file_num_points, file_dim, _aligned_dim);
+
+    copy_aligned_data_from_file<data_t>(reader, _data, file_num_points, file_dim, _aligned_dim, offset);
 
     return (location_t)file_num_points;
 }

@@ -94,7 +94,8 @@ void InMemGraphStore::clear_graph()
 }
 
 #ifdef EXEC_ENV_OLS
-std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileReader &reader, size_t expected_num_points,
+std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileReader &reader,
+                                                                  size_t expected_num_points,
                                                                   size_t offset)
 {
     size_t expected_file_size;
@@ -114,7 +115,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileRea
                   << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << start
                   << ", file_frozen_pts: " << file_frozen_pts << std::endl;
 
-    diskann::cout << "Loading vamana graph from reader..." << std::flush;
+    diskann::cout << "Loading vamana graph from reader..." << std::endl << std::flush;
 
     // If user provides more points than max_points
     // resize the _graph to the larger size.
