@@ -1008,7 +1008,6 @@ void block_convert(std::ofstream &writr, std::ifstream &readr, float *read_buf, 
 
 DISKANN_DLLEXPORT void normalize_data_file(const std::string &inFileName, const std::string &outFileName);
 
-
 inline std::string get_tag_string(std::uint64_t tag)
 {
     return std::to_string(tag);
