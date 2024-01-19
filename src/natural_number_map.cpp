@@ -112,6 +112,5 @@ template class natural_number_map<uint32_t, int32_t>;
 template class natural_number_map<uint32_t, uint32_t>;
 template class natural_number_map<uint32_t, int64_t>;
 template class natural_number_map<uint32_t, uint64_t>;
-template class natural_number_map<uint32_t, uint64_t>;
 template class natural_number_map<uint32_t, tag_uint128>;
 } // namespace diskann
