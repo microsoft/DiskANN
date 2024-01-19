@@ -2251,14 +2251,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
             break;
     }
 
-    if (pos < K)
+    if (pos < K && context.GetAllowLessThanKResults())
+    {
+        context.SetState(State::Success);
+        context.UpdateResultReturned(pos);
+    }
+    else if(pos < K)
     {
         context.SetState(State::Failure);
-        diskann::cerr << "Found pos: " << pos << "fewer than K elements " << K << " for query" << std::endl;
+        context.UpdateResultReturned(pos);
     }
     else
     {
         context.SetState(State::Success);
+        context.UpdateResultReturned(K);
     }
 
     return retval;
@@ -2387,14 +2393,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         if (pos == K)
             break;
     }
-    if (pos < K)
+    if (pos < K && context.GetAllowLessThanKResults())
+    {
+        context.SetState(State::Success);
+        context.UpdateResultReturned(pos);
+    }
+    else if(pos < K)
     {
         context.SetState(State::Failure);
-        diskann::cerr << "Found fewer than K elements for query" << std::endl;
+        context.UpdateResultReturned(pos);
     }
     else
     {
         context.SetState(State::Success);
+        context.UpdateResultReturned(K);
     }
 
     return retval;
