@@ -2393,17 +2393,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         if (pos == K)
             break;
     }
-    if (pos <= K && context.GetAllowLessThanKResults())
+    if (pos < K && context.GetAllowLessThanKResults())
     {
         context.SetState(State::Success);
+        context.UpdateResultReturned(pos);
     }
     else if(pos < K)
     {
         context.SetState(State::Failure);
+        context.UpdateResultReturned(pos);
     }
     else
     {
-        context.SetState(State::Failure);
+        context.SetState(State::Success);
+        context.UpdateResultReturned(K);
     }
 
     return retval;
