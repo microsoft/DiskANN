@@ -12,6 +12,7 @@
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 #include "windows_customizations.h"
+#include "tag_uint128.h"
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
@@ -717,7 +718,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
     if (_tag_to_location.find(tag) == _tag_to_location.end())
     {
-        diskann::cout << "Tag " << tag << " does not exist" << std::endl;
+        diskann::cout << "Tag " << get_tag_string(tag) << " does not exist" << std::endl;
         return -1;
     }
 
@@ -1991,7 +1992,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
         {
             // safe because Index uses uint32_t ids internally
             // and IDType will be uint32_t or uint64_t
-            indices[pos] = (IdType)best_L_nodes[i].id;
+            indices[pos] = best_L_nodes[i].id;
             if (distances != nullptr)
             {
 #ifdef EXEC_ENV_OLS
@@ -2022,14 +2023,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
                                                                            float *distances)
 {
     auto converted_label = this->get_converted_label(raw_label);
-    if (typeid(uint64_t *) == indices.type())
+    
+    if (typeid(TagT*) == indices.type())
     {
-        auto ptr = std::any_cast<uint64_t *>(indices);
-        return this->search_with_filters(std::any_cast<T *>(query), converted_label, K, L, ptr, distances);
-    }
-    else if (typeid(uint32_t *) == indices.type())
-    {
-        auto ptr = std::any_cast<uint32_t *>(indices);
+        auto ptr = std::any_cast<TagT*>(indices);
         return this->search_with_filters(std::any_cast<T *>(query), converted_label, K, L, ptr, distances);
     }
     else
@@ -2100,7 +2097,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 TagT tag;
                 if (_location_to_tag.try_get(best_L_nodes[i].id, tag))
                 {
-                    indices[pos] = (IdType)tag;
+                    indices[pos] = tag;
                 }
                 else
                 {
@@ -2109,7 +2106,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             }
             else
             {
-                indices[pos] = (IdType)best_L_nodes[i].id;
+                indices[pos] = best_L_nodes[i].id;
             }
 
             if (distances != nullptr)
@@ -2861,7 +2858,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 {
 
     assert(_has_built);
-    if (tag == static_cast<TagT>(0))
+    if (tag == 0)
     {
         throw diskann::ANNException("Do not insert point with tag 0. That is "
                                     "reserved for points hidden "
@@ -2879,7 +2876,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         if (labels.empty())
         {
             release_location(location);
-            std::cerr << "Error: Can't insert point with tag " + std::to_string(tag) +
+            std::cerr << "Error: Can't insert point with tag " + get_tag_string(tag) +
                              " . there are no labels for the point."
                       << std::endl;
             return -1;
@@ -3047,7 +3044,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 
     if (_tag_to_location.find(tag) == _tag_to_location.end())
     {
-        diskann::cerr << "Delete tag not found " << tag << std::endl;
+        diskann::cerr << "Delete tag not found " << get_tag_string(tag) << std::endl;
         return -1;
     }
     assert(_tag_to_location[tag] < _max_points);
@@ -3336,6 +3333,9 @@ template DISKANN_DLLEXPORT class Index<uint8_t, int64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, uint64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t, uint32_t>;
+template DISKANN_DLLEXPORT class Index<float, tag_uint128, uint32_t>;
+template DISKANN_DLLEXPORT class Index<int8_t, tag_uint128, uint32_t>;
+template DISKANN_DLLEXPORT class Index<uint8_t, tag_uint128, uint32_t>;
 // Label with short int 2 byte
 template DISKANN_DLLEXPORT class Index<float, int32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, int32_t, uint16_t>;
@@ -3349,19 +3349,16 @@ template DISKANN_DLLEXPORT class Index<uint8_t, int64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<float, uint64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t, uint16_t>;
+template DISKANN_DLLEXPORT class Index<float, tag_uint128, uint16_t>;
+template DISKANN_DLLEXPORT class Index<int8_t, tag_uint128, uint16_t>;
+template DISKANN_DLLEXPORT class Index<uint8_t, tag_uint128, uint16_t>;
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search<uint64_t>(
     const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search<uint32_t>(
-    const float *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search<uint64_t>(
     const uint8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search<uint32_t>(
-    const uint8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search<uint64_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search<uint32_t>(
-    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search<uint64_t>(
     const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
@@ -3375,24 +3372,22 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
     const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search<uint32_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
+// TagT==uint128
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, tag_uint128, uint32_t>::search<tag_uint128>(
+    const float* query, const size_t K, const uint32_t L, tag_uint128* indices, float* distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, tag_uint128, uint32_t>::search<tag_uint128>(
+    const uint8_t* query, const size_t K, const uint32_t L, tag_uint128* indices, float* distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, tag_uint128, uint32_t>::search<tag_uint128>(
+    const int8_t* query, const size_t K, const uint32_t L, tag_uint128* indices, float* distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
-    uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
@@ -3413,19 +3408,23 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
+// TagT==uint128
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, tag_uint128, uint32_t>::search_with_filters<
+    tag_uint128>(const float* query, const uint32_t& filter_label, const size_t K, const uint32_t L, tag_uint128* indices,
+        float* distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, tag_uint128, uint32_t>::search_with_filters<
+    tag_uint128>(const uint8_t* query, const uint32_t& filter_label, const size_t K, const uint32_t L, tag_uint128* indices,
+        float* distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, tag_uint128, uint32_t>::search_with_filters<
+    tag_uint128>(const int8_t* query, const uint32_t& filter_label, const size_t K, const uint32_t L, tag_uint128* indices,
+        float* distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search<uint64_t>(
     const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search<uint32_t>(
-    const float *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search<uint64_t>(
     const uint8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search<uint32_t>(
-    const uint8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search<uint64_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search<uint32_t>(
-    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::search<uint64_t>(
     const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
@@ -3439,24 +3438,22 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
     const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search<uint32_t>(
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
+// TagT==uint128
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, tag_uint128, uint16_t>::search<tag_uint128>(
+    const float* query, const size_t K, const uint32_t L, tag_uint128* indices, float* distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, tag_uint128, uint16_t>::search<tag_uint128>(
+    const uint8_t* query, const size_t K, const uint32_t L, tag_uint128* indices, float* distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, tag_uint128, uint16_t>::search<tag_uint128>(
+    const int8_t* query, const size_t K, const uint32_t L, tag_uint128* indices, float* distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
-    uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
               float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
     uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
-template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
@@ -3477,4 +3474,15 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
+// TagT==uint128
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, tag_uint128, uint16_t>::search_with_filters<
+    tag_uint128>(const float* query, const uint16_t& filter_label, const size_t K, const uint32_t L, tag_uint128* indices,
+        float* distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, tag_uint128, uint16_t>::search_with_filters<
+    tag_uint128>(const uint8_t* query, const uint16_t& filter_label, const size_t K, const uint32_t L, tag_uint128* indices,
+        float* distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, tag_uint128, uint16_t>::search_with_filters<
+    tag_uint128>(const int8_t* query, const uint16_t& filter_label, const size_t K, const uint32_t L, tag_uint128* indices,
+        float* distances);
+
 } // namespace diskann
