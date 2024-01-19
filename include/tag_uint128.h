@@ -59,7 +59,7 @@ inline std::uint64_t Hash128to64(const std::uint64_t &low, const std::uint64_t &
 
 template <> struct hash<diskann::tag_uint128>
 {
-    _NODISCARD size_t operator()(const diskann::tag_uint128 &key) const noexcept
+    size_t operator()(const diskann::tag_uint128 &key) const noexcept
     {
         return Hash128to64(key._data1, key._data2); // map -0 to 0
     }
