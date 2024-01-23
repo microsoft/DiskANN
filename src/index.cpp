@@ -540,7 +540,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         _filter_store->load_medoids(labels_to_medoids);
         _filter_store->load_universal_labels(std::string(filename) + "_universal_label.txt");
     }
-    
+
     _nd = data_file_num_pts - _num_frozen_pts;
     _empty_slots.clear();
     _empty_slots.reserve(_max_points);
@@ -663,13 +663,12 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::calculate_best_medoids(const size_t num_points_to_load,
-                                                          const uint32_t num_candidates)
+void Index<T, TagT, LabelT>::calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates)
 {
     _label_to_medoid_id.clear();
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
     tsl::robin_set<LabelT> label_set = _filter_store->get_all_label_set();
-                
+
     for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
     {
         for (auto label : _filter_store->get_labels_by_location(point_id))
@@ -722,7 +721,6 @@ void Index<T, TagT, LabelT>::calculate_best_medoids(const size_t num_points_to_l
         _medoid_counts[best_medoid]++;
     }
 }
-
 
 // Find common filter between a node's labels and a given set of labels, while
 // taking into account universal label
@@ -948,7 +946,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
-            _filter_store->get_labels_by_location(location), false);
+                               _filter_store->get_labels_by_location(location), false);
 
         // combine candidate pools obtained with filter and unfiltered criteria.
         std::set<Neighbor> best_candidate_pool;
@@ -1846,7 +1844,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
                                                                            const uint32_t L, std::any &indices,
                                                                            float *distances)
 {
-    // Add documentation 
+    // Add documentation
     // rename to get_numeric_label
     auto converted_label = _filter_store->get_numeric_label(raw_label);
     if (typeid(uint64_t *) == indices.type())

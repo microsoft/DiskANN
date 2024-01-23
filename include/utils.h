@@ -177,7 +177,7 @@ inline int delete_file(const std::string &fileName)
 }
 
 inline void convert_label_to_numeric(const std::string &inFileName, const std::string &outFileName,
-                                         const std::string &mapFileName, const std::string &unv_label)
+                                     const std::string &mapFileName, const std::string &unv_label)
 {
     std::unordered_map<std::string, uint32_t> string_int_map;
     std::ofstream label_writer(outFileName);

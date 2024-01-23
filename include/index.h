@@ -109,7 +109,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
-                                                const size_t num_points_to_load, const std::vector<TagT> &tags = std::vector<TagT>());
+                                                const size_t num_points_to_load,
+                                                const std::vector<TagT> &tags = std::vector<TagT>());
 
     // DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
     DISKANN_DLLEXPORT void set_universal_labels(const std::string &raw_labels);
@@ -253,7 +254,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Calculate best medoids for filter data
     void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates);
-    
+
     // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,

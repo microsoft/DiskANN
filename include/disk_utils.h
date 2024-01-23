@@ -66,7 +66,7 @@ DISKANN_DLLEXPORT int merge_shards(const std::string &vamana_prefix, const std::
                                    const uint64_t nshards, uint32_t max_degree, const std::string &output_vamana,
                                    const std::string &medoids_file, bool use_filters = false,
                                    const std::string &labels_to_medoids_file = std::string(""),
-                                   const std::unordered_map<std::string, uint32_t>& disk_labels_map = {});
+                                   const std::unordered_map<std::string, uint32_t> &disk_labels_map = {});
 
 DISKANN_DLLEXPORT void extract_shard_labels(const std::string &in_label_file, const std::string &shard_ids_bin,
                                             const std::string &shard_label_file);

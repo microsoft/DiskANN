@@ -34,7 +34,8 @@ void InMemFilterStore<label_type>::set_labels_to_location(const location_t locat
                                                           const std::vector<std::string> &label_str)
 {
     std::vector<label_type> labels;
-    for(int i=0; i<label_str.size(); i++){
+    for (int i = 0; i < label_str.size(); i++)
+    {
         labels.push_back(this->get_numeric_label(label_str[i]));
     }
     _location_to_labels[location] = labels;
@@ -90,7 +91,7 @@ void InMemFilterStore<label_type>::set_universal_labels(const std::string &raw_u
 {
     if (raw_universal_label.empty())
     {
-       std::cout << "Warning: empty universal label passed" << std::endl;
+        std::cout << "Warning: empty universal label passed" << std::endl;
     }
     else
     {
@@ -99,12 +100,11 @@ void InMemFilterStore<label_type>::set_universal_labels(const std::string &raw_u
     }
 }
 
-template <typename label_type>
-std::pair<bool,label_type> InMemFilterStore<label_type>::get_universal_label()
+template <typename label_type> std::pair<bool, label_type> InMemFilterStore<label_type>::get_universal_label()
 {
     std::pair<bool, label_type> universal_label;
     universal_label.second = _universal_label;
-    if(_has_universal_label)
+    if (_has_universal_label)
     {
         universal_label.first = false;
     }
@@ -116,7 +116,9 @@ std::pair<bool,label_type> InMemFilterStore<label_type>::get_universal_label()
 }
 
 // ideally takes raw label file and then genrate internal mapping and keep the info of mapping
-template <typename label_type> size_t InMemFilterStore<label_type>::load_raw_labels(const std::string &raw_labels_file, const std::string &raw_universal_label)
+template <typename label_type>
+size_t InMemFilterStore<label_type>::load_raw_labels(const std::string &raw_labels_file,
+                                                     const std::string &raw_universal_label)
 {
     std::string raw_label_file_path =
         std::string(raw_labels_file).erase(raw_labels_file.size() - 4); // remove .txt from end
@@ -125,7 +127,7 @@ template <typename label_type> size_t InMemFilterStore<label_type>::load_raw_lab
         raw_label_file_path + "_label_numeric.txt"; // will not be used after parse, can be safely deleted.
     std::string mem_labels_int_map_file = raw_label_file_path + "_labels_map.txt";
     _label_map = InMemFilterStore::convert_label_to_numeric(raw_labels_file, labels_file_to_use,
-                                                                mem_labels_int_map_file, raw_universal_label);
+                                                            mem_labels_int_map_file, raw_universal_label);
     return parse_label_file(labels_file_to_use);
 }
 
@@ -320,8 +322,7 @@ template <typename label_type> void InMemFilterStore<label_type>::save_label_map
     map_writer.close();
 }
 
-template <typename label_type>
-label_type InMemFilterStore<label_type>::get_numeric_label(const std::string &raw_label)
+template <typename label_type> label_type InMemFilterStore<label_type>::get_numeric_label(const std::string &raw_label)
 {
     if (_label_map.empty())
     {
@@ -438,8 +439,7 @@ std::unordered_map<std::string, label_type> InMemFilterStore<label_type>::conver
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             if (string_int_map.find(token) == string_int_map.end())
             {
-                uint32_t nextId =
-                    (uint32_t)string_int_map.size();
+                uint32_t nextId = (uint32_t)string_int_map.size();
                 string_int_map[token] = nextId;
             }
             lbls.push_back(string_int_map[token]);
@@ -487,16 +487,13 @@ bool InMemFilterStore<label_type>::detect_common_filters_by_set_intersection(
     {
         if (!search_invocation)
         {
-            if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) !=
-                    incoming_labels.end() ||
-                std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) !=
-                    curr_node_labels.end())
+            if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) != incoming_labels.end() ||
+                std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
                 common_filters.insert(_universal_label);
         }
         else
         {
-            if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) !=
-                curr_node_labels.end())
+            if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
                 common_filters.insert(_universal_label);
         }
     }

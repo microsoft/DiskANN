@@ -346,8 +346,8 @@ int main(int argc, char **argv)
     path labels_map_file = final_index_path_prefix + "_labels_map.txt";
 
     std::string raw_universal_label = universal_label;
-    diskann::InMemFilterStore<uint32_t>::convert_label_to_numeric(label_data_path, labels_file_to_use,
-                                                                      labels_map_file, raw_universal_label);
+    diskann::InMemFilterStore<uint32_t>::convert_label_to_numeric(label_data_path, labels_file_to_use, labels_map_file,
+                                                                  raw_universal_label);
 
     // 2. parse label file and create necessary data structures
     std::vector<label_set> point_ids_to_labels;

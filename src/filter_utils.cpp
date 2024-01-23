@@ -269,7 +269,8 @@ parse_label_file_return_values parse_label_file(path label_data_path, std::strin
  * 1. a vector of vectors of labels, where the outer vector is indexed by point id
  * 2. a set of all labels
  */
-std::tuple<std::vector<std::vector<std::string>>, tsl::robin_set<std::string>> parse_raw_label_file(std::string label_file)
+std::tuple<std::vector<std::vector<std::string>>, tsl::robin_set<std::string>> parse_raw_label_file(
+    std::string label_file)
 {
     std::vector<std::vector<std::string>> pts_to_labels;
     tsl::robin_set<std::string> labels;
