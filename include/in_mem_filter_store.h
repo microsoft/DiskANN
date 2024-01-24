@@ -23,9 +23,9 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     void set_labels_to_location(const location_t location, const std::vector<std::string> &labels);
     void swap_labels(const location_t location_first, const location_t location_second) override;
     const tsl::robin_set<label_type> &get_all_label_set() override;
-    void add_to_label_set(label_type &label) override;
+    void add_to_label_set(const label_type &label) override;
     // Throws: out of range exception
-    void add_label_to_location(const location_t point_id, label_type label) override;
+    void add_label_to_location(const location_t point_id, const label_type label) override;
     // returns internal mapping for given raw_label
     label_type get_numeric_label(const std::string &raw_label) override;
 

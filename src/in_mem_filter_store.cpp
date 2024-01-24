@@ -52,7 +52,7 @@ template <typename label_type> const tsl::robin_set<label_type> &InMemFilterStor
     return _labels;
 }
 
-template <typename label_type> void InMemFilterStore<label_type>::add_to_label_set(label_type &label)
+template <typename label_type> void InMemFilterStore<label_type>::add_to_label_set(const label_type &label)
 {
     _labels.insert(label);
 }
@@ -81,7 +81,7 @@ template <typename label_type> bool InMemFilterStore<label_type>::label_has_medo
 }
 
 template <typename label_type>
-void InMemFilterStore<label_type>::add_label_to_location(const location_t point_id, label_type label)
+void InMemFilterStore<label_type>::add_label_to_location(const location_t point_id, const label_type label)
 {
     _location_to_labels[point_id].emplace_back(label);
 }

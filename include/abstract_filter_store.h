@@ -28,9 +28,9 @@ template <typename label_type> class AbstractFilterStore
     DISKANN_DLLEXPORT virtual void swap_labels(const location_t location_first, const location_t location_second) = 0;
 
     DISKANN_DLLEXPORT virtual const tsl::robin_set<label_type> &get_all_label_set() = 0;
-    DISKANN_DLLEXPORT virtual void add_to_label_set(label_type &label) = 0;
+    DISKANN_DLLEXPORT virtual void add_to_label_set(const label_type &label) = 0;
     // Throws: out of range exception
-    DISKANN_DLLEXPORT virtual void add_label_to_location(const location_t point_id, label_type label) = 0;
+    DISKANN_DLLEXPORT virtual void add_label_to_location(const location_t point_id, const label_type label) = 0;
     // returns internal mapping for given raw_label
     DISKANN_DLLEXPORT virtual label_type get_numeric_label(const std::string &raw_label) = 0;
 
