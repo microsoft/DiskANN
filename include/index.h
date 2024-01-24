@@ -255,9 +255,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Calculate best medoids for filter data
     void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates);
 
-    //load medoids
+    // load medoids
     size_t load_medoids(const std::string &labels_to_medoid_file);
-    //save medoids
+    // save medoids
     void save_medoids(const std::string &save_path);
 
     // The query to use is placed in scratch->aligned_query

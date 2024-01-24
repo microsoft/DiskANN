@@ -2361,7 +2361,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                 /*  if (label == _universal_label)
                       continue;*/
                 uint32_t medoid = (uint32_t)_nd + (medoid_id - (uint32_t)_max_points);
-                _label_to_medoid_id[label] = medoid; 
+                _label_to_medoid_id[label] = medoid;
             }
         }
     }
