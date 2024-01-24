@@ -255,6 +255,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Calculate best medoids for filter data
     void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates);
 
+    //load medoids
+    size_t load_medoids(const std::string &labels_to_medoid_file);
+    //save medoids
+    void save_medoids(const std::string &save_path);
+
     // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,

@@ -29,12 +29,6 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     // returns internal mapping for given raw_label
     label_type get_numeric_label(const std::string &raw_label) override;
 
-    // Mode medoids related function to index class
-    void update_medoid_by_label(const label_type &label, const uint32_t new_medoid) override;
-    const uint32_t &get_medoid_by_label(const label_type &label) override;
-    const std::unordered_map<label_type, uint32_t> &get_labels_to_medoids() override;
-    bool label_has_medoid(const label_type &label) override;
-
     // takes raw universal labels and map them internally.
     void set_universal_labels(const std::string &raw_universal_labels) override;
     std::pair<bool, label_type> get_universal_label() override;
@@ -46,7 +40,6 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     // For dynamic filtered build, we compact the data and hence location_to_labels, we need the compacted version of
     // raw labels to compute GT correctly.
     void save_raw_labels(const std::string &save_path, const size_t total_points) override;
-    void save_medoids(const std::string &save_path) override;
     void save_label_map(const std::string &save_path) override;
     void save_universal_label(const std::string &save_path) override;
 
@@ -58,7 +51,6 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
   protected:
     // This is for internal use and only loads already parsed file, used by index in during load().
     size_t load_labels(const std::string &labels_file) override;
-    size_t load_medoids(const std::string &labels_to_medoid_file) override;
     void load_label_map(const std::string &labels_map_file) override;
     void load_universal_labels(const std::string &universal_labels_file) override;
 
@@ -67,12 +59,6 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     std::vector<std::vector<label_type>> _location_to_labels;
     tsl::robin_set<label_type> _labels;
     std::unordered_map<std::string, label_type> _label_map;
-
-    // medoids
-
-    // move medoids to Index class since its property of index
-    std::unordered_map<label_type, uint32_t> _label_to_medoid_id;
-    std::unordered_map<uint32_t, uint32_t> _medoid_counts; // medoids only happen for filtered index
 
     // universal label
     bool _has_universal_label = false;

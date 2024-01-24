@@ -34,11 +34,6 @@ template <typename label_type> class AbstractFilterStore
     // returns internal mapping for given raw_label
     DISKANN_DLLEXPORT virtual label_type get_numeric_label(const std::string &raw_label) = 0;
 
-    DISKANN_DLLEXPORT virtual void update_medoid_by_label(const label_type &label, const uint32_t new_medoid) = 0;
-    DISKANN_DLLEXPORT virtual const uint32_t &get_medoid_by_label(const label_type &label) = 0;
-    DISKANN_DLLEXPORT virtual const std::unordered_map<label_type, uint32_t> &get_labels_to_medoids() = 0;
-    DISKANN_DLLEXPORT virtual bool label_has_medoid(const label_type &label) = 0;
-
     // TODO: in future we may accept a set or vector of universal labels
     // DISKANN_DLLEXPORT virtual void set_universal_label(label_type universal_label) = 0;
     DISKANN_DLLEXPORT virtual void set_universal_labels(const std::string &universal_labels) = 0;
@@ -52,14 +47,12 @@ template <typename label_type> class AbstractFilterStore
     // For dynamic filtered build, we compact the data and hence location_to_labels, we need the compacted version of
     // raw labels to compute GT correctly.
     DISKANN_DLLEXPORT virtual void save_raw_labels(const std::string &save_path, const size_t total_points) = 0;
-    DISKANN_DLLEXPORT virtual void save_medoids(const std::string &save_path) = 0;
     DISKANN_DLLEXPORT virtual void save_label_map(const std::string &save_path) = 0;
     DISKANN_DLLEXPORT virtual void save_universal_label(const std::string &save_path) = 0;
 
   protected:
     // This is for internal use and only loads already parsed file
     DISKANN_DLLEXPORT virtual size_t load_labels(const std::string &labels_file) = 0;
-    DISKANN_DLLEXPORT virtual size_t load_medoids(const std::string &labels_to_medoid_file) = 0;
     DISKANN_DLLEXPORT virtual void load_label_map(const std::string &labels_map_file) = 0;
     DISKANN_DLLEXPORT virtual void load_universal_labels(const std::string &universal_labels_file) = 0;
 

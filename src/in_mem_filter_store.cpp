@@ -58,29 +58,6 @@ template <typename label_type> void InMemFilterStore<label_type>::add_to_label_s
 }
 
 template <typename label_type>
-void InMemFilterStore<label_type>::update_medoid_by_label(const label_type &label, const uint32_t new_medoid)
-{
-    _label_to_medoid_id[label] = new_medoid;
-}
-
-template <typename label_type>
-const uint32_t &InMemFilterStore<label_type>::get_medoid_by_label(const label_type &label)
-{
-    return _label_to_medoid_id[label];
-}
-
-template <typename label_type>
-const std::unordered_map<label_type, uint32_t> &InMemFilterStore<label_type>::get_labels_to_medoids()
-{
-    return _label_to_medoid_id;
-}
-
-template <typename label_type> bool InMemFilterStore<label_type>::label_has_medoid(const label_type &label)
-{
-    return _label_to_medoid_id.find(label) != _label_to_medoid_id.end();
-}
-
-template <typename label_type>
 void InMemFilterStore<label_type>::add_label_to_location(const location_t point_id, const label_type label)
 {
     _location_to_labels[point_id].emplace_back(label);
@@ -135,41 +112,6 @@ template <typename label_type> size_t InMemFilterStore<label_type>::load_labels(
 {
     // parse the generated label file
     return parse_label_file(labels_file);
-}
-
-template <typename label_type>
-size_t InMemFilterStore<label_type>::load_medoids(const std::string &labels_to_medoid_file)
-{
-    if (file_exists(labels_to_medoid_file))
-    {
-        std::ifstream medoid_stream(labels_to_medoid_file);
-        std::string line, token;
-        uint32_t line_cnt = 0;
-
-        _label_to_medoid_id.clear();
-        while (std::getline(medoid_stream, line))
-        {
-            std::istringstream iss(line);
-            uint32_t cnt = 0;
-            uint32_t medoid = 0;
-            label_type label;
-            while (std::getline(iss, token, ','))
-            {
-                token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-                token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-                label_type token_as_num = (label_type)std::stoul(token);
-                if (cnt == 0)
-                    label = token_as_num;
-                else
-                    medoid = token_as_num;
-                cnt++;
-            }
-            _label_to_medoid_id[label] = medoid;
-            line_cnt++;
-        }
-        return (size_t)line_cnt;
-    }
-    throw ANNException("ERROR: can not load medoids file does not exist", -1);
 }
 
 template <typename label_type> void InMemFilterStore<label_type>::load_label_map(const std::string &labels_map_file)
@@ -287,23 +229,6 @@ template <typename label_type> void InMemFilterStore<label_type>::save_universal
 
         universal_label_writer << _universal_label << std::endl;
         universal_label_writer.close();
-    }
-}
-
-template <typename label_type> void InMemFilterStore<label_type>::save_medoids(const std::string &save_path)
-{
-    if (_label_to_medoid_id.size() > 0)
-    {
-        std::ofstream medoid_writer(save_path);
-        if (medoid_writer.fail())
-        {
-            throw diskann::ANNException(std::string("Failed to open medoid file ") + save_path, -1);
-        }
-        for (auto iter : _label_to_medoid_id)
-        {
-            medoid_writer << iter.first << ", " << iter.second << std::endl;
-        }
-        medoid_writer.close();
     }
 }
 
