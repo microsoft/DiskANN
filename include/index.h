@@ -246,8 +246,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
 
-    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
-
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();

@@ -1748,27 +1748,6 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
 }
 
 template <typename T, typename TagT, typename LabelT>
-std::unordered_map<std::string, LabelT> Index<T, TagT, LabelT>::load_label_map(const std::string &labels_map_file)
-{
-    _filter_store->load_label_map(labels_map_file);
-    std::unordered_map<std::string, LabelT> string_to_int_mp;
-    std::ifstream map_reader(labels_map_file);
-    std::string line, token;
-    LabelT token_as_num;
-    std::string label_str;
-    while (std::getline(map_reader, line))
-    {
-        std::istringstream iss(line);
-        getline(iss, token, '\t');
-        label_str = token;
-        getline(iss, token, '\t');
-        token_as_num = (LabelT)std::stoul(token);
-        string_to_int_mp[label_str] = token_as_num;
-    }
-    return string_to_int_mp;
-}
-
-template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points)
 {
     num_points = _filter_store->load_labels(label_file);

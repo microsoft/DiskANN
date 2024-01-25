@@ -643,7 +643,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                               std::string medoids_file, std::string centroids_file, size_t build_pq_bytes, bool use_opq,
                               uint32_t num_threads, bool use_filters, const std::string &label_file,
                               const std::string &disk_labels_to_medoids_file, const std::string &universal_label,
-                              const uint32_t Lf)
+                              const uint32_t Lf, const std::unordered_map<std::string, uint32_t> disk_labels_map)
 {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
@@ -768,12 +768,6 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     diskann::cout << timer.elapsed_seconds_for_step("building indices on shards") << std::endl;
 
     timer.reset();
-    const std::string disk_index_path = mem_index_path.substr(0, mem_index_path.size() - 9) + "disk.index";
-    const std::string disk_labels_file = disk_index_path + "_labels.txt";
-    const std::string disk_labels_map_file = disk_index_path + "_labels_map.txt";
-    const std::unordered_map<std::string, uint32_t> disk_labels_map =
-        diskann::InMemFilterStore<uint32_t>::convert_label_to_numeric(label_file, disk_labels_file,
-                                                                      disk_labels_map_file, universal_label);
 
     diskann::merge_shards(merged_index_prefix + "_subshard-", "_mem.index", merged_index_prefix + "_subshard-",
                           "_ids_uint32.bin", num_parts, R, mem_index_path, medoids_file, use_filters,
@@ -1191,7 +1185,6 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string data_file_to_use = base_file;
     std::string labels_file_original = label_file;
     std::string index_prefix_path(indexFilePath);
-    // std::string labels_file_to_use = index_prefix_path + "_label_numeric.txt";
     std::string pq_pivots_path_base = codebook_prefix;
     std::string pq_pivots_path = file_exists(pq_pivots_path_base) ? pq_pivots_path_base + "_pq_pivots.bin"
                                                                   : index_prefix_path + "_pq_pivots.bin";
@@ -1204,12 +1197,10 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string centroids_path = disk_index_path + "_centroids.bin";
 
     std::string disk_labels_to_medoids_path = disk_index_path + "_labels_to_medoids.txt";
-    std::string mem_labels_file = mem_index_path + "_labels.txt";
     std::string disk_labels_file = disk_index_path + "_labels.txt";
     std::string mem_univ_label_file = mem_index_path + "_universal_label.txt";
     std::string disk_univ_label_file = disk_index_path + "_universal_label.txt";
-    std::string mem_labels_int_map_file = mem_index_path + "_labels_map.txt";
-    std::string disk_labels_int_map_path = disk_index_path + "_labels_map.txt";
+    std::string disk_labels_int_map_file = disk_index_path + "_labels_map.txt";
     std::string dummy_remap_file = disk_index_path + "_dummy_remap.txt"; // remap will be used if we break-up points of
                                                                          // high label-density to create copies
 
@@ -1272,17 +1263,19 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     // into replica dummy points which evenly distribute the filters. The rest
     // of index build happens on the augmented base and labels
     std::string augmented_data_file, augmented_labels_file;
+    std::unordered_map<std::string, uint32_t> disk_labels_map;
     if (use_filters)
     {
-
-        // convert_label_to_numeric(labels_file_original, labels_file_to_use, disk_labels_int_map_file,
+        disk_labels_map = diskann::InMemFilterStore<uint32_t>::convert_label_to_numeric(
+            labels_file_original, disk_labels_file, disk_labels_int_map_file, universal_label);
+        // convert_label_to_numeric(labels_file_original, disk_labels_file, disk_labels_int_map_file,
         //  universal_label);
         augmented_data_file = index_prefix_path + "_augmented_data.bin";
         augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
         if (filter_threshold != 0)
         {
             dummy_remap_file = index_prefix_path + "_dummy_remap.txt";
-            breakup_dense_points<T>(data_file_to_use, labels_file_original, filter_threshold, augmented_data_file,
+            breakup_dense_points<T>(data_file_to_use, disk_labels_file, filter_threshold, augmented_data_file,
                                     augmented_labels_file,
                                     dummy_remap_file); // RKNOTE: This has large memory footprint,
                                                        // need to make this streaming
@@ -1333,7 +1326,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     diskann::build_merged_vamana_index<T, LabelT>(
         data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val, indexing_ram_budget, mem_index_path, medoids_path,
         centroids_path, build_pq_bytes, use_opq, num_threads, use_filters, labels_file_original,
-        disk_labels_to_medoids_path, universal_label, Lf);
+        disk_labels_to_medoids_path, universal_label, Lf, disk_labels_map);
     diskann::cout << timer.elapsed_seconds_for_step("building merged vamana index") << std::endl;
 
     timer.reset();
@@ -1480,31 +1473,37 @@ template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
-    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
+    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf,
+    const std::unordered_map<std::string, uint32_t> disk_labels_map);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<float, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
-    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
+    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf,
+    const std::unordered_map<std::string, uint32_t> disk_labels_map);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
-    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
+    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf,
+    const std::unordered_map<std::string, uint32_t> disk_labels_map);
 // Label=16_t
 template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint16_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
-    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
+    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf,
+    const std::unordered_map<std::string, uint32_t> disk_labels_map);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<float, uint16_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
-    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
+    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf,
+    const std::unordered_map<std::string, uint32_t> disk_labels_map);
 template DISKANN_DLLEXPORT int build_merged_vamana_index<uint8_t, uint16_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
     double ram_budget, std::string mem_index_path, std::string medoids_path, std::string centroids_file,
     size_t build_pq_bytes, bool use_opq, uint32_t num_threads, bool use_filters, const std::string &label_file,
-    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf);
+    const std::string &labels_to_medoids_file, const std::string &universal_label, const uint32_t Lf,
+    const std::unordered_map<std::string, uint32_t> disk_labels_map);
 }; // namespace diskann
