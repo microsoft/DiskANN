@@ -36,8 +36,10 @@ typedef int FileHandle;
 #endif
 
 #ifdef __APPLE__
+#ifdef __arm64__
 #define _MM_HINT_T0 1
 #define _MM_HINT_T1 2
+#endif
 #endif
 
 #ifdef __APPLE__
