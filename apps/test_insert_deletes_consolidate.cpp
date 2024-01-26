@@ -246,7 +246,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     std::cout << "Initial non-incremental index build time for " << beginning_index_size << " points took "
               << elapsedSeconds << " seconds (" << beginning_index_size / elapsedSeconds << " points/second)\n ";
 
-    current_point_offset = beginning_index_size;
+    current_point_offset += beginning_index_size;
 
     if (points_to_delete_from_beginning > max_points_to_insert)
     {
