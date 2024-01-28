@@ -673,9 +673,14 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             if (universal_label != "")
             { //  indicates no universal label
               // LabelT unv_label_as_num = 0;
-                _index.set_universal_labels(universal_label);
+                _index.set_universal_label(universal_label);
             }
-            _index.build_filtered_index(base_file.c_str(), label_file, base_num);
+            auto filter_params = diskann::IndexFilterParamsBuilder()
+                                     .with_universal_label(universal_label)
+                                     .with_label_file(label_file)
+                                     .with_save_path_prefix(mem_index_path.c_str())
+                                     .build();
+            _index.build_filtered_index(base_file.c_str(), base_num, filter_params);
         }
         _index.save(mem_index_path.c_str());
 
@@ -685,8 +690,12 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             // file
             std::remove(disk_labels_to_medoids_file.c_str());
             std::string mem_labels_to_medoid_file = mem_index_path + "_labels_to_medoids.txt";
+            std::string mem_labels_file = mem_index_path + "_labels.txt";
+            std::string mem_labels_int_map_file = mem_index_path + "_labels_map.txt";
             copy_file(mem_labels_to_medoid_file, disk_labels_to_medoids_file);
             std::remove(mem_labels_to_medoid_file.c_str());
+            std::remove(mem_labels_file.c_str());
+            std::remove(mem_labels_int_map_file.c_str());
         }
 
         std::remove(medoids_file.c_str());
@@ -747,9 +756,14 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             if (universal_label != "")
             { //  indicates no universal label
               // LabelT unv_label_as_num = 0;
-                _index.set_universal_labels(universal_label);
+                _index.set_universal_label(universal_label);
             }
-            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts);
+            auto filter_params = diskann::IndexFilterParamsBuilder()
+                                     .with_universal_label(universal_label)
+                                     .with_label_file(shard_labels_file)
+                                     .with_save_path_prefix(shard_index_file.c_str())
+                                     .build();
+            _index.build_filtered_index(shard_base_file.c_str(), shard_base_pts, filter_params);
         }
         _index.save(shard_index_file.c_str());
         // copy universal label file from first shard to the final destination
@@ -791,11 +805,13 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         {
             std::string shard_index_label_file = shard_index_file + "_labels.txt";
             std::string shard_index_univ_label_file = shard_index_file + "_universal_label.txt";
-            std::string shard_index_label_map_file = shard_index_file + "_labels_to_medoids.txt";
+            std::string shard_index_label_medoid_file = shard_index_file + "_labels_to_medoids.txt";
+            std::string shard_index_label_map_file = shard_index_file + "_labels_map.txt";
             std::remove(shard_labels_file.c_str());
             std::remove(shard_index_label_file.c_str());
             std::remove(shard_index_label_map_file.c_str());
             std::remove(shard_index_univ_label_file.c_str());
+            std::remove(shard_index_label_medoid_file.c_str());
         }
     }
     return 0;

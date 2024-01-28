@@ -36,7 +36,7 @@ template <typename label_type> class AbstractFilterStore
 
     // TODO: in future we may accept a set or vector of universal labels
     // DISKANN_DLLEXPORT virtual void set_universal_label(label_type universal_label) = 0;
-    DISKANN_DLLEXPORT virtual void set_universal_labels(const std::string &universal_labels) = 0;
+    DISKANN_DLLEXPORT virtual void set_universal_label(const std::string &universal_labels) = 0;
     DISKANN_DLLEXPORT virtual std::pair<bool, label_type> get_universal_label() = 0;
 
     // takes raw label file and then genrate internal mapping file and keep the info of mapping

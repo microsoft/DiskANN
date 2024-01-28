@@ -30,7 +30,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     label_type get_numeric_label(const std::string &raw_label) override;
 
     // takes raw universal labels and map them internally.
-    void set_universal_labels(const std::string &raw_universal_labels) override;
+    void set_universal_label(const std::string &raw_universal_labels) override;
     std::pair<bool, label_type> get_universal_label() override;
 
     // ideally takes raw label file and then genrate internal mapping file and keep the info of mapping

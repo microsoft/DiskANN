@@ -251,7 +251,7 @@ void build_incremental_index(const std::string &data_path, const uint32_t L, con
 
     if (universal_label != "")
     {
-        index->set_universal_labels(universal_label);
+        index->set_universal_label(universal_label);
     }
 
     if (max_points_to_insert == 0)

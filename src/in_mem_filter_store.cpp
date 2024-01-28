@@ -64,7 +64,7 @@ void InMemFilterStore<label_type>::add_label_to_location(const location_t point_
 }
 
 template <typename label_type>
-void InMemFilterStore<label_type>::set_universal_labels(const std::string &raw_universal_label)
+void InMemFilterStore<label_type>::set_universal_label(const std::string &raw_universal_label)
 {
     if (raw_universal_label.empty())
     {

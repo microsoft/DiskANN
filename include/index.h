@@ -108,12 +108,17 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                  IndexFilterParams &filter_params);
 
     // Filtered Support
-    DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
-                                                const size_t num_points_to_load,
+    DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const size_t num_points_to_load,
+                                                const IndexFilterParams &filter_params,
+                                                const std::vector<TagT> &tags = std::vector<TagT>());
+
+    // Filtered support streaming index
+    DISKANN_DLLEXPORT void build_filtered_index(const T *data, const size_t num_points_to_load,
+                                                const IndexFilterParams &filter_params,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     // DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
-    DISKANN_DLLEXPORT void set_universal_labels(const std::string &raw_labels);
+    DISKANN_DLLEXPORT void set_universal_label(const std::string &raw_labels);
 
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.

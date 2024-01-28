@@ -104,7 +104,7 @@ class AbstractIndex
     template <typename tag_type, typename data_type> int get_vector_by_tag(tag_type &tag, data_type *vec);
 
     // required for dynamic index (they dont use filter store / data store yet)
-    virtual void set_universal_labels(const std::string &raw_universal_labels) = 0;
+    virtual void set_universal_label(const std::string &raw_universal_labels) = 0;
 
   private:
     virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;

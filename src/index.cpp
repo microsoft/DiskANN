@@ -76,6 +76,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     _graph_store = std::move(graph_store);
     if (_filtered_index)
     {
+        //_filter_store = filter_store;
         _filter_store = std::make_unique<InMemFilterStore<LabelT>>(total_internal_points);
     }
 
@@ -131,7 +132,6 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .is_filtered(filtered_index)
                 .with_num_pq_chunks(num_pq_chunks)
                 .is_use_opq(use_opq)
-                .is_filtered(filtered_index)
                 .with_data_type(diskann_type_to_name<T>())
                 .build(),
             IndexFactory::construct_datastore<T>(
@@ -1737,11 +1737,7 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     }
     else
     {
-        if (filter_params.universal_label != "")
-        {
-            this->set_universal_labels(filter_params.universal_label);
-        }
-        this->build_filtered_index(data_file.c_str(), filter_params.label_file, points_to_load);
+        this->build_filtered_index(data_file.c_str(), points_to_load, filter_params);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
@@ -1753,26 +1749,38 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     num_points = _filter_store->load_labels(label_file);
 }
 
-// template <typename T, typename TagT, typename LabelT>
-// void Index<T, TagT, LabelT>::set_universal_label(const LabelT &label)
-//{
-//     //_filter_store->set_universal_label(label);
-// }
-
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::set_universal_labels(const std::string &raw_label)
+void Index<T, TagT, LabelT>::set_universal_label(const std::string &raw_label)
 {
-    _filter_store->set_universal_labels(raw_label);
+    _filter_store->set_universal_label(raw_label);
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const std::string &raw_label_file,
-                                                  const size_t num_points_to_load, const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const size_t num_points_to_load,
+                                                  const IndexFilterParams &filter_params, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
-    size_t num_points_labels = _filter_store->load_raw_labels(raw_label_file, "");
+    size_t num_points_labels = _filter_store->load_raw_labels(filter_params.label_file, "");
+    if (filter_params.universal_label != "")
+    {
+        _filter_store->set_universal_label(filter_params.universal_label);
+    }
     calculate_best_medoids(num_points_to_load, 25);
     this->build(filename, num_points_to_load, tags);
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::build_filtered_index(const T *data, const size_t num_points_to_load,
+                                                  const IndexFilterParams &filter_params, const std::vector<TagT> &tags)
+{
+    _filtered_index = true;
+    size_t num_points_labels = _filter_store->load_raw_labels(filter_params.label_file, "");
+    if (filter_params.universal_label != "")
+    {
+        _filter_store->set_universal_label(filter_params.universal_label);
+    }
+    calculate_best_medoids(num_points_to_load, 25);
+    this->build(data, num_points_to_load, tags);
 }
 
 template <typename T, typename TagT, typename LabelT>
