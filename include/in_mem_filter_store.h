@@ -34,7 +34,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     std::pair<bool, label_type> get_universal_label() override;
 
     // ideally takes raw label file and then genrate internal mapping file and keep the info of mapping
-    size_t load_raw_labels(const std::string &raw_labels_file, const std::string &raw_universal_label) override;
+    size_t populate_labels(const std::string &raw_labels_file, const std::string &raw_universal_label) override;
 
     void save_labels(const std::string &save_path, const size_t total_points) override;
     // For dynamic filtered build, we compact the data and hence location_to_labels, we need the compacted version of
@@ -50,6 +50,7 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
 
   protected:
     // This is for internal use and only loads already parsed file, used by index in during load().
+    // populates _loaction_to labels and _labels from given label file
     size_t load_labels(const std::string &labels_file) override;
     void load_label_map(const std::string &labels_map_file) override;
     void load_universal_labels(const std::string &universal_labels_file) override;
@@ -68,9 +69,6 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     // 1. _use_universal_label can be used to identify if universal label present or not
     // 2. from _label_map and _mapped_universal_label, we can know what is raw universal label. Hence seems duplicate
     // std::string _raw_universal_label;
-
-    // populates _loaction_to labels and _labels from given label file
-    size_t parse_label_file(const std::string &label_file);
 
     bool detect_common_filters_by_set_intersection(uint32_t point_id, bool search_invocation,
                                                    const std::vector<label_type> &incoming_labels);

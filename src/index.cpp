@@ -1744,12 +1744,6 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points)
-{
-    num_points = _filter_store->load_labels(label_file);
-}
-
-template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::set_universal_label(const std::string &raw_label)
 {
     _filter_store->set_universal_label(raw_label);
@@ -1760,7 +1754,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const si
                                                   const IndexFilterParams &filter_params, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
-    size_t num_points_labels = _filter_store->load_raw_labels(filter_params.label_file, "");
+    size_t num_points_labels = _filter_store->populate_labels(filter_params.label_file, "");
     if (filter_params.universal_label != "")
     {
         _filter_store->set_universal_label(filter_params.universal_label);
@@ -1769,7 +1763,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const si
     this->build(filename, num_points_to_load, tags);
 }
 
-template <typename T, typename TagT, typename LabelT>
+/*template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::build_filtered_index(const T *data, const size_t num_points_to_load,
                                                   const IndexFilterParams &filter_params, const std::vector<TagT> &tags)
 {
@@ -1781,7 +1775,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const T *data, const size_t nu
     }
     calculate_best_medoids(num_points_to_load, 25);
     this->build(data, num_points_to_load, tags);
-}
+}*/
 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search(const DataType &query, const size_t K, const uint32_t L,

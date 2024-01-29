@@ -94,7 +94,7 @@ template <typename label_type> std::pair<bool, label_type> InMemFilterStore<labe
 
 // ideally takes raw label file and then genrate internal mapping and keep the info of mapping
 template <typename label_type>
-size_t InMemFilterStore<label_type>::load_raw_labels(const std::string &raw_labels_file,
+size_t InMemFilterStore<label_type>::populate_labels(const std::string &raw_labels_file,
                                                      const std::string &raw_universal_label)
 {
     std::string raw_label_file_path =
@@ -105,13 +105,7 @@ size_t InMemFilterStore<label_type>::load_raw_labels(const std::string &raw_labe
     std::string mem_labels_int_map_file = raw_label_file_path + "_labels_map.txt";
     _label_map = InMemFilterStore::convert_label_to_numeric(raw_labels_file, labels_file_to_use,
                                                             mem_labels_int_map_file, raw_universal_label);
-    return parse_label_file(labels_file_to_use);
-}
-
-template <typename label_type> size_t InMemFilterStore<label_type>::load_labels(const std::string &labels_file)
-{
-    // parse the generated label file
-    return parse_label_file(labels_file);
+    return load_labels(labels_file_to_use);
 }
 
 template <typename label_type> void InMemFilterStore<label_type>::load_label_map(const std::string &labels_map_file)
@@ -137,7 +131,7 @@ template <typename label_type> void InMemFilterStore<label_type>::load_label_map
         // TODO: throw exception from here and also make sure filtered_index is set appropriately for both build and
         // search of index.
         diskann::cout << "Warning: Can't load label map file please make sure it was generate, either by "
-                         "filter_store->load_raw_labels() "
+                         "filter_store->populate_labels() "
                          "then index->save() or  convert_label_to_numeric() method in case of dynamic index"
                       << std::endl;
     }
@@ -269,7 +263,7 @@ template <typename label_type> label_type InMemFilterStore<label_type>::get_nume
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 }
 
-template <typename label_type> size_t InMemFilterStore<label_type>::parse_label_file(const std::string &label_file)
+template <typename label_type> size_t InMemFilterStore<label_type>::load_labels(const std::string &label_file)
 {
     // Format of Label txt file: filters with comma separators
     // Format of Label txt file: filters with comma separators
@@ -354,6 +348,9 @@ std::unordered_map<std::string, label_type> InMemFilterStore<label_type>::conver
     std::ofstream label_writer(outFileName);
     std::ifstream label_reader(inFileName);
     std::string line, token;
+    if (raw_universal_label != "")
+        string_int_map[raw_universal_label] = 0; // if universal label is provided map it to 0 always
+
     while (std::getline(label_reader, line))
     {
         std::istringstream new_iss(line);

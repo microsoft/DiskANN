@@ -40,7 +40,7 @@ template <typename label_type> class AbstractFilterStore
     DISKANN_DLLEXPORT virtual std::pair<bool, label_type> get_universal_label() = 0;
 
     // takes raw label file and then genrate internal mapping file and keep the info of mapping
-    DISKANN_DLLEXPORT virtual size_t load_raw_labels(const std::string &raw_labels_file,
+    DISKANN_DLLEXPORT virtual size_t populate_labels(const std::string &raw_labels_file,
                                                      const std::string &raw_universal_label) = 0;
 
     DISKANN_DLLEXPORT virtual void save_labels(const std::string &save_path, const size_t total_points) = 0;
@@ -58,9 +58,6 @@ template <typename label_type> class AbstractFilterStore
 
   private:
     size_t _num_points;
-
-    // populates pts_to labels and _labels from given label file
-    virtual size_t parse_label_file(const std::string &label_file) = 0;
 
     // mark Index as friend so it can access protected loads
     template <typename T, typename TagT, typename LabelT> friend class Index;
