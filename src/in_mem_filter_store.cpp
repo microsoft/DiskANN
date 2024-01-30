@@ -159,6 +159,28 @@ void InMemFilterStore<label_type>::load_universal_labels(const std::string &univ
     }
 }
 
+// load labels, labels_map and universal_label to filter store variables & returns total number of points
+template <typename label_type> size_t InMemFilterStore<label_type>::load(const std::string &load_path)
+{
+    const std::string labels_file = load_path + "_labels.txt";
+    const std::string labels_map_file = load_path + "_labels_map.txt";
+    const std::string universal_label_file = load_path + "_universal_label.txt";
+    load_label_map(labels_map_file);
+    load_universal_labels(universal_label_file);
+    return load_labels(labels_file);
+}
+
+template <typename label_type>
+void InMemFilterStore<label_type>::save(const std::string &save_path, const size_t total_points)
+{
+    const std::string label_path = save_path + "_labels.txt";
+    const std::string universal_label_path = save_path + "_universal_label.txt";
+    const std::string label_map_path = save_path + "_labels_map.txt";
+    save_label_map(label_map_path);
+    save_universal_label(universal_label_path);
+    save_labels(label_path, total_points);
+}
+
 template <typename label_type>
 void InMemFilterStore<label_type>::save_labels(const std::string &save_path, const size_t total_points)
 {

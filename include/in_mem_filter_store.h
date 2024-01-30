@@ -36,12 +36,15 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     // ideally takes raw label file and then genrate internal mapping file and keep the info of mapping
     size_t populate_labels(const std::string &raw_labels_file, const std::string &raw_universal_label) override;
 
-    void save_labels(const std::string &save_path, const size_t total_points) override;
+    // save labels, labels_map and universal_label to files
+    void save(const std::string &save_path, const size_t total_points) override;
+
+    // load labels, labels_map and universal_label to filter store variables & returns total number of points
+    size_t load(const std::string &load_path) override;
+
     // For dynamic filtered build, we compact the data and hence location_to_labels, we need the compacted version of
     // raw labels to compute GT correctly.
     void save_raw_labels(const std::string &save_path, const size_t total_points) override;
-    void save_label_map(const std::string &save_path) override;
-    void save_universal_label(const std::string &save_path) override;
 
     // The function is static so it remains the source of truth across the code. Returns label map
     DISKANN_DLLEXPORT static std::unordered_map<std::string, label_type> convert_label_to_numeric(
@@ -54,6 +57,9 @@ template <typename label_type> class InMemFilterStore : public AbstractFilterSto
     size_t load_labels(const std::string &labels_file) override;
     void load_label_map(const std::string &labels_map_file) override;
     void load_universal_labels(const std::string &universal_labels_file) override;
+    void save_labels(const std::string &save_path, const size_t total_points) override;
+    void save_label_map(const std::string &save_path) override;
+    void save_universal_label(const std::string &save_path) override;
 
   private:
     size_t _num_points;

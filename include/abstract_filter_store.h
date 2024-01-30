@@ -43,18 +43,24 @@ template <typename label_type> class AbstractFilterStore
     DISKANN_DLLEXPORT virtual size_t populate_labels(const std::string &raw_labels_file,
                                                      const std::string &raw_universal_label) = 0;
 
-    DISKANN_DLLEXPORT virtual void save_labels(const std::string &save_path, const size_t total_points) = 0;
+    // save labels, labels_map and universal_label to files
+    DISKANN_DLLEXPORT virtual void save(const std::string &save_path, const size_t total_points) = 0;
+
+    // load labels, labels_map and universal_label to filter store variables & returns total number of points
+    DISKANN_DLLEXPORT virtual size_t load(const std::string &load_path) = 0;
+
     // For dynamic filtered build, we compact the data and hence location_to_labels, we need the compacted version of
     // raw labels to compute GT correctly.
     DISKANN_DLLEXPORT virtual void save_raw_labels(const std::string &save_path, const size_t total_points) = 0;
-    DISKANN_DLLEXPORT virtual void save_label_map(const std::string &save_path) = 0;
-    DISKANN_DLLEXPORT virtual void save_universal_label(const std::string &save_path) = 0;
 
   protected:
     // This is for internal use and only loads already parsed file
     DISKANN_DLLEXPORT virtual size_t load_labels(const std::string &labels_file) = 0;
     DISKANN_DLLEXPORT virtual void load_label_map(const std::string &labels_map_file) = 0;
     DISKANN_DLLEXPORT virtual void load_universal_labels(const std::string &universal_labels_file) = 0;
+    DISKANN_DLLEXPORT virtual void save_labels(const std::string &save_path, const size_t total_points) = 0;
+    DISKANN_DLLEXPORT virtual void save_label_map(const std::string &save_path) = 0;
+    DISKANN_DLLEXPORT virtual void save_universal_label(const std::string &save_path) = 0;
 
   private:
     size_t _num_points;

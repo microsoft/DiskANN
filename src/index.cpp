@@ -291,13 +291,12 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
         if (_filtered_index)
         {
             save_medoids(std::string(filename) + "_labels_to_medoids.txt");
-            _filter_store->save_label_map(std::string(filename) + "_labels_map.txt");
-            _filter_store->save_universal_label(std::string(filename) + "_universal_label.txt");
-            _filter_store->save_labels(std::string(filename) + "_labels.txt", _nd + _num_frozen_pts);
+            _filter_store->save(std::string(filename), _nd + _num_frozen_pts);
             // if data was compacted we need a compacted version of corresponding raw labels to compute GT
             if (compact_before_save && _dynamic_index)
             {
-                _filter_store->load_label_map(std::string(filename) + "_labels_map.txt");
+                // _label_map is already loaded. Feels this function is not required.
+                //_filter_store->load_label_map(std::string(filename) + "_labels_map.txt");
                 _filter_store->save_raw_labels(std::string(filename) + "_raw_labels.txt", _nd + _num_frozen_pts);
             }
         }
@@ -486,8 +485,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     std::string mem_index_file(filename);
     std::string labels_file = mem_index_file + "_labels.txt";
-    std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
-    std::string labels_map_file = mem_index_file + "_labels_map.txt";
+    std::string labels_to_medoids_file = mem_index_file + "_labels_to_medoids.txt";
 
     if (!_save_as_one_file)
     {
@@ -534,11 +532,9 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         {
             _filter_store = std::make_unique<InMemFilterStore<LabelT>>(_max_points + _num_frozen_pts);
         }
-        _filter_store->load_label_map(labels_map_file);
-        label_num_pts = _filter_store->load_labels(labels_file);
+        label_num_pts = _filter_store->load(mem_index_file);
         assert(label_num_pts == data_file_num_pts);
-        load_medoids(labels_to_medoids);
-        _filter_store->load_universal_labels(std::string(filename) + "_universal_label.txt");
+        load_medoids(labels_to_medoids_file);
     }
 
     _nd = data_file_num_pts - _num_frozen_pts;
