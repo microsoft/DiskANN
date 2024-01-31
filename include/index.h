@@ -24,6 +24,7 @@
 
 #include "quantized_distance.h"
 #include "pq_data_store.h"
+#include "tag_manager.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -71,7 +72,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT ~Index();
 
     // Saves graph, data, metadata and associated tags.
-    DISKANN_DLLEXPORT void save(const char *filename, bool compact_before_save = false);
+    DISKANN_DLLEXPORT void save(const char *filename, bool compact_before_save = false, tag_manager_base* tag_manager = nullptr);
 
     // Load functions
 #ifdef EXEC_ENV_OLS
@@ -150,12 +151,16 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag, const std::vector<LabelT> &label);
 
+    DISKANN_DLLEXPORT int insert_point(const T* point, tag_data& tag_data, const std::vector<LabelT>& label);
+
     // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
 
     // Record deleted point now and restructure graph later. Return -1 if tag
     // not found, 0 if OK.
     DISKANN_DLLEXPORT int lazy_delete(const TagT &tag);
+
+    DISKANN_DLLEXPORT int lazy_delete_location(std::uint32_t location);
 
     // Record deleted points now and restructure graph later. Add to failed_tags
     // if tag not found.
@@ -300,7 +305,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Renumber nodes, update tag and location maps and compact the
     // graph, mode = _consolidated_order in case of lazy deletion and
     // _compacted_order in case of eager deletion
-    DISKANN_DLLEXPORT void compact_data();
+    DISKANN_DLLEXPORT void compact_data(tag_manager_base& tag_manager);
     DISKANN_DLLEXPORT void compact_frozen_point();
 
     // Remove deleted nodes from adjacency list of node loc
@@ -414,8 +419,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // lazy_delete removes entry from _location_to_tag and _tag_to_location. If
     // _location_to_tag does not resolve a location, infer that it was deleted.
-    tsl::sparse_map<TagT, uint32_t> _tag_to_location;
-    natural_number_map<uint32_t, TagT> _location_to_tag;
+//    tsl::sparse_map<TagT, uint32_t> _tag_to_location;
+//    natural_number_map<uint32_t, TagT> _location_to_tag;
 
     // _empty_slots has unallocated slots and those freed by consolidate_delete.
     // _delete_set has locations marked deleted by lazy_delete. Will not be
@@ -440,6 +445,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Per node lock, cardinality=_max_points + _num_frozen_points
     std::vector<non_recursive_mutex> _locks;
+
+    default_tag_manager<TagT> _default_tag_manager;
 
     static const float INDEX_GROWTH_FACTOR;
 };
