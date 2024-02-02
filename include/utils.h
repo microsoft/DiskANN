@@ -1013,7 +1013,7 @@ inline std::string get_tag_string(std::uint64_t tag)
     return std::to_string(tag);
 }
 
-inline std::string get_tag_string(const tag_uint128& tag)
+inline std::string get_tag_string(const tag_uint128 &tag)
 {
     std::string str = std::to_string(tag._data2) + "_" + std::to_string(tag._data1);
     return str;
