@@ -89,6 +89,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     if (_dynamic_index)
     {
         this->enable_delete(); // enable delete by default for dynamic index
+        if (_filtered_index)
+        {
+            _location_to_labels.resize(total_internal_points);
+        }
     }
 
     if (index_config.index_write_params != nullptr)
