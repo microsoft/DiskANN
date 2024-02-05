@@ -121,8 +121,8 @@ class AbstractIndex
     virtual void _set_start_points_at_random(DataType radius, uint32_t random_seed = 0) = 0;
     virtual int _get_vector_by_tag(TagType &tag, DataType &vec) = 0;
     virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
-                                     float *distances, DataVector &res_vectors, bool use_filters,
-                                     const std::string filter_label) = 0;
+                                     float *distances, DataVector &res_vectors, bool use_filters = false,
+                                     const std::string filter_label = "") = 0;
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) = 0;
     virtual void _set_universal_label(const LabelType universal_label) = 0;
 };
