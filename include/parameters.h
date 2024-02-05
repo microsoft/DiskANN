@@ -117,4 +117,57 @@ class IndexWriteParametersBuilder
     uint32_t _filter_list_size{defaults::FILTER_LIST_SIZE};
 };
 
+struct IndexFilterParams
+{
+  public:
+    std::string save_path_prefix;
+    std::string label_file;
+    std::string universal_label;
+
+  private:
+    IndexFilterParams(const std::string &save_path_prefix, const std::string &label_file,
+                      const std::string &universal_label)
+        : save_path_prefix(save_path_prefix), label_file(label_file), universal_label(universal_label)
+    {
+    }
+
+    friend class IndexFilterParamsBuilder;
+};
+class IndexFilterParamsBuilder
+{
+  public:
+    IndexFilterParamsBuilder() = default;
+
+    IndexFilterParamsBuilder &with_save_path_prefix(const std::string &save_path_prefix)
+    {
+        this->_save_path_prefix = save_path_prefix;
+        return *this;
+    }
+
+    IndexFilterParamsBuilder &with_label_file(const std::string &label_file)
+    {
+        this->_label_file = label_file;
+        return *this;
+    }
+
+    IndexFilterParamsBuilder &with_universal_label(const std::string &univeral_label)
+    {
+        this->_universal_label = univeral_label;
+        return *this;
+    }
+
+    IndexFilterParams build()
+    {
+        return IndexFilterParams(_save_path_prefix, _label_file, _universal_label);
+    }
+
+    IndexFilterParamsBuilder(const IndexFilterParamsBuilder &) = delete;
+    IndexFilterParamsBuilder &operator=(const IndexFilterParamsBuilder &) = delete;
+
+  private:
+    std::string _save_path_prefix;
+    std::string _label_file;
+    std::string _universal_label;
+};
+
 } // namespace diskann

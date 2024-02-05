@@ -20,6 +20,7 @@
 #include "scratch.h"
 #include "in_mem_data_store.h"
 #include "in_mem_graph_store.h"
+#include "in_mem_filter_store.h"
 #include "abstract_index.h"
 
 #include "quantized_distance.h"
@@ -105,8 +106,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                  IndexFilterParams &filter_params);
 
     // Filtered Support
-    DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
+    DISKANN_DLLEXPORT void build_filtered_index(const char *filename,
                                                 const size_t num_points_to_load,
+                                                const IndexFilterParams filter_params, 
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
@@ -339,6 +341,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Graph related data structures
     std::unique_ptr<AbstractGraphStore> _graph_store;
+
+    // Filter related data structure
+    std::unique_ptr<AbstractFilterStore<LabelT>> _filter_store;
 
     char *_opt_graph = nullptr;
 
