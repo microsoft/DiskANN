@@ -106,9 +106,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                  IndexFilterParams &filter_params);
 
     // Filtered Support
-    DISKANN_DLLEXPORT void build_filtered_index(const char *filename,
-                                                const size_t num_points_to_load,
-                                                const IndexFilterParams filter_params, 
+    DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const size_t num_points_to_load,
+                                                const IndexFilterParams filter_params,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);

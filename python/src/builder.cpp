@@ -96,13 +96,13 @@ void build_memory_index(const diskann::Metric metric, const std::string &vector_
         }
         else
         {
-            //auto labels_file = prepare_filtered_label_map<T, TagT, LabelT>(index, index_output_path, filter_labels_file,
-                                                                           //universal_label);
+            // auto labels_file = prepare_filtered_label_map<T, TagT, LabelT>(index, index_output_path,
+            // filter_labels_file, universal_label);
             auto filter_params = diskann::IndexFilterParamsBuilder()
-                                 .with_universal_label(universal_label)
-                                 .with_label_file(filter_labels_file)
-                                 .with_save_path_prefix(index_output_path)
-                                 .build();
+                                     .with_universal_label(universal_label)
+                                     .with_label_file(filter_labels_file)
+                                     .with_save_path_prefix(index_output_path)
+                                     .build();
             index.build_filtered_index(vector_bin_path.c_str(), data_num, filter_params, tags);
         }
     }
@@ -114,13 +114,14 @@ void build_memory_index(const diskann::Metric metric, const std::string &vector_
         }
         else
         {
-            //auto labels_file = prepare_filtered_label_map<T, TagT, LabelT>(index, index_output_path, filter_labels_file,
-                                                                          // universal_label);
+            // auto labels_file = prepare_filtered_label_map<T, TagT, LabelT>(index, index_output_path,
+            // filter_labels_file,
+            //  universal_label);
             auto filter_params = diskann::IndexFilterParamsBuilder()
-                                 .with_universal_label(universal_label)
-                                 .with_label_file(filter_labels_file)
-                                 .with_save_path_prefix(index_output_path)
-                                 .build();
+                                     .with_universal_label(universal_label)
+                                     .with_label_file(filter_labels_file)
+                                     .with_save_path_prefix(index_output_path)
+                                     .build();
             index.build_filtered_index(vector_bin_path.c_str(), data_num, filter_params);
         }
     }

@@ -663,10 +663,10 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                 _index.set_universal_label(unv_label_as_num);
             }
             diskann::IndexFilterParams filter_params = diskann::IndexFilterParamsBuilder()
-                                 .with_universal_label(universal_label)
-                                 .with_label_file(label_file)
-                                 .with_save_path_prefix(mem_index_path)
-                                 .build();
+                                                           .with_universal_label(universal_label)
+                                                           .with_label_file(label_file)
+                                                           .with_save_path_prefix(mem_index_path)
+                                                           .build();
             _index.build_filtered_index(base_file.c_str(), base_num, filter_params);
         }
         _index.save(mem_index_path.c_str());
@@ -742,10 +742,10 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                 _index.set_universal_label(unv_label_as_num);
             }
             diskann::IndexFilterParams filter_params = diskann::IndexFilterParamsBuilder()
-                                 .with_universal_label(universal_label)
-                                 .with_label_file(shard_labels_file)
-                                 .with_save_path_prefix(shard_index_file)
-                                 .build();
+                                                           .with_universal_label(universal_label)
+                                                           .with_label_file(shard_labels_file)
+                                                           .with_save_path_prefix(shard_index_file)
+                                                           .build();
             _index.build_filtered_index(shard_base_file.c_str(), shard_base_pts, filter_params);
         }
         _index.save(shard_index_file.c_str());
