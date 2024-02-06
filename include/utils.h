@@ -27,6 +27,7 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
 #include "types.h"
+#include "tag_uint128.h"
 #include <any>
 
 #ifdef EXEC_ENV_OLS
@@ -1006,6 +1007,17 @@ inline void prefetch_vector_l2(const char *vec, size_t vecsize)
 void block_convert(std::ofstream &writr, std::ifstream &readr, float *read_buf, uint64_t npts, uint64_t ndims);
 
 DISKANN_DLLEXPORT void normalize_data_file(const std::string &inFileName, const std::string &outFileName);
+
+inline std::string get_tag_string(std::uint64_t tag)
+{
+    return std::to_string(tag);
+}
+
+inline std::string get_tag_string(const tag_uint128 &tag)
+{
+    std::string str = std::to_string(tag._data2) + "_" + std::to_string(tag._data1);
+    return str;
+}
 
 }; // namespace diskann
 
