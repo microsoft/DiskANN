@@ -74,10 +74,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     _data_store = data_store;
     _pq_data_store = pq_data_store;
     _graph_store = std::move(graph_store);
-    if (_filtered_index)
+    /*if (_filtered_index)
     {
         _filter_store = std::make_unique<InMemFilterStore<LabelT>>(total_internal_points);
-    }
+    }*/
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
     if (_enable_tags)
@@ -155,10 +155,10 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     {
         _pq_data_store = _data_store;
     }
-    if (filtered_index)
+    /*if (filtered_index)
     {
         _filter_store = std::make_unique<InMemFilterStore<LabelT>>(max_points + num_frozen_pts);
-    }
+    }*/
 }
 
 template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~Index()
