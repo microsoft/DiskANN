@@ -1757,12 +1757,12 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
             LabelT unv_label_as_num = 0;
             this->set_universal_label(unv_label_as_num);
         }
-        // diskann::IndexFilterParams filter_params = diskann::IndexFilterParamsBuilder()
-        //                                                .with_universal_label(filter_params.label_file)
-        //                                                .with_label_file(filter_params.universal_label)
-        //                                                .with_save_path_prefix(filter_params.save_path_prefix)
-        //                                                .build();
-        this->build_filtered_index(data_file.c_str(), points_to_load, filter_params);
+        diskann::IndexFilterParams filter_params_build = diskann::IndexFilterParamsBuilder()
+                                                             .with_universal_label(filter_params.universal_label)
+                                                             .with_label_file(labels_file_to_use)
+                                                             .with_save_path_prefix(filter_params.save_path_prefix)
+                                                             .build();
+        this->build_filtered_index(data_file.c_str(), points_to_load, filter_params_build);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
