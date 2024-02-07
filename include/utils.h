@@ -39,10 +39,7 @@ typedef int FileHandle;
 #ifdef __arm64__
 #define _MM_HINT_T0 1
 #define _MM_HINT_T1 2
-#endif
-#endif
 
-#ifdef __APPLE__
 static inline __attribute__((always_inline)) void _mm_prefetch(char const *p, int i)
 {
     switch (i)
@@ -55,6 +52,7 @@ static inline __attribute__((always_inline)) void _mm_prefetch(char const *p, in
         break;
     }
 }
+#endif
 
 #define LAPACK_COL_MAJOR 1
 #define LAPACK_ROW_MAJOR 0
