@@ -391,29 +391,30 @@ template <typename T> void read_array(AlignedFileReader &reader, T *data, size_t
     if (data == nullptr)
     {
         throw diskann::ANNException("read_array requires an allocated buffer.", -1);
-        if (size * sizeof(T) > MAX_REQUEST_SIZE)
-        {
-            std::stringstream ss;
-            ss << "Cannot read more than " << MAX_REQUEST_SIZE
-               << " bytes. Current request size: " << std::to_string(size) << " sizeof(T): " << sizeof(T) << std::endl;
-            throw diskann::ANNException(ss.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-        }
-        std::vector<AlignedRead> read_requests;
-        AlignedRead read_req;
-        read_req.buf = data;
-        read_req.len = size * sizeof(T);
-        read_req.offset = offset;
-        read_requests.push_back(read_req);
-        IOContext &ctx = reader.get_ctx();
-        reader.read(read_requests, ctx);
+    }
 
-        if ((*(ctx.m_pRequestsStatus))[0] != IOContext::READ_SUCCESS)
-        {
-            std::stringstream ss;
-            ss << "Failed to read_array() of size: " << size * sizeof(T) << " at offset: " << offset << " from reader. "
-               << std::endl;
-            throw diskann::ANNException(ss.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-        }
+    if (size * sizeof(T) > MAX_REQUEST_SIZE)
+    {
+        std::stringstream ss;
+        ss << "Cannot read more than " << MAX_REQUEST_SIZE << " bytes. Current request size: " << std::to_string(size)
+           << " sizeof(T): " << sizeof(T) << std::endl;
+        throw diskann::ANNException(ss.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    std::vector<AlignedRead> read_requests;
+    AlignedRead read_req;
+    read_req.buf = data;
+    read_req.len = size * sizeof(T);
+    read_req.offset = offset;
+    read_requests.push_back(read_req);
+    IOContext &ctx = reader.get_ctx();
+    reader.read(read_requests, ctx);
+
+    if ((*(ctx.m_pRequestsStatus))[0] != IOContext::READ_SUCCESS)
+    {
+        std::stringstream ss;
+        ss << "Failed to read_array() of size: " << size * sizeof(T) << " at offset: " << offset << " from reader. "
+           << std::endl;
+        throw diskann::ANNException(ss.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 }
 

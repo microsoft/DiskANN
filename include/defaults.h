@@ -17,7 +17,7 @@ const uint32_t NUM_FROZEN_POINTS_STATIC = 0;
 const uint32_t NUM_FROZEN_POINTS_DYNAMIC = 1;
 
 // In-mem index related limits
-const float GRAPH_SLACK_FACTOR = 1.3;
+const float GRAPH_SLACK_FACTOR = 1.3f;
 
 // SSD Index related limits
 const uint64_t MAX_GRAPH_DEGREE = 512;

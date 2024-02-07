@@ -1119,7 +1119,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     if (files.fileExists(medoids_file))
     {
         size_t tmp_dim;
-        diskann::load_bin<uint32_t>(files, medoids_file, _medoids, _num_medoids, tmp_dim);
+        diskann::load_bin<uint32_t>(files, norm_file, medoids_file, _medoids, _num_medoids, tmp_dim);
 #else
     if (file_exists(medoids_file))
     {

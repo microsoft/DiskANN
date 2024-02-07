@@ -726,4 +726,8 @@ template DISKANN_DLLEXPORT class SlowDistanceL2<float>;
 template DISKANN_DLLEXPORT class SlowDistanceL2<int8_t>;
 template DISKANN_DLLEXPORT class SlowDistanceL2<uint8_t>;
 
+template DISKANN_DLLEXPORT Distance<float> *get_distance_function(Metric m);
+template DISKANN_DLLEXPORT Distance<int8_t> *get_distance_function(Metric m);
+template DISKANN_DLLEXPORT Distance<uint8_t> *get_distance_function(Metric m);
+
 } // namespace diskann
