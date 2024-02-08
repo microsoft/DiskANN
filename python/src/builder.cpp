@@ -118,7 +118,7 @@ void build_memory_index(const diskann::Metric metric, const std::string &vector_
                                                                            universal_label);
             auto filter_params = diskann::IndexFilterParamsBuilder()
                                      .with_universal_label(universal_label)
-                                     .with_label_file(filter_labels_file)
+                                     .with_label_file(labels_file)
                                      .with_save_path_prefix(index_output_path)
                                      .build();
             index.build_filtered_index(vector_bin_path.c_str(), data_num, filter_params);
