@@ -1083,50 +1083,31 @@ template <typename T = float> inline void normalize(T *arr, const size_t dim)
     }
 }
 
-inline std::vector<std::string> read_file_to_vector_of_strings(const std::string &filename, bool unique = false)
-{
-    std::vector<std::string> result;
-    std::set<std::string> elementSet;
-    if (filename != "")
-    {
+inline std::vector<std::vector<std::string>> read_file_to_vector_of_strings(const std::string &filename, bool unique = false) {
+        std::vector<std::vector<std::string>> query_filters;
         std::ifstream file(filename);
+        std::string line, token;
+
         if (file.fail())
         {
             throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
         }
-        std::string line;
-        while (std::getline(file, line))
+
+        while (std::getline(file, line)) {
+        std::istringstream iss(line);
+        std::vector<std::string> lbls(0);
+        while (getline(iss, token, '&'))
         {
-            if (line.empty())
-            {
-                break;
-            }
-            if (line.find(',') != std::string::npos)
-            {
-                std::cerr << "Every query must have exactly one filter" << std::endl;
-                exit(-1);
-            }
-            if (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
-            {
-                line.erase(line.size() - 1);
-            }
-            if (!elementSet.count(line))
-            {
-                result.push_back(line);
-            }
-            if (unique)
-            {
-                elementSet.insert(line);
-            }
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+            lbls.push_back(token);
         }
-        file.close();
-    }
-    else
-    {
-        throw diskann::ANNException(std::string("Failed to open file. filename can not be blank"), -1);
-    }
-    return result;
+        query_filters.push_back(lbls);
+        }
+    std::cout << "Populated labels for " << query_filters.size() << " queries" << std::endl;
+        return query_filters;
 }
+
 
 inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::robin_set<std::string> path_suffixes)
 {

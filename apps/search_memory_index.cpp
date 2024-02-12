@@ -30,7 +30,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
                         const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
-                        const std::vector<std::string> &query_filters, const float fail_if_recall_below)
+                        const std::vector<std::vector<std::string>> &query_filters, const float fail_if_recall_below)
 {
     using TagT = uint32_t;
     // Load the query file
@@ -165,7 +165,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search && !tags)
             {
-                std::string raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+                std::vector<std::string> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
 
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
                                                          query_result_ids[test_id].data() + i * recall_at,
@@ -186,10 +186,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 }
                 else
                 {
-                    std::string raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+                    std::vector<std::string> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
 
                     index->search_with_tags(query + i * query_aligned_dim, recall_at, L,
-                                            query_result_tags.data() + i * recall_at, nullptr, res, true, raw_filter);
+                                            query_result_tags.data() + i * recall_at, nullptr, res, true, raw_filter[0]);
                 }
 
                 for (int64_t r = 0; r < (int64_t)recall_at; r++)
@@ -403,10 +403,12 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    std::vector<std::string> query_filters;
+    std::vector<std::vector<std::string>> query_filters;
     if (filter_label != "")
     {
-        query_filters.push_back(filter_label);
+        std::vector<std::string> single_filter;
+        single_filter.push_back(filter_label);
+        query_filters.push_back(single_filter);
     }
     else if (query_filters_file != "")
     {

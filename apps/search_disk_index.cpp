@@ -53,7 +53,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                       const uint32_t num_threads, const uint32_t recall_at, const uint32_t beamwidth,
                       const uint32_t num_nodes_to_cache, const uint32_t search_io_limit,
                       const std::vector<uint32_t> &Lvec, const float fail_if_recall_below,
-                      const std::vector<std::string> &query_filters, const bool use_reorder_data = false)
+                      const std::vector<std::vector<std::string>> &query_filters, const bool use_reorder_data = false)
 {
     diskann::cout << "Search parameters: #threads: " << num_threads << ", ";
     if (beamwidth <= 0)
@@ -239,11 +239,11 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                 LabelT label_for_search;
                 if (query_filters.size() == 1)
                 { // one label for all queries
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[0]);
+                    label_for_search = _pFlashIndex->get_converted_label(query_filters[0][0]);
                 }
                 else
                 { // one label for each query
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[i]);
+                    label_for_search = _pFlashIndex->get_converted_label(query_filters[i][0]);
                 }
                 _pFlashIndex->cached_beam_search(
                     query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),
@@ -434,10 +434,12 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    std::vector<std::string> query_filters;
+    std::vector<std::vector<std::string>> query_filters;
     if (filter_label != "")
     {
-        query_filters.push_back(filter_label);
+        std::vector<std::string> tmp;
+        tmp.push_back(filter_label);
+        query_filters.push_back(tmp);
     }
     else if (query_filters_file != "")
     {
