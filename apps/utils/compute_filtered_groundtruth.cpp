@@ -5,7 +5,7 @@
 #include <iostream>
 #include <fstream>
 #include <cassert>
-
+#include <chrono>
 #include <vector>
 #include <algorithm>
 #include <cassert>
@@ -360,8 +360,11 @@ inline void parse_base_label_file(const std::string &map_file,
     uint32_t line_no = 0;
     while (std::getline(infile, line))
     { 
-        if (line_no < start_id)
+        if (line_no < start_id) {
+            line_no++;
             continue;
+        }
+        line_no++;
         std::istringstream iss(line);
         tsl::robin_set<std::string> lbls;
 
@@ -428,6 +431,9 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
     matching_points.resize(num_query);
     for (auto &x : matching_points)
         x.resize(num_base);
+    std::cout<<"Starting to identify matching points "<< std::endl;
+    std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
+
 #pragma omp parallel for schedule(dynamic, 128)
     for (uint32_t i = 0; i < num_query; i++) {
 //        if (i % 100 == 0)
@@ -448,6 +454,11 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
             }
         }
     }
+ std::chrono::high_resolution_clock::time_point t2 = std::chrono::high_resolution_clock::now();
+
+  std::chrono::duration<double> time_span = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+
+  std::cout << "It took me " << time_span.count() << " seconds.";    
     return 0;
 }
 
