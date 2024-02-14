@@ -92,6 +92,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // get some private variables
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
+    DISKANN_DLLEXPORT size_t get_num_deleted_points();
 
     DISKANN_DLLEXPORT bool detect_common_filters(uint32_t point_id, bool search_invocation,
                                                  const std::vector<LabelT> &incoming_labels);

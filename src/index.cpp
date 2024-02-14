@@ -2496,6 +2496,12 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
     return _max_points;
 }
 
+template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::get_num_deleted_points()
+{
+    std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
+    return _delete_set->size();
+}
+
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::generate_frozen_point()
 {
     if (_num_frozen_pts == 0)
