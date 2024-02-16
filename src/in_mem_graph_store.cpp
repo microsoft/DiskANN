@@ -135,9 +135,12 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileRea
         graph_offset += sizeof(uint32_t);
         std::vector<uint32_t> tmp(k);
         tmp.reserve(k);
-        read_array(reader, tmp.data(), k, graph_offset);
-        graph_offset += k * sizeof(uint32_t);
-        cc += k;
+        if (k > 0)
+        {
+            read_array(reader, tmp.data(), k, graph_offset);
+            graph_offset += k * sizeof(uint32_t);
+            cc += k;
+        }
         _graph[nodes_read].swap(tmp);
         nodes_read++;
         if (nodes_read % 1000000 == 0)
