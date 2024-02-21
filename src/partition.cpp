@@ -91,6 +91,29 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
  * Reimplement using gen_random_slice(const T* inputdata,...)
  ************************************/
 
+void get_slice_mpopov(const std::string data_file, size_t count, std::vector<float> &data, size_t &size, size_t &dims)
+{
+    size_t npts;
+    uint32_t npts32, ndims32;
+
+    const size_t read_blk_size = 64 * 1024 * 1024;
+    // create cached reader + writer
+    cached_ifstream base_reader(data_file.c_str(), read_blk_size);
+
+    // metadata: npts, ndims
+    base_reader.read((char *)&npts32, sizeof(uint32_t));
+    base_reader.read((char *)&ndims32, sizeof(uint32_t));
+    npts = npts32;
+    dims = ndims32;
+
+    size = std::min(count, npts);
+    data.resize(size * dims);
+
+    const size_t vector_size = dims * sizeof(float);
+
+    base_reader.read((char *)&data[0], vector_size * size);
+}
+
 template <typename T>
 void gen_random_slice(const std::string data_file, double p_val, float *&sampled_data, size_t &slice_size,
                       size_t &ndims)
