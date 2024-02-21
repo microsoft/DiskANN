@@ -779,15 +779,20 @@ int generate_pq_data_from_pivots_mpopov(
     const float* pivot_data, const size_t pivots_num,
     const size_t num_pq_chunks,
     const size_t dim,
-    std::vector<uint32_t>& pq)
+    std::vector<uint8_t> &pq)
 {
-    if (num_pq_chunks > dim || dim % num_pq_chunks != 0)
+    if (num_pq_chunks == 0 || num_pq_chunks > dim || dim % num_pq_chunks != 0)
     {
         return -1;
     }
 
     const size_t num_centers = 256;
     const size_t chunk_size = dim / num_pq_chunks;
+
+    if (pivots_num != num_centers * dim)
+    {
+        return -1;
+    }
 
     pq.resize(num * num_pq_chunks);
         
@@ -820,15 +825,44 @@ int generate_pq_data_from_pivots_mpopov(
             }
         }
 
-        math_utils::compute_closest_centers(cur_data, num, chunk_size, cur_pivot_data,
-                                            num, 1, closest_center);
+        math_utils::compute_closest_centers(cur_data, num, chunk_size, cur_pivot_data, num_centers, 1, closest_center);
 
 #pragma omp parallel for schedule(static, 8192)
         for (int j = 0; j < num; j++)
         {
+            assert(closest_center[j] < num_centers);
             pq[j * num_pq_chunks + i] = closest_center[j];
         }
     }
+
+    return 0;
+}
+
+int extract_pivots_mpopov(const char *pq_pivots_path, size_t dim, std::vector<float> &pivot_data)
+{
+    if (!file_exists(pq_pivots_path))
+    {
+        std::cout << "ERROR: PQ k-means pivot file not found" << std::endl;
+        throw diskann::ANNException("PQ k-means pivot file not found", -1);
+    }
+
+    size_t nr, nc;
+    std::unique_ptr<size_t[]> file_offset_data;
+    diskann::load_bin<size_t>(pq_pivots_path, file_offset_data, nr, nc, 0);
+    if (nr != 4)
+    {
+        return -1;
+    }
+
+    std::unique_ptr<float[]> full_pivot_data;
+    diskann::load_bin<float>(pq_pivots_path, full_pivot_data, nr, nc, file_offset_data[0]);
+    if ((nr != 256) || (nc != dim))
+    {
+        return -1;
+    }
+
+    pivot_data.resize(nr * dim);
+    std::memcpy(&pivot_data[0], full_pivot_data.get(), pivot_data.size() * sizeof(float));
 
     return 0;
 }

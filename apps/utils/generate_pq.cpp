@@ -36,16 +36,17 @@ bool generate_pq(const std::string &data_path, const std::string &index_prefix_p
                                     (uint32_t)num_pq_chunks, KMEANS_ITERS_FOR_PQ, pq_pivots_path);
     }
 
-    std::vector<float> pivot_data;
-    int ret = diskann::generate_pq_pivots_mpopov(&data[0], size, dim, num_pq_chunks,
-                                                 pivot_data);
-    if (ret != 0)
-        return false;
-
     diskann::generate_pq_data_from_pivots<T>(data_path, (uint32_t)num_pq_centers, (uint32_t)num_pq_chunks,
                                              pq_pivots_path, pq_compressed_vectors_path, opq);
 
-    std::vector<uint32_t> pq;
+    //*********************************************************************************
+    std::vector<float> pivot_data;
+    diskann::generate_pq_pivots_mpopov(&data[0], size, dim, num_pq_chunks, pivot_data);
+
+    pivot_data.clear();
+    diskann::extract_pivots_mpopov(pq_pivots_path.c_str(), dim, pivot_data);
+
+    std::vector<uint8_t> pq;
     diskann::generate_pq_data_from_pivots_mpopov(&data[0], size, &pivot_data[0], pivot_data.size(), num_pq_chunks, dim,
                                                  pq);
     return 0;

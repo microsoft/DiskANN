@@ -71,9 +71,11 @@ DISKANN_DLLEXPORT int generate_opq_pivots(const float *train_data, size_t num_tr
                                           unsigned num_pq_chunks, std::string opq_pivots_path,
                                           bool make_zero_mean = false);
 
+DISKANN_DLLEXPORT int extract_pivots_mpopov(const char *pq_pivots_path, size_t dim, std::vector<float> &pivot_data);
+
 DISKANN_DLLEXPORT int generate_pq_data_from_pivots_mpopov(const float *data, const size_t num, const float *pivot_data,
                                                           const size_t pivots_num, const size_t num_pq_chunks,
-                                                          const size_t dim, std::vector<uint32_t> &pq);
+                                                          const size_t dim, std::vector<uint8_t> &pq);
 
 
 template <typename T>
