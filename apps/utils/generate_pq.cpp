@@ -5,8 +5,14 @@
 #include "pq.h"
 #include "partition.h"
 
-#define KMEANS_ITERS_FOR_PQ 15
+void esent_demo(const char *data_path, const char* query_path);
 
+#define KMEANS_ITERS_FOR_PQ 15
+/*
+int generate_pq_pivots_mpopov(const float *data, size_t train, size_t dim, size_t num_centers, size_t num_pq_chunks,
+                              std::vector<float> &full_pivot_data_vector,
+                              std::vector<float> &centroid_vector);
+*/
 template <typename T>
 bool generate_pq(const std::string &data_path, const std::string &index_prefix_path, const size_t num_pq_centers,
                  const size_t num_pq_chunks, const float sampling_rate, const bool opq)
@@ -14,32 +20,53 @@ bool generate_pq(const std::string &data_path, const std::string &index_prefix_p
     std::string pq_pivots_path = index_prefix_path + "_pq_pivots.bin";
     std::string pq_compressed_vectors_path = index_prefix_path + "_pq_compressed.bin";
 
-    // generates random sample and sets it to train_data and updates train_size
-    size_t train_size, train_dim;
-    float *train_data;
-    gen_random_slice<T>(data_path, sampling_rate, train_data, train_size, train_dim);
-    std::cout << "For computing pivots, loaded sample data of size " << train_size << std::endl;
+    const size_t count = 1000;
+    size_t dim;
+    size_t size;
+    std::vector<float> data;
+    get_slice_mpopov(data_path, count, data, size, dim);
+    std::cout << "For computing pivots, loaded sample data of size " << size << std::endl;
 
     if (opq)
     {
-        diskann::generate_opq_pivots(train_data, train_size, (uint32_t)train_dim, (uint32_t)num_pq_centers,
+        diskann::generate_opq_pivots(&data[0], size, (uint32_t)dim, (uint32_t)num_pq_centers,
                                      (uint32_t)num_pq_chunks, pq_pivots_path, true);
     }
     else
     {
-        diskann::generate_pq_pivots(train_data, train_size, (uint32_t)train_dim, (uint32_t)num_pq_centers,
+        diskann::generate_pq_pivots(&data[0], size, (uint32_t)dim, (uint32_t)num_pq_centers,
                                     (uint32_t)num_pq_chunks, KMEANS_ITERS_FOR_PQ, pq_pivots_path);
     }
-    diskann::generate_pq_data_from_pivots<T>(data_path, (uint32_t)num_pq_centers, (uint32_t)num_pq_chunks,
-                                             pq_pivots_path, pq_compressed_vectors_path, true);
 
-    delete[] train_data;
+    diskann::generate_pq_data_from_pivots<T>(data_path, (uint32_t)num_pq_centers, (uint32_t)num_pq_chunks,
+                                             pq_pivots_path, pq_compressed_vectors_path, opq);
+
+    //*********************************************************************************
+    std::vector<float> pivot_data;
+    diskann::generate_pq_pivots_mpopov(&data[0], size, dim, num_pq_chunks, pivot_data);
+
+    pivot_data.clear();
+    diskann::extract_pivots_mpopov(pq_pivots_path.c_str(), dim, pivot_data);
+
+    std::vector<uint8_t> pq;
+    diskann::generate_pq_data_from_pivots_mpopov(&data[0], size, &pivot_data[0], 
+        pivot_data.size(), num_pq_chunks, dim,pq);
+
+    std::vector<uint8_t> pq2;
+    diskann::generate_pq_data_from_pivots_mpopov(&data[0], 1, &pivot_data[0],
+        pivot_data.size(), num_pq_chunks, dim, pq2);
 
     return 0;
 }
 
 int main(int argc, char **argv)
 {
+    if (argc == 3)
+    {
+        esent_demo(argv[1], argv[2]);
+        return 0;
+    }
+
     if (argc != 7)
     {
         std::cout << "Usage: \n"

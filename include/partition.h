@@ -15,6 +15,9 @@
 
 #include "windows_customizations.h"
 
+DISKANN_DLLEXPORT void get_slice_mpopov(const std::string data_file, size_t count, std::vector<float> &data,
+                                        size_t &size, size_t &dims);
+
 template <typename T>
 void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate);
 
