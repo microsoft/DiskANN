@@ -377,7 +377,7 @@ int generate_pq_pivots_mpopov(
 #pragma omp parallel for schedule(static, 65536)
         for (int32_t j = 0; j < num; j++)
         {
-            std::memcpy(cur_data + j * cur_chunk_size, 
+            std::memcpy(cur_data + j * cur_chunk_size,
                 data + j * dim + chunk_offset,
                      cur_chunk_size * sizeof(float));
         }

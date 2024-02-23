@@ -5,6 +5,8 @@
 #include "pq.h"
 #include "partition.h"
 
+void esent_demo(const char *data_path, const char* query_path);
+
 #define KMEANS_ITERS_FOR_PQ 15
 /*
 int generate_pq_pivots_mpopov(const float *data, size_t train, size_t dim, size_t num_centers, size_t num_pq_chunks,
@@ -47,13 +49,24 @@ bool generate_pq(const std::string &data_path, const std::string &index_prefix_p
     diskann::extract_pivots_mpopov(pq_pivots_path.c_str(), dim, pivot_data);
 
     std::vector<uint8_t> pq;
-    diskann::generate_pq_data_from_pivots_mpopov(&data[0], size, &pivot_data[0], pivot_data.size(), num_pq_chunks, dim,
-                                                 pq);
+    diskann::generate_pq_data_from_pivots_mpopov(&data[0], size, &pivot_data[0], 
+        pivot_data.size(), num_pq_chunks, dim,pq);
+
+    std::vector<uint8_t> pq2;
+    diskann::generate_pq_data_from_pivots_mpopov(&data[0], 1, &pivot_data[0],
+        pivot_data.size(), num_pq_chunks, dim, pq2);
+
     return 0;
 }
 
 int main(int argc, char **argv)
 {
+    if (argc == 3)
+    {
+        esent_demo(argv[1], argv[2]);
+        return 0;
+    }
+
     if (argc != 7)
     {
         std::cout << "Usage: \n"
