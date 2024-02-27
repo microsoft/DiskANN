@@ -356,8 +356,7 @@ void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_n
 // array of chunk_offsets and centroids.
 // The compiler pragma for multi-threading support is removed from this implementation
 // for the purpose of integration into systems that strictly control resource allocation.
-int generate_pq_pivots_simplified(const float *train_data, size_t num_train, 
-                                  size_t dim, size_t num_pq_chunks,
+int generate_pq_pivots_simplified(const float *train_data, size_t num_train, size_t dim, size_t num_pq_chunks,
                                   std::vector<float> &pivot_data_vector)
 {
     if (num_pq_chunks > dim || dim % num_pq_chunks != 0)
@@ -385,7 +384,8 @@ int generate_pq_pivots_simplified(const float *train_data, size_t num_train,
 
         for (int32_t j = 0; j < num_train; j++)
         {
-            std::memcpy(cur_data + j * cur_chunk_size, train_data + j * dim + chunk_offset, cur_chunk_size * sizeof(float));
+            std::memcpy(cur_data + j * cur_chunk_size, train_data + j * dim + chunk_offset,
+                        cur_chunk_size * sizeof(float));
         }
 
         kmeans::kmeanspp_selecting_pivots(cur_data, num_train, cur_chunk_size, cur_pivot_data, num_centers);
@@ -783,9 +783,8 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
 // array of chunk_offsets and centroids.
 // The compiler pragma for multi-threading support is removed from this implementation
 // for the purpose of integration into systems that strictly control resource allocation.
-int generate_pq_data_from_pivots_simplified(const float *data, const size_t num,
-                                            const float *pivot_data, const size_t pivots_num,
-                                            const size_t dim, const size_t num_pq_chunks,
+int generate_pq_data_from_pivots_simplified(const float *data, const size_t num, const float *pivot_data,
+                                            const size_t pivots_num, const size_t dim, const size_t num_pq_chunks,
                                             std::vector<uint8_t> &pq)
 {
     if (num_pq_chunks == 0 || num_pq_chunks > dim || dim % num_pq_chunks != 0)
