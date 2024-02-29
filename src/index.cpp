@@ -286,7 +286,7 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
 
     if (compact_before_save)
     {
-        compact_data();
+        compact_data(true);
         compact_frozen_point();
     }
     else
@@ -2755,7 +2755,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 }
 
 // Should be called after acquiring _update_lock
-template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::compact_data()
+template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::compact_data(bool forced)
 {
     if (!_dynamic_index)
         throw ANNException("Can not compact a non-dynamic index", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -2763,6 +2763,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     if (_data_compacted)
     {
         diskann::cerr << "Warning! Calling compact_data() when _data_compacted is true!" << std::endl;
+
+        if (!forced)
+        {
+            return;
+        }
     }
 
     if (_delete_set->size() > 0)
