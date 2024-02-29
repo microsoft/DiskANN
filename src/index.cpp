@@ -2763,7 +2763,6 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     if (_data_compacted)
     {
         diskann::cerr << "Warning! Calling compact_data() when _data_compacted is true!" << std::endl;
-        return;
     }
 
     if (_delete_set->size() > 0)
