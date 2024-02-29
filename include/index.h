@@ -307,7 +307,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Renumber nodes, update tag and location maps and compact the
     // graph, mode = _consolidated_order in case of lazy deletion and
     // _compacted_order in case of eager deletion
-    DISKANN_DLLEXPORT void compact_data();
+    DISKANN_DLLEXPORT void compact_data(bool forced = false);
     DISKANN_DLLEXPORT void compact_frozen_point();
 
     // Remove deleted nodes from adjacency list of node loc
