@@ -354,10 +354,9 @@ void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_n
 // The compiler pragma for multi-threading support is removed from this implementation
 // for the purpose of integration into systems that strictly control resource allocation.
 int generate_pq_pivots_simplified(float *train_data, size_t num_train, size_t dim, size_t num_pq_chunks,
-                                  std::vector<float> &pivot_data_vector,
-                                  std::vector<float> &centroids,
-                                  std::vector<uint32_t> &offsets,
-                                  const bool make_zero_mean, const uint32_t kmeans_iters_for_pq)
+                                  std::vector<float> &pivot_data_vector, std::vector<float> &centroids,
+                                  std::vector<uint32_t> &offsets, const bool make_zero_mean,
+                                  const uint32_t kmeans_iters_for_pq)
 {
     if (num_pq_chunks == 0 || num_pq_chunks > dim)
     {
@@ -376,14 +375,11 @@ int generate_pq_pivots_simplified(float *train_data, size_t num_train, size_t di
             do
             {
                 chunk_size++;
-            }
-            while (chunk_size * num_pq_chunks < dim);
+            } while (chunk_size * num_pq_chunks < dim);
 
             sizes.resize(num_pq_chunks, chunk_size);
             size_t target = chunk_size * num_pq_chunks;
-            for (auto iter = sizes.rbegin();
-                iter != sizes.rend() && target > dim;
-                iter++, target--)
+            for (auto iter = sizes.rbegin(); iter != sizes.rend() && target > dim; iter++, target--)
             {
                 (*iter)--;
             }
@@ -394,9 +390,9 @@ int generate_pq_pivots_simplified(float *train_data, size_t num_train, size_t di
         }
 
         offsets.resize(num_pq_chunks, 0);
-        for (size_t i = 0; i < num_pq_chunks-1; i++)
+        for (size_t i = 0; i < num_pq_chunks - 1; i++)
         {
-            offsets[i+1] = (uint32_t)(offsets[i] + sizes[i]);
+            offsets[i + 1] = (uint32_t)(offsets[i] + sizes[i]);
         }
         offsets.push_back((uint32_t)dim);
     }
@@ -436,7 +432,7 @@ int generate_pq_pivots_simplified(float *train_data, size_t num_train, size_t di
     for (size_t i = 0; i < num_pq_chunks; i++)
     {
         const size_t chunk_offset = offsets[i];
-        const size_t cur_chunk_size = offsets[i+1] - offsets[i];
+        const size_t cur_chunk_size = offsets[i + 1] - offsets[i];
 
         for (int32_t j = 0; j < num_train; j++)
         {
@@ -839,8 +835,7 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
 // for the purpose of integration into systems that strictly control resource allocation.
 int generate_pq_data_from_pivots_simplified(float *data, const size_t num, const float *pivot_data,
                                             const size_t pivots_num, const size_t dim, const size_t num_pq_chunks,
-                                            const std::vector<float> &centroids,
-                                            const std::vector<uint32_t> &offsets,
+                                            const std::vector<float> &centroids, const std::vector<uint32_t> &offsets,
                                             std::vector<PQ_DATA_TYPE> &pq)
 {
     if (num_pq_chunks < 2 || num_pq_chunks > dim)
@@ -889,7 +884,7 @@ int generate_pq_data_from_pivots_simplified(float *data, const size_t num, const
     for (size_t i = 0; i < num_pq_chunks; i++)
     {
         const size_t chunk_offset = offsets[i];
-        const size_t cur_chunk_size = offsets[i+1] - offsets[i];
+        const size_t cur_chunk_size = offsets[i + 1] - offsets[i];
 
         for (int j = 0; j < num_centers; j++)
         {
@@ -899,12 +894,11 @@ int generate_pq_data_from_pivots_simplified(float *data, const size_t num, const
 
         for (int j = 0; j < num; j++)
         {
-            std::memcpy(cur_data + j * cur_chunk_size,
-                data + j * dim + chunk_offset,
-                cur_chunk_size * sizeof(float));
+            std::memcpy(cur_data + j * cur_chunk_size, data + j * dim + chunk_offset, cur_chunk_size * sizeof(float));
         }
 
-        math_utils::compute_closest_centers(cur_data, num, cur_chunk_size, cur_pivot_data, num_centers, 1, closest_center);
+        math_utils::compute_closest_centers(cur_data, num, cur_chunk_size, cur_pivot_data, num_centers, 1,
+                                            closest_center);
 
         for (int j = 0; j < num; j++)
         {
