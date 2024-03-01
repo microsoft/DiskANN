@@ -60,7 +60,7 @@ Searching a filtered index uses the `apps/search_disk_index.cpp`:
 Example with SIFT10K:
 --------------------
 We demonstrate how to work through this pipeline using the SIFT10K dataset (http://corpus-texmex.irisa.fr/). Before starting, make sure you have compiled diskANN according to the instructions in the README and can see the following binaries (paths with respect to repository root):
-- `build/apps/utils/compute_groundtruth`
+- `build/apps/utils/compute_groundtruth_for_filters`
 - `build/apps/utils/fvecs_to_bin`
 - `build/apps/build_disk_index`
 - `build/apps/search_disk_index`
@@ -81,11 +81,18 @@ Note : `distribution_type` can be `rand` or `zipf`
 
 This will genearate label file with 10000 data points with 50 distinct labels, ranging from 1 to 50 assigned using zipf distribution (0 is the universal label).
 
+Label count for each unique label in the generated label file can be printed with help of following command
+```bash
+  build/apps/utils/stats_label_data --labels_file ./rand_labels_50_10K.txt --universal_label 0
+```
+	
+Note that neither approach is designed for use with random synthetic labels, which will lead to unpredictable accuracy at search time.
+
 Now build and search the index and measure the recall using ground truth computed using bruteforce. We search for results with the filter 35.
 ```bash
-build/apps/utils/compute_groundtruth --data_type float --dist_fn l2 --base_file siftsmall/siftsmall_base.bin --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin --K 100 --label_file rand_labels_50_10K.txt --filter_label 35 --universal_label 0
-build/apps/build_disk_index --data_type float --dist_fn l2 --data_path siftsmall/siftsmall_base.bin --index_path_prefix data/sift/siftsmall_R32_L50_filtered -R 32 --FilteredLbuild 50 -B 1 -M 1 --label_file rand_labels_50_10K.txt --universal_label 0 -F 0
-build/apps/search_disk_index --data_type float --dist_fn l2 --index_path_prefix data/sift/siftsmall_R32_L50_filtered --result_path siftsmall/search_35 --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin -K 10 -L 10 20 30 40 50 100 --filter_label 35 -W 4 -T 8
+build/apps/utils/compute_groundtruth_for_filters --data_type float --dist_fn l2 --base_file siftsmall/siftsmall_base.bin --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin --K 100 --label_file rand_labels_50_10K.txt --filter_label 35 --universal_label 0
+build/apps/build_disk_index --data_type float --dist_fn l2 --data_path siftsmall/siftsmall_base.bin --index_path_prefix siftsmall/siftsmall_R32_L50_filtered_ssd.index -R 32 --FilteredLbuild 50 -B 1 -M 1 --label_file rand_labels_50_10K.txt --universal_label 0 -F 0
+build/apps/search_disk_index --data_type float --dist_fn l2 --index_path_prefix siftsmall/siftsmall_R32_L50_filtered_ssd.index --result_path siftsmall/search_35 --query_file siftsmall/siftsmall_query.bin --gt_file siftsmall_gt_35.bin -K 10 -L 10 20 30 40 50 100 --filter_label 35 -W 4 -T 8
 ```
 
  The output of both searches is listed below. The throughput (Queries/sec) as well as mean and 99.9 latency in microseconds for each `L` parameter provided. (Measured on a physical machine with a 11th Gen Intel(R) Core(TM) i7-1185G7 CPU and 32 GB RAM)
