@@ -80,8 +80,8 @@ class AbstractIndex
                                                       float *distances);
 
     // insert points with labels, labels should be present for filtered index
-    template <typename data_type, typename tag_type, typename label_type>
-    int insert_point(const data_type *point, const tag_type tag, const std::vector<label_type> &labels);
+    template <typename data_type, typename tag_type>
+    int insert_point(const data_type *point, const tag_type tag, const std::vector<std::string> &labels);
 
     // insert point for unfiltered index build. do not use with filtered index
     template <typename data_type, typename tag_type> int insert_point(const data_type *point, const tag_type tag);
@@ -104,7 +104,8 @@ class AbstractIndex
     // memory should be allocated for vec before calling this function
     template <typename tag_type, typename data_type> int get_vector_by_tag(tag_type &tag, data_type *vec);
 
-    template <typename label_type> void set_universal_label(const label_type universal_label);
+    // required for dynamic index (they dont use filter store / data store yet)
+    virtual void set_universal_label(const std::string &raw_universal_labels) = 0;
 
   private:
     virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;
@@ -124,6 +125,5 @@ class AbstractIndex
                                      float *distances, DataVector &res_vectors, bool use_filters = false,
                                      const std::string filter_label = "") = 0;
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) = 0;
-    virtual void _set_universal_label(const LabelType universal_label) = 0;
 };
 } // namespace diskann

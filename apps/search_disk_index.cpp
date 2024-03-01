@@ -239,11 +239,11 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                 LabelT label_for_search;
                 if (query_filters.size() == 1)
                 { // one label for all queries
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[0]);
+                    label_for_search = _pFlashIndex->get_numeric_label(query_filters[0]);
                 }
                 else
                 { // one label for each query
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[i]);
+                    label_for_search = _pFlashIndex->get_numeric_label(query_filters[i]);
                 }
                 _pFlashIndex->cached_beam_search(
                     query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),

@@ -81,7 +81,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                               const uint32_t io_limit, const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr);
 
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
+    DISKANN_DLLEXPORT LabelT get_numeric_label(const std::string &filter_label);
 
     DISKANN_DLLEXPORT uint32_t range_search(const T *query1, const double range, const uint64_t min_l_search,
                                             const uint64_t max_l_search, std::vector<uint64_t> &indices,

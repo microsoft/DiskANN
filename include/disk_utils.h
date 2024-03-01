@@ -65,7 +65,8 @@ DISKANN_DLLEXPORT int merge_shards(const std::string &vamana_prefix, const std::
                                    const std::string &idmaps_prefix, const std::string &idmaps_suffix,
                                    const uint64_t nshards, uint32_t max_degree, const std::string &output_vamana,
                                    const std::string &medoids_file, bool use_filters = false,
-                                   const std::string &labels_to_medoids_file = std::string(""));
+                                   const std::string &labels_to_medoids_file = std::string(""),
+                                   const std::unordered_map<std::string, uint32_t> &disk_labels_map = {});
 
 DISKANN_DLLEXPORT void extract_shard_labels(const std::string &in_label_file, const std::string &shard_ids_bin,
                                             const std::string &shard_label_file);
@@ -81,7 +82,7 @@ DISKANN_DLLEXPORT int build_merged_vamana_index(std::string base_file, diskann::
                                                 std::string centroids_file, size_t build_pq_bytes, bool use_opq,
                                                 uint32_t num_threads, bool use_filters = false,
                                                 const std::string &label_file = std::string(""),
-                                                const std::string &labels_to_medoids_file = std::string(""),
+                                                const std::string &disk_labels_to_medoids_file = std::string(""),
                                                 const std::string &universal_label = "", const uint32_t Lf = 0);
 
 template <typename T, typename LabelT>

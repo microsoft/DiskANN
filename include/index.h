@@ -21,6 +21,7 @@
 #include "in_mem_data_store.h"
 #include "in_mem_graph_store.h"
 #include "abstract_index.h"
+#include "in_mem_filter_store.h"
 
 #include "quantized_distance.h"
 #include "pq_data_store.h"
@@ -100,19 +101,19 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Batch build from a data array, which must pad vectors to aligned_dim
     DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, const std::vector<TagT> &tags);
 
+    // Add filter params to all the above scenarios ?
+
     // Based on filter params builds a filtered or unfiltered index
     DISKANN_DLLEXPORT void build(const std::string &data_file, const size_t num_points_to_load,
                                  IndexFilterParams &filter_params);
 
     // Filtered Support
-    DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
-                                                const size_t num_points_to_load,
+    DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const size_t num_points_to_load,
+                                                const IndexFilterParams &filter_params,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
-    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
-
-    // Get converted integer label from string to int map (_label_map)
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
+    // DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
+    DISKANN_DLLEXPORT void set_universal_label(const std::string &raw_labels);
 
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.
@@ -149,7 +150,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
     // Will fail if tag already in the index or if tag=0.
-    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag, const std::vector<LabelT> &label);
+    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag, const std::vector<std::string> &labels);
 
     // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
@@ -230,8 +231,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                      float *distances, DataVector &res_vectors, bool use_filters = false,
                                      const std::string filter_label = "") override;
 
-    virtual void _set_universal_label(const LabelType universal_label) override;
-
     // No copy/assign.
     Index(const Index<T, TagT, LabelT> &) = delete;
     Index<T, TagT, LabelT> &operator=(const Index<T, TagT, LabelT> &) = delete;
@@ -247,13 +246,17 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // determines navigating node of the graph by calculating medoid of datafopt
     uint32_t calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
-
-    std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
-
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
+
+    // Calculate best medoids for filter data
+    void calculate_best_medoids(const size_t num_points_to_load, const uint32_t num_candidates);
+
+    // load medoids
+    size_t load_medoids(const std::string &labels_to_medoid_file);
+    // save medoids
+    void save_medoids(const std::string &save_path);
 
     // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
@@ -342,6 +345,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Graph related data structures
     std::unique_ptr<AbstractGraphStore> _graph_store;
 
+    // Filter Store
+    std::unique_ptr<AbstractFilterStore<LabelT>> _filter_store;
+
     char *_opt_graph = nullptr;
 
     // Dimensions
@@ -376,18 +382,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Filter Support
 
     bool _filtered_index = false;
-    // Location to label is only updated during insert_point(), all other reads are protected by
-    // default as a location can only be released at end of consolidate deletes
-    std::vector<std::vector<LabelT>> _location_to_labels;
-    tsl::robin_set<LabelT> _labels;
-    std::string _labels_file;
-    std::unordered_map<LabelT, uint32_t> _label_to_start_id;
+    std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
-
-    bool _use_universal_label = false;
-    LabelT _universal_label = 0;
+    /*  std::vector<std::vector<LabelT>> _pts_to_labels;
+      tsl::robin_set<LabelT> _labels;
+      bool _use_universal_label = false;
+      LabelT _universal_label = 0;
+      std::unordered_map<std::string, LabelT> _label_map;*/
     uint32_t _filterIndexingQueueSize;
-    std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;

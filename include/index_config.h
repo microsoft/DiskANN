@@ -45,7 +45,7 @@ struct IndexConfig
     IndexConfig(DataStoreStrategy data_strategy, GraphStoreStrategy graph_strategy, Metric metric, size_t dimension,
                 size_t max_points, size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
                 bool pq_dist_build, bool concurrent_consolidate, bool use_opq, bool filtered_index,
-                std::string &data_type, const std::string &tag_type, const std::string &label_type,
+                const std::string &data_type, const std::string &tag_type, const std::string &label_type,
                 std::shared_ptr<IndexWriteParameters> index_write_params,
                 std::shared_ptr<IndexSearchParams> index_search_params)
         : data_strategy(data_strategy), graph_strategy(graph_strategy), metric(metric), dimension(dimension),
@@ -124,12 +124,6 @@ class IndexConfigBuilder
         return *this;
     }
 
-    IndexConfigBuilder &is_filtered(bool is_filtered)
-    {
-        this->_filtered_index = is_filtered;
-        return *this;
-    }
-
     IndexConfigBuilder &with_num_pq_chunks(size_t num_pq_chunks)
     {
         this->_num_pq_chunks = num_pq_chunks;
@@ -191,6 +185,12 @@ class IndexConfigBuilder
             return *this;
         }
         this->_index_search_params = search_params_ptr;
+        return *this;
+    }
+
+    IndexConfigBuilder &is_filtered(bool is_filtered)
+    {
+        this->_filtered_index = is_filtered;
         return *this;
     }
 
