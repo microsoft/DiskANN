@@ -398,10 +398,11 @@ int generate_pq_pivots_simplified(float *train_data, size_t num_train, size_t di
     }
 
     const size_t num_centers = 256;
+    const uint32_t max_chunk_size = offsets[1];
 
     pivot_data_vector.resize(num_centers * dim);
-    std::vector<float> cur_pivot_data_vector(num_centers * offsets[1]);
-    std::vector<float> cur_data_vector(num_train * offsets[1]);
+    std::vector<float> cur_pivot_data_vector(num_centers * max_chunk_size);
+    std::vector<float> cur_data_vector(num_train * max_chunk_size);
     std::vector<uint32_t> closest_center_vector(num_train);
 
     float *pivot_data = &pivot_data_vector[0];
@@ -838,7 +839,7 @@ int generate_pq_data_from_pivots_simplified(float *data, const size_t num, const
                                             const std::vector<float> &centroids, const std::vector<uint32_t> &offsets,
                                             std::vector<PQ_DATA_TYPE> &pq)
 {
-    if (num_pq_chunks < 2 || num_pq_chunks > dim)
+    if (num_pq_chunks == 0 || num_pq_chunks > dim)
     {
         return -1;
     }
@@ -854,6 +855,7 @@ int generate_pq_data_from_pivots_simplified(float *data, const size_t num, const
     }
 
     const size_t num_centers = 256;
+    const uint32_t max_chunk_size = offsets[1];
 
     if (pivots_num != num_centers * dim)
     {
@@ -862,8 +864,8 @@ int generate_pq_data_from_pivots_simplified(float *data, const size_t num, const
 
     pq.resize(num * num_pq_chunks);
 
-    std::vector<float> cur_pivot_vector(num_centers * offsets[1]);
-    std::vector<float> cur_data_vector(num * offsets[1]);
+    std::vector<float> cur_pivot_vector(num_centers * max_chunk_size);
+    std::vector<float> cur_data_vector(num * max_chunk_size);
     std::vector<uint32_t> closest_center_vector(num);
 
     float *cur_pivot_data = &cur_pivot_vector[0];
