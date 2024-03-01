@@ -67,9 +67,11 @@ DISKANN_DLLEXPORT int generate_opq_pivots(const float *train_data, size_t num_tr
                                           unsigned num_pq_chunks, std::string opq_pivots_path,
                                           bool make_zero_mean = false);
 
-DISKANN_DLLEXPORT int generate_pq_pivots_simplified(float *train_data, size_t num_train, size_t dim,
-                                                    size_t num_pq_chunks, std::vector<float> &pivot_data_vector,
-                                                    std::vector<float> &centroids, const bool make_zero_mean = true,
+DISKANN_DLLEXPORT int generate_pq_pivots_simplified(float *train_data, size_t num_train, size_t dim, size_t num_pq_chunks, 
+                                                    std::vector<float> &pivot_data_vector,
+                                                    std::vector<float> &centroids,
+                                                    std::vector<uint32_t> &offsets,
+                                                    const bool make_zero_mean = true,
                                                     const uint32_t kmeans_iters_for_pq = 15);
 
 template <typename T>
@@ -82,6 +84,7 @@ DISKANN_DLLEXPORT int generate_pq_data_from_pivots_simplified(float *data, const
                                                               const float *pivot_data, const size_t pivots_num,
                                                               const size_t dim, const size_t num_pq_chunks,
                                                               const std::vector<float> &centroids,
+                                                              const std::vector<uint32_t> &offsets,
                                                               std::vector<PQ_DATA_TYPE> &pq);
 
 template <typename T>
