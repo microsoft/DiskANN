@@ -94,7 +94,9 @@ std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(const Gra
 }
 
 template <typename T>
-std::shared_ptr<PQDataStore<T>> IndexFactory::construct_pq_datastore(DataStoreStrategy strategy, size_t num_points,
+std::shared_ptr<PQDataStore<T>> IndexFactory::construct_pq_datastore(DataStoreStrategy strategy,
+                                                                     const std::string &codebook_path,
+                                                                     size_t num_points,
                                                                      size_t dimension, Metric m, size_t num_pq_chunks,
                                                                      bool use_opq)
 {
@@ -107,7 +109,8 @@ std::shared_ptr<PQDataStore<T>> IndexFactory::construct_pq_datastore(DataStoreSt
     case DataStoreStrategy::MEMORY:
         distance_fn.reset(construct_inmem_distance_fn<T>(m));
         return std::make_shared<diskann::PQDataStore<T>>(dimension, (location_t)(num_points), num_pq_chunks,
-                                                         std::move(distance_fn), std::move(quantized_distance_fn));
+                                                         std::move(distance_fn), std::move(quantized_distance_fn),
+                                                         codebook_path);
     default:
         // REFACTOR TODO: We do support diskPQ - so we may need to add a new class for SSDPQDataStore!
         break;
@@ -127,7 +130,7 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
     {
         pq_data_store =
-            construct_pq_datastore<data_type>(_config->data_strategy, num_points + _config->num_frozen_pts, dim,
+            construct_pq_datastore<data_type>(_config->data_strategy, _config->pq_codebook_path, num_points + _config->num_frozen_pts, dim,
                                               _config->metric, _config->num_pq_chunks, _config->use_opq);
     }
     else
