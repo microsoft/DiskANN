@@ -30,7 +30,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
                         const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
-                        const std::vector<std::vector<std::string>> &query_filters, const float fail_if_recall_below)
+                        const std::vector<std::vector<std::string>> &query_filters, const uint32_t filter_penalty_threshold, const float fail_if_recall_below)
 {
     using TagT = uint32_t;
     // Load the query file
@@ -70,6 +70,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
+    std::cout<<filter_penalty_threshold << " is at driver file" << std::endl;
+    auto search_params = diskann::IndexSearchParams(*(std::max_element(Lvec.begin(), Lvec.end())), num_threads, filter_penalty_threshold);
     auto config = diskann::IndexConfigBuilder()
                       .with_metric(metric)
                       .with_dimension(query_dim)
@@ -86,6 +88,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       .is_use_opq(false)
                       .with_num_pq_chunks(0)
                       .with_num_frozen_pts(num_frozen_pts)
+                      .with_index_search_params(search_params)
                       .build();
 
     auto index_factory = diskann::IndexFactory(config);
@@ -279,7 +282,7 @@ int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path, query_file, gt_file, filter_label, label_type,
         query_filters_file;
-    uint32_t num_threads, K;
+    uint32_t num_threads, K, filter_penalty_threshold;
     std::vector<uint32_t> Lvec;
     bool print_all_recalls, dynamic, tags, show_qps_per_thread;
     float fail_if_recall_below = 0.0f;
@@ -316,6 +319,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("query_filters_file",
                                        po::value<std::string>(&query_filters_file)->default_value(std::string("")),
                                        program_options_utils::FILTERS_FILE_DESCRIPTION);
+        optional_configs.add_options()("filter_penalty_threshold",
+                                       po::value<uint32_t>(&filter_penalty_threshold)->default_value(0),
+                                       "What penalty threshold to tolerate for multiple filter search");
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);
         optional_configs.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
@@ -423,19 +429,19 @@ int main(int argc, char **argv)
             {
                 return search_memory_index<int8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold, fail_if_recall_below);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold, fail_if_recall_below);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float, uint16_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                            show_qps_per_thread, query_filters, fail_if_recall_below);
+                                                            show_qps_per_thread, query_filters, filter_penalty_threshold, fail_if_recall_below);
             }
             else
             {
@@ -449,19 +455,19 @@ int main(int argc, char **argv)
             {
                 return search_memory_index<int8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                   show_qps_per_thread, query_filters, fail_if_recall_below);
+                                                   show_qps_per_thread, query_filters, filter_penalty_threshold,  fail_if_recall_below);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                     num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                    show_qps_per_thread, query_filters, fail_if_recall_below);
+                                                    show_qps_per_thread, query_filters, filter_penalty_threshold,  fail_if_recall_below);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                   num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                  show_qps_per_thread, query_filters, fail_if_recall_below);
+                                                  show_qps_per_thread, query_filters, filter_penalty_threshold,  fail_if_recall_below);
             }
             else
             {

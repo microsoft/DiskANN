@@ -24,6 +24,7 @@ class IndexWriteParameters
     const uint32_t num_threads;
     const uint32_t filter_list_size; // Lf
 
+
     IndexWriteParameters(const uint32_t search_list_size, const uint32_t max_degree, const bool saturate_graph,
                          const uint32_t max_occlusion_size, const float alpha, const uint32_t num_threads,
                          const uint32_t filter_list_size)
@@ -39,12 +40,14 @@ class IndexWriteParameters
 class IndexSearchParams
 {
   public:
-    IndexSearchParams(const uint32_t initial_search_list_size, const uint32_t num_search_threads)
-        : initial_search_list_size(initial_search_list_size), num_search_threads(num_search_threads)
+    IndexSearchParams(const uint32_t initial_search_list_size, const uint32_t num_search_threads, const uint32_t filter_penalty_threshold = 0)
+        : initial_search_list_size(initial_search_list_size), num_search_threads(num_search_threads), filter_penalty_threshold(filter_penalty_threshold)
     {
     }
+
     const uint32_t initial_search_list_size; // search L
     const uint32_t num_search_threads;       // search threads
+    const uint32_t filter_penalty_threshold = 0;
 };
 
 class IndexWriteParametersBuilder
@@ -90,6 +93,7 @@ class IndexWriteParametersBuilder
         _filter_list_size = filter_list_size == 0 ? _search_list_size : filter_list_size;
         return *this;
     }
+
 
     IndexWriteParameters build() const
     {

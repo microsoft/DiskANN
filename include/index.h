@@ -90,6 +90,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT bool detect_common_filters(uint32_t point_id, bool search_invocation,
                                                  const std::vector<LabelT> &incoming_labels);
 
+    DISKANN_DLLEXPORT bool detect_filter_penalty(uint32_t point_id, bool search_invocation,
+                                                 const std::vector<LabelT> &incoming_labels);
+
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
                                  const std::vector<TagT> &tags = std::vector<TagT>());
@@ -389,7 +392,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
+    uint32_t _filter_penalty_threshold = 0;
     std::unordered_map<std::string, LabelT> _label_map;
+
 
     // Indexing parameters
     uint32_t _indexingQueueSize;

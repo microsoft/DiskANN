@@ -109,6 +109,11 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
                                      _indexingQueueSize, _indexingRange, _indexingMaxC, _data_store->get_dims());
         }
     }
+        if (index_config.index_search_params != nullptr)
+        {
+            _filter_penalty_threshold = index_config.index_search_params->filter_penalty_threshold;                    
+        }
+
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -786,6 +791,40 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
     return (common_filters.size() > 0);
 }
 
+
+// Find common filter between a node's labels and a given set of labels, while
+// taking into account universal label
+template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
+                                                   const std::vector<LabelT> &incoming_labels)
+{
+
+    // not implemented for build-time use case, since we need to understand universal labels for multiple filters
+    if (!search_invocation)
+        return true;
+
+    auto &curr_node_labels = _location_to_labels[point_id];
+    std::vector<LabelT> common_filters;
+    uint32_t overlap = 0;
+
+    for (auto &lbl : incoming_labels) {
+        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end()) {
+            overlap++;
+        }
+    }
+
+    std::string tmp = "here, penalty=" + std::to_string(_filter_penalty_threshold) + ", overlap=" + std::to_string(overlap);
+    std::cout << tmp << std::endl;
+
+
+    if (overlap < _filter_penalty_threshold)
+        return true;
+
+    return false;
+}
+
+
+
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
@@ -849,8 +888,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter)
         {
+            if (filter_labels.size() <= 1) {
             if (!detect_common_filters(id, search_invocation, filter_labels))
                 continue;
+            } else {
+            if (!detect_filter_penalty(id, search_invocation, filter_labels))
+                continue;
+            }
         }
 
         if (is_not_visited(id))
@@ -914,8 +958,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
+                    if (filter_labels.size() <=1) {
                     if (!detect_common_filters(id, search_invocation, filter_labels))
                         continue;
+                    } else {
+                    if (!detect_filter_penalty(id, search_invocation, filter_labels))
+                        continue;
+                    }
                 }
 
                 if (is_not_visited(id))
@@ -1788,7 +1837,7 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
         return _universal_label;
     }
     std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
+    stream << "Unable to find label " << raw_label <<" in the Label Map";
     diskann::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 }
@@ -2119,7 +2168,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     if (pos < K)
     {
-        diskann::cerr << "Found fewer than K elements for query" << std::endl;
+//        diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
 
     return retval;
