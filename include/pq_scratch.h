@@ -17,6 +17,7 @@ template <typename T> class PQScratch
 
     PQScratch(size_t graph_degree, size_t aligned_dim);
     void initialize(size_t dim, const T *query, const float norm = 1.0f);
+    virtual ~PQScratch();
 };
 
 } // namespace diskann

@@ -143,6 +143,15 @@ template <typename T> PQScratch<T>::PQScratch(size_t graph_degree, size_t aligne
     memset(rotated_query, 0, aligned_dim * sizeof(float));
 }
 
+template <typename T> PQScratch<T>::~PQScratch()
+{
+    diskann::aligned_free((void *)aligned_pq_coord_scratch);
+    diskann::aligned_free((void *)aligned_pqtable_dist_scratch);
+    diskann::aligned_free((void *)aligned_dist_scratch);
+    diskann::aligned_free((void *)aligned_query_float);
+    diskann::aligned_free((void *)rotated_query);
+}
+
 template <typename T> void PQScratch<T>::initialize(size_t dim, const T *query, const float norm)
 {
     for (size_t d = 0; d < dim; ++d)
