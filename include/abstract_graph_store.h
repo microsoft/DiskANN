@@ -18,6 +18,8 @@ class AbstractGraphStore
     {
     }
 
+    virtual ~AbstractGraphStore() = default;
+
     virtual int load(const std::string &index_path_prefix) = 0;
     virtual int store(const std::string &index_path_prefix) = 0;
 

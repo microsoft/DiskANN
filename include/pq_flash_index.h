@@ -86,6 +86,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
 
+    DISKANN_DLLEXPORT bool is_label_valid(const std::string& filter_label);
+
     DISKANN_DLLEXPORT uint32_t range_search(const T *query1, const double range, const uint64_t min_l_search,
                                             const uint64_t max_l_search, std::vector<uint64_t> &indices,
                                             std::vector<float> &distances, const uint64_t min_beam_width,
@@ -107,11 +109,13 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, uint32_t label_id);
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
     DISKANN_DLLEXPORT void parse_label_file(const std::string &map_file, size_t &num_pts_labels);
-    DISKANN_DLLEXPORT void get_label_file_metadata(std::string map_file, uint32_t &num_pts, uint32_t &num_total_labels);
+    DISKANN_DLLEXPORT void get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
+                                                   uint32_t &num_total_labels);
     DISKANN_DLLEXPORT inline int32_t get_filter_number(const LabelT &filter_label);
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
                                                   const uint32_t nthreads);
 
+    size_t search_string_range(const std::string& str, char ch, size_t start, size_t end);
     // index info
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]

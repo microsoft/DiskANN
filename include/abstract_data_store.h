@@ -18,7 +18,7 @@ template <typename data_t> class AbstractDataStore
   public:
     AbstractDataStore(const location_t capacity, const size_t dim);
 
-    // virtual ~AbstractDataStore() = default;
+    virtual ~AbstractDataStore() = default;
 
     // Return number of points returned
     virtual location_t load(const std::string &filename) = 0;

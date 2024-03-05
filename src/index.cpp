@@ -2023,6 +2023,17 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
 }
 
 template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::is_label_valid(const std::string& raw_label)
+{
+    if (_label_map.find(raw_label) != _label_map.end())
+    {
+        return true;
+    }
+
+    return false;
+}
+
+template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points)
 {
     // Format of Label txt file: filters with comma separators
