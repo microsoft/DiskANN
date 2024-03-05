@@ -2156,7 +2156,7 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
         size_t next_lbl_pos = 0;
         while (lbl_pos < next_pos && lbl_pos != std::string::npos)
         {
-            next_lbl_pos = buffer.find(',', lbl_pos);
+            next_lbl_pos = search_string_range(buffer, ',', lbl_pos, next_pos);
             if (next_lbl_pos == std::string::npos) // the last label in the whole file
             {
                 next_lbl_pos = next_pos;
@@ -3564,6 +3564,20 @@ void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t
     {
         indices[i] = retset[i].id;
     }
+}
+
+template <typename T, typename TagT, typename LabelT>
+size_t Index<T, TagT, LabelT>::search_string_range(const std::string& str, char ch, size_t start, size_t end)
+{
+    for (; start != end; start++)
+    {
+        if (str[start] == ch)
+        {
+            return start;
+        }
+    }
+
+    return std::string::npos;
 }
 
 /*  Internals of the library */
