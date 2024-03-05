@@ -118,30 +118,32 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
                               const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq,
                               const bool filtered_index)
-    : Index(IndexConfigBuilder()
-                .with_metric(m)
-                .with_dimension(dim)
-                .with_max_points(max_points)
-                .with_index_write_params(index_parameters)
-                .with_index_search_params(index_search_params)
-                .with_num_frozen_pts(num_frozen_pts)
-                .is_dynamic_index(dynamic_index)
-                .is_enable_tags(enable_tags)
-                .is_concurrent_consolidate(concurrent_consolidate)
-                .is_pq_dist_build(pq_dist_build)
-                .with_num_pq_chunks(num_pq_chunks)
-                .is_use_opq(use_opq)
-                .is_filtered(filtered_index)
-                .with_data_type(diskann_type_to_name<T>())
-                .build(),
-            IndexFactory::construct_datastore<T>(
-                DataStoreStrategy::MEMORY,
-                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m),
-            IndexFactory::construct_graphstore(
-                GraphStoreStrategy::MEMORY,
-                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
-                (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
-                         defaults::GRAPH_SLACK_FACTOR * 1.05)))
+    : Index(
+          IndexConfigBuilder()
+              .with_metric(m)
+              .with_dimension(dim)
+              .with_max_points(max_points)
+              .with_index_write_params(index_parameters)
+              .with_index_search_params(index_search_params)
+              .with_num_frozen_pts(num_frozen_pts)
+              .is_dynamic_index(dynamic_index)
+              .is_enable_tags(enable_tags)
+              .is_concurrent_consolidate(concurrent_consolidate)
+              .is_pq_dist_build(pq_dist_build)
+              .with_num_pq_chunks(num_pq_chunks)
+              .is_use_opq(use_opq)
+              .is_filtered(filtered_index)
+              .with_data_type(diskann_type_to_name<T>())
+              .build(),
+          IndexFactory::construct_datastore<T>(DataStoreStrategy::MEMORY,
+                                               (max_points == 0 ? (size_t)1 : max_points) +
+                                                   (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                                               dim, m),
+          IndexFactory::construct_graphstore(GraphStoreStrategy::MEMORY,
+                                             (max_points == 0 ? (size_t)1 : max_points) +
+                                                 (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                                             (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
+                                                      defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
     if (_pq_dist)
     {
