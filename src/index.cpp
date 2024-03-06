@@ -157,10 +157,10 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .build(),
             IndexFactory::construct_datastore<T>(
                 DataStoreStrategy::MEMORY,
-                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m),
+                (max_points == 0? (size_t)1 : max_points) + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m),
             IndexFactory::construct_graphstore(
                 GraphStoreStrategy::MEMORY,
-                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                (max_points == 0? (size_t)1 : max_points) + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
                 (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
                          defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
@@ -781,7 +781,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             else
             {
                 std::stringstream stream;
-                stream << "load index from a single file currently only support _save_as_one_file_version = 1 and _save_as_one_file_version = 1. "
+                stream << "load index from a single file currently only support _save_as_one_file_version = 1 and _load_as_one_file_version = 1. "
                        << "Not loading the index."
                        << std::endl;
                 diskann::cerr << stream.str() << std::endl;
@@ -3129,15 +3129,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 template <typename T, typename TagT, typename LabelT>
 int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const std::vector<LabelT> &labels)
 {
-
     assert(_has_built);
-    if (tag == static_cast<TagT>(0))
-    {
-        throw diskann::ANNException("Do not insert point with tag 0. That is "
-                                    "reserved for points hidden "
-                                    "from the user.",
-                                    -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
 
     std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
