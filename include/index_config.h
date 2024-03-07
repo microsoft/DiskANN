@@ -28,6 +28,10 @@ struct IndexConfig
     bool concurrent_consolidate;
     bool use_opq;
     bool filtered_index;
+    bool save_as_one_file;
+    uint64_t save_as_one_file_version;
+    bool load_from_one_file;
+    uint64_t load_from_one_file_version;
 
     size_t num_pq_chunks;
     size_t num_frozen_pts;
@@ -45,12 +49,15 @@ struct IndexConfig
     IndexConfig(DataStoreStrategy data_strategy, GraphStoreStrategy graph_strategy, Metric metric, size_t dimension,
                 size_t max_points, size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
                 bool pq_dist_build, bool concurrent_consolidate, bool use_opq, bool filtered_index,
-                std::string &data_type, const std::string &tag_type, const std::string &label_type,
-                std::shared_ptr<IndexWriteParameters> index_write_params,
+                bool save_as_one_file, uint64_t save_as_one_file_version, bool load_from_one_file,
+                uint64_t load_from_one_file_version, std::string &data_type, const std::string &tag_type,
+                const std::string &label_type, std::shared_ptr<IndexWriteParameters> index_write_params,
                 std::shared_ptr<IndexSearchParams> index_search_params)
         : data_strategy(data_strategy), graph_strategy(graph_strategy), metric(metric), dimension(dimension),
           max_points(max_points), dynamic_index(dynamic_index), enable_tags(enable_tags), pq_dist_build(pq_dist_build),
           concurrent_consolidate(concurrent_consolidate), use_opq(use_opq), filtered_index(filtered_index),
+          save_as_one_file(save_as_one_file), save_as_one_file_version(save_as_one_file_version),
+          load_from_one_file(load_from_one_file), load_from_one_file_version(load_from_one_file_version),
           num_pq_chunks(num_pq_chunks), num_frozen_pts(num_frozen_points), label_type(label_type), tag_type(tag_type),
           data_type(data_type), index_write_params(index_write_params), index_search_params(index_search_params)
     {
@@ -194,6 +201,30 @@ class IndexConfigBuilder
         return *this;
     }
 
+    IndexConfigBuilder &with_save_as_single_file(bool save_as_one_file)
+    {
+        this->_save_as_one_file = save_as_one_file;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_save_as_single_file_version(uint64_t save_as_one_file_version)
+    {
+        this->_save_as_one_file_version = save_as_one_file_version;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_load_from_single_file(bool load_from_one_file)
+    {
+        this->_load_from_one_file = load_from_one_file;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_load_from_single_file_version(uint64_t load_from_one_file_version)
+    {
+        this->_load_from_one_file_version = load_from_one_file_version;
+        return *this;
+    }
+
     IndexConfig build()
     {
         if (_data_type == "" || _data_type.empty())
@@ -219,7 +250,8 @@ class IndexConfigBuilder
 
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
                            _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build, _concurrent_consolidate,
-                           _use_opq, _filtered_index, _data_type, _tag_type, _label_type, _index_write_params,
+                           _use_opq, _filtered_index, _save_as_one_file, _save_as_one_file_version, _load_from_one_file,
+                           _load_from_one_file_version, _data_type, _tag_type, _label_type, _index_write_params,
                            _index_search_params);
     }
 
@@ -240,6 +272,10 @@ class IndexConfigBuilder
     bool _concurrent_consolidate = false;
     bool _use_opq = false;
     bool _filtered_index{defaults::HAS_LABELS};
+    bool _save_as_one_file;
+    uint64_t _save_as_one_file_version;
+    bool _load_from_one_file;
+    uint64_t _load_from_one_file_version;
 
     size_t _num_pq_chunks = 0;
     size_t _num_frozen_pts{defaults::NUM_FROZEN_POINTS_STATIC};

@@ -24,8 +24,10 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     InMemDataStore(const location_t capacity, const size_t dim, std::unique_ptr<Distance<data_t>> distance_fn);
     virtual ~InMemDataStore();
 
-    virtual location_t load(const std::string &filename) override;
-    virtual size_t save(const std::string &filename, const location_t num_points) override;
+    virtual location_t load(const std::string &filename, size_t offset = 0) override;
+    virtual location_t load(AlignedFileReader &reader, size_t offset = 0) override;
+    virtual size_t save(const std::string &filename, const location_t num_pts) override;
+    virtual size_t save(std::ofstream &writer, const location_t num_pts, size_t offset) override;
 
     virtual size_t get_aligned_dim() const override;
 
@@ -59,9 +61,9 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     virtual location_t expand(const location_t new_size) override;
     virtual location_t shrink(const location_t new_size) override;
 
-    virtual location_t load_impl(const std::string &filename);
+    virtual location_t load_impl(const std::string &filename, size_t offset);
 #ifdef EXEC_ENV_OLS
-    virtual location_t load_impl(AlignedFileReader &reader);
+    virtual location_t load_impl(AlignedFileReader &reader, size_t offset);
 #endif
 
   private:

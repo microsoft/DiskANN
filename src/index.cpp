@@ -25,6 +25,11 @@
 
 namespace diskann
 {
+SaveLoadMetaDataV1::SaveLoadMetaDataV1() : data_offset(0), delete_list_offset(0), tags_offset(0), graph_offset(0)
+{
+}
+
+
 // Initialize an index with metric m, load the data of type T with filename
 // (bin), and initialize max_points
 template <typename T, typename TagT, typename LabelT>
@@ -34,7 +39,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
       _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
       _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
       _pq_dist(index_config.pq_dist_build), _use_opq(index_config.use_opq),
-      _filtered_index(index_config.filtered_index), _num_pq_chunks(index_config.num_pq_chunks),
+      _filtered_index(index_config.filtered_index), _save_as_one_file(index_config.save_as_one_file),
+      _save_as_one_file_version(index_config.save_as_one_file_version),
+      _load_from_one_file(index_config.load_from_one_file),
+      _load_from_one_file_version(index_config.load_from_one_file_version), _num_pq_chunks(index_config.num_pq_chunks),
       _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
 {
     if (_dynamic_index && !_enable_tags)
@@ -125,7 +133,8 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts,
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
                               const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq,
-                              const bool filtered_index)
+                              const bool filtered_index, bool save_as_one_file, uint64_t save_as_one_file_version,
+                              bool load_from_one_file, uint64_t load_from_one_file_version)
     : Index(IndexConfigBuilder()
                 .with_metric(m)
                 .with_dimension(dim)
@@ -141,13 +150,17 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                 .is_use_opq(use_opq)
                 .is_filtered(filtered_index)
                 .with_data_type(diskann_type_to_name<T>())
+                .with_save_as_single_file(save_as_one_file)
+                .with_save_as_single_file_version(save_as_one_file_version)
+                .with_load_from_single_file(load_from_one_file)
+                .with_load_from_single_file_version(load_from_one_file_version)
                 .build(),
             IndexFactory::construct_datastore<T>(
                 DataStoreStrategy::MEMORY,
-                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m),
+                (max_points == 0? (size_t)1 : max_points) + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m),
             IndexFactory::construct_graphstore(
                 GraphStoreStrategy::MEMORY,
-                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                (max_points == 0? (size_t)1 : max_points) + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
                 (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
                          defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
@@ -273,7 +286,7 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
 
     if (compact_before_save)
     {
-        compact_data();
+        compact_data(true);
         compact_frozen_point();
     }
     else
@@ -379,9 +392,107 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     }
     else
     {
-        diskann::cout << "Save index in a single file currently not supported. "
-                         "Not saving the index."
-                      << std::endl;
+        if (_filtered_index)
+        {
+            diskann::cout << "Save index in a single file currently not supported for filtered index. "
+                             "Not saving the index."
+                          << std::endl;
+        }
+        else
+        {
+            if (_save_as_one_file_version == 1)
+            {
+                std::ofstream writer;
+                open_file_to_write(writer, filename);
+
+                // Save version.
+                writer.write((char *)&_save_as_one_file_version, sizeof(uint64_t));
+                size_t curr_pos = sizeof(uint64_t);
+
+                // Placeholder for metadata.
+                // This will be filled at end;
+                SaveLoadMetaDataV1 metadata;
+                const size_t meta_data_start = curr_pos;
+                curr_pos += sizeof(SaveLoadMetaDataV1);
+
+                // Save data.
+                {
+                    metadata.data_offset = static_cast<uint64_t>(curr_pos);
+                    curr_pos += _data_store->save(writer, (location_t)(_nd + _num_frozen_pts), curr_pos);
+                }
+
+                // Save delete list.
+                {
+                    metadata.delete_list_offset = static_cast<uint64_t>(curr_pos);
+
+                    if (_delete_set->size() != 0)
+                    {
+                        std::unique_ptr<uint32_t[]> delete_list = std::make_unique<uint32_t[]>(_delete_set->size());
+                        uint32_t i = 0;
+                        for (auto &del : *_delete_set)
+                        {
+                            delete_list[i++] = del;
+                        }
+                        curr_pos += save_bin<uint32_t>(writer, delete_list.get(), _delete_set->size(), 1, curr_pos);
+                    }
+                }
+
+                // Save tags.
+                {
+                    metadata.tags_offset = static_cast<uint64_t>(curr_pos);
+
+                    if (_enable_tags)
+                    {
+                        TagT *tag_data = new TagT[_nd + _num_frozen_pts];
+                        for (uint32_t i = 0; i < _nd; i++)
+                        {
+                            TagT tag;
+                            if (_location_to_tag.try_get(i, tag))
+                            {
+                                tag_data[i] = tag;
+                            }
+                            else
+                            {
+                                // catering to future when tagT can be any type.
+                                std::memset((char *)&tag_data[i], 0, sizeof(TagT));
+                            }
+                        }
+                        if (_num_frozen_pts > 0)
+                        {
+                            std::memset((char *)&tag_data[_start], 0, sizeof(TagT) * _num_frozen_pts);
+                        }
+
+                        curr_pos += save_bin<TagT>(writer, tag_data, _nd + _num_frozen_pts, 1, curr_pos);
+                        delete[] tag_data;
+                    }
+                }
+
+                // Save graph.
+                {
+                    metadata.graph_offset = static_cast<uint64_t>(curr_pos);
+                    _graph_store->store(writer, _nd + _num_frozen_pts, _num_frozen_pts, _start, curr_pos);
+                }
+
+                // Save metadata.
+                {
+                    writer.seekp(meta_data_start, writer.beg);
+                    writer.write((char *)&metadata, sizeof(SaveLoadMetaDataV1));
+                }
+
+                writer.close();
+
+                diskann::cout << "Metadata Saved. data_offset: " << std::to_string(metadata.data_offset)
+                              << " delete_list_offset: " << std::to_string(metadata.delete_list_offset)
+                              << " tag_offset: " << std::to_string(metadata.tags_offset)
+                              << " graph_offset: " << std::to_string(metadata.graph_offset) << std::endl;
+            }
+            else
+            {
+                diskann::cout << "Save index in a single file currently only support _save_as_one_file_version = 1. "
+                                 "Not saving the index."
+                              << std::endl;
+            }
+        }
     }
 
     // If frozen points were temporarily compacted to _nd, move back to
@@ -393,17 +504,16 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_tags(AlignedFileReader &reader)
+size_t Index<T, TagT, LabelT>::load_tags(AlignedFileReader &reader, size_t offset)
 {
 #else
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
+size_t Index<T, TagT, LabelT>::load_tags(const std::string &filename, size_t offset)
 {
-    if (_enable_tags && !file_exists(tag_filename))
+    if (_enable_tags && !file_exists(filename))
     {
-        diskann::cerr << "Tag file " << tag_filename << " does not exist!" << std::endl;
-        throw diskann::ANNException("Tag file " + tag_filename + " does not exist!", -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
+        diskann::cerr << "Tag file " << filename << " does not exist!" << std::endl;
+        throw diskann::ANNException("Tag file " + filename + " does not exist!", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 #endif
     if (!_enable_tags)
@@ -415,9 +525,9 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
     size_t file_dim, file_num_points;
     TagT *tag_data;
 #ifdef EXEC_ENV_OLS
-    load_bin<TagT>(reader, tag_data, file_num_points, file_dim);
+    load_bin<TagT>(reader, tag_data, file_num_points, file_dim, offset);
 #else
-    load_bin<TagT>(std::string(tag_filename), tag_data, file_num_points, file_dim);
+    load_bin<TagT>(std::string(filename), tag_data, file_num_points, file_dim, offset);
 #endif
 
     if (file_dim != 1)
@@ -449,15 +559,15 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
 
 template <typename T, typename TagT, typename LabelT>
 #ifdef EXEC_ENV_OLS
-size_t Index<T, TagT, LabelT>::load_data(AlignedFileReader &reader)
+size_t Index<T, TagT, LabelT>::load_data(AlignedFileReader &reader, size_t offset)
 {
 #else
-size_t Index<T, TagT, LabelT>::load_data(std::string filename)
+size_t Index<T, TagT, LabelT>::load_data(std::string filename, size_t offset)
 {
 #endif
     size_t file_dim, file_num_points;
 #ifdef EXEC_ENV_OLS
-    diskann::get_bin_metadata(reader, file_num_points, file_dim);
+    diskann::get_bin_metadata(reader, file_num_points, file_dim, offset);
 #else
     if (!file_exists(filename))
     {
@@ -466,7 +576,7 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
         diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-    diskann::get_bin_metadata(filename, file_num_points, file_dim);
+    diskann::get_bin_metadata(filename, file_num_points, file_dim, offset);
 #endif
 
     // since we are loading a new dataset, _empty_slots must be cleared
@@ -480,7 +590,6 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
         diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-
     if (file_num_points > _max_points + _num_frozen_pts)
     {
         // update and tag lock acquired in load() before calling load_data
@@ -490,29 +599,29 @@ size_t Index<T, TagT, LabelT>::load_data(std::string filename)
 #ifdef EXEC_ENV_OLS
     // REFACTOR TODO: Must figure out how to support aligned reader in a clean
     // manner.
-    copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _data_store->get_aligned_dim());
+    _data_store->load(reader, offset); // offset == 0.
 #else
-    _data_store->load(filename); // offset == 0.
+    _data_store->load(filename, offset); // offset == 0.
 #endif
     return file_num_points;
 }
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_delete_set(AlignedFileReader &reader)
+size_t Index<T, TagT, LabelT>::load_delete_set(AlignedFileReader &reader, size_t offset)
 {
 #else
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_delete_set(const std::string &filename)
+size_t Index<T, TagT, LabelT>::load_delete_set(const std::string &filename, size_t offset)
 {
 #endif
     std::unique_ptr<uint32_t[]> delete_list;
     size_t npts, ndim;
 
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<uint32_t>(reader, delete_list, npts, ndim);
+    diskann::load_bin<uint32_t>(reader, delete_list, npts, ndim, offset);
 #else
-    diskann::load_bin<uint32_t>(filename, delete_list, npts, ndim);
+    diskann::load_bin<uint32_t>(filename, delete_list, npts, ndim, offset);
 #endif
     assert(ndim == 1);
     for (uint32_t i = 0; i < npts; i++)
@@ -528,6 +637,7 @@ template <typename T, typename TagT, typename LabelT>
 #ifdef EXEC_ENV_OLS
 void Index<T, TagT, LabelT>::load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l)
 {
+    IOContext &ctx = reader.get_ctx();
 #else
 void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, uint32_t search_l)
 {
@@ -546,7 +656,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
 #endif
-    if (!_save_as_one_file)
+    if (!_load_from_one_file)
     {
         // For DLVS Store, we will not support saving the index in multiple
         // files.
@@ -569,10 +679,116 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     }
     else
     {
-        diskann::cout << "Single index file saving/loading support not yet "
-                         "enabled. Not loading the index."
-                      << std::endl;
-        return;
+        if (_filtered_index)
+        {
+            diskann::cout << "Single index file saving/loading support for filtered index is not yet "
+                             "enabled. Not loading the index."
+                          << std::endl;
+        }
+        else
+        {
+            uint64_t version = 0;
+
+#ifdef EXEC_ENV_OLS
+            std::vector<AlignedRead> readReqs;
+            AlignedRead readReq;
+            uint8_t buf[sizeof(uint64_t)] = {};
+
+            readReq.buf = (void *) buf;
+            readReq.offset = 0;
+            readReq.len = sizeof(uint64_t);
+            readReqs.push_back(readReq);
+            reader.read(readReqs, ctx); // synchronous
+
+            if ((*(ctx.m_pRequestsStatus.get()))[0] == IOContext::READ_SUCCESS)
+            {
+                memcpy((void *)&version, (void *)buf, sizeof(uint64_t));
+            }
+            else
+            {
+                std::stringstream str;
+                str << "Could not read binary metadata from index file at offset: 0."  << std::endl;
+                throw diskann::ANNException(str.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+
+#else
+            std::ifstream reader(filename, std::ios::binary);
+            reader.read((char *)&version, sizeof(uint64_t));
+#endif
+
+            if (version == _load_from_one_file_version)
+            {
+                SaveLoadMetaDataV1 metadata;
+#ifdef EXEC_ENV_OLS
+                std::vector<AlignedRead> metadata_readReqs;
+                AlignedRead metadata_readReq;
+                uint8_t metadata_buf[sizeof(SaveLoadMetaDataV1)] = {};
+
+                metadata_readReq.buf = (void*) metadata_buf;
+                metadata_readReq.offset = sizeof(version);
+                metadata_readReq.len = sizeof(SaveLoadMetaDataV1);
+                metadata_readReqs.push_back(metadata_readReq);
+                reader.read(metadata_readReqs, ctx); // synchronous
+                if ((*(ctx.m_pRequestsStatus))[0] == IOContext::READ_SUCCESS)
+                {
+                    memcpy((void *)&metadata, (void *)metadata_buf, sizeof(SaveLoadMetaDataV1));
+                }
+
+                diskann::cout << "Metadata loaded. data_offset: " << std::to_string(metadata.data_offset)
+                              << " delete_list_offset: " << std::to_string(metadata.delete_list_offset)
+                              << " tag_offset: " << std::to_string(metadata.tags_offset)
+                              << " graph_offset: " << std::to_string(metadata.graph_offset)
+                              << std::endl;
+
+#else
+                reader.read((char *)&metadata, sizeof(SaveLoadMetaDataV1));
+#endif
+                // Load data
+#ifdef EXEC_ENV_OLS
+                data_file_num_pts = load_data(reader, metadata.data_offset);
+
+#else
+                data_file_num_pts = load_data(filename, metadata.data_offset);
+#endif
+
+                // Load delete list when presents.
+                if (metadata.delete_list_offset != metadata.tags_offset)
+                {
+#ifdef EXEC_ENV_OLS
+                    load_delete_set(reader, metadata.delete_list_offset);
+#else
+                    load_delete_set(filename, metadata.delete_list_offset);
+#endif
+                }
+
+                // Load tags when presents.
+                if (metadata.tags_offset != metadata.graph_offset)
+                {
+#ifdef EXEC_ENV_OLS
+                    tags_file_num_pts = load_tags(reader, metadata.tags_offset);
+#else
+                    tags_file_num_pts = load_tags(filename, metadata.tags_offset);
+#endif
+                }
+                // Load graph
+#ifdef EXEC_ENV_OLS
+
+                graph_num_pts = load_graph(reader, data_file_num_pts, metadata.graph_offset);
+#else
+                graph_num_pts = load_graph(filename, data_file_num_pts, metadata.graph_offset);
+#endif
+            }
+            else
+            {
+                std::stringstream stream;
+                stream << "load index from a single file currently only support _save_as_one_file_version = 1 and _load_as_one_file_version = 1. "
+                       << "Not loading the index."
+                       << std::endl;
+                diskann::cerr << stream.str() << std::endl;
+
+                throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+        }
     }
 
     if (data_file_num_pts != graph_num_pts || (data_file_num_pts != tags_file_num_pts && _enable_tags))
@@ -584,6 +800,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
+
+
 #ifndef EXEC_ENV_OLS
     if (file_exists(labels_file))
     {
@@ -631,6 +849,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         }
     }
 #endif
+
     _nd = data_file_num_pts - _num_frozen_pts;
     _empty_slots.clear();
     _empty_slots.reserve(_max_points);
@@ -679,15 +898,17 @@ size_t Index<T, TagT, LabelT>::get_graph_num_frozen_points(const std::string &gr
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_graph(AlignedFileReader &reader, size_t expected_num_points)
+size_t Index<T, TagT, LabelT>::load_graph(AlignedFileReader &reader, size_t expected_num_points, size_t offset)
 {
+    auto res = _graph_store->load(reader, expected_num_points, offset);
+
 #else
 
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_num_points)
+size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_num_points, size_t offset)
 {
+    auto res = _graph_store->load(filename, expected_num_points, offset);
 #endif
-    auto res = _graph_store->load(filename, expected_num_points);
     _start = std::get<1>(res);
     _num_frozen_pts = std::get<2>(res);
     return std::get<0>(res);
@@ -1793,7 +2014,7 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
         this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-    std::cout << "Indexing time: " << diff.count() << "\n";
+    diskann::cout << "Indexing time: " << diff.count() << "\n";
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2275,6 +2496,12 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
     return _max_points;
 }
 
+template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::get_num_deleted_points()
+{
+    std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
+    return _delete_set->size();
+}
+
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::generate_frozen_point()
 {
     if (_num_frozen_pts == 0)
@@ -2528,7 +2755,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 }
 
 // Should be called after acquiring _update_lock
-template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::compact_data()
+template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::compact_data(bool forced)
 {
     if (!_dynamic_index)
         throw ANNException("Can not compact a non-dynamic index", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -2536,7 +2763,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     if (_data_compacted)
     {
         diskann::cerr << "Warning! Calling compact_data() when _data_compacted is true!" << std::endl;
-        return;
+
+        if (!forced)
+        {
+            return;
+        }
     }
 
     if (_delete_set->size() > 0)
@@ -2898,15 +3129,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
 template <typename T, typename TagT, typename LabelT>
 int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const std::vector<LabelT> &labels)
 {
-
     assert(_has_built);
-    if (tag == static_cast<TagT>(0))
-    {
-        throw diskann::ANNException("Do not insert point with tag 0. That is "
-                                    "reserved for points hidden "
-                                    "from the user.",
-                                    -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
 
     std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);

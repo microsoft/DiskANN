@@ -1123,7 +1123,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     {
         uint64_t dumr, dumc;
         float *norm_val;
-        diskann::load_bin<float>(files, norm_val, dumr, dumc);
+        diskann::load_bin<float>(files, norm_file, norm_val, dumr, dumc);
 #else
     if (file_exists(norm_file) && metric == diskann::Metric::INNER_PRODUCT)
     {
