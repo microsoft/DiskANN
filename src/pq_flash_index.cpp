@@ -1201,37 +1201,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 }
 
 #ifdef USE_BING_INFRA
-bool getNextCompletedRequest(const IOContext &ctx, size_t size, int &completedIndex)
+bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader, IOContext &ctx, int &completedIndex)
 {
-    bool waitsRemaining = false;
-    long completeCount = ctx.m_completeCount;
-    do
-    {
-        for (int i = 0; i < size; i++)
-        {
-            auto ithStatus = (*ctx.m_pRequestsStatus)[i];
-            if (ithStatus == IOContext::Status::READ_SUCCESS)
-            {
-                completedIndex = i;
-                return true;
-            }
-            else if (ithStatus == IOContext::Status::READ_WAIT)
-            {
-                waitsRemaining = true;
-            }
-        }
-
-        // if we didn't find one in READ_SUCCESS, wait for one to complete.
-        if (waitsRemaining)
-        {
-            WaitOnAddress(&ctx.m_completeCount, &completeCount, sizeof(completeCount), 100);
-            // this assumes the knowledge of the reader behavior (implicit
-            // contract). need better factoring?
-        }
-    } while (waitsRemaining);
-
-    completedIndex = -1;
-    return false;
+    reader->wait(ctx, completedIndex);
+    return completedIndex != -1;
 }
 #endif
 
@@ -1540,7 +1513,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         long requestCount = static_cast<long>(frontier_read_reqs.size());
         // If we issued read requests and if a read is complete or there are
         // reads in wait state, then enter the while loop.
-        while (requestCount > 0 && getNextCompletedRequest(ctx, requestCount, completedIndex))
+        while (requestCount > 0 && getNextCompletedRequest(reader, ctx, completedIndex))
         {
             assert(completedIndex >= 0);
             auto &frontier_nhood = frontier_nhoods[completedIndex];
