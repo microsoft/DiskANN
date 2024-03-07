@@ -444,6 +444,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 #endif
 
+    size_t search_string_range(const std::string& str, char ch, size_t start, size_t end);
+
   private:
     // Distance functions
     Metric _dist_metric = diskann::L2;
