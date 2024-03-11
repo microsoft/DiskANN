@@ -78,7 +78,7 @@ class NeighborPriorityQueue
             }
         }
 
-        if (lo < _capacity)
+        if (lo < _size)
         {
             std::memmove(&_data[lo + 1], &_data[lo], (_size - lo) * sizeof(Neighbor));
         }
