@@ -4,6 +4,7 @@
 #include "common_includes.h"
 #include <boost/program_options.hpp>
 
+#include "utils.h"
 #include "index.h"
 #include "disk_utils.h"
 #include "math_utils.h"
@@ -45,6 +46,44 @@ void print_stats(std::string category, std::vector<float> percentiles, std::vect
         diskann::cout << std::setw(9) << results[s];
     }
     diskann::cout << std::endl;
+}
+
+template<typename T, typename LabelT>
+void parse_labels_of_query(const std::string &filters_for_query,
+                                      std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &pFlashIndex,
+                                      std::vector<LabelT> &label_ids_for_query)
+{
+    std::vector<std::string> label_strs_for_query;
+    diskann::split_string(filters_for_query, MULTIPLE_LABEL_SEPARATOR, label_strs_for_query);
+    for (auto &label_str_for_query : label_strs_for_query)
+    {
+        label_ids_for_query.push_back(pFlashIndex->get_converted_label(label_str_for_query));
+    }
+}
+
+template<typename T, typename LabelT> 
+void populate_label_ids(const std::vector<std::string> &filters_of_queries,
+                        std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &pFlashIndex,
+                        std::vector<std::vector<LabelT>> &label_ids_of_queries, bool apply_one_to_all, uint32_t query_count)
+{
+    if (apply_one_to_all)
+    {
+        std::vector<LabelT> label_ids_of_query;
+        parse_labels_of_query(filters_of_queries[0], pFlashIndex, label_ids_of_query);
+        for (auto i = 0; i < query_count; i++)
+        {
+            label_ids_of_queries.push_back(label_ids_of_query);
+        }
+    }
+    else
+    {
+        for (auto &filters_of_query : filters_of_queries)
+        {
+            std::vector<LabelT> label_ids_of_query;
+            parse_labels_of_query(filters_of_query, pFlashIndex, label_ids_of_query);
+            label_ids_of_queries.push_back(label_ids_of_query);
+        }
+    }
 }
 
 template <typename T, typename LabelT = uint32_t>
@@ -173,6 +212,14 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         diskann::cout << "..done" << std::endl;
     }
 
+    std::vector<std::vector<LabelT>> per_query_label_ids;
+    if (filtered_search)
+    {
+        populate_label_ids(query_filters, _pFlashIndex, per_query_label_ids, (query_filters.size() == 1), query_num );
+    }
+
+    
+
     diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
     diskann::cout.precision(2);
 
@@ -236,19 +283,10 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             }
             else
             {
-                LabelT label_for_search;
-                if (query_filters.size() == 1)
-                { // one label for all queries
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[0]);
-                }
-                else
-                { // one label for each query
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[i]);
-                }
                 _pFlashIndex->cached_beam_search(
                     query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),
-                    query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, label_for_search,
-                    use_reorder_data, stats + i);
+                    query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, per_query_label_ids[i],
+                    search_io_limit, use_reorder_data, stats + i);
             }
         }
         auto e = std::chrono::high_resolution_clock::now();
@@ -443,7 +481,6 @@ int main(int argc, char **argv)
     {
         query_filters = read_file_to_vector_of_strings(query_filters_file);
     }
-
     try
     {
         if (!query_filters.empty() && label_type == "ushort")
