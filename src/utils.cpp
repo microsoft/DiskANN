@@ -252,6 +252,21 @@ double calculate_range_search_recall(uint32_t num_queries, std::vector<std::vect
     return total_recall / (num_queries);
 }
 
+void split_string(const std::string &string_to_split, const std::string& delimiter, std::vector<std::string> &pieces)
+{
+    size_t start = 0;
+    size_t end;
+    while ((end = string_to_split.find(delimiter, start)) != std::string::npos)
+    {
+        pieces.push_back(string_to_split.substr(start, end - start));
+        start = end + delimiter.length();
+    }
+    if (start != string_to_split.length())
+    {
+        pieces.push_back(string_to_split.substr(start, string_to_split.length() - start));
+    }
+}
+
 #ifdef EXEC_ENV_OLS
 void get_bin_metadata(AlignedFileReader &reader, size_t &npts, size_t &ndim, size_t offset)
 {
