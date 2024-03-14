@@ -15,11 +15,10 @@ endif()
 
 set(TARGET_DIR "$<$<CONFIG:Debug>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_DEBUG}>$<$<CONFIG:Release>:${CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE}>")
 
-# set(DISKANN_DLL_IMPLIB "${TARGET_DIR}/${PROJECT_NAME}.lib")
-
 if (DISKANN_USE_STATIC_LIB)
     target_compile_definitions(${PROJECT_NAME} PRIVATE _NODLL)
 else()
+    set(DISKANN_DLL_IMPLIB "${TARGET_DIR}/${PROJECT_NAME}.lib")
     target_compile_definitions(${PROJECT_NAME} PRIVATE _USRDLL _WINDLL)
 endif()
 
