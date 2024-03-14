@@ -45,6 +45,9 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::unique_ptr<A
       _load_from_one_file_version(index_config.load_from_one_file_version), _num_pq_chunks(index_config.num_pq_chunks),
       _delete_set(new tsl::robin_set<uint32_t>), _conc_consolidate(index_config.concurrent_consolidate)
 {
+#ifdef EXEC_ENV_OLS
+    _deleted_tags = std::make_unique<tsl::robin_set<TagT>>();
+#endif
     if (_dynamic_index && !_enable_tags)
     {
         throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -938,8 +941,21 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
     if (_tag_to_location.find(tag) == _tag_to_location.end())
     {
+#ifdef EXEC_ENV_OLS
+        if (_deleted_tags->find(tag) != _deleted_tags->end())
+        {
+            diskann::cout << "Tag " << tag << " has been deleted" << std::endl;
+            return 1;
+        }
+        else
+        {
+            diskann::cout << "Tag " << tag << " has not existed" << std::endl;
+            return -1;
+        }
+#else
         diskann::cout << "Tag " << tag << " does not exist" << std::endl;
         return -1;
+#endif
     }
 
     location_t location = _tag_to_location[tag];
@@ -2496,11 +2512,19 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
     return _max_points;
 }
 
-template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::get_num_deleted_points()
+#ifdef EXEC_ENV_OLS
+template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::get_num_tags()
 {
-    std::shared_lock<std::shared_timed_mutex> dl(_delete_lock);
-    return _delete_set->size();
+    std::shared_lock<std::shared_timed_mutex> dl(_tag_lock);
+    return _tag_to_location.size() + _deleted_tags->size();
 }
+
+template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::get_num_deleted_tags()
+{
+    std::shared_lock<std::shared_timed_mutex> dl(_tag_lock);
+    return _deleted_tags->size();
+}
+#endif
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::generate_frozen_point()
 {
@@ -2674,7 +2698,7 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
         return consolidation_report(diskann::consolidation_report::status_code::LOCK_FAIL, 0, 0, 0, 0, 0, 0, 0);
     }
 
-    diskann::cout << "Starting consolidate_deletes... ";
+    diskann::cout << "Starting consolidate_deletes... " << std::endl;
 
     std::unique_ptr<tsl::robin_set<uint32_t>> old_delete_set(new tsl::robin_set<uint32_t>);
     {
@@ -3084,6 +3108,18 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     diskann::cout << "Resizing took: " << std::chrono::duration<double>(stop - start).count() << "s" << std::endl;
 }
 
+
+template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::increase_size(size_t new_max_points)
+{
+    std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+
+    if (new_max_points > _max_points)
+    {
+        resize(new_max_points);
+    }
+}
+
 template <typename T, typename TagT, typename LabelT>
 int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType tag)
 {
@@ -3156,7 +3192,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                 if (_frozen_pts_used >= _num_frozen_pts)
                 {
                     throw ANNException(
-                        "Error: For dynamic filtered index, the number of frozen points should be atleast equal "
+                        "Error: For dynamic filtered index, the number of frozen points should be at least equal "
                         "to number of unique labels.",
                         -1);
                 }
@@ -3209,21 +3245,39 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         return -1;
 #endif
     } // cant insert as active pts >= max_pts
+#ifndef EXEC_ENV_OLS
     dl.unlock();
+#endif
 
     // Insert tag and mapping to location
     if (_enable_tags)
     {
-        // if tags are enabled and tag is already inserted. so we can't reuse that tag.
+        // if tags are enabled and tag is already inserted.
         if (_tag_to_location.find(tag) != _tag_to_location.end())
         {
-            release_location(location);
+#ifdef EXEC_ENV_OLS
+            // Allow update the point for the existing tag, delete the existing location first.
+            const auto location_to_delete = _tag_to_location[tag];
+            _delete_set->insert(location_to_delete);
+            _location_to_tag.erase(location_to_delete);
+#else
+            // we can't reuse that tag.
             return -1;
+#endif
         }
-
+#ifdef EXEC_ENV_OLS
+        if (_deleted_tags->find(tag) != _deleted_tags->end())
+        {
+            // If the tag was deleted, reactivate it.
+            _deleted_tags->erase(tag);
+        }
+#endif
         _tag_to_location[tag] = location;
         _location_to_tag.set(location, tag);
     }
+#ifdef EXEC_ENV_OLS
+    dl.unlock();
+#endif
     tl.unlock();
 
     _data_store->set_vector(location, point); // update datastore
@@ -3318,6 +3372,9 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     _delete_set->insert(location);
     _location_to_tag.erase(location);
     _tag_to_location.erase(tag);
+#ifdef EXEC_ENV_OLS
+    _deleted_tags->insert(tag);
+#endif
     return 0;
 }
 

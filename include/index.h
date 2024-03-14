@@ -92,7 +92,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // get some private variables
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
-    DISKANN_DLLEXPORT size_t get_num_deleted_points();
+
+#ifdef EXEC_ENV_OLS
+    DISKANN_DLLEXPORT size_t get_num_tags(); // including both active and deleted tags.
+    DISKANN_DLLEXPORT size_t get_num_deleted_tags();
+#endif
 
     DISKANN_DLLEXPORT bool detect_common_filters(uint32_t point_id, bool search_invocation,
                                                  const std::vector<LabelT> &incoming_labels);
@@ -151,10 +155,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
 
-    // Will fail if tag already in the index or if tag=0.
+    // Will fail if tag already in the index.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
 
-    // Will fail if tag already in the index or if tag=0.
+    // Will fail if tag already in the index.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag, const std::vector<LabelT> &label);
 
     // call this before issuing deletions to sets relevant flags
@@ -195,6 +199,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void print_status();
 
     DISKANN_DLLEXPORT void count_nodes_at_bfs_levels();
+
+    // Increase the max points to the new value only if it's higher.
+    DISKANN_DLLEXPORT void increase_size(size_t new_max_points);
 
     // This variable MUST be updated if the number of entries in the metadata
     // change.
@@ -431,6 +438,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // slots to _empty_slots.
     natural_number_set<uint32_t> _empty_slots;
     std::unique_ptr<tsl::robin_set<uint32_t>> _delete_set;
+#ifdef EXEC_ENV_OLS
+    // Set of tags that have been deleted.
+    // This is to differentiate a tag that has been deleted or never existed in a R/W index instance
+    // for checking searched results from prior R/O index instnaces have been deleted later in the R/W index
+    // (if this tag exists in the _deleted_tags).
+    // When the R/W index is saved, deletes will be consolidated. And when loaded back as a R/O instance,
+    // which will always contain active tags only, hence this set doesn't need to be saved.
+    std::unique_ptr<tsl::robin_set<TagT>> _deleted_tags;
+#endif
 
     bool _data_compacted = true;    // true if data has been compacted
     bool _is_saved = false;         // Checking if the index is already saved.
