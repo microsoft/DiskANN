@@ -1140,10 +1140,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 }
 
 #ifdef USE_BING_INFRA
-bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader,
-                             IOContext &ctx, int &completedIndex) {
-  reader->wait(ctx, completedIndex);
-  return completedIndex != -1;
+bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader, IOContext &ctx, int &completedIndex)
+{
+    reader->wait(ctx, completedIndex);
+    return completedIndex != -1;
 }
 #endif
 
