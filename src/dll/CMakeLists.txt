@@ -2,7 +2,7 @@
 #Licensed under the MIT                        license.
 
 if (DISKANN_USE_STATIC_LIB)
-    add_library(${PROJECT_NAME} STATIC dllmain.cpp ../abstract_data_store.cpp ../partition.cpp ../pq.cpp ../pq_flash_index.cpp ../logger.cpp ../utils.cpp
+    add_library(${PROJECT_NAME} STATIC ../abstract_data_store.cpp ../partition.cpp ../pq.cpp ../pq_flash_index.cpp ../logger.cpp ../utils.cpp
         ../windows_aligned_file_reader.cpp ../distance.cpp ../memory_mapper.cpp ../index.cpp 
         ../in_mem_data_store.cpp ../in_mem_graph_store.cpp ../math_utils.cpp ../disk_utils.cpp ../filter_utils.cpp
         ../ann_exception.cpp ../natural_number_set.cpp ../natural_number_map.cpp ../scratch.cpp ../index_factory.cpp ../abstract_index.cpp)
