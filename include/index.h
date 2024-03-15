@@ -23,7 +23,11 @@
 #include "abstract_index.h"
 
 #define OVERHEAD_FACTOR 1.1
+#ifdef EXEC_ENV_OLS
+#define EXPAND_IF_FULL 1
+#else
 #define EXPAND_IF_FULL 0
+#endif
 #define DEFAULT_MAXC 750
 
 namespace diskann
