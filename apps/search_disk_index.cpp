@@ -308,6 +308,9 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         auto mean_cpuus = diskann::get_mean_stats<float>(stats, query_num,
                                                          [](const diskann::QueryStats &stats) { return stats.cpu_us; });
 
+        auto mean_hops = diskann::get_mean_stats<uint32_t>(
+            stats, query_num, [](const diskann::QueryStats &stats) { return stats.n_hops; });
+
         double recall = 0;
         if (calc_recall_flag)
         {
@@ -321,10 +324,32 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                       << std::setw(16) << mean_cpuus;
         if (calc_recall_flag)
         {
-            diskann::cout << std::setw(16) << recall << std::endl;
+            diskann::cout << std::setw(16) << recall << std::endl ; 
         }
         else
             diskann::cout << std::endl;
+
+        //std::stringstream rslts_string; 
+        //for (auto x = 0; x < query_num; x++)
+        //{
+        //    rslts_string << "-----------------------------------------" << std::endl;
+        //    rslts_string << "Query: " << x << std::endl;
+        //    rslts_string << "GT: {";
+        //    for (auto rx = 0; rx < recall_at; rx++)
+        //    {
+        //        rslts_string << "(" << gt_ids[x* gt_dim + rx] << "," << gt_dists[x * gt_dim + rx] << "), ";
+        //    }
+        //    rslts_string << "}" << std::endl;
+        //    rslts_string << "Results: {";
+        //    for (auto rx = 0; rx < recall_at; rx++)
+        //    {
+        //        rslts_string << "(" << query_result_ids[test_id][x * recall_at + rx] << ","
+        //                   << query_result_dists[test_id][x * recall_at + rx] << "), ";
+        //    }
+        //    rslts_string << "}" << std::endl;
+        //    rslts_string << "-----------------------------------------" << std::endl;
+        //}
+        //diskann::cout << rslts_string.str() << std::endl;
         delete[] stats;
     }
 
