@@ -109,6 +109,11 @@ class NeighborPriorityQueue
         return _cur < _size;
     }
 
+    void sort()
+    {
+        std::sort(_data.begin(), _data.begin() + _size);
+    }
+
     size_t size() const
     {
         return _size;
