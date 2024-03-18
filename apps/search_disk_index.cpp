@@ -290,18 +290,24 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         delete[] stats;
     }
 
-    diskann::cout << "Done searching. Now saving results " << std::endl;
-    uint64_t test_id = 0;
-    for (auto L : Lvec)
+    diskann::cout << "Done searching." << std::endl;
+
+    if (result_output_prefix != std::string(""))
     {
-        if (L < recall_at)
-            continue;
+        std::cout << "Saving results." << std::endl;
 
-        std::string cur_result_path = result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
-        diskann::save_bin<uint32_t>(cur_result_path, query_result_ids[test_id].data(), query_num, recall_at);
+        uint64_t test_id = 0;
+        for (auto L : Lvec)
+        {
+            if (L < recall_at)
+                continue;
 
-        cur_result_path = result_output_prefix + "_" + std::to_string(L) + "_dists_float.bin";
-        diskann::save_bin<float>(cur_result_path, query_result_dists[test_id++].data(), query_num, recall_at);
+            std::string cur_result_path = result_output_prefix + "_" + std::to_string(L) + "_idx_uint32.bin";
+            diskann::save_bin<uint32_t>(cur_result_path, query_result_ids[test_id].data(), query_num, recall_at);
+
+            cur_result_path = result_output_prefix + "_" + std::to_string(L) + "_dists_float.bin";
+            diskann::save_bin<float>(cur_result_path, query_result_dists[test_id++].data(), query_num, recall_at);
+        }
     }
 
     diskann::aligned_free(query);
@@ -333,8 +339,6 @@ int main(int argc, char **argv)
                                        program_options_utils::DISTANCE_FUNCTION_DESCRIPTION);
         required_configs.add_options()("index_path_prefix", po::value<std::string>(&index_path_prefix)->required(),
                                        program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
-        required_configs.add_options()("result_path", po::value<std::string>(&result_path_prefix)->required(),
-                                       program_options_utils::RESULT_PATH_DESCRIPTION);
         required_configs.add_options()("query_file", po::value<std::string>(&query_file)->required(),
                                        program_options_utils::QUERY_FILE_DESCRIPTION);
         required_configs.add_options()("recall_at,K", po::value<uint32_t>(&K)->required(),
@@ -345,6 +349,9 @@ int main(int argc, char **argv)
 
         // Optional parameters
         po::options_description optional_configs("Optional");
+        optional_configs.add_options()("result_path",
+                                       po::value<std::string>(&result_path_prefix)->default_value(std::string("")),
+                                       program_options_utils::RESULT_PATH_DESCRIPTION);
         optional_configs.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
                                        program_options_utils::GROUND_TRUTH_FILE_DESCRIPTION);
         optional_configs.add_options()("beamwidth,W", po::value<uint32_t>(&W)->default_value(2),
