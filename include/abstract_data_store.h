@@ -11,7 +11,6 @@
 #include "distance.h"
 #include "aligned_file_reader.h"
 
-
 namespace diskann
 {
 
