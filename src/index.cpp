@@ -29,7 +29,6 @@ SaveLoadMetaDataV1::SaveLoadMetaDataV1() : data_offset(0), delete_list_offset(0)
 {
 }
 
-
 // Initialize an index with metric m, load the data of type T with filename
 // (bin), and initialize max_points
 template <typename T, typename TagT, typename LabelT>
@@ -138,34 +137,36 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                               const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq,
                               const bool filtered_index, bool save_as_one_file, uint64_t save_as_one_file_version,
                               bool load_from_one_file, uint64_t load_from_one_file_version)
-    : Index(IndexConfigBuilder()
-                .with_metric(m)
-                .with_dimension(dim)
-                .with_max_points(max_points)
-                .with_index_write_params(index_parameters)
-                .with_index_search_params(index_search_params)
-                .with_num_frozen_pts(num_frozen_pts)
-                .is_dynamic_index(dynamic_index)
-                .is_enable_tags(enable_tags)
-                .is_concurrent_consolidate(concurrent_consolidate)
-                .is_pq_dist_build(pq_dist_build)
-                .with_num_pq_chunks(num_pq_chunks)
-                .is_use_opq(use_opq)
-                .is_filtered(filtered_index)
-                .with_data_type(diskann_type_to_name<T>())
-                .with_save_as_single_file(save_as_one_file)
-                .with_save_as_single_file_version(save_as_one_file_version)
-                .with_load_from_single_file(load_from_one_file)
-                .with_load_from_single_file_version(load_from_one_file_version)
-                .build(),
-            IndexFactory::construct_datastore<T>(
-                DataStoreStrategy::MEMORY,
-                (max_points == 0? (size_t)1 : max_points) + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m),
-            IndexFactory::construct_graphstore(
-                GraphStoreStrategy::MEMORY,
-                (max_points == 0? (size_t)1 : max_points) + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
-                (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
-                         defaults::GRAPH_SLACK_FACTOR * 1.05)))
+    : Index(
+          IndexConfigBuilder()
+              .with_metric(m)
+              .with_dimension(dim)
+              .with_max_points(max_points)
+              .with_index_write_params(index_parameters)
+              .with_index_search_params(index_search_params)
+              .with_num_frozen_pts(num_frozen_pts)
+              .is_dynamic_index(dynamic_index)
+              .is_enable_tags(enable_tags)
+              .is_concurrent_consolidate(concurrent_consolidate)
+              .is_pq_dist_build(pq_dist_build)
+              .with_num_pq_chunks(num_pq_chunks)
+              .is_use_opq(use_opq)
+              .is_filtered(filtered_index)
+              .with_data_type(diskann_type_to_name<T>())
+              .with_save_as_single_file(save_as_one_file)
+              .with_save_as_single_file_version(save_as_one_file_version)
+              .with_load_from_single_file(load_from_one_file)
+              .with_load_from_single_file_version(load_from_one_file_version)
+              .build(),
+          IndexFactory::construct_datastore<T>(DataStoreStrategy::MEMORY,
+                                               (max_points == 0 ? (size_t)1 : max_points) +
+                                                   (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                                               dim, m),
+          IndexFactory::construct_graphstore(GraphStoreStrategy::MEMORY,
+                                             (max_points == 0 ? (size_t)1 : max_points) +
+                                                 (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                                             (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
+                                                      defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
 }
 
@@ -697,7 +698,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             AlignedRead readReq;
             uint8_t buf[sizeof(uint64_t)] = {};
 
-            readReq.buf = (void *) buf;
+            readReq.buf = (void *)buf;
             readReq.offset = 0;
             readReq.len = sizeof(uint64_t);
             readReqs.push_back(readReq);
@@ -740,8 +741,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
                 diskann::cout << "Metadata loaded. data_offset: " << std::to_string(metadata.data_offset)
                               << " delete_list_offset: " << std::to_string(metadata.delete_list_offset)
                               << " tag_offset: " << std::to_string(metadata.tags_offset)
-                              << " graph_offset: " << std::to_string(metadata.graph_offset)
-                              << std::endl;
+                              << " graph_offset: " << std::to_string(metadata.graph_offset) << std::endl;
 
 #else
                 reader.read((char *)&metadata, sizeof(SaveLoadMetaDataV1));
@@ -784,9 +784,9 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             else
             {
                 std::stringstream stream;
-                stream << "load index from a single file currently only support _save_as_one_file_version = 1 and _load_as_one_file_version = 1. "
-                       << "Not loading the index."
-                       << std::endl;
+                stream << "load index from a single file currently only support _save_as_one_file_version = 1 and "
+                          "_load_as_one_file_version = 1. "
+                       << "Not loading the index." << std::endl;
                 diskann::cerr << stream.str() << std::endl;
 
                 throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
@@ -803,7 +803,6 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-
 
 #ifndef EXEC_ENV_OLS
     if (file_exists(labels_file))
@@ -3107,7 +3106,6 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     auto stop = std::chrono::high_resolution_clock::now();
     diskann::cout << "Resizing took: " << std::chrono::duration<double>(stop - start).count() << "s" << std::endl;
 }
-
 
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::increase_size(size_t new_max_points)
 {

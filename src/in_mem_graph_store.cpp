@@ -4,7 +4,6 @@
 #include "in_mem_graph_store.h"
 #include "utils.h"
 
-
 namespace diskann
 {
 InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t reserve_graph_degree)
@@ -18,10 +17,9 @@ InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t reserve_gr
 }
 
 #ifdef EXEC_ENV_OLS
-std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load(AlignedFileReader &reader,
-                                                             const size_t num_points, size_t offset)
+std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load(AlignedFileReader &reader, const size_t num_points,
+                                                             size_t offset)
 {
-    
     return load_impl(reader, num_points, offset);
 }
 #else
@@ -94,8 +92,7 @@ void InMemGraphStore::clear_graph()
 }
 
 #ifdef EXEC_ENV_OLS
-std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileReader &reader,
-                                                                  size_t expected_num_points,
+std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileReader &reader, size_t expected_num_points,
                                                                   size_t offset)
 {
     size_t expected_file_size;
