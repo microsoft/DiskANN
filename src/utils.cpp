@@ -285,7 +285,7 @@ template <typename T> void load_bin(AlignedFileReader &reader, T *&data, size_t 
 {
     // Code assumes that the reader is already setup correctly.
     get_bin_metadata(reader, npts, ndim, offset);
- 
+
     data = new T[npts * ndim];
 
     size_t data_size = npts * ndim * sizeof(T);
@@ -397,8 +397,8 @@ template <typename T> void read_array(AlignedFileReader &reader, T *data, size_t
     if (size * sizeof(T) > MAX_REQUEST_SIZE)
     {
         std::stringstream ss;
-        ss << "Cannot read more than " << MAX_REQUEST_SIZE
-           << " bytes. Current request size: " << std::to_string(size) << " sizeof(T): " << sizeof(T) << std::endl;
+        ss << "Cannot read more than " << MAX_REQUEST_SIZE << " bytes. Current request size: " << std::to_string(size)
+           << " sizeof(T): " << sizeof(T) << std::endl;
         throw diskann::ANNException(ss.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 

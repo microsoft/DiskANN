@@ -711,7 +711,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             else
             {
                 std::stringstream str;
-                str << "Could not read binary metadata from index file at offset: 0."  << std::endl;
+                str << "Could not read binary metadata from index file at offset: 0." << std::endl;
                 throw diskann::ANNException(str.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
             }
 
@@ -728,7 +728,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
                 AlignedRead metadata_readReq;
                 uint8_t metadata_buf[sizeof(SaveLoadMetaDataV1)] = {};
 
-                metadata_readReq.buf = (void*) metadata_buf;
+                metadata_readReq.buf = (void *)metadata_buf;
                 metadata_readReq.offset = sizeof(version);
                 metadata_readReq.len = sizeof(SaveLoadMetaDataV1);
                 metadata_readReqs.push_back(metadata_readReq);
