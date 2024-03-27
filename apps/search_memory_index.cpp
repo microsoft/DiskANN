@@ -145,6 +145,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         query_result_tags.resize(recall_at * query_num);
     }
 
+    //query_num = 1;
     double best_recall = 0.0;
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)

@@ -761,19 +761,19 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 // Find common filter between a node's labels and a given set of labels, while
 // taking into account universal label
 template <typename T, typename TagT, typename LabelT>
-bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
+uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
 {
     auto &curr_node_labels = _location_to_labels[point_id];
     std::vector<LabelT> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
                           curr_node_labels.end(), std::back_inserter(common_filters));
-    if (common_filters.size() > 0)
+/*    if (common_filters.size() > 0)
     {
         // This is to reduce the repetitive calls. If common_filters size is > 0 ,
         // we dont need to check further for universal label
         return true;
-    }
+    } */
     if (_use_universal_label)
     {
         if (!search_invocation)
@@ -788,14 +788,14 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
                 common_filters.push_back(_universal_label);
         }
     }
-    return (common_filters.size() > 0);
+    return common_filters.size();
 }
 
 
 // Find common filter between a node's labels and a given set of labels, while
 // taking into account universal label
 template <typename T, typename TagT, typename LabelT>
-bool Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
+uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
 {
 
@@ -813,14 +813,15 @@ bool Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool searc
         }
     }
 
-    std::string tmp = "here, penalty=" + std::to_string(_filter_penalty_threshold) + ", overlap=" + std::to_string(overlap);
-    std::cout << tmp << std::endl;
+    //std::string tmp = "here, penalty=" + std::to_string(_filter_penalty_threshold) + ", overlap=" + std::to_string(overlap);
+//    std::cout << tmp << std::endl;
 
 
-    if (overlap < _filter_penalty_threshold)
-        return true;
+//    if (overlap < _filter_penalty_threshold)
+//        return true;
 
-    return false;
+//    return false;
+    return incoming_labels.size() - overlap;
 }
 
 
@@ -889,10 +890,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         if (use_filter)
         {
             if (filter_labels.size() <= 1) {
-            if (!detect_common_filters(id, search_invocation, filter_labels))
+//            if (detect_common_filters(id, search_invocation, filter_labels) == 0)
+//                continue;
+            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
                 continue;
             } else {
-            if (!detect_filter_penalty(id, search_invocation, filter_labels))
+            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
                 continue;
             }
         }
@@ -959,13 +962,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                     if (filter_labels.size() <=1) {
-                    if (!detect_common_filters(id, search_invocation, filter_labels))
-                        continue;
+//                    if (detect_common_filters(id, search_invocation, filter_labels) == 0)
+//                        continue;
+            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
+                continue;
                     } else {
-                    if (!detect_filter_penalty(id, search_invocation, filter_labels))
-                        continue;
+            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
+                continue;
                     }
-                }
+               }
 
                 if (is_not_visited(id))
                 {
@@ -985,8 +990,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (!detect_common_filters(id, search_invocation, filter_labels))
+                    if (filter_labels.size() <=1) {
+//                    if (detect_common_filters(id, search_invocation, filter_labels) == 0)
+//                        continue;
+            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
+                continue;
+
+                    } else {
+                    if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
                         continue;
+                    }
                 }
 
                 if (is_not_visited(id))
@@ -2147,8 +2160,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     size_t pos = 0;
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
-        if (best_L_nodes[i].id < _max_points)
-        {
+        if (best_L_nodes[i].id >= _max_points || (detect_common_filters(best_L_nodes[i].id, true, filter_vec) != filter_vec.size())) 
+                continue; 
+/*         std::stringstream a;
+         a  << i <<" " << best_L_nodes[i].id <<" , ";
+         for (auto &x : _location_to_labels[ best_L_nodes[i].id])
+         a  << x <<" ";
+        a << filter_vec[0] << std::endl;
+         std::cout<< a.str();
+        } */
+
             indices[pos] = (IdType)best_L_nodes[i].id;
 
             if (distances != nullptr)
@@ -2162,12 +2183,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 #endif
             }
             pos++;
-        }
+        
         if (pos == K)
             break;
     }
-    if (pos < K)
+    while (pos < K)
     {
+                    indices[pos] = (IdType)std::numeric_limits<uint32_t>::max();
+                    pos++;
 //        diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
 
