@@ -117,7 +117,7 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
     diskann::aligned_free((void *)sector_scratch);
     diskann::aligned_free((void *)this->_aligned_query_T);
 
-    delete[] this->_pq_scratch;
+    delete this->_pq_scratch;
 }
 
 template <typename T>
@@ -141,6 +141,15 @@ template <typename T> PQScratch<T>::PQScratch(size_t graph_degree, size_t aligne
 
     memset(aligned_query_float, 0, aligned_dim * sizeof(float));
     memset(rotated_query, 0, aligned_dim * sizeof(float));
+}
+
+template <typename T> PQScratch<T>::~PQScratch()
+{
+    diskann::aligned_free((void *)aligned_pq_coord_scratch);
+    diskann::aligned_free((void *)aligned_pqtable_dist_scratch);
+    diskann::aligned_free((void *)aligned_dist_scratch);
+    diskann::aligned_free((void *)aligned_query_float);
+    diskann::aligned_free((void *)rotated_query);
 }
 
 template <typename T> void PQScratch<T>::initialize(size_t dim, const T *query, const float norm)
