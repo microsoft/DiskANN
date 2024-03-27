@@ -117,7 +117,7 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
     diskann::aligned_free((void *)sector_scratch);
     diskann::aligned_free((void *)this->_aligned_query_T);
 
-    delete[] this->_pq_scratch;
+    delete this->_pq_scratch;
 }
 
 template <typename T>
