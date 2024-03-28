@@ -1792,6 +1792,11 @@ template <typename T, typename LabelT> std::uint64_t PQFlashIndex<T, LabelT>::ge
     return _num_points;
 }
 
+template <typename T, typename LabelT> std::uint64_t PQFlashIndex<T, LabelT>::get_max_degree()
+{
+    return _max_degree;
+}
+
 // instantiations
 template class PQFlashIndex<uint8_t>;
 template class PQFlashIndex<int8_t>;
