@@ -111,7 +111,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     }
         if (index_config.index_search_params != nullptr)
         {
-            _filter_penalty_threshold = index_config.index_search_params->filter_penalty_threshold;                    
+            _filter_penalty_threshold = index_config.index_search_params->filter_penalty_threshold;     
+            diskann::cout<<"Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         }
 
 }
@@ -892,10 +893,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             if (filter_labels.size() <= 1) {
 //            if (detect_common_filters(id, search_invocation, filter_labels) == 0)
 //                continue;
-            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
+            if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                 continue;
             } else {
-            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
+            if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                 continue;
             }
         }
@@ -964,10 +965,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     if (filter_labels.size() <=1) {
 //                    if (detect_common_filters(id, search_invocation, filter_labels) == 0)
 //                        continue;
-            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
+            if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                 continue;
                     } else {
-            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
+            if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                 continue;
                     }
                }
@@ -993,11 +994,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     if (filter_labels.size() <=1) {
 //                    if (detect_common_filters(id, search_invocation, filter_labels) == 0)
 //                        continue;
-            if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
+            if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                 continue;
 
                     } else {
-                    if (detect_filter_penalty(id, search_invocation, filter_labels) >= _filter_penalty_threshold)
+                    if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                         continue;
                     }
                 }
