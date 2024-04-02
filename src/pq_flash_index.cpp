@@ -93,6 +93,10 @@ template <typename T, typename LabelT> PQFlashIndex<T, LabelT>::~PQFlashIndex()
     {
         delete[] _pts_to_labels;
     }
+    if (_medoids != nullptr)
+    {
+        delete[] _medoids;
+    }
 }
 
 template <typename T, typename LabelT> inline uint64_t PQFlashIndex<T, LabelT>::get_node_sector(uint64_t node_id)
