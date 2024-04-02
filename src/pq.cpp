@@ -901,8 +901,12 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
             {
                 block_compressed_base[j * num_pq_chunks + i] = closest_center[j];
 #ifdef SAVE_INFLATED_PQ
-                for (size_t k = 0; k < cur_chunk_size; k++) {
-                    total_error += (block_inflated_base[j * dim + chunk_offsets[i] + k] - block_data_float[j * dim + chunk_offsets[i] + k])*(block_inflated_base[j * dim + chunk_offsets[i] + k] - block_data_float[j * dim + chunk_offsets[i] + k]);
+                for (size_t k = 0; k < cur_chunk_size; k++)
+                {
+                    total_error += (block_inflated_base[j * dim + chunk_offsets[i] + k] -
+                                    block_data_float[j * dim + chunk_offsets[i] + k]) *
+                                   (block_inflated_base[j * dim + chunk_offsets[i] + k] -
+                                    block_data_float[j * dim + chunk_offsets[i] + k]);
                     block_inflated_base[j * dim + chunk_offsets[i] + k] =
                         cur_pivot_data[closest_center[j] * cur_chunk_size + k] + centroid[chunk_offsets[i] + k];
                 }
@@ -936,7 +940,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
 #ifdef SAVE_INFLATED_PQ
     inflated_file_writer.close();
 #endif
-    std::cout<<"Average error = " << total_error/num_points << "." << std::endl;
+    std::cout << "Average error = " << total_error / num_points << "." << std::endl;
     return 0;
 }
 
