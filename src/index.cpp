@@ -891,8 +891,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         if (use_filter)
         {
             if (filter_labels.size() <= 1) {
-//            if (detect_common_filters(id, search_invocation, filter_labels) == 0)
-//                continue;
             if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                 continue;
             } else {
@@ -963,8 +961,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                     if (filter_labels.size() <=1) {
-//                    if (detect_common_filters(id, search_invocation, filter_labels) == 0)
-//                        continue;
             if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                 continue;
                     } else {
@@ -992,8 +988,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                     if (filter_labels.size() <=1) {
-//                    if (detect_common_filters(id, search_invocation, filter_labels) == 0)
-//                        continue;
             if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                 continue;
 
@@ -2161,15 +2155,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     size_t pos = 0;
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
-        if (best_L_nodes[i].id >= _max_points || (detect_common_filters(best_L_nodes[i].id, true, filter_vec) != filter_vec.size())) 
+        if (best_L_nodes[i].id >= _max_points || (detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) != 0)) 
                 continue; 
-/*         std::stringstream a;
-         a  << i <<" " << best_L_nodes[i].id <<" , ";
-         for (auto &x : _location_to_labels[ best_L_nodes[i].id])
-         a  << x <<" ";
-        a << filter_vec[0] << std::endl;
-         std::cout<< a.str();
-        } */
 
             indices[pos] = (IdType)best_L_nodes[i].id;
 
