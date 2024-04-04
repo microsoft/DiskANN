@@ -24,6 +24,7 @@
 
 #include "quantized_distance.h"
 #include "pq_data_store.h"
+#include "roaring.hh"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -88,10 +89,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t get_max_points();
 
     DISKANN_DLLEXPORT uint32_t detect_common_filters(uint32_t point_id, bool search_invocation,
-                                                 const std::vector<LabelT> &incoming_labels);
+                                                     const std::vector<LabelT> &incoming_labels);
 
     DISKANN_DLLEXPORT uint32_t detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                 const std::vector<LabelT> &incoming_labels);
+                                                     const roaring::Roaring &incoming_labels);
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
@@ -142,12 +143,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                               float *distances, std::vector<T *> &res_vectors, bool use_filters = false,
                                               const std::string filter_label = "");
 
-
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const std::vector<LabelT> &filter_label,
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query,
+                                                                        const std::vector<LabelT> &filter_label,
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
-
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
@@ -211,10 +211,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) override;
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query,
-                                                               const std::vector<std::string> &filter_label_raw, const size_t K,
-                                                               const uint32_t L, std::any &indices,
+                                                               const std::vector<std::string> &filter_label_raw,
+                                                               const size_t K, const uint32_t L, std::any &indices,
                                                                float *distances) override;
-
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
     virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;
@@ -254,16 +253,21 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
 
+    std::vector<std::pair<LabelT, uint32_t>> sort_filter_counts(const std::vector<LabelT> &filter_label);
+
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
+    std::pair<uint32_t, uint32_t> brute_force_filters(const T *query, const uint32_t Lsize,
+                                                      const roaring::Roaring &init_ids, InMemQueryScratch<T> *scratch);
+
     // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool search_invocation);
+                                                         const roaring::Roaring &filters, bool search_invocation);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
@@ -384,17 +388,19 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Location to label is only updated during insert_point(), all other reads are protected by
     // default as a location can only be released at end of consolidate deletes
     std::vector<std::vector<LabelT>> _location_to_labels;
+    std::vector<roaring::Roaring> _location_to_labels_bitmap;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
+    std::unordered_map<LabelT, roaring::Roaring> _labels_to_points;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
 
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
     uint32_t _filter_penalty_threshold = 0;
+    uint32_t _bruteforce_threshold = 0;
     std::unordered_map<std::string, LabelT> _label_map;
-
 
     // Indexing parameters
     uint32_t _indexingQueueSize;
