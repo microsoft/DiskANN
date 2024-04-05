@@ -797,15 +797,22 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
 // taking into account universal label
 template <typename T, typename TagT, typename LabelT>
 uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                       const roaring::Roaring &incoming_labels)
+                                                       const std::vector<LabelT> &incoming_labels)
 {
 
     // not implemented for build-time use case, since we need to understand universal labels for multiple filters
     if (!search_invocation)
         return true;
 
-    auto &curr_node_labels = _location_to_labels_bitmap[point_id];
-    return incoming_labels.cardinality() - incoming_labels.and_cardinality(curr_node_labels);
+    auto &curr_node_labels = _location_to_labels[point_id];
+    uint32_t overlap = 0;
+    for (auto &lbl : incoming_labels)
+    {
+        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
+        {
+            overlap++;
+        }
+    }
 
     // std::string tmp = "here, penalty=" + std::to_string(_filter_penalty_threshold) + ", overlap=" +
     // std::to_string(overlap);
@@ -815,7 +822,7 @@ uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool s
     //        return true;
 
     //    return false;
-    /* return incoming_labels.size() - overlap; */
+    return incoming_labels.size() - overlap;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -843,7 +850,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
-    const roaring::Roaring &filter_labels, bool search_invocation)
+    const std::vector<LabelT> &filter_labels, bool search_invocation)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -903,7 +910,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter)
         {
-            if (filter_labels.cardinality() <= 1)
+            if (filter_labels.size() <= 1)
             {
                 if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                     continue;
@@ -976,7 +983,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (filter_labels.cardinality() <= 1)
+                    if (filter_labels.size() <= 1)
                     {
                         if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                             continue;
@@ -1006,7 +1013,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (filter_labels.cardinality() <= 1)
+                    if (filter_labels.size() <= 1)
                     {
                         if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                             continue;
@@ -1058,7 +1065,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
                                                         uint32_t filteredLindex)
 {
     const std::vector<uint32_t> init_ids = get_init_ids();
-    const roaring::Roaring unused_filter_label;
+    const std::vector<LabelT> unused_filter_label;
 
     if (!use_filter)
     {
@@ -1079,7 +1086,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
-                               _location_to_labels_bitmap[location], false);
+                               _location_to_labels[location], false);
 
         // combine candidate pools obtained with filter and unfiltered criteria.
         std::set<Neighbor> best_candidate_pool;
@@ -2055,7 +2062,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
         diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
 
-    const roaring::Roaring unused_filter_label;
+    const std::vector<LabelT> unused_filter_label;
     const std::vector<uint32_t> init_ids = get_init_ids();
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
@@ -2165,7 +2172,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
 
-    roaring::Roaring filter_vec;
+    std::vector<LabelT> filter_vec;
     std::vector<uint32_t> init_ids = get_init_ids();
 
     std::vector<std::pair<LabelT, uint32_t>> sorted_filters = sort_filter_counts(filter_label);
@@ -2189,7 +2196,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         tl.unlock();
 
     for (auto &lbl : filter_label)
-        filter_vec.add(lbl);
+        filter_vec.push_back(lbl);
 
     _data_store->preprocess_query(query, scratch);
     std::pair<uint32_t, uint32_t> retval;
@@ -2290,14 +2297,14 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     _data_store->preprocess_query(query, scratch);
     if (!use_filters)
     {
-        const roaring::Roaring unused_filter_label;
+        const std::vector<LabelT> unused_filter_label;
         iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
     }
     else
     {
         auto converted_label = this->get_converted_label(filter_label);
-        roaring::Roaring filter_vec;
-        filter_vec.add(converted_label);
+        std::vector<LabelT> filter_vec;
+        filter_vec.push_back(converted_label);
         iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
     }
 
