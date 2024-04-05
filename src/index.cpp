@@ -2184,7 +2184,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         diskann::cout << "No filtered medoid found. exitting "
                       << std::endl; // RKNOTE: If universal label found start there
         throw diskann::ANNException("No filtered medoid found. exitting ", -1);
-    }
+    } 
     if (_dynamic_index)
         tl.unlock();
 

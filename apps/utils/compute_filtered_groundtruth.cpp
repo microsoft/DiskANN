@@ -418,9 +418,22 @@ inline void parse_query_label_file(const std::string &query_label_file,
 }
 
 
+void print_query_stats(std::vector<std::pair<uint32_t, uint32_t>> &v) {
+
+  std::sort(v.begin(), v.end(), [](const std::pair<uint32_t, uint32_t>& a, const std::pair<uint32_t, uint32_t>& b) {
+    return a.second < b.second;
+  });
+
+    for (uint32_t pct = 0; pct < 100; pct+=5) {
+        std::cout<<v[(v.size()*pct*1.0)/100].second<<" is pass-rate of query with percentile " << pct << std::endl;
+    }
+
+    return;
+}
+
 //template<typename A, typename B>
 // add UNIVERSAL LABEL SUPPORT
-int identify_matching_points(const std::string &base, const size_t start_id, const std::string &query, const std::string &unv_label, std::vector<boost::dynamic_bitset<>> &matching_points) {
+int identify_matching_points(const std::string &base, const size_t start_id, const std::string &query, const std::string &unv_label, std::vector<boost::dynamic_bitset<>> &matching_points, std::vector<std::pair<uint32_t, uint32_t>> &query_stats) {
     std::vector<tsl::robin_set<std::string>> base_labels;
     std::vector<std::vector<std::string>> query_labels;
     parse_base_label_file(base, base_labels, start_id);
@@ -451,6 +464,7 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
             }
             if (pass) {
                 matching_points[i][j] = 1;
+                query_stats[i].second++;
             }
         }
     }
@@ -474,6 +488,12 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
     float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
+    std::vector<std::pair<uint32_t, uint32_t>> query_stats(nqueries);
+    for (uint32_t i = 0; i < nqueries; i++) {
+        query_stats[i].first = i;
+        query_stats[i].second = 0;
+    }
+
     for (int p = 0; p < num_parts; p++)
     {
         size_t start_id = p * PARTSIZE;
@@ -481,7 +501,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         size_t end_id = start_id + npoints;
 
         std::vector<boost::dynamic_bitset<>> matching_points;
-        identify_matching_points(base_labels, start_id, query_labels, unv_label, matching_points);
+        identify_matching_points(base_labels, start_id, query_labels, unv_label, matching_points, query_stats);
 
 
         size_t *closest_points_part = new size_t[nqueries * k];
@@ -508,7 +528,10 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         delete[] dist_closest_points_part;
 
         diskann::aligned_free(base_data);
+
     }
+        print_query_stats(query_stats);
+
     return res;
 };
 
