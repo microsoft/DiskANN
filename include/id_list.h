@@ -9,6 +9,7 @@
 #include "types.h"
 #include "windows_customizations.h"
 #include "distance.h"
+#include <iterator>
 
 namespace diskann
 {
