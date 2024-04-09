@@ -9,12 +9,15 @@
 #include "aligned_file_reader.h"
 #endif
 
+#include "cluster_store.h"
 #include "distance.h"
 #include "locking.h"
+#include "math_utils.h"
 #include "natural_number_map.h"
 #include "natural_number_set.h"
 #include "neighbor.h"
 #include "parameters.h"
+#include "partition.h"
 #include "utils.h"
 #include "windows_customizations.h"
 #include "scratch.h"
@@ -394,6 +397,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<LabelT, roaring::Roaring> _labels_to_points;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
+    diskann::InMemClusterStore<T> *_ivf_clusters = nullptr;
 
     bool _use_universal_label = false;
     LabelT _universal_label = 0;

@@ -116,6 +116,9 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
     }
+    if (_filtered_index) {
+        _ivf_clusters = new InMemClusterStore<T>(_dim);
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -297,6 +300,7 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     {
         if (_filtered_index)
         {
+            _ivf_clusters->save(filename);
             if (_label_to_start_id.size() > 0)
             {
                 std::ofstream medoid_writer(std::string(filename) + "_labels_to_medoids.txt");
@@ -595,6 +599,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     if (file_exists(labels_file))
     {
+        _ivf_clusters->load(filename);
+     
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
         assert(label_num_pts == data_file_num_pts - _num_frozen_pts);
@@ -2004,6 +2010,38 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         }
         _label_to_start_id[curr_label] = best_medoid;
         _medoid_counts[best_medoid]++;
+    }
+
+    // IVF cluster part
+    {
+    size_t train_dim;
+    size_t num_train;
+    float *train_data_float;
+    float p_val = 1000000.0/num_points_to_load;
+    gen_random_slice<T>(filename, p_val, train_data_float, num_train, train_dim);
+
+    float *pivot_data;
+
+    uint32_t num_clusters = sqrt(num_points_to_load);
+    // kmeans_partitioning on training data
+    pivot_data = new float[num_clusters * train_dim];
+
+    // Process Global k-means for kmeans_partitioning Step
+    diskann::cout << "Processing global k-means (kmeans_partitioning Step)" << std::endl;
+    kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim, pivot_data, num_clusters);
+
+    kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data, num_clusters, 15, NULL, NULL);
+
+    _ivf_clusters->add_cetroids(pivot_data, num_clusters);
+    delete[] train_data_float;
+    delete[] pivot_data;
+
+    T* raw_vectors;
+    uint64_t n1, n2;
+    diskann::load_bin<T>(filename, raw_vectors, n1, n2);
+    std::vector<uint32_t> default_ids(num_points_to_load);
+    std::iota(default_ids.begin(), default_ids.end(), 0); 
+    _ivf_clusters->assign_data_to_clusters(raw_vectors, default_ids);
     }
 
     this->build(filename, num_points_to_load, tags);
