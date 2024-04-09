@@ -9,6 +9,7 @@
 #include <set>
 #include <string.h>
 #include <boost/program_options.hpp>
+#include <random>
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -33,7 +34,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
                         const std::vector<std::vector<std::string>> &query_filters,
                         const uint32_t filter_penalty_threshold, const uint32_t bruteforce_threshold,
-                        const float fail_if_recall_below)
+                        const float fail_if_recall_below, uint32_t maxN = 10000000, float p1 = 0.1, float p2 = 0.1)
 {
     using TagT = uint32_t;
     // Load the query file
@@ -294,6 +295,9 @@ int main(int argc, char **argv)
     bool print_all_recalls, dynamic, tags, show_qps_per_thread;
     float fail_if_recall_below = 0.0f;
 
+    uint32_t maxN;
+    float p1,p2;
+
     po::options_description desc{
         program_options_utils::make_program_description("search_memory_index", "Searches in-memory DiskANN indexes")};
     try
@@ -347,6 +351,17 @@ int main(int argc, char **argv)
         optional_configs.add_options()("fail_if_recall_below",
                                        po::value<float>(&fail_if_recall_below)->default_value(0.0f),
                                        program_options_utils::FAIL_IF_RECALL_BELOW);
+
+        optional_configs.add_options()("maxN",
+                                       po::value<uint32_t>(&maxN)->default_value(10000000),
+                                       "maxN");
+        optional_configs.add_options()("p1",
+                                       po::value<float>(&p1)->default_value(0.1),
+                                       "p1");
+        optional_configs.add_options()("p2",
+                                       po::value<float>(&p2)->default_value(0.1),
+                                       "p2");
+
 
         // Output controls
         po::options_description output_controls("Output controls");
@@ -469,7 +484,7 @@ int main(int argc, char **argv)
                 return search_memory_index<int8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags,
                                                    show_qps_per_thread, query_filters, filter_penalty_threshold,
-                                                   bruteforce_threshold, fail_if_recall_below);
+                                                   bruteforce_threshold, fail_if_recall_below, maxN, p1, p2);
             }
             else if (data_type == std::string("uint8"))
             {

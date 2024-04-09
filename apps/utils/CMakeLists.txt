@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
 
+add_executable(bitmap_vs_list bitmap_vs_list.cpp)
+target_link_libraries(bitmap_vs_list ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
+
 add_executable(fvecs_to_bin fvecs_to_bin.cpp)
 
 add_executable(fvecs_to_bvecs fvecs_to_bvecs.cpp)
