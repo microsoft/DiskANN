@@ -18,6 +18,7 @@
 #include <unistd.h>
 #endif
 
+#include "id_list.h"
 #include "index.h"
 #include "roaring.h"
 #include "memory_mapper.h"
@@ -32,6 +33,7 @@ int main(int argc, char **argv)
 
     uint32_t maxN;
     float p1,p2;
+
 
     po::options_description desc{
         program_options_utils::make_program_description("search_memory_index", "Searches in-memory DiskANN indexes")};
@@ -108,8 +110,23 @@ int main(int argc, char **argv)
         if (i == 99) std::cout<<roaring_bitmap_get_cardinality(intersect) << " is the size of intersection computed using roaring." << std::endl;
         roaring_bitmap_free(intersect);
     }
+
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "set intersection computation using roaring bitmap time:" << diff.count()/100 << std::endl;
+
+
+    diskann::RoaringIdList dr1, dr2;
+    for (auto &x : v1)
+        dr1.add(x);
+    for (auto &x : v2)
+        dr2.add(x);
+
+    s = std::chrono::high_resolution_clock::now();
+    dr1.intersect_list(dr2);
+    diff = std::chrono::high_resolution_clock::now() - s;
+    std::cout<<dr1.size() << " is the size of intersection computed using diskann::roaring." << std::endl;
+    std::cout << "set intersection computation using diskann::roaring bitmap time:" << diff.count() << std::endl;
+
 
 
     s = std::chrono::high_resolution_clock::now();
