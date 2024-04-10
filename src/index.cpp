@@ -801,14 +801,15 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
 
 // Find common filter between a node's labels and a given set of labels, while
 // taking into account universal label
+// TODO: modify for handling universal label
 template <typename T, typename TagT, typename LabelT>
 uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
                                                        const std::vector<LabelT> &incoming_labels)
 {
 
     // not implemented for build-time use case, since we need to understand universal labels for multiple filters
-    if (!search_invocation)
-        return true;
+//    if (!search_invocation)
+//        return true;
 
     auto &curr_node_labels = _location_to_labels[point_id];
     uint32_t overlap = 0;
