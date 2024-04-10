@@ -96,8 +96,6 @@ class IndexWriteParametersBuilder
         return IndexWriteParameters(_search_list_size, _max_degree, _saturate_graph, _max_occlusion_size, _alpha,
                                     _num_threads, _filter_list_size);
     }
-    IndexWriteParametersBuilder(const IndexWriteParametersBuilder &) = delete;
-    IndexWriteParametersBuilder &operator=(const IndexWriteParametersBuilder &) = delete;
 
     IndexWriteParametersBuilder(const IndexWriteParameters &wp)
         : _search_list_size(wp.search_list_size), _max_degree(wp.max_degree),

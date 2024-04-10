@@ -805,6 +805,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     assert(id_scratch.size() == 0);
 
     T *aligned_query = scratch->aligned_query();
+    std::vector<std::uint64_t>& query_bitmask_buf = scratch->query_label_bitmask();
 
     float *pq_dists = nullptr;
 
@@ -857,9 +858,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             bitmask_full_val._mask = query_bitmask_buf.data();
         }
         
-        for (size_t i = 0; i < filter_label.size(); i++)
+        for (size_t i = 0; i < filter_labels.size(); i++)
         {
-            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label[i]);
+            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_labels[i]);
             bitmask_full_val.merge_bitmask_val(bitmask_val);
         }
 
@@ -1787,10 +1788,11 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     else
     {
         // TODO: this should ideally happen in save()
+        uint32_t unv_label_as_num = 0;
         std::string labels_file_to_use = filter_params.save_path_prefix + "_label_formatted.txt";
         std::string mem_labels_int_map_file = filter_params.save_path_prefix + "_labels_map.txt";
         convert_labels_string_to_int(filter_params.label_file, labels_file_to_use, mem_labels_int_map_file,
-                                     filter_params.universal_label);
+                                     filter_params.universal_label, unv_label_as_num);
         if (filter_params.universal_label != "")
         {
             LabelT unv_label_as_num = 0;
@@ -2045,7 +2047,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                      num_points_labels); // determines medoid for each label and identifies
                                          // the points to label mapping
 
-    convert_pts_label_to_bitmask(_pts_to_labels, _bitmask_buf, _labels.size());
+    convert_pts_label_to_bitmask(_location_to_labels, _bitmask_buf, _labels.size());
 
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
     std::vector<std::uint64_t> label_bitmask;
