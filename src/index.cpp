@@ -116,9 +116,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
     }
-    if (_filtered_index) {
-        _ivf_clusters = new InMemClusterStore<T>(_dim);
-    }
+//    if (_filtered_index) {
+//    }
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1387,6 +1386,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     diskann::Timer link_timer;
 
+    diskann::cout<<"Filtered L index: " << _filtered_index <<", " << _filterIndexingQueueSize << std::endl;
+
 #pragma omp parallel for schedule(dynamic, 2048)
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
@@ -1952,6 +1953,12 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                                                   const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
+
+    diskann::cout<<"Going to initialize IVF clustering to aid filtered index" << std::endl;
+    _ivf_clusters = new InMemClusterStore<T>(_dim);
+    diskann::cout<<"Dimension = " << _ivf_clusters->get_dims() << std::endl;
+
+
     _label_to_start_id.clear();
     size_t num_points_labels = 0;
 
@@ -2018,21 +2025,26 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
     size_t num_train;
     float *train_data_float;
     float p_val = 1000000.0/num_points_to_load;
+    p_val = p_val > 1 ? 1 : p_val;
     gen_random_slice<T>(filename, p_val, train_data_float, num_train, train_dim);
 
     float *pivot_data;
 
     uint32_t num_clusters = sqrt(num_points_to_load);
+    diskann::cout << "num_train, train_dim, num_clusters=" << num_train <<" " << train_dim <<" " << num_clusters<< std::endl;
+
     // kmeans_partitioning on training data
     pivot_data = new float[num_clusters * train_dim];
+
 
     // Process Global k-means for kmeans_partitioning Step
     diskann::cout << "Processing global k-means (kmeans_partitioning Step)" << std::endl;
     kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim, pivot_data, num_clusters);
-
+    diskann::cout << "Processing Lloyds iteration" << std::endl;
     kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data, num_clusters, 15, NULL, NULL);
-
+    diskann::cout << "Done" << std::endl;
     _ivf_clusters->add_cetroids(pivot_data, num_clusters);
+    diskann::cout << "Added centroids" << std::endl;
     delete[] train_data_float;
     delete[] pivot_data;
 
