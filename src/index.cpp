@@ -915,14 +915,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter)
         {
-            if (filter_labels.size() <= 1)
+            if (search_invocation)
             {
                 if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
                     continue;
             }
             else
             {
-                if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
+                if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
                     continue;
             }
         }
@@ -988,16 +988,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (filter_labels.size() <= 1)
-                    {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
-                            continue;
-                    }
-                    else
-                    {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
-                            continue;
-                    }
+                    // TODO: CHECK ABOUT UNIVERSAL LABELS
+            if (search_invocation)
+            {
+                if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
+                    continue;
+            }
+            else
+            {
+                if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+                    continue;
+            }
                 }
 
                 if (is_not_visited(id))
@@ -1018,16 +1019,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (filter_labels.size() <= 1)
-                    {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
-                            continue;
-                    }
-                    else
-                    {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
-                            continue;
-                    }
+            if (search_invocation)
+            {
+                if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
+                    continue;
+            }
+            else
+            {
+                if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+                    continue;
+            }
                 }
 
                 if (is_not_visited(id))
