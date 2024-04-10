@@ -26,6 +26,9 @@ template <typename data_t> uint32_t InMemClusterStore<data_t>::load(const std::s
     centers_file += "_centers.bin";
     posting_file += "_posting.bin";
 
+    if (!file_exists(posting_file))
+     return 0;
+
     diskann::load_bin<float>(centers_file, this->_cluster_centroids,
                                    this->_num_clusters, this->_dim);
 

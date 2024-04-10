@@ -598,6 +598,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     if (file_exists(labels_file))
     {
+        _ivf_clusters = new InMemClusterStore<T>(0);
         _ivf_clusters->load(filename);
      
         _label_map = load_label_map(labels_map_file);
