@@ -17,7 +17,8 @@ namespace diskann
 class AbstractIdList
 {
   public:
-    AbstractIdList() {   
+    AbstractIdList()
+    {
     }
 
     virtual ~AbstractIdList() = default;
@@ -30,47 +31,51 @@ class AbstractIdList
 
     virtual void union_list(const AbstractIdList &other) = 0;
 
-    virtual void* get_bitmap() const = 0;
+    virtual void *get_bitmap() const = 0;
 
   protected:
-
 };
 
 class RoaringIdList : public AbstractIdList
 {
   public:
-    RoaringIdList() {
-      list = roaring_bitmap_create();
+    RoaringIdList()
+    {
+        list = roaring_bitmap_create();
     }
 
-    ~RoaringIdList() {
-          roaring_bitmap_free(list);
+    ~RoaringIdList()
+    {
+        roaring_bitmap_free(list);
     }
 
-    uint64_t size() {
-      return roaring_bitmap_get_cardinality(list);
+    uint64_t size()
+    {
+        return roaring_bitmap_get_cardinality(list);
     }
 
-    void add(const uint32_t val) {
-     roaring_bitmap_add(list, val); 
+    void add(const uint32_t val)
+    {
+        roaring_bitmap_add(list, val);
     }
 
-    void intersect_list(const AbstractIdList &other) {
-      roaring_bitmap_and_inplace(list, (roaring_bitmap_t*) (other.get_bitmap()));
+    void intersect_list(const AbstractIdList &other)
+    {
+        roaring_bitmap_and_inplace(list, (roaring_bitmap_t *)(other.get_bitmap()));
     }
 
-    void union_list(const AbstractIdList &other) {
-      roaring_bitmap_or_inplace(list, (roaring_bitmap_t*) (other.get_bitmap()));
+    void union_list(const AbstractIdList &other)
+    {
+        roaring_bitmap_or_inplace(list, (roaring_bitmap_t *)(other.get_bitmap()));
     }
 
-    void* get_bitmap() const {
-      return (void*) list;
+    void *get_bitmap() const
+    {
+        return (void *)list;
     }
 
   protected:
-
     roaring_bitmap_t *list;
-    
 };
 
 } // namespace diskann

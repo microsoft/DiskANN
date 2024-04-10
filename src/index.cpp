@@ -6,8 +6,10 @@
 #include <type_traits>
 
 #include "boost/dynamic_bitset.hpp"
+#include "id_list.h"
 #include "index_factory.h"
 #include "memory_mapper.h"
+#include "roaring.h"
 #include "timer.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
@@ -116,7 +118,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
     }
-    if (_filtered_index) {
+    if (_filtered_index)
+    {
         _ivf_clusters = new InMemClusterStore<T>(_dim);
     }
 }
@@ -600,7 +603,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     if (file_exists(labels_file))
     {
         _ivf_clusters->load(filename);
-     
+
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
         assert(label_num_pts == data_file_num_pts - _num_frozen_pts);
@@ -829,6 +832,47 @@ uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool s
 
     //    return false;
     return incoming_labels.size() - overlap;
+}
+
+template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(const T *query, const uint32_t Lsize,
+                                                                              roaring::Roaring &init_ids,
+                                                                              InMemQueryScratch<T> *scratch)
+{
+    T *aligned_query = scratch->aligned_query();
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    best_L_nodes.reserve(Lsize);
+
+    uint32_t cmps = 0;
+    uint32_t hops = 0;
+    std::vector<uint32_t> closest_clusters;
+    RoaringIdList cluster_results;
+    _ivf_clusters->get_closest_clusters(aligned_query, Lsize, closest_clusters);
+    _ivf_clusters->get_cluster_members(closest_clusters[0], cluster_results);
+    for (size_t i = 1; i < closest_clusters.size(); i++)
+    {
+        RoaringIdList curr_results;
+        _ivf_clusters->get_cluster_members(closest_clusters[i], curr_results);
+        cluster_results.union_list(curr_results);
+    }
+
+    roaring_bitmap_and_inplace(&(init_ids.roaring), (roaring_bitmap_t *)cluster_results.get_bitmap());
+    roaring_bitmap_t *real_results = (roaring_bitmap_t *)cluster_results.get_bitmap();
+    roaring_uint32_iterator_t *i = roaring_iterator_create(real_results);
+    while (i->has_value)
+    {
+        float distance = _data_store->get_distance(aligned_query, i->current_value);
+        Neighbor nn = Neighbor(i->current_value, distance);
+        best_L_nodes.insert(nn);
+        cmps++;
+
+        roaring_uint32_iterator_advance(i);
+    }
+    // you can skip over values and move the iterator with
+    // roaring_uint32_iterator_move_equalorlarger(i,someintvalue)
+    roaring_uint32_iterator_free(i);
+
+    return std::make_pair(hops, cmps);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2014,34 +2058,34 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
     // IVF cluster part
     {
-    size_t train_dim;
-    size_t num_train;
-    float *train_data_float;
-    float p_val = 1000000.0/num_points_to_load;
-    gen_random_slice<T>(filename, p_val, train_data_float, num_train, train_dim);
+        size_t train_dim;
+        size_t num_train;
+        float *train_data_float;
+        float p_val = 1000000.0 / num_points_to_load;
+        gen_random_slice<T>(filename, p_val, train_data_float, num_train, train_dim);
 
-    float *pivot_data;
+        float *pivot_data;
 
-    uint32_t num_clusters = sqrt(num_points_to_load);
-    // kmeans_partitioning on training data
-    pivot_data = new float[num_clusters * train_dim];
+        uint32_t num_clusters = sqrt(num_points_to_load);
+        // kmeans_partitioning on training data
+        pivot_data = new float[num_clusters * train_dim];
 
-    // Process Global k-means for kmeans_partitioning Step
-    diskann::cout << "Processing global k-means (kmeans_partitioning Step)" << std::endl;
-    kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim, pivot_data, num_clusters);
+        // Process Global k-means for kmeans_partitioning Step
+        diskann::cout << "Processing global k-means (kmeans_partitioning Step)" << std::endl;
+        kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim, pivot_data, num_clusters);
 
-    kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data, num_clusters, 15, NULL, NULL);
+        kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data, num_clusters, 15, NULL, NULL);
 
-    _ivf_clusters->add_cetroids(pivot_data, num_clusters);
-    delete[] train_data_float;
-    delete[] pivot_data;
+        _ivf_clusters->add_cetroids(pivot_data, num_clusters);
+        delete[] train_data_float;
+        delete[] pivot_data;
 
-    T* raw_vectors;
-    uint64_t n1, n2;
-    diskann::load_bin<T>(filename, raw_vectors, n1, n2);
-    std::vector<uint32_t> default_ids(num_points_to_load);
-    std::iota(default_ids.begin(), default_ids.end(), 0); 
-    _ivf_clusters->assign_data_to_clusters(raw_vectors, default_ids);
+        T *raw_vectors;
+        uint64_t n1, n2;
+        diskann::load_bin<T>(filename, raw_vectors, n1, n2);
+        std::vector<uint32_t> default_ids(num_points_to_load);
+        std::iota(default_ids.begin(), default_ids.end(), 0);
+        _ivf_clusters->assign_data_to_clusters(raw_vectors, default_ids);
     }
 
     this->build(filename, num_points_to_load, tags);
@@ -2238,8 +2282,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     _data_store->preprocess_query(query, scratch);
     std::pair<uint32_t, uint32_t> retval;
-    if (sorted_filters[0].second < _bruteforce_threshold)
+    switch (_bruteforce_threshold)
     {
+    case 0: {
         // last_intersection has the common elements across all filters in sorted_filters
         roaring::Roaring last_intersection = _labels_to_points[sorted_filters[0].first];
         for (size_t i = 1; i < sorted_filters.size(); i++)
@@ -2248,9 +2293,19 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         }
         retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
     }
-    else
-    {
+    break;
+    case 1: {
+        roaring::Roaring last_intersection = _labels_to_points[sorted_filters[0].first];
+        for (size_t i = 1; i < sorted_filters.size(); i++)
+        {
+            last_intersection &= _labels_to_points[sorted_filters[i].first];
+        }
+        retval = closest_cluster_filters(scratch->aligned_query(), L, last_intersection, scratch);
+    }
+    break;
+    case 2:
         retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+        break;
     }
 
     auto best_L_nodes = scratch->best_l_nodes();

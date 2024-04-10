@@ -264,6 +264,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
+    std::pair<uint32_t, uint32_t> closest_cluster_filters(const T *query, const uint32_t Lsize,
+                                                          roaring::Roaring &init_ids, InMemQueryScratch<T> *scratch);
+
     std::pair<uint32_t, uint32_t> brute_force_filters(const T *query, const uint32_t Lsize,
                                                       const roaring::Roaring &init_ids, InMemQueryScratch<T> *scratch);
 
