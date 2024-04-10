@@ -14,6 +14,7 @@
 #   such behavior.
 #   Contact for this feature: gopalrs.
 
+
 # Some variables like MSVC are defined only after project(), so put that first.
 cmake_minimum_required(VERSION 3.15)
 project(diskann)
@@ -52,6 +53,9 @@ endif()
 
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
+if(NOT PYBIND)
+    set(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS ON)
+endif()
 # It's necessary to include tcmalloc headers only if calling into MallocExtension interface.
 # For using tcmalloc in DiskANN tools, it's enough to just link with tcmalloc.
 if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
@@ -92,7 +96,9 @@ if (MSVC)
     set(Boost_USE_STATIC_LIBS ON)
 endif()
 
-find_package(Boost COMPONENTS program_options)
+if(NOT MSVC)
+    find_package(Boost COMPONENTS program_options)
+endif()
 
 # For Windows, fall back to nuget version if find_package didn't find it.
 if (MSVC AND NOT Boost_FOUND)
@@ -219,13 +225,13 @@ if (MSVC)
     # Tell CMake how to build the tcmalloc linker library from the submodule.
     add_custom_target(build_libtcmalloc_minimal DEPENDS ${TCMALLOC_LINK_LIBRARY})
     add_custom_command(OUTPUT ${TCMALLOC_LINK_LIBRARY}
-                       COMMAND ${CMAKE_VS_MSBUILD_COMMAND} gperftools.sln /m /nologo
-                           /t:libtcmalloc_minimal /p:Configuration="Release-Patch"
-                           /property:Platform="x64"
-                           /p:PlatformToolset=v${MSVC_TOOLSET_VERSION}
-                           /p:WindowsTargetPlatformVersion=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}
-                       WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/gperftools)
-
+                        COMMAND ${CMAKE_VS_MSBUILD_COMMAND} gperftools.sln /m /nologo
+                            /t:libtcmalloc_minimal /p:Configuration="Release-Patch"
+                            /property:Platform="x64"
+                            /p:PlatformToolset=v${MSVC_TOOLSET_VERSION}
+                            /p:WindowsTargetPlatformVersion=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}
+                        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/gperftools)
+ 
     add_library(libtcmalloc_minimal_for_exe STATIC IMPORTED)
     add_library(libtcmalloc_minimal_for_dll STATIC IMPORTED)
 

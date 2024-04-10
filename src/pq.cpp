@@ -2,7 +2,9 @@
 // Licensed under the MIT license.
 
 #include "mkl.h"
-
+#if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#include "gperftools/malloc_extension.h"
+#endif
 #include "pq.h"
 #include "partition.h"
 #include "math_utils.h"
@@ -133,11 +135,13 @@ void FixedChunkPQTable::load_pq_centroid_bin(const char *pq_table_file, size_t n
     diskann::cout << "Loaded PQ Pivots: #ctrs: " << NUM_PQ_CENTROIDS << ", #dims: " << this->ndims
                   << ", #chunks: " << this->n_chunks << std::endl;
 
-    if (file_exists(rotmat_file))
-    {
 #ifdef EXEC_ENV_OLS
+    if (files.fileExists(rotmat_file))
+    {
         diskann::load_bin<float>(files, rotmat_file, (float *&)rotmat_tr, nr, nc);
 #else
+    if (file_exists(rotmat_file))
+    {
         diskann::load_bin<float>(rotmat_file, rotmat_tr, nr, nc);
 #endif
         if (nr != this->ndims || nc != this->ndims)
@@ -338,6 +342,65 @@ void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_n
             dists_out[idx] += chunk_dists[pq_centerid];
         }
     }
+}
+
+// generate_pq_pivots_simplified is a simplified version of generate_pq_pivots.
+// Input is provided in the in-memory buffer train_data.
+// Output is stored in the in-memory buffer pivot_data_vector.
+// Simplification is based on the following assumptions:
+//   dim % num_pq_chunks == 0
+//   num_centers == 256 by default
+//   KMEANS_ITERS_FOR_PQ == 15 by default
+//   make_zero_mean is false by default.
+// These assumptions allow to make the function much simpler and avoid storing
+// array of chunk_offsets and centroids.
+// The compiler pragma for multi-threading support is removed from this implementation
+// for the purpose of integration into systems that strictly control resource allocation.
+int generate_pq_pivots_simplified(const float *train_data, size_t num_train, size_t dim, size_t num_pq_chunks,
+                                  std::vector<float> &pivot_data_vector)
+{
+    if (num_pq_chunks > dim || dim % num_pq_chunks != 0)
+    {
+        return -1;
+    }
+
+    const size_t num_centers = 256;
+    const size_t cur_chunk_size = dim / num_pq_chunks;
+    const uint32_t KMEANS_ITERS_FOR_PQ = 15;
+
+    pivot_data_vector.resize(num_centers * dim);
+    std::vector<float> cur_pivot_data_vector(num_centers * cur_chunk_size);
+    std::vector<float> cur_data_vector(num_train * cur_chunk_size);
+    std::vector<uint32_t> closest_center_vector(num_train);
+
+    float *pivot_data = &pivot_data_vector[0];
+    float *cur_pivot_data = &cur_pivot_data_vector[0];
+    float *cur_data = &cur_data_vector[0];
+    uint32_t *closest_center = &closest_center_vector[0];
+
+    for (size_t i = 0; i < num_pq_chunks; i++)
+    {
+        size_t chunk_offset = cur_chunk_size * i;
+
+        for (int32_t j = 0; j < num_train; j++)
+        {
+            std::memcpy(cur_data + j * cur_chunk_size, train_data + j * dim + chunk_offset,
+                        cur_chunk_size * sizeof(float));
+        }
+
+        kmeans::kmeanspp_selecting_pivots(cur_data, num_train, cur_chunk_size, cur_pivot_data, num_centers);
+
+        kmeans::run_lloyds(cur_data, num_train, cur_chunk_size, cur_pivot_data, num_centers, KMEANS_ITERS_FOR_PQ, NULL,
+                           closest_center);
+
+        for (uint64_t j = 0; j < num_centers; j++)
+        {
+            std::memcpy(pivot_data + j * dim + chunk_offset, cur_pivot_data + j * cur_chunk_size,
+                        cur_chunk_size * sizeof(float));
+        }
+    }
+
+    return 0;
 }
 
 // given training data in train_data of dimensions num_train * dim, generate
@@ -708,6 +771,75 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
     return 0;
 }
 
+// generate_pq_data_from_pivots_simplified is a simplified version of generate_pq_data_from_pivots.
+// Input is provided in the in-memory buffers data and pivot_data.
+// Output is stored in the in-memory buffer pq.
+// Simplification is based on the following assumptions:
+//   supporting only float data type
+//   dim % num_pq_chunks == 0, which results in a fixed chunk_size
+//   num_centers == 256 by default
+//   make_zero_mean is false by default.
+// These assumptions allow to make the function much simpler and avoid using
+// array of chunk_offsets and centroids.
+// The compiler pragma for multi-threading support is removed from this implementation
+// for the purpose of integration into systems that strictly control resource allocation.
+int generate_pq_data_from_pivots_simplified(const float *data, const size_t num, const float *pivot_data,
+                                            const size_t pivots_num, const size_t dim, const size_t num_pq_chunks,
+                                            std::vector<uint8_t> &pq)
+{
+    if (num_pq_chunks == 0 || num_pq_chunks > dim || dim % num_pq_chunks != 0)
+    {
+        return -1;
+    }
+
+    const size_t num_centers = 256;
+    const size_t chunk_size = dim / num_pq_chunks;
+
+    if (pivots_num != num_centers * dim)
+    {
+        return -1;
+    }
+
+    pq.resize(num * num_pq_chunks);
+
+    std::vector<float> cur_pivot_vector(num_centers * chunk_size);
+    std::vector<float> cur_data_vector(num * chunk_size);
+    std::vector<uint32_t> closest_center_vector(num);
+
+    float *cur_pivot_data = &cur_pivot_vector[0];
+    float *cur_data = &cur_data_vector[0];
+    uint32_t *closest_center = &closest_center_vector[0];
+
+    for (size_t i = 0; i < num_pq_chunks; i++)
+    {
+        const size_t chunk_offset = chunk_size * i;
+
+        for (int j = 0; j < num_centers; j++)
+        {
+            std::memcpy(cur_pivot_data + j * chunk_size, pivot_data + j * dim + chunk_offset,
+                        chunk_size * sizeof(float));
+        }
+
+        for (int j = 0; j < num; j++)
+        {
+            for (size_t k = 0; k < chunk_size; k++)
+            {
+                cur_data[j * chunk_size + k] = data[j * dim + chunk_offset + k];
+            }
+        }
+
+        math_utils::compute_closest_centers(cur_data, num, chunk_size, cur_pivot_data, num_centers, 1, closest_center);
+
+        for (int j = 0; j < num; j++)
+        {
+            assert(closest_center[j] < num_centers);
+            pq[j * num_pq_chunks + i] = closest_center[j];
+        }
+    }
+
+    return 0;
+}
+
 // streams the base file (data_file), and computes the closest centers in each
 // chunk to generate the compressed data_file and stores it in
 // pq_compressed_vectors_path.
@@ -921,7 +1053,7 @@ int generate_pq_data_from_pivots(const std::string &data_file, uint32_t num_cent
     }
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
     MallocExtension::instance()->ReleaseFreeMemory();
 #endif
     compressed_file_writer.close();

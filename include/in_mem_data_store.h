@@ -21,7 +21,7 @@ namespace diskann
 template <typename data_t> class InMemDataStore : public AbstractDataStore<data_t>
 {
   public:
-    InMemDataStore(const location_t capacity, const size_t dim, std::shared_ptr<Distance<data_t>> distance_fn);
+    InMemDataStore(const location_t capacity, const size_t dim, std::unique_ptr<Distance<data_t>> distance_fn);
     virtual ~InMemDataStore();
 
     virtual location_t load(const std::string &filename) override;
@@ -44,14 +44,20 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
                               const location_t num_points) override;
     virtual void copy_vectors(const location_t from_loc, const location_t to_loc, const location_t num_points) override;
 
-    virtual float get_distance(const data_t *query, const location_t loc) const override;
+    virtual void preprocess_query(const data_t *query, AbstractScratch<data_t> *query_scratch) const override;
+
+    virtual float get_distance(const data_t *preprocessed_query, const location_t loc) const override;
     virtual float get_distance(const location_t loc1, const location_t loc2) const override;
-    virtual void get_distance(const data_t *query, const location_t *locations, const uint32_t location_count,
-                              float *distances) const override;
+
+    virtual void get_distance(const data_t *preprocessed_query, const location_t *locations,
+                              const uint32_t location_count, float *distances,
+                              AbstractScratch<data_t> *scratch) const override;
+    virtual void get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
+                              std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const override;
 
     virtual location_t calculate_medoid() const override;
 
-    virtual Distance<data_t> *get_dist_fn() override;
+    virtual Distance<data_t> *get_dist_fn() const override;
 
     virtual size_t get_alignment_factor() const override;
 
@@ -73,7 +79,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     // but this gives us perf benefits as the datastore can do distance
     // computations during search and compute norms of vectors internally without
     // have to copy data back and forth.
-    std::shared_ptr<Distance<data_t>> _distance_fn;
+    std::unique_ptr<Distance<data_t>> _distance_fn;
 
     // in case we need to save vector norms for optimization
     std::shared_ptr<float[]> _pre_computed_norms;

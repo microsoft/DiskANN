@@ -27,6 +27,7 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
 #include "types.h"
+#include "tag_uint128.h"
 #include <any>
 
 #ifdef EXEC_ENV_OLS
@@ -57,7 +58,7 @@ typedef int FileHandle;
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 60
 
-inline bool file_exists(const std::string &name, bool dirCheck = false)
+inline bool file_exists_impl(const std::string &name, bool dirCheck = false)
 {
     int val;
 #ifndef _WINDOWS
@@ -92,6 +93,29 @@ inline bool file_exists(const std::string &name, bool dirCheck = false)
         // the file entry exists. If reqd, check if this is a directory.
         return dirCheck ? buffer.st_mode & S_IFDIR : true;
     }
+}
+
+inline bool file_exists(const std::string &name, bool dirCheck = false)
+{
+#ifdef EXEC_ENV_OLS
+    bool exists = file_exists_impl(name, dirCheck);
+    if (exists)
+    {
+        return true;
+    }
+    if (!dirCheck)
+    {
+        // try with .enc extension
+        std::string enc_name = name + ENCRYPTED_EXTENSION;
+        return file_exists_impl(enc_name, dirCheck);
+    }
+    else
+    {
+        return exists;
+    }
+#else
+    return file_exists_impl(name, dirCheck);
+#endif
 }
 
 inline void open_file_to_write(std::ofstream &writer, const std::string &filename)
@@ -153,6 +177,7 @@ inline int delete_file(const std::string &fileName)
     }
 }
 
+// generates formatted_label and _labels_map file.
 inline void convert_labels_string_to_int(const std::string &inFileName, const std::string &outFileName,
                                          const std::string &mapFileName, const std::string &unv_label,
                                         uint32_t& unv_label_id)
@@ -174,7 +199,7 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
             if (string_int_map.find(token) == string_int_map.end())
             {
                 uint32_t nextId = (uint32_t)string_int_map.size() + 1;
-                string_int_map[token] = nextId;
+                string_int_map[token] = nextId; // nextId can never be 0
             }
             lbls.push_back(string_int_map[token]);
         }
@@ -988,6 +1013,17 @@ inline void prefetch_vector_l2(const char *vec, size_t vecsize)
 void block_convert(std::ofstream &writr, std::ifstream &readr, float *read_buf, uint64_t npts, uint64_t ndims);
 
 DISKANN_DLLEXPORT void normalize_data_file(const std::string &inFileName, const std::string &outFileName);
+
+inline std::string get_tag_string(std::uint64_t tag)
+{
+    return std::to_string(tag);
+}
+
+inline std::string get_tag_string(const tag_uint128 &tag)
+{
+    std::string str = std::to_string(tag._data2) + "_" + std::to_string(tag._data1);
+    return str;
+}
 
 }; // namespace diskann
 

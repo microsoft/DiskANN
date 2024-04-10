@@ -499,7 +499,8 @@ int main(int argc, char **argv)
         desc.add_options()("help,h", "Print information on arguments");
 
         desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
-        desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(), "distance function <l2/mips>");
+        desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
+                           "distance function <l2/mips/cosine>");
         desc.add_options()("base_file", po::value<std::string>(&base_file)->required(),
                            "File containing the base vectors in binary format");
         desc.add_options()("query_file", po::value<std::string>(&query_file)->required(),
