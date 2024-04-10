@@ -847,17 +847,25 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
     uint32_t hops = 0;
     std::vector<uint32_t> closest_clusters;
     RoaringIdList cluster_results;
+    RoaringIdList tmp;
     _ivf_clusters->get_closest_clusters(aligned_query, Lsize, closest_clusters);
-    _ivf_clusters->get_cluster_members(closest_clusters[0], cluster_results);
+    _ivf_clusters->get_cluster_members(closest_clusters[0], tmp);
+    cluster_results.union_list(tmp);
+//    std::cout<<closest_clusters[0]<<" ";
     for (size_t i = 1; i < closest_clusters.size(); i++)
     {
-        RoaringIdList curr_results;
-        _ivf_clusters->get_cluster_members(closest_clusters[i], curr_results);
-        cluster_results.union_list(curr_results);
+  //      std::cout<<closest_clusters[i] <<",";
+  //      std::cout<<cluster_results.size() << " ";
+        _ivf_clusters->get_cluster_members(closest_clusters[i], tmp);
+        cluster_results.union_list(tmp);
     }
+//    std::cout<<cluster_results.size() << std::endl;
 
     roaring_bitmap_and_inplace(&(init_ids.roaring), (roaring_bitmap_t *)cluster_results.get_bitmap());
-    roaring_bitmap_t *real_results = (roaring_bitmap_t *)cluster_results.get_bitmap();
+//    roaring_bitmap_t *real_results = (roaring_bitmap_t *)cluster_results.get_bitmap();
+
+    roaring_bitmap_t *real_results = &(init_ids.roaring);
+;
     roaring_uint32_iterator_t *i = roaring_iterator_create(real_results);
     while (i->has_value)
     {

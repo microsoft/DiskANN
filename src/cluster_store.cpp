@@ -46,6 +46,15 @@ template <typename data_t> uint32_t InMemClusterStore<data_t>::load(const std::s
       total_count += cur_count;
     }
     in.close();
+
+    uint64_t chksum = 0;
+    uint32_t idx = 0;
+    for (auto &x : _posting_lists) {
+        if (x.size() ==0)
+        std::cout<< idx << " ";
+        idx++;
+    }
+
     std::cout << "Read a total of " << total_count
                 << " points from inverted index file." << std::endl;
     return this->_num_clusters;
@@ -119,7 +128,9 @@ template <typename data_t> void InMemClusterStore<data_t>::get_closest_clusters(
 
 // todo: do we copy the roaring bitmap inside the roaring list?
 template <typename data_t> void InMemClusterStore<data_t>::get_cluster_members(const uint32_t cluster_id, AbstractIdList &output_list) {
-    output_list = _posting_lists[cluster_id];
+//    output_list = _posting_lists[cluster_id];
+    output_list.create_from(_posting_lists[cluster_id]);
+    //std::cout<<"*"<<_posting_lists[cluster_id].size()<<"*";
 }
 
 template DISKANN_DLLEXPORT class InMemClusterStore<float>;

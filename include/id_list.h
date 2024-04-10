@@ -27,6 +27,8 @@ class AbstractIdList
 
     virtual void add(const uint32_t val) = 0;
 
+    virtual void create_from(AbstractIdList &other) = 0;
+
     virtual void intersect_list(const AbstractIdList &other) = 0;
 
     virtual void union_list(const AbstractIdList &other) = 0;
@@ -46,7 +48,11 @@ class RoaringIdList : public AbstractIdList
 
     ~RoaringIdList()
     {
-        roaring_bitmap_free(list);
+        //roaring_bitmap_free(list);
+    }
+
+    void create_from(AbstractIdList &other) {
+      list = (roaring_bitmap_t*) (other.get_bitmap());
     }
 
     uint64_t size()
