@@ -843,42 +843,37 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
 
-    uint32_t cmps = 0;
-    uint32_t hops = 0;
     std::vector<uint32_t> closest_clusters;
     RoaringIdList cluster_results;
     RoaringIdList tmp;
     _ivf_clusters->get_closest_clusters(aligned_query, Lsize, closest_clusters);
     _ivf_clusters->get_cluster_members(closest_clusters[0], tmp);
+//    std::cout<<"#"<<tmp.size()<<"#";
     cluster_results.union_list(tmp);
-//    std::cout<<closest_clusters[0]<<" ";
     for (size_t i = 1; i < closest_clusters.size(); i++)
     {
-  //      std::cout<<closest_clusters[i] <<",";
-  //      std::cout<<cluster_results.size() << " ";
         _ivf_clusters->get_cluster_members(closest_clusters[i], tmp);
+//        std::cout<<"#"<<tmp.size()<<"#";
+//        std::cout << "=" <<cluster_results.size() << "=";
         cluster_results.union_list(tmp);
     }
 //    std::cout<<cluster_results.size() << std::endl;
 
-    roaring_bitmap_and_inplace(&(init_ids.roaring), (roaring_bitmap_t *)cluster_results.get_bitmap());
+    init_ids &= cluster_results.list;
+
+//    roaring_bitmap_and_inplace(&(init_ids.roaring), (roaring_bitmap_t *)cluster_results.get_bitmap());
 //    roaring_bitmap_t *real_results = (roaring_bitmap_t *)cluster_results.get_bitmap();
 
-    roaring_bitmap_t *real_results = &(init_ids.roaring);
-;
-    roaring_uint32_iterator_t *i = roaring_iterator_create(real_results);
-    while (i->has_value)
+
+    uint32_t cmps = 0;
+    uint32_t hops = 0;
+    for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
     {
-        float distance = _data_store->get_distance(aligned_query, i->current_value);
-        Neighbor nn = Neighbor(i->current_value, distance);
+        float distance = _data_store->get_distance(aligned_query, *i);
+        Neighbor nn = Neighbor(*i, distance);
         best_L_nodes.insert(nn);
         cmps++;
-
-        roaring_uint32_iterator_advance(i);
     }
-    // you can skip over values and move the iterator with
-    // roaring_uint32_iterator_move_equalorlarger(i,someintvalue)
-    roaring_uint32_iterator_free(i);
 
     return std::make_pair(hops, cmps);
 }

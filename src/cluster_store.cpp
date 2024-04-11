@@ -41,19 +41,13 @@ template <typename data_t> uint32_t InMemClusterStore<data_t>::load(const std::s
       in.read((char *) &cur_count, sizeof(unsigned));
       uint32_t* vals = new uint32_t[cur_count];
       in.read((char *) vals, (uint64_t)cur_count * sizeof(unsigned));
-      roaring_bitmap_add_many((roaring_bitmap_t*)_posting_lists[i].get_bitmap(), cur_count, vals);
+
+      _posting_lists[i] = RoaringIdList(cur_count, vals);
+//      roaring_bitmap_add_many((roaring_bitmap_t*)_posting_lists[i].get_bitmap(), cur_count, vals);
       delete[] vals;
       total_count += cur_count;
     }
     in.close();
-
-    uint64_t chksum = 0;
-    uint32_t idx = 0;
-    for (auto &x : _posting_lists) {
-        if (x.size() ==0)
-        std::cout<< idx << " ";
-        idx++;
-    }
 
     std::cout << "Read a total of " << total_count
                 << " points from inverted index file." << std::endl;
@@ -76,8 +70,10 @@ template <typename data_t> size_t InMemClusterStore<data_t>::save(const std::str
       out.write((char *) &count, sizeof(unsigned));
 
       uint32_t* arr = new uint32_t[count];
-      auto x = (roaring_bitmap_t*) _posting_lists[i].get_bitmap();
-      roaring_bitmap_to_uint32_array(x, arr);
+
+     roaring::Roaring x = _posting_lists[i].list;
+     x.toUint32Array(arr);
+
       out.write((char *) arr, sizeof(unsigned)*(uint64_t)count);
       total_count += count;
       delete[] arr;
@@ -90,7 +86,6 @@ template <typename data_t> size_t InMemClusterStore<data_t>::save(const std::str
 }
 
 template <typename data_t> void InMemClusterStore<data_t>::add_cetroids(float *clusters, uint32_t num_clusters) {
-    std::cout<<"Inside centroid addition: dim is " << this->_dim << std::endl;
     this->_num_clusters = num_clusters;
     this->_cluster_centroids = new float[(uint64_t)num_clusters*this->_dim];
     std::memcpy(this->_cluster_centroids, clusters, (uint64_t)num_clusters*this->_dim);
@@ -128,9 +123,8 @@ template <typename data_t> void InMemClusterStore<data_t>::get_closest_clusters(
 
 // todo: do we copy the roaring bitmap inside the roaring list?
 template <typename data_t> void InMemClusterStore<data_t>::get_cluster_members(const uint32_t cluster_id, AbstractIdList &output_list) {
-//    output_list = _posting_lists[cluster_id];
-    output_list.create_from(_posting_lists[cluster_id]);
-    //std::cout<<"*"<<_posting_lists[cluster_id].size()<<"*";
+//    std::cout<<"*" << _posting_lists[cluster_id].size() <<"*";
+    output_list.copy_from(_posting_lists[cluster_id]);
 }
 
 template DISKANN_DLLEXPORT class InMemClusterStore<float>;

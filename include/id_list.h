@@ -5,7 +5,8 @@
 
 #include <vector>
 #include <string>
-#include "roaring.h"
+#include <iostream>
+#include "roaring.hh"
 #include "types.h"
 #include "windows_customizations.h"
 #include "distance.h"
@@ -21,19 +22,21 @@ class AbstractIdList
     {
     }
 
+    AbstractIdList(uint32_t size, uint32_t* vals)
+    {
+    }
+
     virtual ~AbstractIdList() = default;
 
     virtual uint64_t size() = 0;
 
     virtual void add(const uint32_t val) = 0;
 
-    virtual void create_from(AbstractIdList &other) = 0;
+    virtual void copy_from(const AbstractIdList &other) = 0;
 
     virtual void intersect_list(const AbstractIdList &other) = 0;
 
     virtual void union_list(const AbstractIdList &other) = 0;
-
-    virtual void *get_bitmap() const = 0;
 
   protected:
 };
@@ -41,47 +44,52 @@ class AbstractIdList
 class RoaringIdList : public AbstractIdList
 {
   public:
-    RoaringIdList()
-    {
-        list = roaring_bitmap_create();
+    RoaringIdList() {
+    }
+
+  RoaringIdList( const RoaringIdList &d ) : AbstractIdList(d) {
+    list = d.list;
+//    std::cout<<"here" ;
+    }
+
+    RoaringIdList(uint32_t size, uint32_t* vals) {
+      list = roaring::Roaring(size, vals);
     }
 
     ~RoaringIdList()
     {
-        //roaring_bitmap_free(list);
-    }
-
-    void create_from(AbstractIdList &other) {
-      list = (roaring_bitmap_t*) (other.get_bitmap());
     }
 
     uint64_t size()
     {
-        return roaring_bitmap_get_cardinality(list);
+        return list.cardinality();
     }
 
     void add(const uint32_t val)
     {
-        roaring_bitmap_add(list, val);
+        list.add(val);
+    }
+    
+    void copy_from(const AbstractIdList &other) {
+        const RoaringIdList & other_r =  dynamic_cast<const RoaringIdList&>(other);
+        list = other_r.list;
     }
 
     void intersect_list(const AbstractIdList &other)
     {
-        roaring_bitmap_and_inplace(list, (roaring_bitmap_t *)(other.get_bitmap()));
+        const RoaringIdList & other_r =  dynamic_cast<const RoaringIdList&>(other);
+        list &= other_r.list;
     }
 
     void union_list(const AbstractIdList &other)
     {
-        roaring_bitmap_or_inplace(list, (roaring_bitmap_t *)(other.get_bitmap()));
+        const RoaringIdList & other_r =  dynamic_cast<const RoaringIdList&>(other);
+        list |= other_r.list;
     }
 
-    void *get_bitmap() const
-    {
-        return (void *)list;
-    }
-
-  protected:
-    roaring_bitmap_t *list;
+// TODO: make this protected again and remove external usage of list
+//  protected:
+    roaring::Roaring list;
 };
 
 } // namespace diskann
