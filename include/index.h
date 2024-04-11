@@ -33,6 +33,10 @@
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
 
+inline double time_to_union = 0.;
+inline double time_to_intersect = 0.;
+inline double time_to_cluster = 0.;
+
 namespace diskann
 {
 

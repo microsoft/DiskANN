@@ -119,8 +119,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     else
     {
         std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
-                  << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency";
-        table_width += 4 + 12 + 18 + 20 + 15;
+                  << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency" << std::setw(20)
+                  << "avg cluster time" << std::setw(20) << "avg union time" << std::setw(20) << "avg int. time";
+        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20;
     }
     uint32_t recalls_to_print = 0;
     const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -289,7 +290,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15)
-                      << (float)latency_stats[(uint64_t)(0.999 * query_num)];
+                      << (float)latency_stats[(uint64_t)(0.999 * query_num)] << std::setw(20)
+                      << time_to_cluster / query_num << std::setw(20) << time_to_union / query_num << std::setw(20)
+                      << time_to_intersect / query_num;
         }
         for (double recall : recalls)
         {
