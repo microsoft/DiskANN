@@ -226,7 +226,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Get converted integer label from string to int map (_label_map)
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
 
-    DISKANN_DLLEXPORT bool is_label_valid(const std::string& raw_label);
+    DISKANN_DLLEXPORT bool is_label_valid(const std::string& raw_label) override;
 
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.

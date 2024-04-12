@@ -125,5 +125,6 @@ class AbstractIndex
                                      const std::string filter_label = "") = 0;
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) = 0;
     virtual void _set_universal_label(const LabelType universal_label) = 0;
+    virtual bool is_label_valid(const std::string& raw_label) = 0;
 };
 } // namespace diskann
