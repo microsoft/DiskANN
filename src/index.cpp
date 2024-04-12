@@ -1825,11 +1825,12 @@ std::unordered_map<std::string, LabelT> Index<T, TagT, LabelT>::load_label_map(c
 }
 
 template <typename T, typename TagT, typename LabelT>
-LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
+LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label) const
 {
-    if (_label_map.find(raw_label) != _label_map.end())
+    auto iter = _label_map.find(raw_label);
+    if (iter != _label_map.end())
     {
-        return _label_map[raw_label];
+        return iter->second;
     }
     else if (_use_universal_label)
     {
@@ -1842,7 +1843,24 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
 }
 
 template <typename T, typename TagT, typename LabelT>
-bool Index<T, TagT, LabelT>::is_label_valid(const std::string& raw_label)
+bool Index<T, TagT, LabelT>::is_universal_label(const std::string& raw_label) const
+{
+    if (!_use_universal_label)
+    {
+        return false;
+    }
+
+    auto internal_label = get_converted_label(raw_label);
+    if (internal_label == std::numeric_limits<LabelT>::max())
+    {
+        return false;
+    }
+
+    return internal_label == _universal_label;
+}
+
+template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::is_label_valid(const std::string& raw_label) const
 {
     if (_label_map.find(raw_label) != _label_map.end())
     {
