@@ -1843,20 +1843,9 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
 }
 
 template <typename T, typename TagT, typename LabelT>
-bool Index<T, TagT, LabelT>::is_universal_label(const std::string& raw_label) const
+bool Index<T, TagT, LabelT>::is_set_universal_label() const
 {
-    if (!_use_universal_label)
-    {
-        return false;
-    }
-
-    auto internal_label = get_converted_label(raw_label);
-    if (internal_label == std::numeric_limits<LabelT>::max())
-    {
-        return false;
-    }
-
-    return internal_label == _universal_label;
+    return _use_universal_label;
 }
 
 template <typename T, typename TagT, typename LabelT>

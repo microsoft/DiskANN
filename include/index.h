@@ -228,7 +228,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT bool is_label_valid(const std::string& raw_label) const override;
 
-    DISKANN_DLLEXPORT bool is_universal_label(const std::string& raw_label) const override;
+    DISKANN_DLLEXPORT bool is_set_universal_label() const override;
 
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.
