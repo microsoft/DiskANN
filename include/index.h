@@ -36,6 +36,8 @@
 inline double time_to_union = 0.;
 inline double time_to_intersect = 0.;
 inline double time_to_cluster = 0.;
+inline double time_to_compare = 0.;
+inline double time_to_get_valid = 0.;
 
 namespace diskann
 {

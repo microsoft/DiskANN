@@ -120,8 +120,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
                   << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency" << std::setw(20)
-                  << "avg cluster time" << std::setw(20) << "avg union time" << std::setw(20) << "avg int. time";
-        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20;
+                  << "get valid pts" << std::setw(20) << "closest clusters" << std::setw(20) << "union" << std::setw(20) << "intersect" << std::setw(20) << "dist. cmp" << std::endl;
+        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20;
     }
     uint32_t recalls_to_print = 0;
     const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -157,6 +157,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
+        time_to_get_valid = 0;
+        time_to_cluster = 0;
+        time_to_union = 0;
+        time_to_intersect = 0;
+        time_to_compare  = 0;
         uint32_t L = Lvec[test_id];
         if (L < recall_at)
         {
@@ -167,7 +172,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         query_result_ids[test_id].resize(recall_at * query_num);
         query_result_dists[test_id].resize(recall_at * query_num);
         std::vector<T *> res = std::vector<T *>();
-
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
@@ -234,7 +238,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             if (L == L_for_print)
             {
                 std::ofstream query_stats_file;
-                query_stats_file.open(index_path + "_query_stats.txt");
+                query_stats_file.open(result_path_prefix + "_query_stats.txt");
                 query_stats_file << "cmps\tnum correct\t" << std::endl;
                 for (size_t i = 0; i < query_num; i++)
                 {
@@ -291,8 +295,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15)
                       << (float)latency_stats[(uint64_t)(0.999 * query_num)] << std::setw(20)
-                      << time_to_cluster / query_num << std::setw(20) << time_to_union / query_num << std::setw(20)
-                      << time_to_intersect / query_num;
+                      << time_to_get_valid  << std::setw(20) << time_to_cluster << std::setw(20)
+                      << time_to_union << std::setw(20)
+                      << time_to_intersect << std::setw(20)
+                      << time_to_compare ;
         }
         for (double recall : recalls)
         {

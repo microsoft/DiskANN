@@ -103,11 +103,18 @@ int main(int argc, char **argv)
     for (auto &x : v2)
         roaring_bitmap_add(r2, x);
 
+    diskann::RoaringIdList dr1, dr2;
+    for (auto &x : v1)
+        dr1.add(x);
+    for (auto &x : v2)
+        dr2.add(x);
+
+
     auto s = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < 100; i++) {
 //        auto intersect = roaring_bitmap_create();
         auto intersect = roaring_bitmap_and(r1, r2);
-        if (i == 99) std::cout<<roaring_bitmap_get_cardinality(intersect) << " is the size of intersection computed using roaring." << std::endl;
+//        if (i == 99) std::cout<<roaring_bitmap_get_cardinality(intersect) << " is the size of intersection computed using roaring." << std::endl;
         roaring_bitmap_free(intersect);
     }
 
@@ -115,11 +122,6 @@ int main(int argc, char **argv)
     std::cout << "set intersection computation using roaring bitmap time:" << diff.count()/100 << std::endl;
 
 
-    diskann::RoaringIdList dr1, dr2;
-    for (auto &x : v1)
-        dr1.add(x);
-    for (auto &x : v2)
-        dr2.add(x);
 
     s = std::chrono::high_resolution_clock::now();
     dr1.intersect_list(dr2);
@@ -131,20 +133,21 @@ int main(int argc, char **argv)
 
     s = std::chrono::high_resolution_clock::now();
     uint64_t count = 0;
-    for (int i = 0; i < 100; i++) {
+//    for (int i = 0; i < 100; i++) {
     for (auto &y : v2) {
         bool flag = roaring_bitmap_contains(r1, y);
         if (flag)
             count++;
     }
-    }
+ //   }
     diff = std::chrono::high_resolution_clock::now() - s;
-    std::cout << "membership lookup time using roaring:" << diff.count()/(v2.size()*100) << std::endl;
+    std::cout<<"found " << count << " matches of set 2 in set 1" << std::endl;
+    std::cout << "membership lookup time using roaring:" << diff.count()/(v2.size()) << std::endl;
 
 
     s = std::chrono::high_resolution_clock::now();
-    diff = std::chrono::high_resolution_clock::now() - s;
-    for (int i = 0; i < 100; i++) {
+ //   diff = std::chrono::high_resolution_clock::now() - s;
+//    for (int i = 0; i < 100; i++) {
         auto intersect = roaring_bitmap_create();
         for (auto &y : v2) {
             bool flag = roaring_bitmap_contains(r1, y);
@@ -152,9 +155,9 @@ int main(int argc, char **argv)
                 roaring_bitmap_add(intersect, y);
         }
         roaring_bitmap_free(intersect);        
-    }
+//    }
     diff = std::chrono::high_resolution_clock::now() - s;
-    std::cout << "set intersection computation using roaring lookups time:" << diff.count()/(100) << std::endl;
+    std::cout << "set intersection computation using roaring lookups time:" << diff.count() << std::endl;
 
 
     tsl::robin_set<uint32_t> a;
@@ -163,43 +166,43 @@ int main(int argc, char **argv)
     
     s = std::chrono::high_resolution_clock::now();
     count=0;    
-    for (int i = 0; i < 100; i++) {
+//    for (int i = 0; i < 100; i++) {
         for (auto &y : v2) {
             bool flag = a.find(y) != a.end() ? true : false;
             if (flag)
                 count++;
             }
-    }
+//    }
     diff = std::chrono::high_resolution_clock::now() - s;
-    std::cout<<"intersection count per robin_set: " << count/100 << std::endl;
-    std::cout << "tsl robin membership check time:" << diff.count()/(v2.size()*100) << std::endl;
+    std::cout<<"intersection count per robin_set: " << count << std::endl;
+    std::cout << "tsl robin membership check time:" << diff.count()/(v2.size()) << std::endl;
 
 
     s = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < 100; i++) {
+//    for (int i = 0; i < 100; i++) {
         tsl::robin_set<uint32_t> robin_intersect;    
         for (auto &y : v2) {
             bool flag = a.find(y) != a.end() ? true : false;
             if (flag)
                 robin_intersect.insert(y);
             }
-            if (i == 99)
+//            if (i == 99)
                 std::cout<<robin_intersect.size() << std::endl;
-    }
+//    }
     diff = std::chrono::high_resolution_clock::now() - s;
-    std::cout<< "intersection computation time via iterative tsl lookups:" << diff.count()/100 << std::endl;
+    std::cout<< "intersection computation time via iterative tsl lookups:" << diff.count() << std::endl;
 
 
     s = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < 100; i++)
+//    for (int i = 0; i < 100; i++)
     {
         std::vector<uint32_t> common_filters;
         std::set_intersection(v1.begin(), v1.end(), v2.begin(), v2.end(), std::back_inserter(common_filters));
-        if (i==99)
+  //      if (i==99)
         std::cout<< common_filters.size() << std::endl;
     }
     diff = std::chrono::high_resolution_clock::now() - s;
-    std::cout << "intersection computation using std set intersection time:" << diff.count()/100 << std::endl;
+    std::cout << "intersection computation using std set intersection time:" << diff.count() << std::endl;
 
     roaring_bitmap_free(r1);
     roaring_bitmap_free(r2);

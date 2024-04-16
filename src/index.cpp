@@ -849,24 +849,33 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
 
     auto s = std::chrono::high_resolution_clock::now();
     _ivf_clusters->get_closest_clusters(aligned_query, Lsize, closest_clusters);
-    _ivf_clusters->get_cluster_members(closest_clusters[0], tmp);
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     time_to_cluster += diff.count();
-    //    std::cout<<"#"<<tmp.size()<<"#";
+
     s = std::chrono::high_resolution_clock::now();
+    _ivf_clusters->get_cluster_members(closest_clusters[0], tmp);
+    //    std::cout<<"#"<<tmp.size()<<"#";
     cluster_results.union_list(tmp);
+    cluster_results.list &= init_ids;
+
     for (size_t i = 1; i < closest_clusters.size(); i++)
     {
         _ivf_clusters->get_cluster_members(closest_clusters[i], tmp);
         //        std::cout<<"#"<<tmp.size()<<"#";
         //        std::cout << "=" <<cluster_results.size() << "=";
+        tmp.list &= init_ids;
         cluster_results.union_list(tmp);
     }
     diff = std::chrono::high_resolution_clock::now() - s;
     time_to_union += diff.count();
     //    std::cout<<cluster_results.size() << std::endl;
 
+/*
+    s = std::chrono::high_resolution_clock::now();
     init_ids &= cluster_results.list;
+    diff = std::chrono::high_resolution_clock::now() - s;
+    time_to_intersect += diff.count();
+*/
 
     //    roaring_bitmap_and_inplace(&(init_ids.roaring), (roaring_bitmap_t *)cluster_results.get_bitmap());
     //    roaring_bitmap_t *real_results = (roaring_bitmap_t *)cluster_results.get_bitmap();
@@ -874,7 +883,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
     uint32_t cmps = 0;
     uint32_t hops = 0;
     s = std::chrono::high_resolution_clock::now();
-    for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
+    for (roaring::Roaring::const_iterator i = cluster_results.list.begin(); i != cluster_results.list.end(); i++)
     {
         float distance = _data_store->get_distance(aligned_query, *i);
         Neighbor nn = Neighbor(*i, distance);
@@ -882,7 +891,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
         cmps++;
     }
     diff = std::chrono::high_resolution_clock::now() - s;
-    time_to_intersect += diff.count();
+    time_to_compare += diff.count();
 
     return std::make_pair(hops, cmps);
 }
@@ -898,6 +907,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 
     uint32_t cmps = 0;
     uint32_t hops = 0;
+    auto s = std::chrono::high_resolution_clock::now();
     for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
     {
         float distance = _data_store->get_distance(aligned_query, *i);
@@ -905,7 +915,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
         best_L_nodes.insert(nn);
         cmps++;
     }
-
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    time_to_compare += diff.count();
     return std::make_pair(hops, cmps);
 }
 
@@ -2311,20 +2322,27 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     {
     case 0: {
         // last_intersection has the common elements across all filters in sorted_filters
+    auto s = std::chrono::high_resolution_clock::now();
         roaring::Roaring last_intersection = _labels_to_points[sorted_filters[0].first];
         for (size_t i = 1; i < sorted_filters.size(); i++)
         {
             last_intersection &= _labels_to_points[sorted_filters[i].first];
         }
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    time_to_get_valid += diff.count();
+
         retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
     }
     break;
     case 1: {
+    auto s = std::chrono::high_resolution_clock::now();
         roaring::Roaring last_intersection = _labels_to_points[sorted_filters[0].first];
         for (size_t i = 1; i < sorted_filters.size(); i++)
         {
             last_intersection &= _labels_to_points[sorted_filters[i].first];
         }
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    time_to_get_valid += diff.count();
         retval = closest_cluster_filters(scratch->aligned_query(), L, last_intersection, scratch);
     }
     break;

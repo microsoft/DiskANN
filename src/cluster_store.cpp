@@ -32,12 +32,17 @@ template <typename data_t> uint32_t InMemClusterStore<data_t>::load(const std::s
     diskann::load_bin<float>(centers_file, this->_cluster_centroids,
                                    this->_num_clusters, this->_dim);
 
+
+    std::vector<uint32_t> non_empty_clusters;
+
     std::ifstream in(posting_file, std::ios::binary | std::ios::in);
     uint64_t          total_count = 0;
 
     _posting_lists.resize(this->_num_clusters);
     for (unsigned i = 0; i < this->_num_clusters; i++) {
       unsigned cur_count;
+      if (cur_count != 0)
+        non_empty_clusters.emplace_back(i);
       in.read((char *) &cur_count, sizeof(unsigned));
       uint32_t* vals = new uint32_t[cur_count];
       in.read((char *) vals, (uint64_t)cur_count * sizeof(unsigned));
@@ -49,8 +54,18 @@ template <typename data_t> uint32_t InMemClusterStore<data_t>::load(const std::s
     }
     in.close();
 
+    for (uint32_t i = 0; i < non_empty_clusters.size(); i++) {
+        if (i != non_empty_clusters[i]) {
+        std::memcpy(this->_cluster_centroids + i* this->_dim,  this->_cluster_centroids + ((uint64_t)non_empty_clusters[i])* this->_dim, this->_dim*sizeof(float));
+        _posting_lists[i] = _posting_lists[non_empty_clusters[i]];
+        }
+    }
+
+    this->_num_clusters = non_empty_clusters.size();
+
     std::cout << "Read a total of " << total_count
                 << " points from inverted index file." << std::endl;
+    std::cout <<" Resized to " << this->_num_clusters << " clusters after removing empty clusters." << std::endl;
     return this->_num_clusters;
 }
 
