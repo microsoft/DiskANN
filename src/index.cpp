@@ -115,6 +115,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     {
         _filter_penalty_threshold = index_config.index_search_params->filter_penalty_threshold;
         _bruteforce_threshold = index_config.index_search_params->bruteforce_threshold;
+        _clustering_threshold = index_config.index_search_params->clustering_threshold;
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
     }
@@ -814,8 +815,7 @@ uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool s
     //        return true;
     uint32_t overlap = 0;
 
-
-//    if (!search_invocation) {
+    //    if (!search_invocation) {
     auto &curr_node_labels = _location_to_labels[point_id];
     for (auto &lbl : incoming_labels)
     {
@@ -824,16 +824,16 @@ uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool s
             overlap++;
         }
     }
-/*    } else {
-    auto &curr_node_labels = _location_to_labels_bitmap[point_id];
-    for (auto &lbl : incoming_labels)
-    {
-        if (curr_node_labels.contains(lbl))
+    /*    } else {
+        auto &curr_node_labels = _location_to_labels_bitmap[point_id];
+        for (auto &lbl : incoming_labels)
         {
-            overlap++;
+            if (curr_node_labels.contains(lbl))
+            {
+                overlap++;
+            }
         }
-    }
-    } */
+        } */
 
     // std::string tmp = "here, penalty=" + std::to_string(_filter_penalty_threshold) + ", overlap=" +
     // std::to_string(overlap);
@@ -888,19 +888,19 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
 #endif
     //    std::cout<<cluster_results.size() << std::endl;
 
-/*
-    s = std::chrono::high_resolution_clock::now();
-    init_ids &= cluster_results.list;
-    diff = std::chrono::high_resolution_clock::now() - s;
-    time_to_intersect += diff.count();
-*/
+    /*
+        s = std::chrono::high_resolution_clock::now();
+        init_ids &= cluster_results.list;
+        diff = std::chrono::high_resolution_clock::now() - s;
+        time_to_intersect += diff.count();
+    */
 
     //    roaring_bitmap_and_inplace(&(init_ids.roaring), (roaring_bitmap_t *)cluster_results.get_bitmap());
     //    roaring_bitmap_t *real_results = (roaring_bitmap_t *)cluster_results.get_bitmap();
 
     uint32_t cmps = 0;
     uint32_t hops = 0;
-#ifdef INSTRUMENT    
+#ifdef INSTRUMENT
     s = std::chrono::high_resolution_clock::now();
 #endif
     for (roaring::Roaring::const_iterator i = cluster_results.list.begin(); i != cluster_results.list.end(); i++)
@@ -910,7 +910,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
         best_L_nodes.insert(nn);
         cmps++;
     }
-#ifdef INSTRUMENT    
+#ifdef INSTRUMENT
     diff = std::chrono::high_resolution_clock::now() - s;
     time_to_compare += diff.count();
 #endif
@@ -944,7 +944,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 #endif
     return std::make_pair(hops, cmps);
 }
-
 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
@@ -2124,7 +2123,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
         float *pivot_data;
 
-        uint32_t num_clusters = sqrt(num_points_to_load);
+        uint32_t num_clusters = 1000;
         diskann::cout << "num_train, train_dim, num_clusters=" << num_train << " " << train_dim << " " << num_clusters
                       << std::endl;
 
@@ -2344,47 +2343,76 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     _data_store->preprocess_query(query, scratch);
     std::pair<uint32_t, uint32_t> retval;
-    switch (_bruteforce_threshold)
+    if (_bruteforce_threshold < 4 && _bruteforce_threshold > 0)
     {
-    case 0: {
-        // last_intersection has the common elements across all filters in sorted_filters
-#ifdef INSTRUMENT
-    auto s = std::chrono::high_resolution_clock::now();
-#endif
-        auto &last_intersection = scratch->get_valid_bitmap(); 
-        last_intersection = _labels_to_points[sorted_filters[0].first];
-        for (size_t i = 1; i < sorted_filters.size(); i++)
+        switch (_bruteforce_threshold)
         {
-            last_intersection &= _labels_to_points[sorted_filters[i].first];
-        }
+        case 1: {
+            // last_intersection has the common elements across all filters in sorted_filters
 #ifdef INSTRUMENT
-    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-    time_to_get_valid += diff.count();
+            auto s = std::chrono::high_resolution_clock::now();
+#endif
+            auto &last_intersection = scratch->get_valid_bitmap();
+            last_intersection = _labels_to_points[sorted_filters[0].first];
+            for (size_t i = 1; i < sorted_filters.size(); i++)
+            {
+                last_intersection &= _labels_to_points[sorted_filters[i].first];
+            }
+#ifdef INSTRUMENT
+            std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+            time_to_get_valid += diff.count();
 #endif
 
-        retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
-    }
-    break;
-    case 1: {
-#ifdef INSTRUMENT        
-    auto s = std::chrono::high_resolution_clock::now();
-#endif
-        auto &last_intersection = scratch->get_valid_bitmap(); 
-        last_intersection = _labels_to_points[sorted_filters[0].first];
-        for (size_t i = 1; i < sorted_filters.size(); i++)
-        {
-            last_intersection &= _labels_to_points[sorted_filters[i].first];
+            retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
         }
-#ifdef INSTRUMENT
-    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-    time_to_get_valid += diff.count();
-#endif
-        retval = closest_cluster_filters(scratch->aligned_query(), L, last_intersection, scratch);
-    }
-    break;
-    case 2:
-        retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
         break;
+        case 2: {
+#ifdef INSTRUMENT
+            auto s = std::chrono::high_resolution_clock::now();
+#endif
+            auto &last_intersection = scratch->get_valid_bitmap();
+            last_intersection = _labels_to_points[sorted_filters[0].first];
+            for (size_t i = 1; i < sorted_filters.size(); i++)
+            {
+                last_intersection &= _labels_to_points[sorted_filters[i].first];
+            }
+#ifdef INSTRUMENT
+            std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+            time_to_get_valid += diff.count();
+#endif
+            retval = closest_cluster_filters(scratch->aligned_query(), L, last_intersection, scratch);
+        }
+        break;
+        case 3:
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            break;
+        }
+    }
+    else
+    {
+        if (sorted_filters[0].second < _bruteforce_threshold)
+        {
+            auto &last_intersection = scratch->get_valid_bitmap();
+            last_intersection = _labels_to_points[sorted_filters[0].first];
+            for (size_t i = 1; i < sorted_filters.size(); i++)
+            {
+                last_intersection &= _labels_to_points[sorted_filters[i].first];
+            }
+        }
+        else if (sorted_filters[0].second < _clustering_threshold && sorted_filters[0].second >= _bruteforce_threshold)
+        {
+            auto &last_intersection = scratch->get_valid_bitmap();
+            last_intersection = _labels_to_points[sorted_filters[0].first];
+            for (size_t i = 1; i < sorted_filters.size(); i++)
+            {
+                last_intersection &= _labels_to_points[sorted_filters[i].first];
+            }
+            retval = closest_cluster_filters(scratch->aligned_query(), L, last_intersection, scratch);
+        }
+        else
+        {
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+        }
     }
 
     auto best_L_nodes = scratch->best_l_nodes();
