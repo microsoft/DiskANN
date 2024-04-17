@@ -10,6 +10,7 @@
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
 #include "tsl/sparse_map.h"
+#include "roaring.hh"
 
 #include "aligned_file_reader.h"
 #include "abstract_scratch.h"
@@ -94,6 +95,12 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
         return _occlude_list_output;
     }
 
+    inline roaring::Roaring &get_valid_bitmap()
+    {
+        return _last_intersection;
+    }
+
+
   private:
     uint32_t _L;
     uint32_t _R;
@@ -132,6 +139,8 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     tsl::robin_set<uint32_t> _expanded_nodes_set;
     std::vector<Neighbor> _expanded_nghrs_vec;
     std::vector<uint32_t> _occlude_list_output;
+
+    roaring::Roaring _last_intersection;
 };
 
 //

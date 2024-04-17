@@ -812,9 +812,11 @@ uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool s
     // not implemented for build-time use case, since we need to understand universal labels for multiple filters
     //    if (!search_invocation)
     //        return true;
-
-    auto &curr_node_labels = _location_to_labels[point_id];
     uint32_t overlap = 0;
+
+
+//    if (!search_invocation) {
+    auto &curr_node_labels = _location_to_labels[point_id];
     for (auto &lbl : incoming_labels)
     {
         if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
@@ -822,6 +824,16 @@ uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool s
             overlap++;
         }
     }
+/*    } else {
+    auto &curr_node_labels = _location_to_labels_bitmap[point_id];
+    for (auto &lbl : incoming_labels)
+    {
+        if (curr_node_labels.contains(lbl))
+        {
+            overlap++;
+        }
+    }
+    } */
 
     // std::string tmp = "here, penalty=" + std::to_string(_filter_penalty_threshold) + ", overlap=" +
     // std::to_string(overlap);
@@ -846,13 +858,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
     std::vector<uint32_t> closest_clusters;
     RoaringIdList cluster_results;
     RoaringIdList tmp;
-
+#ifdef INSTRUMENT
     auto s = std::chrono::high_resolution_clock::now();
+#endif
     _ivf_clusters->get_closest_clusters(aligned_query, Lsize, closest_clusters);
+#ifdef INSTRUMENT
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     time_to_cluster += diff.count();
-
+#endif
+#ifdef INSTRUMENT
     s = std::chrono::high_resolution_clock::now();
+#endif
     _ivf_clusters->get_cluster_members(closest_clusters[0], tmp);
     //    std::cout<<"#"<<tmp.size()<<"#";
     cluster_results.union_list(tmp);
@@ -866,8 +882,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
         tmp.list &= init_ids;
         cluster_results.union_list(tmp);
     }
+#ifdef INSTRUMENT
     diff = std::chrono::high_resolution_clock::now() - s;
     time_to_union += diff.count();
+#endif
     //    std::cout<<cluster_results.size() << std::endl;
 
 /*
@@ -882,7 +900,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
 
     uint32_t cmps = 0;
     uint32_t hops = 0;
+#ifdef INSTRUMENT    
     s = std::chrono::high_resolution_clock::now();
+#endif
     for (roaring::Roaring::const_iterator i = cluster_results.list.begin(); i != cluster_results.list.end(); i++)
     {
         float distance = _data_store->get_distance(aligned_query, *i);
@@ -890,9 +910,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
         best_L_nodes.insert(nn);
         cmps++;
     }
+#ifdef INSTRUMENT    
     diff = std::chrono::high_resolution_clock::now() - s;
     time_to_compare += diff.count();
-
+#endif
     return std::make_pair(hops, cmps);
 }
 
@@ -907,7 +928,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 
     uint32_t cmps = 0;
     uint32_t hops = 0;
+#ifdef INSTRUMENT
     auto s = std::chrono::high_resolution_clock::now();
+#endif
     for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
     {
         float distance = _data_store->get_distance(aligned_query, *i);
@@ -915,8 +938,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
         best_L_nodes.insert(nn);
         cmps++;
     }
+#ifdef INSTRUMENT
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     time_to_compare += diff.count();
+#endif
     return std::make_pair(hops, cmps);
 }
 
@@ -2322,27 +2347,37 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     {
     case 0: {
         // last_intersection has the common elements across all filters in sorted_filters
+#ifdef INSTRUMENT
     auto s = std::chrono::high_resolution_clock::now();
-        roaring::Roaring last_intersection = _labels_to_points[sorted_filters[0].first];
+#endif
+        auto &last_intersection = scratch->get_valid_bitmap(); 
+        last_intersection = _labels_to_points[sorted_filters[0].first];
         for (size_t i = 1; i < sorted_filters.size(); i++)
         {
             last_intersection &= _labels_to_points[sorted_filters[i].first];
         }
+#ifdef INSTRUMENT
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     time_to_get_valid += diff.count();
+#endif
 
         retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
     }
     break;
     case 1: {
+#ifdef INSTRUMENT        
     auto s = std::chrono::high_resolution_clock::now();
-        roaring::Roaring last_intersection = _labels_to_points[sorted_filters[0].first];
+#endif
+        auto &last_intersection = scratch->get_valid_bitmap(); 
+        last_intersection = _labels_to_points[sorted_filters[0].first];
         for (size_t i = 1; i < sorted_filters.size(); i++)
         {
             last_intersection &= _labels_to_points[sorted_filters[i].first];
         }
+#ifdef INSTRUMENT
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     time_to_get_valid += diff.count();
+#endif
         retval = closest_cluster_filters(scratch->aligned_query(), L, last_intersection, scratch);
     }
     break;

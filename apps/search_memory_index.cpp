@@ -45,6 +45,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     size_t query_num, query_dim, query_aligned_dim, gt_num, gt_dim;
     diskann::load_aligned_bin<T>(query_file, query, query_num, query_dim, query_aligned_dim);
 
+    std::vector<double> filter_match_time(query_num);
+    std::vector<double> dist_cmp_time(query_num);
+
+
     bool calc_recall_flag = false;
     if (truthset_file != std::string("null") && file_exists(truthset_file))
     {
@@ -177,6 +181,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 #pragma omp parallel for schedule(dynamic, 1)
         for (int64_t i = 0; i < (int64_t)query_num; i++)
         {
+//            time_to_get_valid = 0;
+//            time_to_compare = 0;
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search && !tags)
             {
@@ -186,6 +192,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                                                          query_result_ids[test_id].data() + i * recall_at,
                                                          query_result_dists[test_id].data() + i * recall_at);
                 cmp_stats[i] = retval.second;
+//                filter_match_time[i] = time_to_get_valid*1000000;
+//                dist_cmp_time[i] = time_to_compare*1000000;
             }
             else if (metric == diskann::FAST_L2)
             {
@@ -239,7 +247,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             {
                 std::ofstream query_stats_file;
                 query_stats_file.open(result_path_prefix + "_query_stats.txt");
-                query_stats_file << "cmps\tnum correct\t" << std::endl;
+                query_stats_file << "cmps\tnum correct\tfilt time\tcmp time" << std::endl;
                 for (size_t i = 0; i < query_num; i++)
                 {
                     std::set<uint32_t> gt, res;
@@ -266,7 +274,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                             cur_recall++;
                         }
                     }
-                    query_stats_file << cmp_stats[i] << "\t" << cur_recall << std::endl;
+                    query_stats_file << cmp_stats[i] << "\t" << cur_recall << "\t" << filter_match_time[i] << "\t" << dist_cmp_time[i] << std::endl;
                 }
                 query_stats_file.close();
             }
@@ -295,10 +303,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15)
                       << (float)latency_stats[(uint64_t)(0.999 * query_num)] << std::setw(20)
-                      << time_to_get_valid  << std::setw(20) << time_to_cluster << std::setw(20)
-                      << time_to_union << std::setw(20)
-                      << time_to_intersect << std::setw(20)
-                      << time_to_compare ;
+                      << time_to_get_valid*1000000/query_num  << std::setw(20) << time_to_cluster*100000/query_num << std::setw(20)
+                      << time_to_union*1000000/query_num << std::setw(20)
+                      << time_to_intersect*1000000/query_num << std::setw(20)
+                      << time_to_compare*1000000/query_num ;
         }
         for (double recall : recalls)
         {
