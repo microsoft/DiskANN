@@ -1795,7 +1795,7 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
                                      filter_params.universal_label, unv_label_as_num);
         if (filter_params.universal_label != "")
         {
-            LabelT unv_label_as_num = 0;
+//            LabelT unv_label_as_num = 0;
             this->set_universal_label(unv_label_as_num);
         }
         this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load);
