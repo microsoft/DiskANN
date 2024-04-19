@@ -1014,7 +1014,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
         }
 
-        assert(dist_scratch.capacity() >= id_scratch.size());
+        dist_scratch.resize(id_scratch.size());
+        //assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
         cmps += (uint32_t)id_scratch.size();
 
