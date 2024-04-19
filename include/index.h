@@ -38,6 +38,7 @@ inline double time_to_intersect = 0.;
 inline double time_to_cluster = 0.;
 inline double time_to_compare = 0.;
 inline double time_to_get_valid = 0.;
+inline double time_to_detect_penalty = 0.;
 
 namespace diskann
 {
@@ -100,7 +101,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT uint32_t detect_common_filters(uint32_t point_id, bool search_invocation,
                                                      const std::vector<LabelT> &incoming_labels);
 
-    DISKANN_DLLEXPORT uint32_t detect_filter_penalty(uint32_t point_id, bool search_invocation,
+    DISKANN_DLLEXPORT inline uint32_t detect_filter_penalty(uint32_t point_id, bool search_invocation,
                                                      const std::vector<LabelT> &incoming_labels);
 
     // Batch build from a file. Optionally pass tags vector.
@@ -400,6 +401,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Location to label is only updated during insert_point(), all other reads are protected by
     // default as a location can only be released at end of consolidate deletes
     std::vector<std::vector<LabelT>> _location_to_labels;
+    std::vector<tsl::robin_set<LabelT>> _location_to_labels_robin;
     std::vector<roaring::Roaring> _location_to_labels_bitmap;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;

@@ -806,21 +806,26 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
 // taking into account universal label
 // TODO: modify for handling universal label
 template <typename T, typename TagT, typename LabelT>
-uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
+inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
                                                        const std::vector<LabelT> &incoming_labels)
 {
+
+    auto s = std::chrono::high_resolution_clock::now();
 
     // not implemented for build-time use case, since we need to understand universal labels for multiple filters
     //    if (!search_invocation)
     //        return true;
     uint32_t overlap = 0;
 
-    //    if (!search_invocation) {
-    auto &curr_node_labels = _location_to_labels[point_id];
+
+//    if (!search_invocation) {
+//    auto &curr_node_labels = _location_to_labels[point_id];
     for (auto &lbl : incoming_labels)
     {
-        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
-        {
+//        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
+//        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
+        if (_labels_to_points[lbl].contains(point_id))
+            {
             overlap++;
         }
     }
@@ -843,6 +848,9 @@ uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool s
     //        return true;
 
     //    return false;
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    time_to_detect_penalty += diff.count();
+
     return incoming_labels.size() - overlap;
 }
 
@@ -931,10 +939,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 #ifdef INSTRUMENT
     auto s = std::chrono::high_resolution_clock::now();
 #endif
-    for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
-    {
-        float distance = _data_store->get_distance(aligned_query, *i);
-        Neighbor nn = Neighbor(*i, distance);
+//    for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
+    for (uint32_t value : init_ids) {
+    //        float distance = _data_store->get_distance(aligned_query, *i);
+        float distance = _data_store->get_distance(aligned_query, value);
+//        if ((i+1) != init_ids.end())
+//        _data_store->prefetch_vector(*(i+1));
+  //      Neighbor nn = Neighbor(*i, distance);
+        Neighbor nn = Neighbor(value, distance);
         best_L_nodes.insert(nn);
         cmps++;
     }
@@ -1078,6 +1090,19 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 assert(id < _max_points + _num_frozen_pts);
 
+                if (!is_not_visited(id))
+                    continue;
+
+            if (fast_iterate)
+            {
+                inserted_into_pool_bs[id] = 1;
+            }
+            else
+            {
+                inserted_into_pool_rs.insert(id);
+            }
+
+
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
@@ -1094,10 +1119,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                 }
 
-                if (is_not_visited(id))
-                {
-                    id_scratch.push_back(id);
-                }
+                id_scratch.push_back(id);
             }
         }
         else
@@ -1108,6 +1130,19 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             for (auto id : nbrs)
             {
                 assert(id < _max_points + _num_frozen_pts);
+
+                if (!is_not_visited(id))
+                    continue;
+
+            if (fast_iterate)
+            {
+                inserted_into_pool_bs[id] = 1;
+            }
+            else
+            {
+                inserted_into_pool_rs.insert(id);
+            }
+
 
                 if (use_filter)
                 {
@@ -1124,25 +1159,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                 }
 
-                if (is_not_visited(id))
-                {
-                    id_scratch.push_back(id);
-                }
+                id_scratch.push_back(id);
             }
         }
 
         // Mark nodes visited
-        for (auto id : id_scratch)
+/*        for (auto id : id_scratch)
         {
-            if (fast_iterate)
-            {
-                inserted_into_pool_bs[id] = 1;
-            }
-            else
-            {
-                inserted_into_pool_rs.insert(id);
-            }
-        }
+        } */
 
         assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
@@ -1998,6 +2022,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
         line_cnt++;
     }
     _location_to_labels.resize(line_cnt, std::vector<LabelT>());
+    _location_to_labels_robin.resize(line_cnt, tsl::robin_set<LabelT>());    
     _location_to_labels_bitmap.resize(line_cnt, roaring::Roaring());
 
     infile.clear();
@@ -2017,6 +2042,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             LabelT token_as_num = (LabelT)std::stoul(token);
             lbls.push_back(token_as_num);
             _location_to_labels_bitmap[line_cnt].add(token_as_num);
+            _location_to_labels_robin[line_cnt].insert(token_as_num);
             _labels_to_points[token_as_num].add(line_cnt);
             _labels.insert(token_as_num);
         }

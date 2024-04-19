@@ -127,8 +127,10 @@ void normalize_data_file(const std::string &inFileName, const std::string &outFi
 }
 
 double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist, uint32_t dim_gs,
-                        uint32_t *our_results, uint32_t dim_or, uint32_t recall_at)
+                        uint32_t *our_results, uint32_t dim_or, uint32_t recall_at, unsigned r2)
 {
+    if (r2 == 0)
+        r2 = recall_at;
     double total_recall = 0;
     std::set<uint32_t> gt, res;
 
@@ -149,7 +151,7 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
 
         gt.insert(gt_vec, gt_vec + tie_breaker);
         res.insert(res_vec,
-                   res_vec + recall_at); // change to recall_at for recall k@k
+                   res_vec + r2); // change to recall_at for recall k@k
                                          // or dim_or for k@dim_or
         uint32_t cur_recall = 0;
         for (auto &v : gt)
