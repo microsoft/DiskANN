@@ -32,6 +32,7 @@
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
+#define INSTRUMENT true
 
 inline double time_to_union = 0.;
 inline double time_to_intersect = 0.;
@@ -39,6 +40,9 @@ inline double time_to_cluster = 0.;
 inline double time_to_compare = 0.;
 inline double time_to_get_valid = 0.;
 inline double time_to_detect_penalty = 0.;
+inline uint32_t num_brutes = 0;
+inline uint32_t num_clusters = 0;
+inline uint32_t num_graphs = 0;
 
 namespace diskann
 {
@@ -102,7 +106,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                      const std::vector<LabelT> &incoming_labels);
 
     DISKANN_DLLEXPORT inline uint32_t detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                     const std::vector<LabelT> &incoming_labels);
+                                                            const std::vector<LabelT> &incoming_labels);
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
@@ -272,7 +276,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::vector<uint32_t> get_init_ids();
 
     std::pair<uint32_t, uint32_t> closest_cluster_filters(const T *query, const uint32_t Lsize,
-                                                          roaring::Roaring &init_ids, InMemQueryScratch<T> *scratch);
+                                                          std::vector<LabelT> filter_vec,
+                                                          InMemQueryScratch<T> *scratch);
 
     std::pair<uint32_t, uint32_t> brute_force_filters(const T *query, const uint32_t Lsize,
                                                       const roaring::Roaring &init_ids, InMemQueryScratch<T> *scratch);
@@ -407,6 +412,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<LabelT, roaring::Roaring> _labels_to_points;
+    std::vector<std::unordered_map<LabelT, roaring::Roaring>> _clusters_to_labels_to_points;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     diskann::InMemClusterStore<T> *_ivf_clusters = nullptr;
 

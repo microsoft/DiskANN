@@ -603,6 +603,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     {
         _ivf_clusters = new InMemClusterStore<T>(0);
         _ivf_clusters->load(filename);
+        _clusters_to_labels_to_points.resize(_ivf_clusters->get_num_clusters());
 
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
@@ -634,6 +635,19 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
                 }
                 _label_to_start_id[label] = medoid;
                 line_cnt++;
+            }
+        }
+
+        for (size_t i = 0; i < _ivf_clusters->get_num_clusters(); i++)
+        {
+            RoaringIdList curr_list;
+            _ivf_clusters->get_cluster_members(i, curr_list);
+            for (roaring::Roaring::const_iterator j = curr_list.list.begin(); j != curr_list.list.end(); j++)
+            {
+                for (auto const &filter : _location_to_labels[*j])
+                {
+                    _clusters_to_labels_to_points[i][filter].add(*j);
+                }
             }
         }
 
@@ -807,7 +821,7 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
 // TODO: modify for handling universal label
 template <typename T, typename TagT, typename LabelT>
 inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                       const std::vector<LabelT> &incoming_labels)
+                                                              const std::vector<LabelT> &incoming_labels)
 {
 
     auto s = std::chrono::high_resolution_clock::now();
@@ -817,15 +831,14 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
     //        return true;
     uint32_t overlap = 0;
 
-
-//    if (!search_invocation) {
-//    auto &curr_node_labels = _location_to_labels[point_id];
+    //    if (!search_invocation) {
+    //    auto &curr_node_labels = _location_to_labels[point_id];
     for (auto &lbl : incoming_labels)
     {
-//        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
-//        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
+        //        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
+        //        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
         if (_labels_to_points[lbl].contains(point_id))
-            {
+        {
             overlap++;
         }
     }
@@ -856,7 +869,7 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(const T *query, const uint32_t Lsize,
-                                                                              roaring::Roaring &init_ids,
+                                                                              std::vector<LabelT> filter_vec,
                                                                               InMemQueryScratch<T> *scratch)
 {
     T *aligned_query = scratch->aligned_query();
@@ -865,7 +878,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
 
     std::vector<uint32_t> closest_clusters;
     RoaringIdList cluster_results;
-    RoaringIdList tmp;
 #ifdef INSTRUMENT
     auto s = std::chrono::high_resolution_clock::now();
 #endif
@@ -877,19 +889,28 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
 #ifdef INSTRUMENT
     s = std::chrono::high_resolution_clock::now();
 #endif
-    _ivf_clusters->get_cluster_members(closest_clusters[0], tmp);
-    //    std::cout<<"#"<<tmp.size()<<"#";
-    cluster_results.union_list(tmp);
-    cluster_results.list &= init_ids;
-
-    for (size_t i = 1; i < closest_clusters.size(); i++)
+    for (auto const &cluster_id : closest_clusters)
     {
-        _ivf_clusters->get_cluster_members(closest_clusters[i], tmp);
-        //        std::cout<<"#"<<tmp.size()<<"#";
-        //        std::cout << "=" <<cluster_results.size() << "=";
-        tmp.list &= init_ids;
-        cluster_results.union_list(tmp);
+        roaring::Roaring tmp = _clusters_to_labels_to_points[cluster_id][filter_vec[0]];
+        for (size_t k = 1; k < filter_vec.size(); k++)
+        {
+            tmp &= _clusters_to_labels_to_points[cluster_id][filter_vec[k]];
+        }
+        cluster_results.list |= tmp;
     }
+    /* _ivf_clusters->get_cluster_members(closest_clusters[0], tmp); */
+    //    std::cout<<"#"<<tmp.size()<<"#";
+    /* cluster_results.union_list(tmp); */
+    /* cluster_results.list &= init_ids; */
+
+    /* for (size_t i = 1; i < closest_clusters.size(); i++) */
+    /* { */
+    /*     _ivf_clusters->get_cluster_members(closest_clusters[i], tmp); */
+    /*     //        std::cout<<"#"<<tmp.size()<<"#"; */
+    /*     //        std::cout << "=" <<cluster_results.size() << "="; */
+    /*     tmp.list &= init_ids; */
+    /*     cluster_results.union_list(tmp); */
+    /* } */
 #ifdef INSTRUMENT
     diff = std::chrono::high_resolution_clock::now() - s;
     time_to_union += diff.count();
@@ -939,13 +960,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 #ifdef INSTRUMENT
     auto s = std::chrono::high_resolution_clock::now();
 #endif
-//    for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
-    for (uint32_t value : init_ids) {
-    //        float distance = _data_store->get_distance(aligned_query, *i);
+    //    for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
+    for (uint32_t value : init_ids)
+    {
+        //        float distance = _data_store->get_distance(aligned_query, *i);
         float distance = _data_store->get_distance(aligned_query, value);
-//        if ((i+1) != init_ids.end())
-//        _data_store->prefetch_vector(*(i+1));
-  //      Neighbor nn = Neighbor(*i, distance);
+        //        if ((i+1) != init_ids.end())
+        //        _data_store->prefetch_vector(*(i+1));
+        //      Neighbor nn = Neighbor(*i, distance);
         Neighbor nn = Neighbor(value, distance);
         best_L_nodes.insert(nn);
         cmps++;
@@ -1093,15 +1115,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (!is_not_visited(id))
                     continue;
 
-            if (fast_iterate)
-            {
-                inserted_into_pool_bs[id] = 1;
-            }
-            else
-            {
-                inserted_into_pool_rs.insert(id);
-            }
-
+                if (fast_iterate)
+                {
+                    inserted_into_pool_bs[id] = 1;
+                }
+                else
+                {
+                    inserted_into_pool_rs.insert(id);
+                }
 
                 if (use_filter)
                 {
@@ -1134,15 +1155,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (!is_not_visited(id))
                     continue;
 
-            if (fast_iterate)
-            {
-                inserted_into_pool_bs[id] = 1;
-            }
-            else
-            {
-                inserted_into_pool_rs.insert(id);
-            }
-
+                if (fast_iterate)
+                {
+                    inserted_into_pool_bs[id] = 1;
+                }
+                else
+                {
+                    inserted_into_pool_rs.insert(id);
+                }
 
                 if (use_filter)
                 {
@@ -1164,9 +1184,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
 
         // Mark nodes visited
-/*        for (auto id : id_scratch)
-        {
-        } */
+        /*        for (auto id : id_scratch)
+                {
+                } */
 
         assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
@@ -2022,7 +2042,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
         line_cnt++;
     }
     _location_to_labels.resize(line_cnt, std::vector<LabelT>());
-    _location_to_labels_robin.resize(line_cnt, tsl::robin_set<LabelT>());    
+    _location_to_labels_robin.resize(line_cnt, tsl::robin_set<LabelT>());
     _location_to_labels_bitmap.resize(line_cnt, roaring::Roaring());
 
     infile.clear();
@@ -2396,17 +2416,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 #ifdef INSTRUMENT
             auto s = std::chrono::high_resolution_clock::now();
 #endif
-            auto &last_intersection = scratch->get_valid_bitmap();
-            last_intersection = _labels_to_points[sorted_filters[0].first];
-            for (size_t i = 1; i < sorted_filters.size(); i++)
-            {
-                last_intersection &= _labels_to_points[sorted_filters[i].first];
-            }
+            /* auto &last_intersection = scratch->get_valid_bitmap(); */
+            /* last_intersection = _labels_to_points[sorted_filters[0].first]; */
+            /* for (size_t i = 1; i < sorted_filters.size(); i++) */
+            /* { */
+            /*     last_intersection &= _labels_to_points[sorted_filters[i].first]; */
+            /* } */
 #ifdef INSTRUMENT
             std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
             time_to_get_valid += diff.count();
 #endif
-            retval = closest_cluster_filters(scratch->aligned_query(), L, last_intersection, scratch);
+            retval = closest_cluster_filters(scratch->aligned_query(), L, filter_vec, scratch);
         }
         break;
         case 3:
@@ -2418,6 +2438,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     {
         if (sorted_filters[0].second < _bruteforce_threshold)
         {
+            num_brutes++;
             auto &last_intersection = scratch->get_valid_bitmap();
             last_intersection = _labels_to_points[sorted_filters[0].first];
             for (size_t i = 1; i < sorted_filters.size(); i++)
@@ -2427,16 +2448,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         }
         else if (sorted_filters[0].second < _clustering_threshold && sorted_filters[0].second >= _bruteforce_threshold)
         {
-            auto &last_intersection = scratch->get_valid_bitmap();
-            last_intersection = _labels_to_points[sorted_filters[0].first];
-            for (size_t i = 1; i < sorted_filters.size(); i++)
-            {
-                last_intersection &= _labels_to_points[sorted_filters[i].first];
-            }
-            retval = closest_cluster_filters(scratch->aligned_query(), L, last_intersection, scratch);
+            num_clusters++;
+            /* auto &last_intersection = scratch->get_valid_bitmap(); */
+            /* last_intersection = _labels_to_points[sorted_filters[0].first]; */
+            /* for (size_t i = 1; i < sorted_filters.size(); i++) */
+            /* { */
+            /*     last_intersection &= _labels_to_points[sorted_filters[i].first]; */
+            /* } */
+            retval = closest_cluster_filters(scratch->aligned_query(), L, filter_vec, scratch);
         }
         else
         {
+            num_graphs++;
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
         }
     }

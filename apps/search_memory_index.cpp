@@ -339,6 +339,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         test_id++;
     }
 
+    std::cout << "num_graphs " << num_graphs << std::endl;
+    std::cout << "num_clusters " << num_clusters << std::endl;
+    std::cout << "num_brutes " << num_brutes << std::endl;
+
     diskann::aligned_free(query);
     return best_recall >= fail_if_recall_below ? 0 : -1;
 }

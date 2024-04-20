@@ -22,7 +22,7 @@ class AbstractIdList
     {
     }
 
-    AbstractIdList(uint32_t size, uint32_t* vals)
+    AbstractIdList(uint32_t size, uint32_t *vals)
     {
     }
 
@@ -38,22 +38,27 @@ class AbstractIdList
 
     virtual void union_list(const AbstractIdList &other) = 0;
 
+    virtual roaring::Roaring get_list() = 0;
+
   protected:
 };
 
 class RoaringIdList : public AbstractIdList
 {
   public:
-    RoaringIdList() {
+    RoaringIdList()
+    {
     }
 
-  RoaringIdList( const RoaringIdList &d ) : AbstractIdList(d) {
-    list = d.list;
-//    std::cout<<"here" ;
+    RoaringIdList(const RoaringIdList &d) : AbstractIdList(d)
+    {
+        list = d.list;
+        //    std::cout<<"here" ;
     }
 
-    RoaringIdList(uint32_t size, uint32_t* vals) {
-      list = roaring::Roaring(size, vals);
+    RoaringIdList(uint32_t size, uint32_t *vals)
+    {
+        list = roaring::Roaring(size, vals);
     }
 
     ~RoaringIdList()
@@ -69,26 +74,32 @@ class RoaringIdList : public AbstractIdList
     {
         list.add(val);
     }
-    
-    void copy_from(const AbstractIdList &other) {
-        const RoaringIdList & other_r =  dynamic_cast<const RoaringIdList&>(other);
+
+    void copy_from(const AbstractIdList &other)
+    {
+        const RoaringIdList &other_r = dynamic_cast<const RoaringIdList &>(other);
         list = other_r.list;
     }
 
     void intersect_list(const AbstractIdList &other)
     {
-        const RoaringIdList & other_r =  dynamic_cast<const RoaringIdList&>(other);
+        const RoaringIdList &other_r = dynamic_cast<const RoaringIdList &>(other);
         list &= other_r.list;
     }
 
     void union_list(const AbstractIdList &other)
     {
-        const RoaringIdList & other_r =  dynamic_cast<const RoaringIdList&>(other);
+        const RoaringIdList &other_r = dynamic_cast<const RoaringIdList &>(other);
         list |= other_r.list;
     }
 
-// TODO: make this protected again and remove external usage of list
-//  protected:
+    roaring::Roaring get_list()
+    {
+        return list;
+    }
+
+    // TODO: make this protected again and remove external usage of list
+    //  protected:
     roaring::Roaring list;
 };
 
