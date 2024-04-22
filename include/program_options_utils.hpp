@@ -70,6 +70,7 @@ const char *BUIlD_GRAPH_PQ_BYTES = "Number of PQ bytes to build the index; 0 for
 const char *USE_OPQ = "Use Optimized Product Quantization (OPQ).";
 const char *LABEL_FILE = "Input label file in txt format for Filtered Index build. The file should contain comma "
                          "separated filters for each node with each line corresponding to a graph node";
+const char *CODEBOOK_PATH = "Path for Codebook/piviot file to use when building PQ";
 const char *UNIVERSAL_LABEL =
     "Universal label, Use only in conjunction with label file for filtered index build. If a "
     "graph node has all the labels against it, we can assign a special universal filter to the "
