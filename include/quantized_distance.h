@@ -1,8 +1,14 @@
 #pragma once
-#include <memory>
 #include <string>
 #include <vector>
+
 #include "abstract_scratch.h"
+#include "fixed_chunk_pq_table.h"
+
+#ifdef EXEC_ENV_OLS
+#include "content_buf.h"
+#include "memory_mapped_files.h"
+#endif
 
 namespace diskann
 {
@@ -17,22 +23,22 @@ template <typename data_t> class QuantizedDistance
     virtual ~QuantizedDistance() = default;
 
     virtual bool is_opq() const = 0;
-    virtual std::string get_quantized_vectors_filename(const std::string &prefix) const = 0;
-    virtual std::string get_pivot_data_filename(const std::string &prefix) const = 0;
-    virtual std::string get_rotation_matrix_suffix(const std::string &pq_pivots_filename) const = 0;
 
     // Loading the PQ centroid table need not be part of the abstract class.
     // However, we want to indicate that this function will change once we have a
     // file reader hierarchy, so leave it here as-is.
 #ifdef EXEC_ENV_OLS
-    virtual void load_pivot_data(MemoryMappedFiles &files, const std::String &pq_table_file, size_t num_chunks) = 0;
+    virtual void load_pivot_data(MemoryMappedFiles &files, const std::String &pq_table_file) = 0;
 #else
-    virtual void load_pivot_data(const std::string &pq_table_file, size_t num_chunks) = 0;
+    virtual void load_pivot_data(const std::string &pq_table_file) = 0;
 #endif
 
     // Number of chunks in the PQ table. Depends on the compression level used.
     // Has to be < ndim
     virtual uint32_t get_num_chunks() const = 0;
+
+    // Return the pq_table used for quantized distance calculation.
+    virtual const FixedChunkPQTable &get_pq_table() const = 0;
 
     // Preprocess the query by computing chunk distances from the query vector to
     // various centroids. Since we don't want this class to do scratch management,

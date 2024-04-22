@@ -1,5 +1,6 @@
 #include <exception>
 
+#include "pq_common.h"
 #include "pq_data_store.h"
 #include "pq.h"
 #include "pq_scratch.h"
@@ -69,8 +70,8 @@ template <typename data_t> void PQDataStore<data_t>::populate_data(const std::st
 
     double p_val = std::min(1.0, ((double)MAX_PQ_TRAINING_SET_SIZE / (double)file_num_points));
 
-    auto pivots_file = _pq_distance_fn->get_pivot_data_filename(filename);
-    auto compressed_file = _pq_distance_fn->get_quantized_vectors_filename(filename);
+    auto pivots_file = get_pivot_data_filename(filename, _use_opq, static_cast<uint32_t>(_num_chunks));
+    auto compressed_file = get_quantized_vectors_filename(filename, _use_opq, static_cast<uint32_t>(_num_chunks));
 
     generate_quantized_data<data_t>(filename, pivots_file, compressed_file, _distance_metric, p_val, _num_chunks,
                                     _pq_distance_fn->is_opq());
@@ -84,7 +85,7 @@ template <typename data_t> void PQDataStore<data_t>::populate_data(const std::st
                        "EXEC_ENV_OLS is defined.",
                        -1, __FUNCSIG__, __FILE__, __LINE__);
 #else
-    _pq_distance_fn->load_pivot_data(pivots_file.c_str(), _num_chunks);
+    _pq_distance_fn->load_pivot_data(pivots_file);
 #endif
 }
 
@@ -225,14 +226,15 @@ template <typename data_t> location_t PQDataStore<data_t>::load_impl(const std::
     {
         aligned_free(_quantized_data);
     }
-    auto quantized_vectors_file = _pq_distance_fn->get_quantized_vectors_filename(file_prefix);
+    auto quantized_vectors_file =
+        get_quantized_vectors_filename(file_prefix, _use_opq, static_cast<uint32_t>(_num_chunks));
 
     size_t num_points;
     load_aligned_bin(quantized_vectors_file, _quantized_data, num_points, _num_chunks, _num_chunks);
     this->_capacity = (location_t)num_points;
 
-    auto pivots_file = _pq_distance_fn->get_pivot_data_filename(file_prefix);
-    _pq_distance_fn->load_pivot_data(pivots_file, _num_chunks);
+    auto pivots_file = get_pivot_data_filename(file_prefix, _use_opq, static_cast<uint32_t>(_num_chunks));
+    _pq_distance_fn->load_pivot_data(pivots_file);
 
     return this->_capacity;
 }
