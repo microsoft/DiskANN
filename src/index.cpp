@@ -752,6 +752,22 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     return 0;
 }
 
+template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::get_pq_vector_by_tag(TagT &tag, T *vec)
+{
+    std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+    if (_tag_to_location.find(tag) == _tag_to_location.end())
+    {
+        diskann::cout << "Tag " << get_tag_string(tag) << " does not exist" << std::endl;
+        return -1;
+    }
+
+    location_t location = _tag_to_location[tag];
+    _pq_data_store->get_vector(location, vec);
+
+    return 0;
+}
+
+
 template <typename T, typename TagT, typename LabelT> uint32_t Index<T, TagT, LabelT>::calculate_entry_point()
 {
     // REFACTOR TODO: This function does not support multi-threaded calculation of medoid.
