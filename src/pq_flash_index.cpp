@@ -211,9 +211,9 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     size_t num_cached_nodes = node_list.size();
 
     // borrow thread data
-    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-    auto this_thread_data = manager.scratch_space();
-    IOContext &ctx = this_thread_data->ctx;
+    //ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    //auto this_thread_data = manager.scratch_space();
+    //IOContext &ctx = this_thread_data->ctx;
 
     // Allocate space for neighborhood cache
     _nhood_cache_buf = new uint32_t[num_cached_nodes * (_max_degree + 1)];
@@ -372,9 +372,9 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
     diskann::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
 
     // borrow thread data
-    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-    auto this_thread_data = manager.scratch_space();
-    IOContext &ctx = this_thread_data->ctx;
+    //ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    //auto this_thread_data = manager.scratch_space();
+    //IOContext &ctx = this_thread_data->ctx;
 
     std::unique_ptr<tsl::robin_set<uint32_t>> cur_level, prev_level;
     cur_level = std::make_unique<tsl::robin_set<uint32_t>>();
@@ -508,9 +508,9 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
     std::memset(_centroid_data, 0, _num_medoids * _aligned_dim * sizeof(float));
 
     // borrow ctx
-    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-    auto data = manager.scratch_space();
-    IOContext &ctx = data->ctx;
+    //ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    //auto data = manager.scratch_space();
+    //IOContext &ctx = data->ctx;
     diskann::cout << "Loading centroid data from medoids vector data of " << _num_medoids << " medoid(s)" << std::endl;
 
     std::vector<uint32_t> nodes_to_read;
