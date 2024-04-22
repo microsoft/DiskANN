@@ -2089,6 +2089,8 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                 labeled_points.emplace_back(point_id);
             }
         }
+
+        label_to_points[x] = labeled_points;
     }
 
     uint32_t num_cands = 25;
