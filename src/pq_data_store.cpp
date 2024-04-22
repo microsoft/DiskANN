@@ -4,7 +4,6 @@
 #include "pq_data_store.h"
 #include "pq.h"
 #include "pq_scratch.h"
-#include "utils.h"
 #include "distance.h"
 
 namespace diskann
@@ -13,19 +12,44 @@ namespace diskann
 // REFACTOR TODO: Assuming that num_pq_chunks is known already. Must verify if
 // this is true.
 template <typename data_t>
+
+#ifdef EXEC_ENV_OLS
+PQDataStore<data_t>::PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks,
+                                 std::unique_ptr<Distance<data_t>> distance_fn,
+                                 std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn,
+                                 MemoryMappedFiles &files,
+                                 const std::string &codebook_path)
+#else
 PQDataStore<data_t>::PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks,
                                  std::unique_ptr<Distance<data_t>> distance_fn,
                                  std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn,
                                  const std::string &codebook_path)
-    : AbstractDataStore<data_t>(num_points, dim), _quantized_data(nullptr), _num_chunks(num_pq_chunks),
-      _distance_metric(distance_fn->get_metric())
+#endif
+    : AbstractDataStore<data_t>(num_points, num_pq_chunks), _num_chunks(num_pq_chunks)
 {
     if (num_pq_chunks > dim)
     {
         throw diskann::ANNException("ERROR: num_pq_chunks > dim", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
+
     _distance_fn = std::move(distance_fn);
     _pq_distance_fn = std::move(pq_distance_fn);
+
+    _aligned_dim = ROUND_UP(num_pq_chunks, _distance_fn->get_required_alignment());
+    alloc_aligned(((void **)&_quantized_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    std::memset(_quantized_data, 0, this->_capacity * _aligned_dim * sizeof(data_t));
+
+#ifdef EXEC_ENV_OLS
+    if (!codebook_path.empty())
+    {
+        _pq_distance_fn->load_pivot_data(files, codebook_path);
+    }
+#else
+    if (!codebook_path.empty())
+    {
+        _pq_distance_fn->load_pivot_data(codebook_path.c_str());
+    }
+#endif
 }
 
 template <typename data_t> PQDataStore<data_t>::~PQDataStore()
@@ -48,13 +72,17 @@ template <typename data_t> size_t PQDataStore<data_t>::save(const std::string &f
 
 template <typename data_t> size_t PQDataStore<data_t>::get_aligned_dim() const
 {
-    return this->get_dims();
+    return _aligned_dim;
 }
 
 // Populate quantized data from regular data.
 template <typename data_t> void PQDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
 {
-    throw std::logic_error("Not implemented yet");
+    memset(_quantized_data, 0, _aligned_dim * sizeof(data_t) * num_pts);
+    for (location_t i = 0; i < num_pts; i++)
+    {
+        std::memmove(_quantized_data + i * _aligned_dim, vectors + i * this->_dim, this->_dim * sizeof(data_t));
+    }
 }
 
 template <typename data_t> void PQDataStore<data_t>::populate_data(const std::string &filename, const size_t offset)
@@ -74,7 +102,8 @@ template <typename data_t> void PQDataStore<data_t>::populate_data(const std::st
     auto pivots_file = get_pivot_data_filename(filename, _use_opq, static_cast<uint32_t>(_num_chunks));
     auto compressed_file = get_quantized_vectors_filename(filename, _use_opq, static_cast<uint32_t>(_num_chunks));
 
-    generate_quantized_data<data_t>(filename, pivots_file, compressed_file, _distance_metric, p_val, _num_chunks,
+    generate_quantized_data<data_t>(filename, pivots_file, compressed_file, _distance_fn->get_metric(), p_val,
+                                    _num_chunks,
                                     _pq_distance_fn->is_opq());
 
     // REFACTOR TODO: Not sure of the alignment. Just copying from index.cpp
@@ -93,15 +122,15 @@ template <typename data_t> void PQDataStore<data_t>::populate_data(const std::st
 template <typename data_t>
 void PQDataStore<data_t>::extract_data_to_bin(const std::string &filename, const location_t num_pts)
 {
-    throw std::logic_error("Not implemented yet");
+    diskann::save_bin(filename, _quantized_data, this->capacity(), _num_chunks, 0);
 }
 
-template <typename data_t> void PQDataStore<data_t>::get_vector(const location_t i, data_t *target) const
+template <typename data_t> void PQDataStore<data_t>::get_vector(const location_t i, data_t *dest) const
 {
     // REFACTOR TODO: Should we inflate the compressed vector here?
     if (i < this->capacity())
     {
-        throw std::logic_error("Not implemented yet.");
+        memcpy(dest, _quantized_data + i * _aligned_dim, this->_dim * sizeof(data_t));
     }
     else
     {
@@ -110,11 +139,38 @@ template <typename data_t> void PQDataStore<data_t>::get_vector(const location_t
         throw diskann::ANNException(ss.str(), -1);
     }
 }
-template <typename data_t> void PQDataStore<data_t>::set_vector(const location_t i, const data_t *const vector)
+template <typename data_t> void PQDataStore<data_t>::set_vector(const location_t loc, const data_t *const vector)
 {
-    // REFACTOR TODO: Should we accept a normal vector and compress here?
-    // memcpy (_data + i * _num_chunks, vector, _num_chunks * sizeof(data_t));
-    throw std::logic_error("Not implemented yet");
+    if (_pq_distance_fn == nullptr)
+    {
+        throw diskann::ANNException("PQ distance is not loaded, cannot set vector for PQDataStore.", -1);
+    }
+
+    const FixedChunkPQTable &pq_table = _pq_distance_fn->get_pq_table();
+
+    if (pq_table.tables == nullptr)
+    {
+        throw diskann::ANNException("PQ table is not loaded for PQ distance, cannot set vector for PQDataStore.", -1);
+    }
+
+    uint64_t full_dimension = pq_table.ndims;
+    uint64_t num_chunks = _num_chunks;
+
+    std::vector<float> vector_float(full_dimension);
+
+    diskann::convert_types<data_t, float>(vector, vector_float.data(), 1, full_dimension);
+    std::vector<uint8_t> compressed_vector(num_chunks * sizeof(data_t));
+    std::vector<data_t> compressed_vector_T(num_chunks);
+
+    generate_pq_data_from_pivots_simplified(vector_float.data(), 1, pq_table.tables, 256 * full_dimension,
+                                            full_dimension,
+                                            num_chunks, compressed_vector);
+
+    diskann::convert_types<uint8_t, data_t>(compressed_vector.data(), compressed_vector_T.data(), 1, num_chunks);
+
+    size_t offset_in_data = loc * _aligned_dim;
+    memset(_quantized_data + offset_in_data, 0, _aligned_dim * sizeof(data_t));
+    memcpy(_quantized_data + offset_in_data, compressed_vector_T.data(), this->_dim * sizeof(data_t));
 }
 
 template <typename data_t> void PQDataStore<data_t>::prefetch_vector(const location_t loc)
@@ -125,10 +181,43 @@ template <typename data_t> void PQDataStore<data_t>::prefetch_vector(const locat
 
 template <typename data_t>
 void PQDataStore<data_t>::move_vectors(const location_t old_location_start, const location_t new_location_start,
-                                       const location_t num_points)
+                                       const location_t num_locations)
 {
-    // REFACTOR TODO: Moving vectors is only for in-mem fresh.
-    throw std::logic_error("Not implemented yet");
+    if (num_locations == 0 || old_location_start == new_location_start)
+    {
+        return;
+    }
+
+    // The [start, end) interval which will contain obsolete points to be
+    // cleared.
+    uint32_t mem_clear_loc_start = old_location_start;
+    uint32_t mem_clear_loc_end_limit = old_location_start + num_locations;
+
+    if (new_location_start < old_location_start)
+    {
+        // If ranges are overlapping, make sure not to clear the newly copied
+        // data.
+        if (mem_clear_loc_start < new_location_start + num_locations)
+        {
+            // Clear only after the end of the new range.
+            mem_clear_loc_start = new_location_start + num_locations;
+        }
+    }
+    else
+    {
+        // If ranges are overlapping, make sure not to clear the newly copied
+        // data.
+        if (mem_clear_loc_end_limit > new_location_start)
+        {
+            // Clear only up to the beginning of the new range.
+            mem_clear_loc_end_limit = new_location_start;
+        }
+    }
+
+    // Use memmove to handle overlapping ranges.
+    copy_vectors(old_location_start, new_location_start, num_locations);
+    memset(_quantized_data + _aligned_dim * mem_clear_loc_start, 0,
+           sizeof(data_t) * _aligned_dim * (mem_clear_loc_end_limit - mem_clear_loc_start));
 }
 
 template <typename data_t>
@@ -160,12 +249,17 @@ void PQDataStore<data_t>::preprocess_query(const data_t *aligned_query, Abstract
 
 template <typename data_t> float PQDataStore<data_t>::get_distance(const data_t *query, const location_t loc) const
 {
-    throw std::logic_error("Not implemented yet");
+    // Probably should return PQ distance.
+    return _distance_fn->compare(query, reinterpret_cast<data_t *>(_quantized_data) + _aligned_dim * loc,
+                                 (uint32_t)_aligned_dim);
 }
 
 template <typename data_t> float PQDataStore<data_t>::get_distance(const location_t loc1, const location_t loc2) const
 {
-    throw std::logic_error("Not implemented yet");
+    // Probably should return PQ distance.
+    return _distance_fn->compare(reinterpret_cast<data_t *>(_quantized_data) + loc1 * _aligned_dim,
+                                 reinterpret_cast<data_t *>(_quantized_data) + loc2 * _aligned_dim,
+                                 (uint32_t)this->_aligned_dim);
 }
 
 template <typename data_t>
@@ -213,7 +307,7 @@ template <typename data_t> location_t PQDataStore<data_t>::calculate_medoid() co
 
 template <typename data_t> size_t PQDataStore<data_t>::get_alignment_factor() const
 {
-    return 1;
+    return _distance_fn->get_required_alignment();
 }
 
 template <typename data_t> Distance<data_t> *PQDataStore<data_t>::get_dist_fn() const
@@ -242,12 +336,54 @@ template <typename data_t> location_t PQDataStore<data_t>::load_impl(const std::
 
 template <typename data_t> location_t PQDataStore<data_t>::expand(const location_t new_size)
 {
-    throw std::logic_error("Not implemented yet");
+    if (new_size == this->capacity())
+    {
+        return this->capacity();
+    }
+    else if (new_size < this->capacity())
+    {
+        std::stringstream ss;
+        ss << "Cannot 'expand' datastore when new capacity (" << new_size << ") < existing capacity("
+           << this->capacity() << ")" << std::endl;
+        throw diskann::ANNException(ss.str(), -1);
+    }
+#ifndef _WINDOWS
+    data_t *new_data;
+    alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    memcpy(new_data, _quantized_data, this->capacity() * _aligned_dim * sizeof(data_t));
+    aligned_free(_quantized_data);
+    _quantized_data = new_data;
+#else
+    realloc_aligned((void **)&_quantized_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+#endif
+    this->_capacity = new_size;
+    return this->_capacity;
 }
 
 template <typename data_t> location_t PQDataStore<data_t>::shrink(const location_t new_size)
 {
-    throw std::logic_error("Not implemented yet");
+    if (new_size == this->capacity())
+    {
+        return this->capacity();
+    }
+    else if (new_size > this->capacity())
+    {
+        std::stringstream ss;
+        ss << "Cannot 'shrink' datastore when new capacity (" << new_size << ") > existing capacity("
+           << this->capacity() << ")" << std::endl;
+        throw diskann::ANNException(ss.str(), -1);
+    }
+#ifndef _WINDOWS
+    data_t *new_data;
+    alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+    memcpy(new_data, _quantized_data, new_size * _aligned_dim * sizeof(data_t));
+    aligned_free(_quantized_data);
+    _quantized_data = new_data;
+#else
+    realloc_aligned((void **)&_quantized_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
+#endif
+    this->_capacity = new_size;
+    return this->_capacity;
 }
 
 #ifdef EXEC_ENV_OLS

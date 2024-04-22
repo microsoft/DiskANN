@@ -150,7 +150,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                              uint32_t num_start_pts, size_t points_per_checkpoint, size_t checkpoints_per_snapshot,
                              const std::string &save_path, size_t points_to_delete_from_beginning,
                              size_t start_deletes_after, bool concurrent, const std::string &label_file,
-                             const std::string &universal_label)
+                             const std::string &universal_label, size_t num_pq_chunks, const std::string& pq_pivot_file)
 {
     size_t dim, aligned_dim;
     size_t num_points;
@@ -161,7 +161,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     using LabelT = uint32_t;
 
     size_t current_point_offset = points_to_skip;
-    const size_t last_point_threshold = points_to_skip + max_points_to_insert;
+    size_t last_point_threshold = points_to_skip + max_points_to_insert;
 
     bool enable_tags = true;
     using TagT = uint32_t;
@@ -182,6 +182,9 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                                             .is_filtered(has_labels)
                                             .with_num_frozen_pts(num_start_pts)
                                             .is_concurrent_consolidate(concurrent)
+                                            .with_pq_codebook_path(pq_pivot_file)
+                                            .is_pq_dist_build(!pq_pivot_file.empty())
+                                            .with_num_pq_chunks(num_pq_chunks)
                                             .build();
 
     diskann::IndexFactory index_factory = diskann::IndexFactory(index_config);
@@ -206,6 +209,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     if (points_to_skip + max_points_to_insert > num_points)
     {
         max_points_to_insert = num_points - points_to_skip;
+        last_point_threshold = num_points;
         std::cerr << "WARNING: Reducing max_points_to_insert to " << max_points_to_insert
                   << " points since the data file has only that many" << std::endl;
     }
@@ -327,6 +331,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
              start += points_per_checkpoint, current_point_offset += points_per_checkpoint)
         {
             const size_t end = std::min(start + points_per_checkpoint, last_point_threshold);
+            std::cout << std::endl << "Last Point Threshold is:" << last_point_threshold << std::endl;
             std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
             load_aligned_bin_part(data_path, data, start, end - start);
@@ -377,11 +382,11 @@ int main(int argc, char **argv)
     uint32_t num_threads, R, L, num_start_pts;
     float alpha, start_point_norm;
     size_t points_to_skip, max_points_to_insert, beginning_index_size, points_per_checkpoint, checkpoints_per_snapshot,
-        points_to_delete_from_beginning, start_deletes_after;
+        points_to_delete_from_beginning, start_deletes_after, num_pq_chunks;
     bool concurrent;
 
     // label options
-    std::string label_file, label_type, universal_label;
+    std::string label_file, label_type, universal_label, pq_pivot_file;
     std::uint32_t Lf, unique_labels_supported;
 
     po::options_description desc{program_options_utils::make_program_description("test_insert_deletes_consolidate",
@@ -449,6 +454,11 @@ int main(int argc, char **argv)
         optional_configs.add_options()("unique_labels_supported",
                                        po::value<uint32_t>(&unique_labels_supported)->default_value(0),
                                        "Number of unique labels supported by the dynamic index.");
+        optional_configs.add_options()("pq_pivot_file", po::value<std::string>(&pq_pivot_file)->default_value(""),
+                                       "The file stored pq pivot info.");
+        optional_configs.add_options()("num_pq_chunks", po::value<uint64_t>(&num_pq_chunks)->default_value(0),
+                                       "Number of PQ chunks to use.");
+
 
         optional_configs.add_options()(
             "num_start_points",
@@ -507,17 +517,20 @@ int main(int argc, char **argv)
             build_incremental_index<int8_t>(
                 data_path, params, points_to_skip, max_points_to_insert, beginning_index_size, start_point_norm,
                 num_start_pts, points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
-                points_to_delete_from_beginning, start_deletes_after, concurrent, label_file, universal_label);
+                                            points_to_delete_from_beginning, start_deletes_after, concurrent,
+                                            label_file, universal_label, num_pq_chunks, pq_pivot_file);
         else if (data_type == std::string("uint8"))
             build_incremental_index<uint8_t>(
                 data_path, params, points_to_skip, max_points_to_insert, beginning_index_size, start_point_norm,
                 num_start_pts, points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
-                points_to_delete_from_beginning, start_deletes_after, concurrent, label_file, universal_label);
+                                             points_to_delete_from_beginning, start_deletes_after, concurrent,
+                                             label_file, universal_label, num_pq_chunks, pq_pivot_file);
         else if (data_type == std::string("float"))
             build_incremental_index<float>(data_path, params, points_to_skip, max_points_to_insert,
                                            beginning_index_size, start_point_norm, num_start_pts, points_per_checkpoint,
                                            checkpoints_per_snapshot, index_path_prefix, points_to_delete_from_beginning,
-                                           start_deletes_after, concurrent, label_file, universal_label);
+                                           start_deletes_after, concurrent, label_file, universal_label,
+                                           num_pq_chunks, pq_pivot_file);
         else
             std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
     }

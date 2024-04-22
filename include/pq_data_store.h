@@ -2,7 +2,7 @@
 #include <memory>
 #include "distance.h"
 #include "quantized_distance.h"
-#include "pq.h"
+#include "fixed_chunk_pq_table.h"
 #include "abstract_data_store.h"
 
 namespace diskann
@@ -13,8 +13,14 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
 {
 
   public:
+#ifdef EXEC_ENV_OLS
     PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks, std::unique_ptr<Distance<data_t>> distance_fn,
-                std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn, const std::string& codebook_path);
+                std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn, MemoryMappedFiles &files,
+                const std::string &codebook_path);
+#else
+    PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks, std::unique_ptr<Distance<data_t>> distance_fn,
+                std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn, const std::string &codebook_path);
+#endif
     PQDataStore(const PQDataStore &) = delete;
     PQDataStore &operator=(const PQDataStore &) = delete;
     ~PQDataStore();
@@ -85,6 +91,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
   private:
     uint8_t *_quantized_data = nullptr;
     size_t _num_chunks = 0;
+    size_t _aligned_dim;
 
     // REFACTOR TODO: Doing this temporarily before refactoring OPQ into
     // its own class. Remove later.
