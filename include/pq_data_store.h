@@ -14,7 +14,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
 
   public:
     PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks, std::unique_ptr<Distance<data_t>> distance_fn,
-                std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn);
+                std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn, const std::string& codebook_path);
     PQDataStore(const PQDataStore &) = delete;
     PQDataStore &operator=(const PQDataStore &) = delete;
     ~PQDataStore();

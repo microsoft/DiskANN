@@ -15,7 +15,8 @@ namespace diskann
 template <typename data_t>
 PQDataStore<data_t>::PQDataStore(size_t dim, location_t num_points, size_t num_pq_chunks,
                                  std::unique_ptr<Distance<data_t>> distance_fn,
-                                 std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn)
+                                 std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn,
+                                 const std::string &codebook_path)
     : AbstractDataStore<data_t>(num_points, dim), _quantized_data(nullptr), _num_chunks(num_pq_chunks),
       _distance_metric(distance_fn->get_metric())
 {

@@ -23,6 +23,7 @@ class IndexFactory
     // flavours.
     template <typename T>
     DISKANN_DLLEXPORT static std::shared_ptr<PQDataStore<T>> construct_pq_datastore(DataStoreStrategy strategy,
+                                                                                    const std::string &codebook_path,
                                                                                     size_t num_points, size_t dimension,
                                                                                     Metric m, size_t num_pq_chunks,
                                                                                     bool use_opq);
