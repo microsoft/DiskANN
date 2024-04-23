@@ -331,7 +331,6 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
              start += points_per_checkpoint, current_point_offset += points_per_checkpoint)
         {
             const size_t end = std::min(start + points_per_checkpoint, last_point_threshold);
-            std::cout << std::endl << "Last Point Threshold is:" << last_point_threshold << std::endl;
             std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
             load_aligned_bin_part(data_path, data, start, end - start);
