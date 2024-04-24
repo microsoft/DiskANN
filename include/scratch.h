@@ -12,22 +12,22 @@
 #include "tsl/sparse_map.h"
 
 #include "aligned_file_reader.h"
-#include "concurrent_queue.h"
-#include "defaults.h"
+#include "abstract_scratch.h"
 #include "neighbor.h"
-#include "pq.h"
+#include "defaults.h"
+#include "concurrent_queue.h"
 
 namespace diskann
 {
+template <typename T> class PQScratch;
 
 //
-// Scratch space for in-memory index based search
+// AbstractScratch space for in-memory index based search
 //
-template <typename T> class InMemQueryScratch
+template <typename T> class InMemQueryScratch : public AbstractScratch<T>
 {
   public:
     ~InMemQueryScratch();
-    // REFACTOR TODO: move all parameters to a new class.
     InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim, size_t aligned_dim,
                       size_t alignment_factor, bool init_pq_scratch = false);
     void resize_for_new_L(uint32_t new_search_l);
@@ -47,11 +47,11 @@ template <typename T> class InMemQueryScratch
     }
     inline T *aligned_query()
     {
-        return _aligned_query;
+        return this->_aligned_query_T;
     }
     inline PQScratch<T> *pq_scratch()
     {
-        return _pq_scratch;
+        return this->_pq_scratch;
     }
     inline std::vector<Neighbor> &pool()
     {
@@ -99,10 +99,6 @@ template <typename T> class InMemQueryScratch
     uint32_t _R;
     uint32_t _maxc;
 
-    T *_aligned_query = nullptr;
-
-    PQScratch<T> *_pq_scratch = nullptr;
-
     // _pool stores all neighbors explored from best_L_nodes.
     // Usually around L+R, but could be higher.
     // Initialized to 3L+R for some slack, expands as needed.
@@ -139,20 +135,16 @@ template <typename T> class InMemQueryScratch
 };
 
 //
-// Scratch space for SSD index based search
+// AbstractScratch space for SSD index based search
 //
 
-template <typename T> class SSDQueryScratch
+template <typename T> class SSDQueryScratch : public AbstractScratch<T>
 {
   public:
     T *coord_scratch = nullptr; // MUST BE AT LEAST [sizeof(T) * data_dim]
 
     char *sector_scratch = nullptr; // MUST BE AT LEAST [MAX_N_SECTOR_READS * SECTOR_LEN]
     size_t sector_idx = 0;          // index of next [SECTOR_LEN] scratch to use
-
-    T *aligned_query_T = nullptr;
-
-    PQScratch<T> *_pq_scratch;
 
     tsl::robin_set<size_t> visited;
     NeighborPriorityQueue retset;
