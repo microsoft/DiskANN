@@ -916,6 +916,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
     cmps += static_cast<uint32_t>(init_ids.size());
+    std::vector<location_t> tmp_neighbor_list;
 
     while (best_L_nodes.has_unexpanded_node())
     {
@@ -972,10 +973,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
         else
         {
+            tmp_neighbor_list.clear();
             _locks[n].lock();
-            auto nbrs = _graph_store->get_neighbours(n);
+            auto& nbrs = _graph_store->get_neighbours(n);
+            tmp_neighbor_list.resize(nbrs.size());
+            memcpy(tmp_neighbor_list.data(), nbrs.data(), nbrs.size() * sizeof(location_t));
             _locks[n].unlock();
-            for (auto id : nbrs)
+            for (auto id : tmp_neighbor_list)
             {
                 assert(id < _max_points + _num_frozen_pts);
 
