@@ -173,7 +173,7 @@ template <typename data_t> void InMemDataStore<data_t>::set_vector(const locatio
     }
 }
 
-template <typename data_t> void InMemDataStore<data_t>::prefetch_vector(const location_t loc)
+template <typename data_t> void InMemDataStore<data_t>::prefetch_vector(const location_t loc) const
 {
     diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)loc * sizeof(data_t),
                              sizeof(data_t) * _aligned_dim);
