@@ -168,11 +168,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         time_to_compare  = 0;
         time_to_detect_penalty = 0;
         uint32_t L = Lvec[test_id];
-        if (L < recall_at)
+/*        if (L < recall_at)
         {
             diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
             continue;
-        }
+        }*/
 
         query_result_ids[test_id].resize(recall_at * query_num);
         query_result_dists[test_id].resize(recall_at * query_num);

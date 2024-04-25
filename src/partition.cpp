@@ -31,12 +31,21 @@
 // #define SAVE_INFLATED_PQ true
 
 template <typename T>
-void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate)
+void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate, std::string label_file)
 {
     size_t read_blk_size = 64 * 1024 * 1024;
+    std::ifstream label_reader;
+    bool use_labels;
+    if (label_file != "") {
+        label_reader = std::ifstream(label_file);
+        use_labels = true;
+    }
     cached_ifstream base_reader(base_file.c_str(), read_blk_size);
     std::ofstream sample_writer(std::string(output_prefix + "_data.bin").c_str(), std::ios::binary);
     std::ofstream sample_id_writer(std::string(output_prefix + "_ids.bin").c_str(), std::ios::binary);
+    std::ofstream sample_label_writer;
+    if (use_labels)
+    sample_label_writer = std::ofstream(std::string(output_prefix + "_labels.txt").c_str());
 
     std::random_device rd; // Will be used to obtain a seed for the random number engine
     auto x = rd();
@@ -61,12 +70,18 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
     nd = nd_u32;
     std::unique_ptr<T[]> cur_row = std::make_unique<T[]>(nd);
 
+    std::string line;
     for (size_t i = 0; i < npts; i++)
     {
+        if (use_labels) {
+        label_reader >> line;
+        }
         base_reader.read((char *)cur_row.get(), sizeof(T) * nd);
         float sample = distribution(generator);
         if (sample < sampling_rate)
         {
+            if (use_labels)
+                sample_label_writer << line << std::endl;
             sample_writer.write((char *)cur_row.get(), sizeof(T) * nd);
             uint32_t cur_i_u32 = (uint32_t)i;
             sample_id_writer.write((char *)&cur_i_u32, sizeof(uint32_t));
@@ -79,6 +94,8 @@ void gen_random_slice(const std::string base_file, const std::string output_pref
     sample_id_writer.write((char *)&num_sampled_pts_u32, sizeof(uint32_t));
     sample_writer.close();
     sample_id_writer.close();
+    if (use_labels)
+    sample_label_writer.close();
     diskann::cout << "Wrote " << num_sampled_pts_u32 << " points to sample file: " << output_prefix + "_data.bin"
                   << std::endl;
 }
@@ -604,11 +621,11 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
 // Instantations of supported templates
 
 template void DISKANN_DLLEXPORT gen_random_slice<int8_t>(const std::string base_file, const std::string output_prefix,
-                                                         double sampling_rate);
+                                                         double sampling_rate, std::string label_file);
 template void DISKANN_DLLEXPORT gen_random_slice<uint8_t>(const std::string base_file, const std::string output_prefix,
-                                                          double sampling_rate);
+                                                          double sampling_rate, std::string label_file);
 template void DISKANN_DLLEXPORT gen_random_slice<float>(const std::string base_file, const std::string output_prefix,
-                                                        double sampling_rate);
+                                                        double sampling_rate, std::string label_file);
 
 template void DISKANN_DLLEXPORT gen_random_slice<float>(const float *inputdata, size_t npts, size_t ndims, double p_val,
                                                         float *&sampled_data, size_t &slice_size);
