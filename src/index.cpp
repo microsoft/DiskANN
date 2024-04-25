@@ -974,11 +974,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         else
         {
             tmp_neighbor_list.clear();
-        //    _locks[n].lock();
+            _locks[n].lock_shared();
             auto& nbrs = _graph_store->get_neighbours(n);
             tmp_neighbor_list.resize(nbrs.size());
             memcpy(tmp_neighbor_list.data(), nbrs.data(), nbrs.size() * sizeof(location_t));
-        //    _locks[n].unlock();
+            _locks[n].unlock_shared();
             for (auto id : tmp_neighbor_list)
             {
                 assert(id < _max_points + _num_frozen_pts);
