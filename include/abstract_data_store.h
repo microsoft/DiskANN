@@ -67,7 +67,7 @@ template <typename data_t> class AbstractDataStore
     // streaming setting
     virtual void get_vector(const location_t i, data_t *dest) const = 0;
     virtual void set_vector(const location_t i, const data_t *const vector) = 0;
-    virtual void prefetch_vector(const location_t loc) = 0;
+    virtual void prefetch_vector(const location_t loc) const = 0;
 
     // internal shuffle operations to move around vectors
     // will bulk-move all the vectors in [old_start_loc, old_start_loc +
