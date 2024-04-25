@@ -207,6 +207,11 @@ void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t 
 {
     for (location_t i = 0; i < location_count; i++)
     {
+        if (i + 1 < location_count)
+        {
+            prefetch_vector(locations[i + 1]);
+        }
+       
         distances[i] = _distance_fn->compare(query, _data + locations[i] * _aligned_dim, (uint32_t)this->_aligned_dim);
     }
 }
