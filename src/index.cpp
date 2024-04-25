@@ -1255,28 +1255,40 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
 
     assert(!src_pool.empty());
 
+    // des_pool contains the neighbors of the neighbors of n
+    std::vector<uint32_t> copy_of_neighbors;
+
     for (auto des : src_pool)
     {
         // des.loc is the loc of the neighbors of n
         assert(des < _max_points + _num_frozen_pts);
-        // des_pool contains the neighbors of the neighbors of n
-        std::vector<uint32_t> copy_of_neighbors;
+        
         bool prune_needed = false;
         {
-            LockGuard guard(_locks[des]);
+            copy_of_neighbors.clear();
+        //    LockGuard guard(_locks[des]);
+            _locks[des].lock_shared();
             auto &des_pool = _graph_store->get_neighbours(des);
-            if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end())
+            copy_of_neighbors.reserve(des_pool.size() + 1);
+            for (auto& des_n : des_pool)
             {
-                if (des_pool.size() < (uint64_t)(defaults::GRAPH_SLACK_FACTOR * range))
+                copy_of_neighbors.push_back(des_n);
+            }
+            _locks[des].unlock_shared();
+
+            if (std::find(copy_of_neighbors.begin(), copy_of_neighbors.end(), n) == copy_of_neighbors.end())
+            {
+                if (copy_of_neighbors.size() < (uint64_t)(defaults::GRAPH_SLACK_FACTOR * range))
                 {
+                    LockGuard guard(_locks[des]);
                     // des_pool.emplace_back(n);
                     _graph_store->add_neighbour(des, n);
                     prune_needed = false;
                 }
                 else
                 {
-                    copy_of_neighbors.reserve(des_pool.size() + 1);
-                    copy_of_neighbors = des_pool;
+                //    copy_of_neighbors.reserve(des_pool.size() + 1);
+                //    copy_of_neighbors = des_pool;
                     copy_of_neighbors.push_back(n);
                     prune_needed = true;
                 }
