@@ -21,6 +21,8 @@
 #include "in_mem_data_store.h"
 #include "in_mem_graph_store.h"
 #include "abstract_index.h"
+#include "pq_scratch.h"
+#include "pq.h"
 
 #define OVERHEAD_FACTOR 1.1
 #ifdef EXEC_ENV_OLS

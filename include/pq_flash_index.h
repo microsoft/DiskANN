@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #pragma once
+#include <unordered_map>
 #include "common_includes.h"
 
 #include "aligned_file_reader.h"
@@ -34,6 +35,15 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // load compressed data, and obtains the handle to the disk-resident index
     DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *index_prefix);
 #endif
+
+#ifdef EXEC_ENV_OLS
+    DISKANN_DLLEXPORT void load_labels(MemoryMappedFiles &files, const std::string &disk_index_file);
+#else
+    DISKANN_DLLEXPORT void load_labels(const std::string& disk_index_filepath);
+#endif
+    DISKANN_DLLEXPORT void load_label_medoid_map(
+        const std::string &labels_to_medoids_filepath, std::istream &medoid_stream);
+    DISKANN_DLLEXPORT void load_dummy_map(const std::string& dummy_map_filepath, std::istream &dummy_map_stream);
 
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT int load_from_separate_paths(diskann::MemoryMappedFiles &files, uint32_t num_threads,
@@ -77,7 +87,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_filter, const LabelT &filter_label,
+                                              const bool use_filter, const std::vector<LabelT> &filter_labels,
                                               const uint32_t io_limit, const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr);
 
@@ -116,9 +126,11 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
   private:
     DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, LabelT label_id);
-    std::unordered_map<std::string, LabelT> load_label_map(std::basic_istream<char> &infile);
+    DISKANN_DLLEXPORT inline bool point_has_any_label(uint32_t point_id, const std::vector<LabelT> &label_ids);
+    void load_label_map(std::basic_istream<char> &map_reader,
+                        std::unordered_map<std::string, LabelT> &string_to_int_map);
     DISKANN_DLLEXPORT void parse_label_file(std::basic_istream<char> &infile, size_t &num_pts_labels);
-    DISKANN_DLLEXPORT void get_label_file_metadata(std::basic_istream<char> &infile, uint32_t &num_pts,
+    DISKANN_DLLEXPORT void get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
                                                    uint32_t &num_total_labels);
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
                                                   const uint32_t nthreads);

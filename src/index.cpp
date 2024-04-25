@@ -1063,7 +1063,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             query_float[d] = (float)aligned_query[d];
         }
-        pq_query_scratch->set(_dim, aligned_query);
+        pq_query_scratch->initialize(_dim, aligned_query);
 
         // center the query and rotate if we have a rotation matrix
         _pq_table.preprocess_query(query_rotated);
