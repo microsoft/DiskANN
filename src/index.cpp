@@ -893,7 +893,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
     best_L_nodes.reserve(Lsize);
 
     std::vector<uint32_t> closest_clusters;
-    RoaringIdList cluster_results;
 #ifdef INSTRUMENT
     auto s = std::chrono::high_resolution_clock::now();
 #endif
@@ -902,6 +901,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     time_to_cluster += diff.count();
 #endif
+    uint32_t cmps = 0;
+    uint32_t hops = 0;
 #ifdef INSTRUMENT
     s = std::chrono::high_resolution_clock::now();
 #endif
@@ -912,7 +913,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
         {
             tmp &= _clusters_to_labels_to_points[cluster_id][filter_vec[k]];
         }
-        cluster_results.list |= tmp;
+
+        for (roaring::Roaring::const_iterator i = tmp.begin(); i != tmp.end(); i++)
+        {
+            float distance = _data_store->get_distance(aligned_query, *i);
+            Neighbor nn = Neighbor(*i, distance);
+            best_L_nodes.insert(nn);
+            cmps++;
+        }
     }
     /* _ivf_clusters->get_cluster_members(closest_clusters[0], tmp); */
     //    std::cout<<"#"<<tmp.size()<<"#";
@@ -929,7 +937,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
     /* } */
 #ifdef INSTRUMENT
     diff = std::chrono::high_resolution_clock::now() - s;
-    time_to_union += diff.count();
+    time_to_filter_check_and_compare += diff.count();
 #endif
     //    std::cout<<cluster_results.size() << std::endl;
 
@@ -942,23 +950,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
 
     //    roaring_bitmap_and_inplace(&(init_ids.roaring), (roaring_bitmap_t *)cluster_results.get_bitmap());
     //    roaring_bitmap_t *real_results = (roaring_bitmap_t *)cluster_results.get_bitmap();
-
-    uint32_t cmps = 0;
-    uint32_t hops = 0;
-#ifdef INSTRUMENT
-    s = std::chrono::high_resolution_clock::now();
-#endif
-    for (roaring::Roaring::const_iterator i = cluster_results.list.begin(); i != cluster_results.list.end(); i++)
-    {
-        float distance = _data_store->get_distance(aligned_query, *i);
-        Neighbor nn = Neighbor(*i, distance);
-        best_L_nodes.insert(nn);
-        cmps++;
-    }
-#ifdef INSTRUMENT
-    diff = std::chrono::high_resolution_clock::now() - s;
-    time_to_compare += diff.count();
-#endif
     return std::make_pair(hops, cmps);
 }
 
@@ -990,7 +981,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
     }
 #ifdef INSTRUMENT
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-    time_to_compare += diff.count();
+    time_to_filter_check_and_compare += diff.count();
 #endif
     return std::make_pair(hops, cmps);
 }

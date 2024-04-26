@@ -34,10 +34,9 @@
 #define DEFAULT_MAXC 750
 #define INSTRUMENT true
 
-inline double time_to_union = 0.;
 inline double time_to_intersect = 0.;
 inline double time_to_cluster = 0.;
-inline double time_to_compare = 0.;
+inline double time_to_filter_check_and_compare = 0.;
 inline double time_to_get_valid = 0.;
 inline double time_to_detect_penalty = 0.;
 inline uint32_t num_brutes = 0;
