@@ -651,6 +651,22 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             }
         }
 
+        std::srand(time(NULL));
+        for (auto const &label : _labels)
+        {
+            if (_labels_to_points[label].cardinality() > _bruteforce_threshold)
+            {
+                roaring::Roaring tmp;
+                for (roaring::Roaring::const_iterator j = _labels_to_points[label].begin();
+                     j != _labels_to_points[label].end(); j++)
+                {
+                    int val = (int)(100.0 * std::rand() / (RAND_MAX + 1.0)) + 1;
+                    if (val <= _prob * 100.0)
+                        _labels_to_points_samples[label].add(*j);
+                }
+            }
+        }
+
         std::string universal_label_file(filename);
         universal_label_file += "_universal_label.txt";
         if (file_exists(universal_label_file))
@@ -2235,10 +2251,10 @@ template <typename IdType>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, const size_t K, const uint32_t L,
                                                              IdType *indices, float *distances)
 {
-/*    if (K > (uint64_t)L)
-    {
-        throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
-    }*/
+    /*    if (K > (uint64_t)L)
+        {
+            throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }*/
 
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
@@ -2339,16 +2355,28 @@ std::vector<std::pair<LabelT, uint32_t>> Index<T, TagT, LabelT>::sort_filter_cou
 }
 
 template <typename T, typename TagT, typename LabelT>
+uint32_t Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap,
+                                                     const std::vector<LabelT> &filter_label)
+{
+    intersection_bitmap = _labels_to_points_samples[filter_label[0]];
+    for (size_t i = 1; i < filter_label.size(); i++)
+    {
+        intersection_bitmap &= _labels_to_points_samples[filter_label[i]];
+    }
+    return (uint32_t)(intersection_bitmap.cardinality() * (1.0 / (_prob * _prob)));
+}
+
+template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query,
                                                                           const std::vector<LabelT> &filter_label,
                                                                           const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
 {
-/*    if (K > (uint64_t)L)
-    {
-        throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
-    }*/
+    /*    if (K > (uint64_t)L)
+        {
+            throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }*/
 
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
@@ -2436,7 +2464,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     else
     {
-        if (sorted_filters[0].second < _bruteforce_threshold)
+        uint32_t sample_size = _clustering_threshold + 1;
+        if (sorted_filters[0].second < _bruteforce_threshold ||
+            (sample_size = sample_intersection(scratch->get_valid_bitmap(), filter_label)) < _bruteforce_threshold)
         {
             num_brutes++;
             auto &last_intersection = scratch->get_valid_bitmap();
@@ -2445,8 +2475,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             {
                 last_intersection &= _labels_to_points[sorted_filters[i].first];
             }
+            retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
         }
-        else if (sorted_filters[0].second < _clustering_threshold && sorted_filters[0].second >= _bruteforce_threshold)
+        else if (sorted_filters[0].second < _clustering_threshold ||
+                 (sample_size = (sample_size < _clustering_threshold)
+                                    ? sample_intersection(scratch->get_valid_bitmap(), filter_label)
+                                    : sample_size) <
+                     _clustering_threshold) // this is very cursed, is there a better way to do this?
         {
             num_clusters++;
             /* auto &last_intersection = scratch->get_valid_bitmap(); */

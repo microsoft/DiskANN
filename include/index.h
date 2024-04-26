@@ -269,6 +269,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     std::vector<std::pair<LabelT, uint32_t>> sort_filter_counts(const std::vector<LabelT> &filter_label);
 
+    uint32_t sample_intersection(roaring::Roaring &intersection_bitmap, const std::vector<LabelT> &filter_label);
+
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
     // Returns the locations of start point and frozen points suitable for use
@@ -412,6 +414,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<LabelT, roaring::Roaring> _labels_to_points;
+    std::unordered_map<LabelT, roaring::Roaring> _labels_to_points_samples;
     std::vector<std::unordered_map<LabelT, roaring::Roaring>> _clusters_to_labels_to_points;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     diskann::InMemClusterStore<T> *_ivf_clusters = nullptr;
@@ -422,6 +425,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _filter_penalty_threshold = 0;
     uint32_t _bruteforce_threshold = 0;
     uint32_t _clustering_threshold = 0;
+    float _prob = 0.1;
     std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
