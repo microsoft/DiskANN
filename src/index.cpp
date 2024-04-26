@@ -119,6 +119,13 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
     }
+
+    _parent_nodes.resize(total_internal_points);
+    for (uint32_t i = 0; i < total_internal_points; i++) {
+        _parent_nodes[i] = i;
+    }
+    std::cout<<"here resetting parent nodes to " << total_internal_points << std::endl;
+
     //    if (_filtered_index) {
     //    }
 }
@@ -603,7 +610,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     {
         _ivf_clusters = new InMemClusterStore<T>(0);
         _ivf_clusters->load(filename);
-        _clusters_to_labels_to_points.resize(_ivf_clusters->get_num_clusters());
+        _clusterwise_labels_to_points.resize(_ivf_clusters->get_num_clusters());
 
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
@@ -646,7 +653,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             {
                 for (auto const &filter : _location_to_labels[*j])
                 {
-                    _clusters_to_labels_to_points[i][filter].add(*j);
+                    _clusterwise_labels_to_points[i][filter].add(*j);
                 }
             }
         }
@@ -891,10 +898,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
 #endif
     for (auto const &cluster_id : closest_clusters)
     {
-        roaring::Roaring tmp = _clusters_to_labels_to_points[cluster_id][filter_vec[0]];
+        roaring::Roaring tmp = _clusterwise_labels_to_points[cluster_id][filter_vec[0]];
         for (size_t k = 1; k < filter_vec.size(); k++)
         {
-            tmp &= _clusters_to_labels_to_points[cluster_id][filter_vec[k]];
+            tmp &= _clusterwise_labels_to_points[cluster_id][filter_vec[k]];
         }
         cluster_results.list |= tmp;
     }
@@ -980,6 +987,23 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 }
 
 template <typename T, typename TagT, typename LabelT>
+inline bool Index<T, TagT, LabelT>:: is_not_visited(uint32_t id, bool fast_iterate, tsl::robin_set<uint32_t> &inserted_into_pool_rs, boost::dynamic_bitset<> &inserted_into_pool_bs) {
+        bool ret_flag = true;
+        bool break_flag = false;
+        do {
+//        std::cout<<id << std::endl;
+        bool cur_flag = (fast_iterate ? inserted_into_pool_bs[id] == 0
+                            : inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end());
+        ret_flag &= cur_flag;
+        if (_parent_nodes[id] == id)
+            break_flag = true;
+        else
+            id = _parent_nodes[id];
+        } while(!break_flag);
+        return ret_flag;
+}
+
+template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
     const std::vector<LabelT> &filter_labels, bool search_invocation)
@@ -1019,11 +1043,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
     }
 
+/*
     // Lambda to determine if a node has been visited
     auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs, &inserted_into_pool_rs](const uint32_t id) {
         return fast_iterate ? inserted_into_pool_bs[id] == 0
                             : inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end();
-    };
+    }; */
 
     // Lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, scratch, pq_dists](const std::vector<uint32_t> &ids, std::vector<float> &dists_out) {
@@ -1053,8 +1078,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     continue;
             }
         }
-
-        if (is_not_visited(id))
+//        std::cout<<id<<std::endl;
+        if (is_not_visited(id, fast_iterate, inserted_into_pool_rs, inserted_into_pool_bs))
         {
             if (fast_iterate)
             {
@@ -1112,7 +1137,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 assert(id < _max_points + _num_frozen_pts);
 
-                if (!is_not_visited(id))
+                if (!is_not_visited(id, fast_iterate, inserted_into_pool_rs, inserted_into_pool_bs))
                     continue;
 
                 if (fast_iterate)
@@ -1152,7 +1177,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 assert(id < _max_points + _num_frozen_pts);
 
-                if (!is_not_visited(id))
+                if (!is_not_visited(id, fast_iterate, inserted_into_pool_rs, inserted_into_pool_bs))
                     continue;
 
                 if (fast_iterate)
@@ -3170,6 +3195,13 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     _data_store->resize((location_t)new_internal_points);
     _graph_store->resize_graph(new_internal_points);
     _locks = std::vector<non_recursive_mutex>(new_internal_points);
+
+    _parent_nodes.resize(new_internal_points);
+    for (uint32_t i = 0; i < new_internal_points; i++) {
+        _parent_nodes[i] = i;
+    }
+    std::cout<<"here resizing parent nodes to " << new_internal_points << std::endl;
+
 
     if (_num_frozen_pts != 0)
     {

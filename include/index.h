@@ -282,7 +282,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::pair<uint32_t, uint32_t> brute_force_filters(const T *query, const uint32_t Lsize,
                                                       const roaring::Roaring &init_ids, InMemQueryScratch<T> *scratch);
 
-    // The query to use is placed in scratch->aligned_query
+
+    inline bool is_not_visited(uint32_t id, bool fast_iterate, tsl::robin_set<uint32_t> &inserted_into_pool_rs, boost::dynamic_bitset<> &inserted_into_pool_bs); 
+
+        // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
@@ -412,9 +415,12 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<LabelT, roaring::Roaring> _labels_to_points;
-    std::vector<std::unordered_map<LabelT, roaring::Roaring>> _clusters_to_labels_to_points;
+    std::vector<std::unordered_map<LabelT, roaring::Roaring>> _clusterwise_labels_to_points;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     diskann::InMemClusterStore<T> *_ivf_clusters = nullptr;
+    std::vector<uint32_t> _parent_nodes;
+
+
 
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
