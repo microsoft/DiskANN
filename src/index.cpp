@@ -106,9 +106,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
 
         if (index_config.index_search_params != nullptr)
         {
+            std::uint32_t default_queue_size = (std::max)(_indexingQueueSize, _filterIndexingQueueSize);
             uint32_t num_scratch_spaces = index_config.index_search_params->num_search_threads + _indexingThreads;
             initialize_query_scratch(num_scratch_spaces, index_config.index_search_params->initial_search_list_size,
-                                     _indexingQueueSize, _indexingRange, _indexingMaxC, _data_store->get_dims());
+                default_queue_size, _indexingRange, _indexingMaxC, _data_store->get_dims());
         }
     }
 }
@@ -1602,7 +1603,8 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
 
     if (_query_scratch.size() == 0)
     {
-        initialize_query_scratch(5 + num_threads_index, index_L, index_L, index_R, maxc,
+        std::uint32_t default_queue_size = (std::max)(_indexingQueueSize, _filterIndexingQueueSize);
+        initialize_query_scratch(5 + num_threads_index, default_queue_size, default_queue_size, index_R, maxc,
                                  _data_store->get_aligned_dim());
     }
 
