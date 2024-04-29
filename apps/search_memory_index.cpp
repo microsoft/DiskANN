@@ -124,8 +124,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
                   << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency" << std::setw(20)
-                  << "get valid pts" << std::setw(20) << "closest clusters" << std::setw(20) << "union" << std::setw(20) << "intersect" << std::setw(20) << "dist. cmp" << std::setw(20) << "dtct pnlty" << std::endl;
-        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20;
+                  << "get valid pts" << std::setw(20) << "closest clusters" << std::setw(20) << "union" << std::setw(20)
+                  << "intersect" << std::setw(20) << "dist. cmp" << std::setw(20) << "dtct pnlty" << std::setw(20)
+                  << "estimate time" << std::endl;
+        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20 + 20 + 20;
     }
     uint32_t recalls_to_print = 0;
     const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -165,14 +167,14 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         time_to_cluster = 0;
         time_to_union = 0;
         time_to_intersect = 0;
-        time_to_compare  = 0;
+        time_to_compare = 0;
         time_to_detect_penalty = 0;
         uint32_t L = Lvec[test_id];
-/*        if (L < recall_at)
-        {
-            diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at << std::endl;
-            continue;
-        }*/
+        /*        if (L < recall_at)
+                {
+                    diskann::cout << "Ignoring search with L:" << L << " since it's smaller than K:" << recall_at <<
+           std::endl; continue;
+                }*/
 
         query_result_ids[test_id].resize(recall_at * query_num);
         query_result_dists[test_id].resize(recall_at * query_num);
@@ -276,7 +278,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         }
                     }
                     query_stats_file << cmp_stats[i] << "\t" << cur_recall << "\t" << filter_match_time[i] << "\t"
-                                     << dist_cmp_time[i] << std::endl;
+                                     << dist_cmp_time[i] << "\t";
+                    for (auto const &r : res)
+                        query_stats_file << r << " ";
+                    query_stats_file << std::endl;
                 }
                 query_stats_file.close();
             }
@@ -305,11 +310,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15)
                       << (float)latency_stats[(uint64_t)(0.999 * query_num)] << std::setw(20)
-                      << time_to_get_valid*1000000/query_num  << std::setw(20) << time_to_cluster*100000/query_num << std::setw(20)
-                      << time_to_union*1000000/query_num << std::setw(20)
-                      << time_to_intersect*1000000/query_num << std::setw(20)
-                      << time_to_compare*1000000/query_num << std::setw(20)
-                      << time_to_detect_penalty*1000000/query_num ;
+                      << time_to_get_valid * 1000000 / query_num << std::setw(20)
+                      << time_to_cluster * 100000 / query_num << std::setw(20) << time_to_union * 1000000 / query_num
+                      << std::setw(20) << time_to_intersect * 1000000 / query_num << std::setw(20)
+                      << time_to_compare * 1000000 / query_num << std::setw(20)
+                      << time_to_detect_penalty * 1000000 / query_num << std::setw(20)
+                      << time_to_estimate * 1000000 / query_num;
         }
         for (double recall : recalls)
         {
@@ -339,9 +345,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         test_id++;
     }
 
-    std::cout << "num_graphs " << num_graphs << std::endl;
-    std::cout << "num_clusters " << num_clusters << std::endl;
-    std::cout << "num_brutes " << num_brutes << std::endl;
+    std::cout << "num_graphs " << num_graphs / Lvec.size() << std::endl;
+    std::cout << "num_clusters " << num_clusters / Lvec.size() << std::endl;
+    std::cout << "num_brutes " << num_brutes / Lvec.size() << std::endl;
 
     diskann::aligned_free(query);
     return best_recall >= fail_if_recall_below ? 0 : -1;

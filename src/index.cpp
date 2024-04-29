@@ -654,17 +654,16 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         std::srand(time(NULL));
         for (auto const &label : _labels)
         {
-            if (_labels_to_points[label].cardinality() > _bruteforce_threshold)
+            /* if (_labels_to_points[label].cardinality() > _bruteforce_threshold) */
+            /* { */
+            for (roaring::Roaring::const_iterator j = _labels_to_points[label].begin();
+                 j != _labels_to_points[label].end(); j++)
             {
-                roaring::Roaring tmp;
-                for (roaring::Roaring::const_iterator j = _labels_to_points[label].begin();
-                     j != _labels_to_points[label].end(); j++)
-                {
-                    int val = (int)(100.0 * std::rand() / (RAND_MAX + 1.0)) + 1;
-                    if (val <= _prob * 100.0)
-                        _labels_to_points_samples[label].add(*j);
-                }
+                int val = (int)(100.0 * std::rand() / (RAND_MAX + 1.0)) + 1;
+                if (val <= _prob * 100.0)
+                    _labels_to_points_samples[label].add(*j);
             }
+            /* } */
         }
 
         std::string universal_label_file(filename);
@@ -2464,9 +2463,21 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     else
     {
-        uint32_t sample_size = _clustering_threshold + 1;
-        if (sorted_filters[0].second < _bruteforce_threshold ||
-            (sample_size = sample_intersection(scratch->get_valid_bitmap(), filter_label)) < _bruteforce_threshold)
+#ifdef INSTRUMENT
+        auto s = std::chrono::high_resolution_clock::now();
+#endif
+        /* uint32_t sample_size = _clustering_threshold + 1; */
+        uint32_t sample_size = sample_intersection(scratch->get_valid_bitmap(), filter_label);
+#ifdef INSTRUMENT
+        std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+        time_to_estimate += diff.count();
+#endif
+        /* if (sorted_filters[0].second < _bruteforce_threshold || */
+        /*     (sample_size = sample_intersection(scratch->get_valid_bitmap(), filter_label)) <
+         * _bruteforce_threshold)
+         */
+        /* if (sorted_filters[0].second < _bruteforce_threshold) */
+        if (sample_size < _bruteforce_threshold)
         {
             num_brutes++;
             auto &last_intersection = scratch->get_valid_bitmap();
@@ -2477,11 +2488,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             }
             retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
         }
-        else if (sorted_filters[0].second < _clustering_threshold ||
-                 (sample_size = (sample_size < _clustering_threshold)
-                                    ? sample_intersection(scratch->get_valid_bitmap(), filter_label)
-                                    : sample_size) <
-                     _clustering_threshold) // this is very cursed, is there a better way to do this?
+        /* else if (sorted_filters[0].second < _clustering_threshold || */
+        /*          (sample_size = (sample_size < _clustering_threshold) */
+        /*                             ? sample_intersection(scratch->get_valid_bitmap(), filter_label) */
+        /*                             : sample_size) < */
+        /*              _clustering_threshold) // this is very cursed, is there a better way to do this? */
+        /* else if (sorted_filters[0].second < _clustering_threshold) */
+        else if (sample_size < _clustering_threshold)
         {
             num_clusters++;
             /* auto &last_intersection = scratch->get_valid_bitmap(); */

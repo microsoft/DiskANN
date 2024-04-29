@@ -40,6 +40,7 @@ inline double time_to_cluster = 0.;
 inline double time_to_compare = 0.;
 inline double time_to_get_valid = 0.;
 inline double time_to_detect_penalty = 0.;
+inline double time_to_estimate = 0;
 inline uint32_t num_brutes = 0;
 inline uint32_t num_clusters = 0;
 inline uint32_t num_graphs = 0;
