@@ -466,7 +466,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     char *_opt_graph = nullptr;
 
-    T *_data = nullptr; // coordinates of all base points
     // Dimensions
     size_t _dim = 0;
     size_t _nd = 0;         // number of active points i.e. existing in the graph

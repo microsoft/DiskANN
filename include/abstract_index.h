@@ -106,7 +106,7 @@ class AbstractIndex
 
     template <typename label_type> void set_universal_label(const label_type universal_label);
 
-    virtual bool is_label_valid(const std::string& raw_label) const = 0;
+    virtual bool is_label_valid(const std::string &raw_label) const = 0;
     virtual bool is_set_universal_label() const = 0;
 
   private:
