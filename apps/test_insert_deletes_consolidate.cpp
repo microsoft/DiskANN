@@ -97,7 +97,6 @@ void insert_till_next_checkpoint(diskann::AbstractIndex &index, size_t start, si
                                  size_t aligned_dim, std::vector<std::vector<LabelT>> &location_to_labels)
 {
     diskann::Timer insert_timer;
-
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
     for (int64_t j = start; j < (int64_t)end; j++)
     {
@@ -306,8 +305,6 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
         delete_task.wait();
 
         std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
-        const auto save_path_inc = get_save_filename(save_path + ".after-concurrent-delete-", points_to_skip,
-                                                     points_to_delete_from_beginning, last_point_threshold);
         index->save(save_path_inc.c_str(), true);
     }
     else
