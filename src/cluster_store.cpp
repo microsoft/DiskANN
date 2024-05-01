@@ -40,16 +40,19 @@ template <typename data_t> uint32_t InMemClusterStore<data_t>::load(const std::s
 
     _posting_lists.resize(this->_num_clusters);
     for (unsigned i = 0; i < this->_num_clusters; i++) {
-      unsigned cur_count;
-      if (cur_count != 0)
-        non_empty_clusters.emplace_back(i);
+      unsigned cur_count = 0;
+
       in.read((char *) &cur_count, sizeof(unsigned));
+
+      if (cur_count > 0) {
+      non_empty_clusters.emplace_back(i);
       uint32_t* vals = new uint32_t[cur_count];
       in.read((char *) vals, (uint64_t)cur_count * sizeof(unsigned));
-
       _posting_lists[i] = RoaringIdList(cur_count, vals);
-//      roaring_bitmap_add_many((roaring_bitmap_t*)_posting_lists[i].get_bitmap(), cur_count, vals);
       delete[] vals;
+      }
+
+//      roaring_bitmap_add_many((roaring_bitmap_t*)_posting_lists[i].get_bitmap(), cur_count, vals);
       total_count += cur_count;
     }
     in.close();
