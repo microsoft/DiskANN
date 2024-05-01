@@ -114,10 +114,15 @@ template <typename data_t> void InMemClusterStore<data_t>::add_cetroids(float *c
     _posting_lists.resize(num_clusters);
 }
 
-template <typename data_t> void InMemClusterStore<data_t>::assign_data_to_clusters(const data_t *vectors, std::vector<uint32_t> &ids) {
+template <typename data_t> void InMemClusterStore<data_t>::assign_data_to_clusters(data_t *vectors, std::vector<uint32_t> &ids) {
     uint64_t num_pts = ids.size();
-    float* vectors_float = new float[num_pts*this->_dim];
+    float* vectors_float;
+    if (sizeof(data_t) != sizeof(float)) {
+     vectors_float = new float[num_pts*this->_dim];
     diskann::convert_types<data_t, float>(vectors, vectors_float, num_pts, this->_dim);
+    } else {
+        vectors_float = (float*) vectors;
+    }
 
     uint32_t* closest_centers = new uint32_t[num_pts];
     math_utils::compute_closest_centers(vectors_float, num_pts, this->_dim, this->_cluster_centroids, this->_num_clusters, 1,
