@@ -105,8 +105,11 @@ template <typename data_t> size_t InMemClusterStore<data_t>::save(const std::str
 
 template <typename data_t> void InMemClusterStore<data_t>::add_cetroids(float *clusters, uint32_t num_clusters) {
     this->_num_clusters = num_clusters;
+
+    diskann::cout<<"Set num clusters to " << num_clusters << ", and dim to " << this->_dim << std::endl;
     this->_cluster_centroids = new float[(uint64_t)num_clusters*this->_dim];
-    std::memcpy(this->_cluster_centroids, clusters, (uint64_t)num_clusters*this->_dim);
+    std::memcpy(this->_cluster_centroids, clusters, (uint64_t)num_clusters*this->_dim*sizeof(float));
+
     _posting_lists.clear();
     _posting_lists.resize(num_clusters);
 }

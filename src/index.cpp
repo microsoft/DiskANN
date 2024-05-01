@@ -2175,7 +2175,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
         float *pivot_data;
 
-        uint32_t num_clusters = 1000;
+        uint32_t num_clusters = 250;
         diskann::cout << "num_train, train_dim, num_clusters=" << num_train << " " << train_dim << " " << num_clusters
                       << std::endl;
 
@@ -2183,7 +2183,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         pivot_data = new float[num_clusters * train_dim];
 
         // Process Global k-means for kmeans_partitioning Step
-        diskann::cout << "Processing global k-means (kmeans_partitioning Step)" << std::endl;
+        diskann::cout << "Processing global k-means (kmeans_partitioning Step) with k=" << num_clusters << std::endl;
         kmeans::kmeanspp_selecting_pivots(train_data_float, num_train, train_dim, pivot_data, num_clusters);
         diskann::cout << "Processing Lloyds iteration" << std::endl;
         kmeans::run_lloyds(train_data_float, num_train, train_dim, pivot_data, num_clusters, 15, NULL, NULL);
