@@ -97,9 +97,9 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
 
     inline roaring::Roaring &get_valid_bitmap()
     {
+        _last_intersection.removeRangeClosed(_last_intersection.minimum(), _last_intersection.maximum());
         return _last_intersection;
     }
-
 
   private:
     uint32_t _L;

@@ -413,10 +413,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
-//    std::unordered_map<LabelT, roaring::Roaring> _labels_to_points;
-    std::vector<roaring::Roaring> _labels_to_points;    
-    std::unordered_map<LabelT, roaring::Roaring> _labels_to_points_samples;
-    std::vector<std::unordered_map<LabelT, roaring::Roaring>> _clusters_to_labels_to_points;
+    std::vector<roaring::Roaring> _labels_to_points;
+    std::vector<roaring::Roaring> _labels_to_points_samples;
+    std::vector<std::vector<roaring::Roaring>> _clusters_to_labels_to_points;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     diskann::InMemClusterStore<T> *_ivf_clusters = nullptr;
 
