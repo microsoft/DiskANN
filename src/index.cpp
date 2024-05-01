@@ -2062,7 +2062,6 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     infile.clear();
     infile.seekg(0, std::ios::beg);
     line_cnt = 0;
-    _labels_to_points.resize(5000); // TODO TODO TODO
     while (std::getline(infile, line))
     {
         std::istringstream iss(line);
