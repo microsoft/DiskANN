@@ -2076,8 +2076,8 @@ void Index<T, TagT, LabelT>::parse_label_file_bloom(const std::string &label_fil
         std::string low = line.substr(64, 64);
         assert((high.size() + low.size()) == 128);
 
-        uint128_t high_64 = (uint128_t)std::stoull(high);
-        uint128_t low_64 = (uint128_t)std::stoull(low);
+        uint128_t high_64 = (uint128_t)std::stoull(high,nullptr,2);
+        uint128_t low_64 = (uint128_t)std::stoull(low,nullptr,2);
         _location_to_labels_bloom[line_cnt] = (high_64 << 64) | (low_64 << 0);
 
         line_cnt++;

@@ -189,14 +189,14 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             if (filtered_search && !tags)
             {
                 std::vector<std::string> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
-                std::string line = query_filters_bloom[query_num];
+                std::string line = query_filters_bloom[i];
                 assert(line.size() == 128);
                 std::string high = line.substr(0, 64);
                 std::string low = line.substr(64, 64);
                 assert((high.size() + low.size()) == 128);
 
-                uint128_t high_64 = (uint128_t)std::stoull(high);
-                uint128_t low_64 = (uint128_t)std::stoull(low);
+                uint128_t high_64 = (uint128_t)std::stoull(high,nullptr,2);
+                uint128_t low_64 = (uint128_t)std::stoull(low,nullptr,2);
                 curr_query_bloom_filter = (high_64 << 64) | (low_64 << 0);
 
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
