@@ -364,7 +364,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path, query_file, gt_file, filter_label, label_type,
-        query_filters_file;
+        query_filters_file, query_filters_file_bloom;
     uint32_t num_threads, K, filter_penalty_threshold, bruteforce_threshold, clustering_threshold, L_for_print;
     std::vector<uint32_t> Lvec;
     bool print_all_recalls, dynamic, tags, show_qps_per_thread;
@@ -405,6 +405,10 @@ int main(int argc, char **argv)
         optional_configs.add_options()("query_filters_file",
                                        po::value<std::string>(&query_filters_file)->default_value(std::string("")),
                                        program_options_utils::FILTERS_FILE_DESCRIPTION);
+        optional_configs.add_options()(
+            "query_filters_file_bloom",
+            po::value<std::string>(&query_filters_file_bloom)->default_value(std::string("")),
+            program_options_utils::FILTERS_FILE_DESCRIPTION);
         optional_configs.add_options()("filter_penalty_threshold",
                                        po::value<uint32_t>(&filter_penalty_threshold)->default_value(0),
                                        "What penalty threshold to tolerate for multiple filter search");
@@ -519,7 +523,7 @@ int main(int argc, char **argv)
     else if (query_filters_file != "")
     {
         query_filters = read_file_to_vector_of_strings(query_filters_file);
-        query_filters_bloom = read_file_to_vector_of_strings_bloom(query_filters_file);
+        query_filters_bloom = read_file_to_vector_of_strings_bloom(query_filters_file_bloom);
     }
 
     try
