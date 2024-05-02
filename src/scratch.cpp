@@ -7,6 +7,7 @@
 #include "scratch.h"
 #include "pq_scratch.h"
 
+#define RECOMMENDED_NUM_CLUSTERS 5000
 namespace diskann
 {
 //
@@ -38,6 +39,7 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
         this->_pq_scratch = nullptr;
 
     _occlude_factor.reserve(maxc);
+    _cluster_distances.reserve(RECOMMENDED_NUM_CLUSTERS);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
     _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
     _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
@@ -53,6 +55,7 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _closest_clusters.clear();
     _inserted_into_pool_rs.clear();
     _inserted_into_pool_bs->reset();
+    _cluster_distances.clear();
 
     _id_scratch.clear();
     _dist_scratch.clear();

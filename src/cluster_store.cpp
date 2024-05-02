@@ -32,6 +32,8 @@ template <typename data_t> uint32_t InMemClusterStore<data_t>::load(const std::s
     diskann::load_bin<float>(centers_file, this->_cluster_centroids,
                                    this->_num_clusters, this->_dim);
 
+    this->_cluster_norms = new float[this->_num_clusters];
+    math_utils::compute_vecs_l2sq(this->_cluster_norms, this->_cluster_centroids, this->_num_clusters, this->_dim);
 
     std::vector<uint32_t> non_empty_clusters;
 
@@ -135,11 +137,17 @@ template <typename data_t> void InMemClusterStore<data_t>::assign_data_to_cluste
     delete[] vectors_float;
 }
 
-template <typename data_t> void InMemClusterStore<data_t>::get_closest_clusters(const data_t *const query, const uint32_t num_closest, std::vector<uint32_t> &closest_clusters) {
+template <typename data_t> void InMemClusterStore<data_t>::get_closest_clusters(data_t *query, const uint32_t num_closest, InMemQueryScratch<data_t> *scratch) {
 
-    float* query_float = new float[this->_dim];
-    diskann::convert_types<data_t, float>(query, query_float, 1, this->_dim);
+    float* query_float;// = new float[this->_dim];
+    if (sizeof(data_t) == sizeof(float)) {
+        query_float = query;
+    } else {
+        query_float = scratch->get_query_float();
+        diskann::convert_types<data_t, float>(query, query_float, 1, this->_dim);
+    }
 
+    auto &x = scratch->closest_clusters();
     closest_clusters.resize(num_closest);
     math_utils::compute_closest_centers(query_float, 1, this->_dim, this->_cluster_centroids, this->_num_clusters, num_closest,
                                             closest_clusters.data());

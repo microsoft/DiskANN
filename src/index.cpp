@@ -887,11 +887,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
 
-    std::vector<uint32_t> closest_clusters = scratch->closest_clusters();
+//    std::vector<uint32_t> closest_clusters = scratch->closest_clusters();
 #ifdef INSTRUMENT
     auto s = std::chrono::high_resolution_clock::now();
 #endif
-    _ivf_clusters->get_closest_clusters(aligned_query, Lsize, closest_clusters);
+    _ivf_clusters->get_closest_clusters(aligned_query, Lsize, scratch);
 #ifdef INSTRUMENT
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     time_to_cluster += diff.count();
@@ -2239,7 +2239,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
         float *pivot_data;
 
-        uint32_t num_clusters = 2500;
+        uint32_t num_clusters = 250;
         diskann::cout << "num_train, train_dim, num_clusters=" << num_train << " " << train_dim << " " << num_clusters
                       << std::endl;
 
@@ -2265,7 +2265,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         _ivf_clusters->assign_data_to_clusters(raw_vectors, default_ids);
     }
 
-    this->build(filename, num_points_to_load, tags);
+   // this->build(filename, num_points_to_load, tags);
 }
 
 template <typename T, typename TagT, typename LabelT>

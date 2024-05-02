@@ -10,6 +10,7 @@
 #include "windows_customizations.h"
 #include "id_list.h"
 #include "distance.h"
+#include "scratch.h"
 
 namespace diskann
 {
@@ -52,12 +53,13 @@ template <typename data_t> class AbstractClusterStore
     // operations on vectors
     // like populate_data function, but over one vector at a time useful for
     // streaming setting
-    virtual void get_closest_clusters(const data_t *const query, const uint32_t num_closest,
-                                      std::vector<uint32_t> &closest_clusters) = 0;
+    virtual void get_closest_clusters(data_t *query, const uint32_t num_closest,
+                                      InMemQueryScratch<data_t> *scratch) = 0;
     virtual void get_cluster_members(const uint32_t cluster_id, AbstractIdList &output_list) = 0;
 
   protected:
     float *_cluster_centroids = nullptr;
+    float *_cluster_norms = nullptr;
     size_t _num_clusters = 0;
     size_t _dim;
 };
@@ -87,8 +89,8 @@ template <typename data_t> class InMemClusterStore : public AbstractClusterStore
     // operations on vectors
     // like populate_data function, but over one vector at a time useful for
     // streaming setting
-    virtual void get_closest_clusters(const data_t *const query, const uint32_t num_closest,
-                                      std::vector<uint32_t> &closest_clusters) override;
+    virtual void get_closest_clusters(data_t *query, const uint32_t num_closest,
+                                      InMemQueryScratch<data_t> *scratch) override;
 
     virtual void get_cluster_members(const uint32_t cluster_id, AbstractIdList &output_list) override;
 
