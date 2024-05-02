@@ -13,6 +13,7 @@
 #include "timer.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
+#include "tsl/sparse_hash.h"
 #include "windows_customizations.h"
 #include "tag_uint128.h"
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
@@ -557,6 +558,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     std::string mem_index_file(filename);
     std::string labels_file = mem_index_file + "_labels.txt";
+    std::string labels_file_bloom = mem_index_file + "_labels_bloom.txt";
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
 
@@ -607,6 +609,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
+        parse_label_file_bloom(labels_file_bloom, label_num_pts);
         assert(label_num_pts == data_file_num_pts - _num_frozen_pts);
         if (file_exists(labels_to_medoids))
         {
@@ -838,7 +841,7 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
 // TODO: modify for handling universal label
 template <typename T, typename TagT, typename LabelT>
 inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                              const std::vector<LabelT> &incoming_labels)
+                                                              const uint128_t &incoming_labels)
 {
 
     auto s = std::chrono::high_resolution_clock::now();
@@ -847,18 +850,23 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
     //    if (!search_invocation)
     //        return true;
     uint32_t overlap = 0;
+    uint128_t n = (_location_to_labels_bloom[point_id] & incoming_labels) ^ incoming_labels;
+    const uint64_t n_hi = n >> 64;
+    const uint64_t n_lo = n;
+    const uint32_t cnt_hi = _mm_popcnt_u64(n_hi);
+    const uint32_t cnt_lo = _mm_popcnt_u64(n_lo);
 
     //    if (!search_invocation) {
     //    auto &curr_node_labels = _location_to_labels[point_id];
-    for (auto &lbl : incoming_labels)
-    {
-        //        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
-        //        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
-        if (_labels_to_points[lbl].contains(point_id))
-        {
-            overlap++;
-        }
-    }
+    /* for (auto &lbl : incoming_labels) */
+    /* { */
+    //        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
+    //        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
+    /* if (_labels_to_points[lbl].contains(point_id)) */
+    /* { */
+    /* overlap++; */
+    /* } */
+    /* } */
     /*    } else {
         auto &curr_node_labels = _location_to_labels_bitmap[point_id];
         for (auto &lbl : incoming_labels)
@@ -881,7 +889,8 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     time_to_detect_penalty += diff.count();
 
-    return incoming_labels.size() - overlap;
+    /* return incoming_labels.size() - overlap; */
+    return cnt_hi + cnt_lo;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -999,7 +1008,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
-    const std::vector<LabelT> &filter_labels, bool search_invocation)
+    const uint128_t &filter_labels, bool search_invocation)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -1055,7 +1064,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
             else
             {
-                if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+                if (detect_filter_penalty(id, search_invocation, filter_labels) == 0)
                     continue;
             }
         }
@@ -1141,7 +1150,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                     else
                     {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+                        if (detect_filter_penalty(id, search_invocation, filter_labels) == 0)
                             continue;
                     }
                 }
@@ -1188,7 +1197,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                     else
                     {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+                        if (detect_filter_penalty(id, search_invocation, filter_labels) == 0)
                             continue;
                     }
                 }
@@ -1222,7 +1231,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
                                                         uint32_t filteredLindex)
 {
     const std::vector<uint32_t> init_ids = get_init_ids();
-    const std::vector<LabelT> unused_filter_label;
+    const uint128_t unused_filter_label = 0;
 
     if (!use_filter)
     {
@@ -1243,7 +1252,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
-                               _location_to_labels[location], false);
+                               _location_to_labels_bloom[location], false);
 
         // combine candidate pools obtained with filter and unfiltered criteria.
         std::set<Neighbor> best_candidate_pool;
@@ -2038,6 +2047,46 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
 }
 
 template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::parse_label_file_bloom(const std::string &label_file, size_t &num_points)
+{
+    std::ifstream infile(label_file);
+    if (infile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+
+    std::string line, token;
+    uint32_t line_cnt = 0;
+
+    while (std::getline(infile, line))
+    {
+        line_cnt++;
+    }
+    _location_to_labels_bloom.resize(line_cnt, 0);
+    /* _location_to_labels_robin.resize(line_cnt, tsl::robin_set<LabelT>()); */
+    /* _location_to_labels_bitmap.resize(line_cnt, roaring::Roaring()); */
+
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
+    while (std::getline(infile, line))
+    {
+        assert(line.size() == 128);
+        std::string high = line.substr(0, 64);
+        std::string low = line.substr(64, 64);
+        assert((high.size() + low.size()) == 128);
+
+        uint128_t high_64 = (uint128_t)std::stoull(high);
+        uint128_t low_64 = (uint128_t)std::stoull(low);
+        _location_to_labels_bloom[line_cnt] = (high_64 << 64) | (low_64 << 0);
+
+        line_cnt++;
+    }
+    num_points = (size_t)line_cnt;
+    diskann::cout << "Identified " << _labels.size() << " distinct label(s), bloom filter style" << std::endl;
+}
+
+template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, size_t &num_points)
 {
     // Format of Label txt file: filters with comma separators
@@ -2272,7 +2321,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
         diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
 
-    const std::vector<LabelT> unused_filter_label;
+    const uint128_t unused_filter_label = 0;
     const std::vector<uint32_t> init_ids = get_init_ids();
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
@@ -2463,7 +2512,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         }
         break;
         case 3:
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, curr_query_bloom_filter, true);
             break;
         }
     }
@@ -2514,7 +2563,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         else
         {
             num_graphs++;
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, curr_query_bloom_filter, true);
         }
     }
 
@@ -2523,7 +2572,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     size_t pos = 0;
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
-        if (best_L_nodes[i].id >= _max_points || (detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) != 0))
+        if (best_L_nodes[i].id >= _max_points ||
+            (detect_filter_penalty(best_L_nodes[i].id, true, curr_query_bloom_filter) != 0))
             continue;
 
         indices[pos] = (IdType)best_L_nodes[i].id;
@@ -2598,17 +2648,15 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     //_distance->preprocess_query(query, _data_store->get_dims(),
     // scratch->aligned_query());
     _data_store->preprocess_query(query, scratch);
+    const uint128_t unused_filter_label = 0;
     if (!use_filters)
     {
-        const std::vector<LabelT> unused_filter_label;
         iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
     }
     else
     {
         auto converted_label = this->get_converted_label(filter_label);
-        std::vector<LabelT> filter_vec;
-        filter_vec.push_back(converted_label);
-        iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+        iterate_to_fixed_point(scratch, L, init_ids, true, unused_filter_label, true);
     }
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();

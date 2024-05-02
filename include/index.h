@@ -34,6 +34,7 @@
 #define DEFAULT_MAXC 750
 #define INSTRUMENT true
 
+typedef __uint128_t uint128_t;
 inline double time_to_intersect = 0.;
 inline double time_to_cluster = 0.;
 inline double time_to_filter_check_and_compare = 0.;
@@ -43,6 +44,7 @@ inline double time_to_estimate = 0;
 inline uint32_t num_brutes = 0;
 inline uint32_t num_clusters = 0;
 inline uint32_t num_graphs = 0;
+inline __uint128_t curr_query_bloom_filter;
 
 namespace diskann
 {
@@ -106,7 +108,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                      const std::vector<LabelT> &incoming_labels);
 
     DISKANN_DLLEXPORT inline uint32_t detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                            const std::vector<LabelT> &incoming_labels);
+                                                            const uint128_t &incoming_labels);
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
@@ -266,6 +268,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t calculate_entry_point();
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
+    void parse_label_file_bloom(const std::string &label_file, size_t &num_pts_labels);
 
     std::vector<std::pair<LabelT, uint32_t>> sort_filter_counts(const std::vector<LabelT> &filter_label);
 
@@ -287,7 +290,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool search_invocation);
+                                                         const uint128_t &filters, bool search_invocation);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
@@ -427,6 +430,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _clustering_threshold = 0;
     float _prob = 0.1;
     std::unordered_map<std::string, LabelT> _label_map;
+
+    // f con't
+    std::vector<uint128_t> _location_to_labels_bloom;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;

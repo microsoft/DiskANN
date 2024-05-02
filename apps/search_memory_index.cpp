@@ -33,9 +33,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
                         const std::vector<std::vector<std::string>> &query_filters,
-                        const uint32_t filter_penalty_threshold, const uint32_t bruteforce_threshold,
-                        const uint32_t clustering_threshold, uint32_t L_for_print, const float fail_if_recall_below,
-                        uint32_t maxN = 10000000, float p1 = 0.1, float p2 = 0.1)
+                        const std::vector<std::string> &query_filters_bloom, const uint32_t filter_penalty_threshold,
+                        const uint32_t bruteforce_threshold, const uint32_t clustering_threshold, uint32_t L_for_print,
+                        const float fail_if_recall_below, uint32_t maxN = 10000000, float p1 = 0.1, float p2 = 0.1)
 {
     using TagT = uint32_t;
     // Load the query file
@@ -124,8 +124,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
                   << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency" << std::setw(20)
-                  << "get valid pts" << std::setw(20) << "closest clusters" << std::setw(20)
-                  << "intersect" << std::setw(24) << "filter match+dist. cmp" << std::setw(20) << "dtct pnlty" << std::setw(20)
+                  << "get valid pts" << std::setw(20) << "closest clusters" << std::setw(20) << "intersect"
+                  << std::setw(24) << "filter match+dist. cmp" << std::setw(20) << "dtct pnlty" << std::setw(20)
                   << "estimate time" << std::endl;
         table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 24 + 20 + 20;
     }
@@ -166,7 +166,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         time_to_get_valid = 0;
         time_to_cluster = 0;
         time_to_intersect = 0;
-        time_to_filter_check_and_compare  = 0;
+        time_to_filter_check_and_compare = 0;
         time_to_detect_penalty = 0;
         uint32_t L = Lvec[test_id];
         /*        if (L < recall_at)
@@ -189,6 +189,15 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             if (filtered_search && !tags)
             {
                 std::vector<std::string> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+                std::string line = query_filters_bloom[query_num];
+                assert(line.size() == 128);
+                std::string high = line.substr(0, 64);
+                std::string low = line.substr(64, 64);
+                assert((high.size() + low.size()) == 128);
+
+                uint128_t high_64 = (uint128_t)std::stoull(high);
+                uint128_t low_64 = (uint128_t)std::stoull(low);
+                curr_query_bloom_filter = (high_64 << 64) | (low_64 << 0);
 
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
                                                          query_result_ids[test_id].data() + i * recall_at,
@@ -309,10 +318,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15)
                       << (float)latency_stats[(uint64_t)(0.999 * query_num)] << std::setw(20)
-                      << time_to_get_valid*1000000/query_num  << std::setw(20) << time_to_cluster*100000/query_num << std::setw(20)
-                      << time_to_intersect*1000000/query_num << std::setw(20)
-                      << time_to_filter_check_and_compare*1000000/query_num << std::setw(24)
-                      << time_to_detect_penalty*1000000/query_num << std::setw(24)
+                      << time_to_get_valid * 1000000 / query_num << std::setw(20)
+                      << time_to_cluster * 100000 / query_num << std::setw(20)
+                      << time_to_intersect * 1000000 / query_num << std::setw(20)
+                      << time_to_filter_check_and_compare * 1000000 / query_num << std::setw(24)
+                      << time_to_detect_penalty * 1000000 / query_num << std::setw(24)
                       << time_to_estimate * 1000000 / query_num;
         }
         for (double recall : recalls)
@@ -499,6 +509,7 @@ int main(int argc, char **argv)
     }
 
     std::vector<std::vector<std::string>> query_filters;
+    std::vector<std::string> query_filters_bloom;
     if (filter_label != "")
     {
         std::vector<std::string> single_filter;
@@ -508,6 +519,7 @@ int main(int argc, char **argv)
     else if (query_filters_file != "")
     {
         query_filters = read_file_to_vector_of_strings(query_filters_file);
+        query_filters_bloom = read_file_to_vector_of_strings_bloom(query_filters_file);
     }
 
     try
@@ -518,22 +530,25 @@ int main(int argc, char **argv)
             {
                 return search_memory_index<int8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, query_filters_bloom,
+                    filter_penalty_threshold, bruteforce_threshold, clustering_threshold, L_for_print,
+                    fail_if_recall_below);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, query_filters_bloom,
+                    filter_penalty_threshold, bruteforce_threshold, clustering_threshold, L_for_print,
+                    fail_if_recall_below);
             }
             else if (data_type == std::string("float"))
             {
-                return search_memory_index<float, uint16_t>(
-                    metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                return search_memory_index<float, uint16_t>(metric, index_path_prefix, result_path, query_file, gt_file,
+                                                            num_threads, K, print_all_recalls, Lvec, dynamic, tags,
+                                                            show_qps_per_thread, query_filters, query_filters_bloom,
+                                                            filter_penalty_threshold, bruteforce_threshold,
+                                                            clustering_threshold, L_for_print, fail_if_recall_below);
             }
             else
             {
@@ -545,24 +560,27 @@ int main(int argc, char **argv)
         {
             if (data_type == std::string("int8"))
             {
-                return search_memory_index<int8_t>(
-                    metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below, maxN, p1, p2);
+                return search_memory_index<int8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
+                                                   num_threads, K, print_all_recalls, Lvec, dynamic, tags,
+                                                   show_qps_per_thread, query_filters, query_filters_bloom,
+                                                   filter_penalty_threshold, bruteforce_threshold, clustering_threshold,
+                                                   L_for_print, fail_if_recall_below, maxN, p1, p2);
             }
             else if (data_type == std::string("uint8"))
             {
-                return search_memory_index<uint8_t>(
-                    metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                return search_memory_index<uint8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
+                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags,
+                                                    show_qps_per_thread, query_filters, query_filters_bloom,
+                                                    filter_penalty_threshold, bruteforce_threshold,
+                                                    clustering_threshold, L_for_print, fail_if_recall_below);
             }
             else if (data_type == std::string("float"))
             {
-                return search_memory_index<float>(
-                    metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                return search_memory_index<float>(metric, index_path_prefix, result_path, query_file, gt_file,
+                                                  num_threads, K, print_all_recalls, Lvec, dynamic, tags,
+                                                  show_qps_per_thread, query_filters, query_filters_bloom,
+                                                  filter_penalty_threshold, bruteforce_threshold, clustering_threshold,
+                                                  L_for_print, fail_if_recall_below);
             }
             else
             {

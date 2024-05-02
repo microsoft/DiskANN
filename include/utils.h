@@ -1083,17 +1083,20 @@ template <typename T = float> inline void normalize(T *arr, const size_t dim)
     }
 }
 
-inline std::vector<std::vector<std::string>> read_file_to_vector_of_strings(const std::string &filename, bool unique = false) {
-        std::vector<std::vector<std::string>> query_filters;
-        std::ifstream file(filename);
-        std::string line, token;
+inline std::vector<std::vector<std::string>> read_file_to_vector_of_strings(const std::string &filename,
+                                                                            bool unique = false)
+{
+    std::vector<std::vector<std::string>> query_filters;
+    std::ifstream file(filename);
+    std::string line, token;
 
-        if (file.fail())
-        {
-            throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
-        }
+    if (file.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+    }
 
-        while (std::getline(file, line)) {
+    while (std::getline(file, line))
+    {
         std::istringstream iss(line);
         std::vector<std::string> lbls(0);
         while (getline(iss, token, '&'))
@@ -1103,11 +1106,29 @@ inline std::vector<std::vector<std::string>> read_file_to_vector_of_strings(cons
             lbls.push_back(token);
         }
         query_filters.push_back(lbls);
-        }
+    }
     std::cout << "Populated labels for " << query_filters.size() << " queries" << std::endl;
-        return query_filters;
+    return query_filters;
 }
 
+inline std::vector<std::string> read_file_to_vector_of_strings_bloom(const std::string &filename, bool unique = false)
+{
+    std::vector<std::string> query_filters;
+    std::ifstream file(filename);
+    std::string line, token;
+
+    if (file.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+    }
+
+    while (std::getline(file, line))
+    {
+        query_filters.push_back(line);
+    }
+    std::cout << "Populated labels for " << query_filters.size() << " queries" << std::endl;
+    return query_filters;
+}
 
 inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::robin_set<std::string> path_suffixes)
 {
