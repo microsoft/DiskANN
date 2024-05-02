@@ -104,6 +104,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t get_num_points();
     DISKANN_DLLEXPORT size_t get_max_points();
 
+    DISKANN_DLLEXPORT inline uint32_t detect_filter_penalty_orig(uint32_t point_id, bool search_invocation,
+                                                                 const std::vector<LabelT> &incoming_labels);
+
     DISKANN_DLLEXPORT uint32_t detect_common_filters(uint32_t point_id, bool search_invocation,
                                                      const std::vector<LabelT> &incoming_labels);
 
