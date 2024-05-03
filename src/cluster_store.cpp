@@ -138,10 +138,10 @@ template <typename data_t> void InMemClusterStore<data_t>::assign_data_to_cluste
 }
 
 template <typename data_t> void InMemClusterStore<data_t>::get_closest_clusters(data_t *query, const uint32_t num_closest, InMemQueryScratch<data_t> *scratch) {
-
+    auto &closest_clusters = scratch->closest_clusters();
     float* query_float;// = new float[this->_dim];
     if (sizeof(data_t) == sizeof(float)) {
-        query_float = query;
+        query_float = (float*) query;
     } else {
         query_float = scratch->get_query_float();
         diskann::convert_types<data_t, float>(query, query_float, 1, this->_dim);
@@ -152,7 +152,7 @@ template <typename data_t> void InMemClusterStore<data_t>::get_closest_clusters(
     math_utils::compute_closest_centers(query_float, 1, this->_dim, this->_cluster_centroids, this->_num_clusters, num_closest,
                                             closest_clusters.data());
 
-    delete[] query_float;
+    //delete[] query_float;
 }
 
 // todo: do we copy the roaring bitmap inside the roaring list?

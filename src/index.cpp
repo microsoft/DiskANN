@@ -901,7 +901,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
 #ifdef INSTRUMENT
     s = std::chrono::high_resolution_clock::now();
 #endif
-    for (auto const &cluster_id : closest_clusters)
+    for (auto const &cluster_id : scratch->closest_clusters())
     {
         roaring::Roaring tmp = _clusters_to_labels_to_points[cluster_id][filter_vec[0]];
         for (size_t k = 1; k < filter_vec.size(); k++)

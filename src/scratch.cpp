@@ -7,7 +7,6 @@
 #include "scratch.h"
 #include "pq_scratch.h"
 
-#define RECOMMENDED_NUM_CLUSTERS 5000
 namespace diskann
 {
 //

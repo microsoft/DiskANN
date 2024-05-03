@@ -18,6 +18,8 @@
 #include "defaults.h"
 #include "concurrent_queue.h"
 
+#define RECOMMENDED_NUM_CLUSTERS 5000
+
 namespace diskann
 {
 template <typename T> class PQScratch;
