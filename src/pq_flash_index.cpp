@@ -1256,8 +1256,6 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader, IOContext &ctx, size_t size,
                              int &completedIndex)
 {
-    bool waitsRemaining = false;
-    long completeCount = ctx.m_completeCount;
     if ((*ctx.m_pRequests)[0].m_callback)
     {
         bool waitsRemaining = false;
