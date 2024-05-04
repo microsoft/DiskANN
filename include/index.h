@@ -24,6 +24,8 @@
 
 #include "quantized_distance.h"
 #include "pq_data_store.h"
+#include "LSH.h"
+
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -409,6 +411,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_ptr<AbstractDataStore<T>> _pq_data_store = nullptr;
     bool _pq_generated = false;
     FixedChunkPQTable _pq_table;
+
+    //LSH Optimization
+    std::unique_ptr<diskann::LSH> _ls_hasher = nullptr;
+    bool _use_lsh_for_build = true;
+    std::vector<std::bitset<LSH_NUM_AXES>> _lsh_hashes;
 
     //
     // Data structures, locks and flags for dynamic indexing and tags

@@ -38,6 +38,10 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
     _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
 
+    //lsh_test
+    _lsh_dp_scratch = new float[8]; //should be taken as parameter. 
+    _lsh_query_scratch = new float[dim];
+
     resize_for_new_L(std::max(search_l, indexing_l));
 }
 
@@ -80,6 +84,16 @@ template <typename T> InMemQueryScratch<T>::~InMemQueryScratch()
 
     delete this->_pq_scratch;
     delete _inserted_into_pool_bs;
+
+    if (_lsh_dp_scratch != nullptr) {
+        delete[] this->_lsh_dp_scratch;
+        _lsh_dp_scratch = nullptr;
+    }
+    if (_lsh_query_scratch != nullptr)
+    {
+        delete[] this->_lsh_query_scratch;
+        _lsh_query_scratch = nullptr;
+    }
 }
 
 //

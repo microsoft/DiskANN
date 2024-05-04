@@ -93,7 +93,16 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _occlude_list_output;
     }
-
+    inline float *lsh_dp_scratch()
+    {
+        return _lsh_dp_scratch;
+    }
+    inline float *lsh_query_scratch()
+    {
+        return _lsh_query_scratch;
+    }
+    
+    
   private:
     uint32_t _L;
     uint32_t _R;
@@ -132,6 +141,9 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     tsl::robin_set<uint32_t> _expanded_nodes_set;
     std::vector<Neighbor> _expanded_nghrs_vec;
     std::vector<uint32_t> _occlude_list_output;
+
+    float *_lsh_dp_scratch;
+    float *_lsh_query_scratch;
 };
 
 //

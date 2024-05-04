@@ -136,6 +136,9 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // returns region of `node_buf` containing [COORD(T)]
     DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
 
+    //lsh_test
+    //void load_lsh_data(const std::string &lsh_hash_file, const std::string &lsh_axes_file);
+
     // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]

@@ -767,6 +767,28 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_univers
     _universal_filter_label = label;
 }
 
+// lsh_test
+//template <typename T, typename LabelT>
+//void PQFlashIndex<T, LabelT>::load_lsh_data(const std::string &lsh_hash_file, const std::string &lsh_axes_file)
+//{
+//    //currently read from text file. Will be binary later.
+//    std::ifstream hash_in(lsh_hash_file);
+//    uint32_t value;
+//    while (hash_in.good()){
+//        hash_in >> value;
+//        _lsh_hashes.push_back((uint8_t)value);
+//    }
+//    hash_in.close();
+//
+//    std::ifstream axes_in(lsh_axes_file);
+//    float fval; 
+//    while (axes_in.good()) {
+//        axes_in >> fval;
+//        _lsh_axes.push_back(fval);
+//    }
+//    axes_in.close();
+//}
+
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix)
@@ -805,10 +827,20 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string medoids_file = std::string(_disk_index_file) + "_medoids.bin";
     std::string centroids_file = std::string(_disk_index_file) + "_centroids.bin";
 
-    std::string labels_file = std ::string(_disk_index_file) + "_labels.txt";
-    std::string labels_to_medoids = std ::string(_disk_index_file) + "_labels_to_medoids.txt";
-    std::string dummy_map_file = std ::string(_disk_index_file) + "_dummy_map.txt";
-    std::string labels_map_file = std ::string(_disk_index_file) + "_labels_map.txt";
+    std::string labels_file = _disk_index_file + "_labels.txt";
+    std::string labels_to_medoids = _disk_index_file + "_labels_to_medoids.txt";
+    std::string dummy_map_file = _disk_index_file + "_dummy_map.txt";
+    std::string labels_map_file = _disk_index_file + "_labels_map.txt";
+
+    //std::string lsh_hashes_file = _disk_index_file + "_hashes.txt";
+    //std::string lsh_axes_file = _disk_index_file + "_axes.txt";
+
+    //if (file_exists(lsh_hashes_file) && file_exists(lsh_axes_file))
+    //{
+    //    load_lsh_data(lsh_hashes_file, lsh_axes_file);
+    //    _lsh_opt = true;
+    //}
+
     size_t num_pts_in_label_file = 0;
 
     size_t pq_file_dim, pq_file_num_centroids;
