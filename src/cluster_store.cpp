@@ -40,16 +40,19 @@ template <typename data_t> uint32_t InMemClusterStore<data_t>::load(const std::s
 
     _posting_lists.resize(this->_num_clusters);
     for (unsigned i = 0; i < this->_num_clusters; i++) {
-      unsigned cur_count;
-      if (cur_count != 0)
-        non_empty_clusters.emplace_back(i);
+      unsigned cur_count = 0;
+
       in.read((char *) &cur_count, sizeof(unsigned));
+
+      if (cur_count > 0) {
+      non_empty_clusters.emplace_back(i);
       uint32_t* vals = new uint32_t[cur_count];
       in.read((char *) vals, (uint64_t)cur_count * sizeof(unsigned));
-
       _posting_lists[i] = RoaringIdList(cur_count, vals);
-//      roaring_bitmap_add_many((roaring_bitmap_t*)_posting_lists[i].get_bitmap(), cur_count, vals);
       delete[] vals;
+      }
+
+//      roaring_bitmap_add_many((roaring_bitmap_t*)_posting_lists[i].get_bitmap(), cur_count, vals);
       total_count += cur_count;
     }
     in.close();
@@ -102,16 +105,24 @@ template <typename data_t> size_t InMemClusterStore<data_t>::save(const std::str
 
 template <typename data_t> void InMemClusterStore<data_t>::add_cetroids(float *clusters, uint32_t num_clusters) {
     this->_num_clusters = num_clusters;
+
+    diskann::cout<<"Set num clusters to " << num_clusters << ", and dim to " << this->_dim << std::endl;
     this->_cluster_centroids = new float[(uint64_t)num_clusters*this->_dim];
-    std::memcpy(this->_cluster_centroids, clusters, (uint64_t)num_clusters*this->_dim);
+    std::memcpy(this->_cluster_centroids, clusters, (uint64_t)num_clusters*this->_dim*sizeof(float));
+
     _posting_lists.clear();
     _posting_lists.resize(num_clusters);
 }
 
-template <typename data_t> void InMemClusterStore<data_t>::assign_data_to_clusters(const data_t *vectors, std::vector<uint32_t> &ids) {
+template <typename data_t> void InMemClusterStore<data_t>::assign_data_to_clusters(data_t *vectors, std::vector<uint32_t> &ids) {
     uint64_t num_pts = ids.size();
-    float* vectors_float = new float[num_pts*this->_dim];
+    float* vectors_float;
+    if (sizeof(data_t) != sizeof(float)) {
+     vectors_float = new float[num_pts*this->_dim];
     diskann::convert_types<data_t, float>(vectors, vectors_float, num_pts, this->_dim);
+    } else {
+        vectors_float = (float*) vectors;
+    }
 
     uint32_t* closest_centers = new uint32_t[num_pts];
     math_utils::compute_closest_centers(vectors_float, num_pts, this->_dim, this->_cluster_centroids, this->_num_clusters, 1,

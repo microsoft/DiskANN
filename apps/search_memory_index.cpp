@@ -249,7 +249,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             {
                 std::ofstream query_stats_file;
                 query_stats_file.open(result_path_prefix + "_query_stats.txt");
-                query_stats_file << "cmps\tnum correct\tfilt time\tcmp time" << std::endl;
+                query_stats_file << "cmps\tnum correct\tfilt time\tcmp time\tlatency" << std::endl;
                 for (size_t i = 0; i < query_num; i++)
                 {
                     std::set<uint32_t> gt, res;
@@ -277,7 +277,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         }
                     }
                     query_stats_file << cmp_stats[i] << "\t" << cur_recall << "\t" << filter_match_time[i] << "\t"
-                                     << dist_cmp_time[i] << "\t";
+                                     << dist_cmp_time[i] << "\t" << latency_stats[i] << "\t";
                     for (auto const &r : res)
                         query_stats_file << r << " ";
                     query_stats_file << std::endl;

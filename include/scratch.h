@@ -38,6 +38,10 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _L;
     }
+    inline float* get_query_float()
+    {
+        return _aligned_query_float;
+    }
     inline uint32_t get_R()
     {
         return _R;
@@ -62,6 +66,11 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _best_l_nodes;
     }
+    inline std::vector<uint32_t> &closest_clusters()
+    {
+        return _closest_clusters;
+    }
+
     inline std::vector<float> &occlude_factor()
     {
         return _occlude_factor;
@@ -97,9 +106,9 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
 
     inline roaring::Roaring &get_valid_bitmap()
     {
+        _last_intersection.removeRangeClosed(_last_intersection.minimum(), _last_intersection.maximum());
         return _last_intersection;
     }
-
 
   private:
     uint32_t _L;
@@ -141,6 +150,9 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     std::vector<uint32_t> _occlude_list_output;
 
     roaring::Roaring _last_intersection;
+    // _to calculate the closest clusters during filtered search in clustered index
+    std::vector<uint32_t> _closest_clusters;
+    float* _aligned_query_float;
 };
 
 //

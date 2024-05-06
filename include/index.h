@@ -32,7 +32,7 @@
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
-#define INSTRUMENT true
+//#define INSTRUMENT true
 
 inline double time_to_intersect = 0.;
 inline double time_to_cluster = 0.;
@@ -267,6 +267,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
 
+    void parse_sample_label_file(const std::string &label_file, size_t &num_samples);
+
     std::vector<std::pair<LabelT, uint32_t>> sort_filter_counts(const std::vector<LabelT> &filter_label);
 
     uint32_t sample_intersection(roaring::Roaring &intersection_bitmap, const std::vector<LabelT> &filter_label);
@@ -413,9 +415,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
-    std::unordered_map<LabelT, roaring::Roaring> _labels_to_points;
-    std::unordered_map<LabelT, roaring::Roaring> _labels_to_points_samples;
-    std::vector<std::unordered_map<LabelT, roaring::Roaring>> _clusters_to_labels_to_points;
+    std::vector<roaring::Roaring> _labels_to_points;
+    std::vector<roaring::Roaring> _labels_to_points_sample;
+    float _sample_prob = 0;
+    std::vector<std::vector<roaring::Roaring>> _clusters_to_labels_to_points;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
     diskann::InMemClusterStore<T> *_ivf_clusters = nullptr;
 
