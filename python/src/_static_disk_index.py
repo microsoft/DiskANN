@@ -79,9 +79,9 @@ class StaticDiskIndex:
           does not exist, you are required to provide it.
         - **index_prefix**: The prefix of the index files. Defaults to "ann".
         """
-        index_prefix = _valid_index_prefix(index_directory, index_prefix)
+        index_prefix_path = _valid_index_prefix(index_directory, index_prefix)
         vector_dtype, metric, _, _ = _ensure_index_metadata(
-            index_prefix,
+            index_prefix_path,
             vector_dtype,
             distance_metric,
             1,  # it doesn't matter because we don't need it in this context anyway
@@ -101,7 +101,7 @@ class StaticDiskIndex:
             _index = _native_dap.StaticDiskFloatIndex
         self._index = _index(
             distance_metric=dap_metric,
-            index_path_prefix=os.path.join(index_directory, index_prefix),
+            index_path_prefix=index_prefix_path,
             num_threads=num_threads,
             num_nodes_to_cache=num_nodes_to_cache,
             cache_mechanism=cache_mechanism,
@@ -138,12 +138,13 @@ class StaticDiskIndex:
             )
             complexity = k_neighbors
 
-        return self._index.search(
+        neighbors, distances = self._index.search(
             query=_query,
             knn=k_neighbors,
             complexity=complexity,
             beam_width=beam_width,
         )
+        return QueryResponse(identifiers=neighbors, distances=distances)
 
     def batch_search(
         self,
@@ -187,7 +188,7 @@ class StaticDiskIndex:
             complexity = k_neighbors
 
         num_queries, dim = _queries.shape
-        return self._index.batch_search(
+        neighbors, distances = self._index.batch_search(
             queries=_queries,
             num_queries=num_queries,
             knn=k_neighbors,
@@ -195,3 +196,4 @@ class StaticDiskIndex:
             beam_width=beam_width,
             num_threads=num_threads,
         )
+        return QueryResponseBatch(identifiers=neighbors, distances=distances)

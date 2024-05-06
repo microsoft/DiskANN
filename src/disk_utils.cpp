@@ -3,7 +3,7 @@
 
 #include "common_includes.h"
 
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
 
@@ -559,7 +559,21 @@ void breakup_dense_points(const std::string data_file, const std::string labels_
     if (dummy_pt_ids.size() != 0)
     {
         diskann::cout << dummy_pt_ids.size() << " is the number of dummy points created" << std::endl;
-        data = (T *)std::realloc((void *)data, labels_per_point.size() * ndims * sizeof(T));
+
+        T *ptr = (T *)std::realloc((void *)data, labels_per_point.size() * ndims * sizeof(T));
+        if (ptr == nullptr)
+        {
+            diskann::cerr << "Realloc failed while creating dummy points" << std::endl;
+            free(data);
+            data = nullptr;
+            throw new diskann::ANNException("Realloc failed while expanding data.", -1, __FUNCTION__, __FILE__,
+                                            __LINE__);
+        }
+        else
+        {
+            data = ptr;
+        }
+
         std::ofstream dummy_writer(out_metadata_file);
         assert(dummy_writer.is_open());
         for (auto i = dummy_pt_ids.begin(); i != dummy_pt_ids.end(); i++)
@@ -635,10 +649,12 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                                                   .with_num_threads(num_threads)
                                                   .build();
         using TagT = uint32_t;
-        diskann::Index<T, TagT, LabelT> _index(compareMetric, base_dim, base_num, false, false, false,
-                                               build_pq_bytes > 0, build_pq_bytes, use_opq);
+        diskann::Index<T, TagT, LabelT> _index(compareMetric, base_dim, base_num,
+                                               std::make_shared<diskann::IndexWriteParameters>(paras), nullptr,
+                                               defaults::NUM_FROZEN_POINTS_STATIC, false, false, false,
+                                               build_pq_bytes > 0, build_pq_bytes, use_opq, use_filters);
         if (!use_filters)
-            _index.build(base_file.c_str(), base_num, paras);
+            _index.build(base_file.c_str(), base_num);
         else
         {
             if (universal_label != "")
@@ -646,7 +662,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
             //    LabelT unv_label_as_num = 0;
                 _index.set_universal_label(universal_label_num);
             }
-            _index.build_filtered_index(base_file.c_str(), label_file, base_num, paras);
+            _index.build_filtered_index(base_file.c_str(), label_file, base_num);
         }
         _index.save(mem_index_path.c_str());
 
@@ -673,7 +689,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     Timer timer;
     int num_parts =
         partition_with_ram_budget<T>(base_file, sampling_rate, ram_budget, 2 * R / 3, merged_index_prefix, 2);
-    diskann::cout << timer.elapsed_seconds_for_step("partitioning data") << std::endl;
+    diskann::cout << timer.elapsed_seconds_for_step("partitioning data ") << std::endl;
 
     std::string cur_centroid_filepath = merged_index_prefix + "_centroids.bin";
     std::rename(cur_centroid_filepath.c_str(), centroids_file.c_str());
@@ -681,6 +697,10 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
     timer.reset();
     for (int p = 0; p < num_parts; p++)
     {
+#if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+        MallocExtension::instance()->ReleaseFreeMemory();
+#endif
+
         std::string shard_base_file = merged_index_prefix + "_subshard-" + std::to_string(p) + ".bin";
 
         std::string shard_ids_file = merged_index_prefix + "_subshard-" + std::to_string(p) + "_ids_uint32.bin";
@@ -691,16 +711,22 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 
         std::string shard_index_file = merged_index_prefix + "_subshard-" + std::to_string(p) + "_mem.index";
 
-        diskann::IndexWriteParameters paras =
-            diskann::IndexWriteParametersBuilder(L, (2 * R / 3)).with_filter_list_size(Lf).build();
+        diskann::IndexWriteParameters low_degree_params = diskann::IndexWriteParametersBuilder(L, 2 * R / 3)
+                                                              .with_filter_list_size(Lf)
+                                                              .with_saturate_graph(false)
+                                                              .with_num_threads(num_threads)
+                                                              .build();
 
         uint64_t shard_base_dim, shard_base_pts;
         get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
-        diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts, false, false, false, build_pq_bytes > 0,
+
+        diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts,
+                                 std::make_shared<diskann::IndexWriteParameters>(low_degree_params), nullptr,
+                                 defaults::NUM_FROZEN_POINTS_STATIC, false, false, false, build_pq_bytes > 0,
                                  build_pq_bytes, use_opq);
         if (!use_filters)
         {
-            _index.build(shard_base_file.c_str(), shard_base_pts, paras);
+            _index.build(shard_base_file.c_str(), shard_base_pts);
         }
         else
         {
@@ -710,7 +736,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
 //                LabelT unv_label_as_num = 0;
                 _index.set_universal_label(universal_label_num);
             }
-            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts, paras);
+            _index.build_filtered_index(shard_base_file.c_str(), shard_labels_file, shard_base_pts);
         }
         _index.save(shard_index_file.c_str());
         // copy universal label file from first shard to the final destination
@@ -895,29 +921,31 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     if (vamana_frozen_num == 1)
         vamana_frozen_loc = medoid;
     max_node_len = (((uint64_t)width_u32 + 1) * sizeof(uint32_t)) + (ndims_64 * sizeof(T));
-    nnodes_per_sector = SECTOR_LEN / max_node_len;
+    nnodes_per_sector = defaults::SECTOR_LEN / max_node_len; // 0 if max_node_len > SECTOR_LEN
 
     diskann::cout << "medoid: " << medoid << "B" << std::endl;
     diskann::cout << "max_node_len: " << max_node_len << "B" << std::endl;
     diskann::cout << "nnodes_per_sector: " << nnodes_per_sector << "B" << std::endl;
 
-    // SECTOR_LEN buffer for each sector
-    std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(SECTOR_LEN);
+    // defaults::SECTOR_LEN buffer for each sector
+    std::unique_ptr<char[]> sector_buf = std::make_unique<char[]>(defaults::SECTOR_LEN);
+    std::unique_ptr<char[]> multisector_buf = std::make_unique<char[]>(ROUND_UP(max_node_len, defaults::SECTOR_LEN));
     std::unique_ptr<char[]> node_buf = std::make_unique<char[]>(max_node_len);
     uint32_t &nnbrs = *(uint32_t *)(node_buf.get() + ndims_64 * sizeof(T));
     uint32_t *nhood_buf = (uint32_t *)(node_buf.get() + (ndims_64 * sizeof(T)) + sizeof(uint32_t));
 
     // number of sectors (1 for meta data)
-    uint64_t n_sectors = ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector;
+    uint64_t n_sectors = nnodes_per_sector > 0 ? ROUND_UP(npts_64, nnodes_per_sector) / nnodes_per_sector
+                                               : npts_64 * DIV_ROUND_UP(max_node_len, defaults::SECTOR_LEN);
     uint64_t n_reorder_sectors = 0;
     uint64_t n_data_nodes_per_sector = 0;
 
     if (append_reorder_data)
     {
-        n_data_nodes_per_sector = SECTOR_LEN / (ndims_reorder_file * sizeof(float));
+        n_data_nodes_per_sector = defaults::SECTOR_LEN / (ndims_reorder_file * sizeof(float));
         n_reorder_sectors = ROUND_UP(npts_64, n_data_nodes_per_sector) / n_data_nodes_per_sector;
     }
-    uint64_t disk_index_file_size = (n_sectors + n_reorder_sectors + 1) * SECTOR_LEN;
+    uint64_t disk_index_file_size = (n_sectors + n_reorder_sectors + 1) * defaults::SECTOR_LEN;
 
     std::vector<uint64_t> output_file_meta;
     output_file_meta.push_back(npts_64);
@@ -936,20 +964,73 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     }
     output_file_meta.push_back(disk_index_file_size);
 
-    diskann_writer.write(sector_buf.get(), SECTOR_LEN);
+    diskann_writer.write(sector_buf.get(), defaults::SECTOR_LEN);
 
     std::unique_ptr<T[]> cur_node_coords = std::make_unique<T[]>(ndims_64);
     diskann::cout << "# sectors: " << n_sectors << std::endl;
     uint64_t cur_node_id = 0;
-    for (uint64_t sector = 0; sector < n_sectors; sector++)
-    {
-        if (sector % 100000 == 0)
+
+    if (nnodes_per_sector > 0)
+    { // Write multiple nodes per sector
+        for (uint64_t sector = 0; sector < n_sectors; sector++)
         {
-            diskann::cout << "Sector #" << sector << "written" << std::endl;
+            if (sector % 100000 == 0)
+            {
+                diskann::cout << "Sector #" << sector << "written" << std::endl;
+            }
+            memset(sector_buf.get(), 0, defaults::SECTOR_LEN);
+            for (uint64_t sector_node_id = 0; sector_node_id < nnodes_per_sector && cur_node_id < npts_64;
+                 sector_node_id++)
+            {
+                memset(node_buf.get(), 0, max_node_len);
+                // read cur node's nnbrs
+                vamana_reader.read((char *)&nnbrs, sizeof(uint32_t));
+
+                // sanity checks on nnbrs
+                assert(nnbrs > 0);
+                assert(nnbrs <= width_u32);
+
+                // read node's nhood
+                vamana_reader.read((char *)nhood_buf, (std::min)(nnbrs, width_u32) * sizeof(uint32_t));
+                if (nnbrs > width_u32)
+                {
+                    vamana_reader.seekg((nnbrs - width_u32) * sizeof(uint32_t), vamana_reader.cur);
+                }
+
+                // write coords of node first
+                //  T *node_coords = data + ((uint64_t) ndims_64 * cur_node_id);
+                base_reader.read((char *)cur_node_coords.get(), sizeof(T) * ndims_64);
+                memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
+
+                // write nnbrs
+                *(uint32_t *)(node_buf.get() + ndims_64 * sizeof(T)) = (std::min)(nnbrs, width_u32);
+
+                // write nhood next
+                memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(uint32_t), nhood_buf,
+                       (std::min)(nnbrs, width_u32) * sizeof(uint32_t));
+
+                // get offset into sector_buf
+                char *sector_node_buf = sector_buf.get() + (sector_node_id * max_node_len);
+
+                // copy node buf into sector_node_buf
+                memcpy(sector_node_buf, node_buf.get(), max_node_len);
+                cur_node_id++;
+            }
+            // flush sector to disk
+            diskann_writer.write(sector_buf.get(), defaults::SECTOR_LEN);
         }
-        memset(sector_buf.get(), 0, SECTOR_LEN);
-        for (uint64_t sector_node_id = 0; sector_node_id < nnodes_per_sector && cur_node_id < npts_64; sector_node_id++)
+    }
+    else
+    { // Write multi-sector nodes
+        uint64_t nsectors_per_node = DIV_ROUND_UP(max_node_len, defaults::SECTOR_LEN);
+        for (uint64_t i = 0; i < npts_64; i++)
         {
+            if ((i * nsectors_per_node) % 100000 == 0)
+            {
+                diskann::cout << "Sector #" << i * nsectors_per_node << "written" << std::endl;
+            }
+            memset(multisector_buf.get(), 0, nsectors_per_node * defaults::SECTOR_LEN);
+
             memset(node_buf.get(), 0, max_node_len);
             // read cur node's nnbrs
             vamana_reader.read((char *)&nnbrs, sizeof(uint32_t));
@@ -968,25 +1049,20 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
             // write coords of node first
             //  T *node_coords = data + ((uint64_t) ndims_64 * cur_node_id);
             base_reader.read((char *)cur_node_coords.get(), sizeof(T) * ndims_64);
-            memcpy(node_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
+            memcpy(multisector_buf.get(), cur_node_coords.get(), ndims_64 * sizeof(T));
 
             // write nnbrs
-            *(uint32_t *)(node_buf.get() + ndims_64 * sizeof(T)) = (std::min)(nnbrs, width_u32);
+            *(uint32_t *)(multisector_buf.get() + ndims_64 * sizeof(T)) = (std::min)(nnbrs, width_u32);
 
             // write nhood next
-            memcpy(node_buf.get() + ndims_64 * sizeof(T) + sizeof(uint32_t), nhood_buf,
+            memcpy(multisector_buf.get() + ndims_64 * sizeof(T) + sizeof(uint32_t), nhood_buf,
                    (std::min)(nnbrs, width_u32) * sizeof(uint32_t));
 
-            // get offset into sector_buf
-            char *sector_node_buf = sector_buf.get() + (sector_node_id * max_node_len);
-
-            // copy node buf into sector_node_buf
-            memcpy(sector_node_buf, node_buf.get(), max_node_len);
-            cur_node_id++;
+            // flush sector to disk
+            diskann_writer.write(multisector_buf.get(), nsectors_per_node * defaults::SECTOR_LEN);
         }
-        // flush sector to disk
-        diskann_writer.write(sector_buf.get(), SECTOR_LEN);
     }
+
     if (append_reorder_data)
     {
         diskann::cout << "Index written. Appending reorder data..." << std::endl;
@@ -1001,7 +1077,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
                 diskann::cout << "Reorder data Sector #" << sector << "written" << std::endl;
             }
 
-            memset(sector_buf.get(), 0, SECTOR_LEN);
+            memset(sector_buf.get(), 0, defaults::SECTOR_LEN);
 
             for (uint64_t sector_node_id = 0; sector_node_id < n_data_nodes_per_sector && sector_node_id < npts_64;
                  sector_node_id++)
@@ -1013,7 +1089,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
                 memcpy(sector_buf.get() + (sector_node_id * vec_len), vec_buf.get(), vec_len);
             }
             // flush sector to disk
-            diskann_writer.write(sector_buf.get(), SECTOR_LEN);
+            diskann_writer.write(sector_buf.get(), defaults::SECTOR_LEN);
         }
     }
     diskann_writer.close();
@@ -1053,11 +1129,12 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         return -1;
     }
 
-    if (!std::is_same<T, float>::value && compareMetric == diskann::Metric::INNER_PRODUCT)
+    if (!std::is_same<T, float>::value &&
+        (compareMetric == diskann::Metric::INNER_PRODUCT || compareMetric == diskann::Metric::COSINE))
     {
         std::stringstream stream;
-        stream << "DiskANN currently only supports floating point data for Max "
-                  "Inner Product Search. "
+        stream << "Disk-index build currently only supports floating point data for Max "
+                  "Inner Product Search/ cosine similarity. "
                << std::endl;
         throw diskann::ANNException(stream.str(), -1);
     }
@@ -1119,6 +1196,10 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string disk_pq_pivots_path = index_prefix_path + "_disk.index_pq_pivots.bin";
     // optional, used if disk index must store pq data
     std::string disk_pq_compressed_vectors_path = index_prefix_path + "_disk.index_pq_compressed.bin";
+    std::string prepped_base =
+        index_prefix_path +
+        "_prepped_base.bin"; // temp file for storing pre-processed base file for cosine/ mips metrics
+    bool created_temp_file_for_processed_data = false;
 
     // output a new base file which contains extra dimension with sqrt(1 -
     // ||x||^2/M^2) for every x, M is max norm of all points. Extra space on
@@ -1129,14 +1210,26 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         std::cout << "Using Inner Product search, so need to pre-process base "
                      "data into temp file. Please ensure there is additional "
                      "(n*(d+1)*4) bytes for storing pre-processed base vectors, "
-                     "apart from the intermin indices and final index."
+                     "apart from the interim indices created by DiskANN and the final index."
                   << std::endl;
-        std::string prepped_base = index_prefix_path + "_prepped_base.bin";
         data_file_to_use = prepped_base;
         float max_norm_of_base = diskann::prepare_base_for_inner_products<T>(base_file, prepped_base);
         std::string norm_file = disk_index_path + "_max_base_norm.bin";
         diskann::save_bin<float>(norm_file, &max_norm_of_base, 1, 1);
         diskann::cout << timer.elapsed_seconds_for_step("preprocessing data for inner product") << std::endl;
+        created_temp_file_for_processed_data = true;
+    }
+    else if (compareMetric == diskann::Metric::COSINE)
+    {
+        Timer timer;
+        std::cout << "Normalizing data for cosine to temporary file, please ensure there is additional "
+                     "(n*d*4) bytes for storing normalized base vectors, "
+                     "apart from the interim indices created by DiskANN and the final index."
+                  << std::endl;
+        data_file_to_use = prepped_base;
+        diskann::normalize_data_file(base_file, prepped_base);
+        diskann::cout << timer.elapsed_seconds_for_step("preprocessing data for cosine") << std::endl;
+        created_temp_file_for_processed_data = true;
     }
 
     uint32_t R = (uint32_t)atoi(param_list[0].c_str());
@@ -1226,10 +1319,10 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
 
 // Gopal. Splitting diskann_dll into separate DLLs for search and build.
 // This code should only be available in the "build" DLL.
-#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
     MallocExtension::instance()->ReleaseFreeMemory();
 #endif
-
+    // Whether it is cosine or inner product, we still L2 metric due to the pre-processing.
     timer.reset();
     diskann::build_merged_vamana_index<T, LabelT>(data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
                                                   indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
@@ -1270,7 +1363,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         std::remove(augmented_labels_file.c_str());
         std::remove(labels_file_to_use.c_str());
     }
-
+    if (created_temp_file_for_processed_data)
+        std::remove(prepped_base.c_str());
     std::remove(mem_index_path.c_str());
     if (use_disk_pq)
         std::remove(disk_pq_compressed_vectors_path.c_str());

@@ -11,23 +11,31 @@
 
 namespace po = boost::program_options;
 
-int block_write_float(std::ofstream &writer, size_t ndims, size_t npts, float norm)
+int block_write_float(std::ofstream &writer, size_t ndims, size_t npts, bool normalization, float norm,
+                      float rand_scale)
 {
     auto vec = new float[ndims];
 
     std::random_device rd{};
     std::mt19937 gen{rd()};
     std::normal_distribution<> normal_rand{0, 1};
+    std::uniform_real_distribution<> unif_dis(1.0, rand_scale);
 
     for (size_t i = 0; i < npts; i++)
     {
         float sum = 0;
+        float scale = 1.0f;
+        if (rand_scale > 1.0f)
+            scale = (float)unif_dis(gen);
         for (size_t d = 0; d < ndims; ++d)
-            vec[d] = (float)normal_rand(gen);
-        for (size_t d = 0; d < ndims; ++d)
-            sum += vec[d] * vec[d];
-        for (size_t d = 0; d < ndims; ++d)
-            vec[d] = vec[d] * norm / std::sqrt(sum);
+            vec[d] = scale * (float)normal_rand(gen);
+        if (normalization)
+        {
+            for (size_t d = 0; d < ndims; ++d)
+                sum += vec[d] * vec[d];
+            for (size_t d = 0; d < ndims; ++d)
+                vec[d] = vec[d] * norm / std::sqrt(sum);
+        }
 
         writer.write((char *)vec, ndims * sizeof(float));
     }
@@ -104,8 +112,8 @@ int main(int argc, char **argv)
 {
     std::string data_type, output_file;
     size_t ndims, npts;
-    float norm;
-
+    float norm, rand_scaling;
+    bool normalization = false;
     try
     {
         po::options_description desc{"Arguments"};
@@ -117,7 +125,11 @@ int main(int argc, char **argv)
                            "File name for saving the random vectors");
         desc.add_options()("ndims,D", po::value<uint64_t>(&ndims)->required(), "Dimensoinality of the vector");
         desc.add_options()("npts,N", po::value<uint64_t>(&npts)->required(), "Number of vectors");
-        desc.add_options()("norm", po::value<float>(&norm)->required(), "Norm of the vectors");
+        desc.add_options()("norm", po::value<float>(&norm)->default_value(-1.0f),
+                           "Norm of the vectors (if not specified, vectors are not normalized)");
+        desc.add_options()("rand_scaling", po::value<float>(&rand_scaling)->default_value(1.0f),
+                           "Each vector will be scaled (if not explicitly normalized) by a factor randomly chosen from "
+                           "[1, rand_scale]. Only applicable for floating point data");
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
         if (vm.count("help"))
@@ -139,9 +151,20 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    if (norm <= 0.0)
+    if (norm > 0.0)
     {
-        std::cerr << "Error: Norm must be a positive number" << std::endl;
+        normalization = true;
+    }
+
+    if (rand_scaling < 1.0)
+    {
+        std::cout << "We will only scale the vector norms randomly in [1, value], so value must be >= 1." << std::endl;
+        return -1;
+    }
+
+    if ((rand_scaling > 1.0) && (normalization == true))
+    {
+        std::cout << "Data cannot be normalized and randomly scaled at same time. Use one or the other." << std::endl;
         return -1;
     }
 
@@ -153,6 +176,11 @@ int main(int argc, char **argv)
                          "greater "
                          "than 127"
                       << std::endl;
+            return -1;
+        }
+        if (rand_scaling > 1.0)
+        {
+            std::cout << "Data scaling only supported for floating point data." << std::endl;
             return -1;
         }
     }
@@ -177,7 +205,7 @@ int main(int argc, char **argv)
             size_t cblk_size = std::min(npts - i * blk_size, blk_size);
             if (data_type == std::string("float"))
             {
-                ret = block_write_float(writer, ndims, cblk_size, norm);
+                ret = block_write_float(writer, ndims, cblk_size, normalization, norm, rand_scaling);
             }
             else if (data_type == std::string("int8"))
             {

@@ -211,6 +211,7 @@ def _ensure_index_metadata(
     distance_metric: Optional[DistanceMetric],
     max_vectors: int,
     dimensions: Optional[int],
+    warn_size_exceeded: bool = False,
 ) -> Tuple[VectorDType, str, np.uint64, np.uint64]:
     possible_metadata = _read_index_metadata(index_path_and_prefix)
     if possible_metadata is None:
@@ -226,16 +227,17 @@ def _ensure_index_metadata(
         return vector_dtype, distance_metric, max_vectors, dimensions  # type: ignore
     else:
         vector_dtype, distance_metric, num_vectors, dimensions = possible_metadata
-        if max_vectors is not None and num_vectors > max_vectors:
-            warnings.warn(
-                "The number of vectors in the saved index exceeds the max_vectors parameter. "
-                "max_vectors is being adjusted to accommodate the dataset, but any insertions will fail."
-            )
-            max_vectors = num_vectors
-        if num_vectors == max_vectors:
-            warnings.warn(
-                "The number of vectors in the saved index equals max_vectors parameter. Any insertions will fail."
-            )
+        if warn_size_exceeded:
+            if max_vectors is not None and num_vectors > max_vectors:
+                warnings.warn(
+                    "The number of vectors in the saved index exceeds the max_vectors parameter. "
+                    "max_vectors is being adjusted to accommodate the dataset, but any insertions will fail."
+                )
+                max_vectors = num_vectors
+            if num_vectors == max_vectors:
+                warnings.warn(
+                    "The number of vectors in the saved index equals max_vectors parameter. Any insertions will fail."
+                )
         return possible_metadata
 
 

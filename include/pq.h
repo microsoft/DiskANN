@@ -4,13 +4,7 @@
 #pragma once
 
 #include "utils.h"
-
-#define NUM_PQ_BITS 8
-#define NUM_PQ_CENTROIDS (1 << NUM_PQ_BITS)
-#define MAX_OPQ_ITERS 20
-#define NUM_KMEANS_REPS_PQ 12
-#define MAX_PQ_TRAINING_SET_SIZE 256000
-#define MAX_PQ_CHUNKS 512
+#include "pq_common.h"
 
 namespace diskann
 {
@@ -53,40 +47,6 @@ class FixedChunkPQTable
     void populate_chunk_inner_products(const float *query_vec, float *dist_vec);
 };
 
-template <typename T> struct PQScratch
-{
-    float *aligned_pqtable_dist_scratch = nullptr; // MUST BE AT LEAST [256 * NCHUNKS]
-    float *aligned_dist_scratch = nullptr;         // MUST BE AT LEAST diskann MAX_DEGREE
-    uint8_t *aligned_pq_coord_scratch = nullptr;   // MUST BE AT LEAST  [N_CHUNKS * MAX_DEGREE]
-    float *rotated_query = nullptr;
-    float *aligned_query_float = nullptr;
-
-    PQScratch(size_t graph_degree, size_t aligned_dim)
-    {
-        diskann::alloc_aligned((void **)&aligned_pq_coord_scratch,
-                               (size_t)graph_degree * (size_t)MAX_PQ_CHUNKS * sizeof(uint8_t), 256);
-        diskann::alloc_aligned((void **)&aligned_pqtable_dist_scratch, 256 * (size_t)MAX_PQ_CHUNKS * sizeof(float),
-                               256);
-        diskann::alloc_aligned((void **)&aligned_dist_scratch, (size_t)graph_degree * sizeof(float), 256);
-        diskann::alloc_aligned((void **)&aligned_query_float, aligned_dim * sizeof(float), 8 * sizeof(float));
-        diskann::alloc_aligned((void **)&rotated_query, aligned_dim * sizeof(float), 8 * sizeof(float));
-
-        memset(aligned_query_float, 0, aligned_dim * sizeof(float));
-        memset(rotated_query, 0, aligned_dim * sizeof(float));
-    }
-
-    void set(size_t dim, T *query, const float norm = 1.0f)
-    {
-        for (size_t d = 0; d < dim; ++d)
-        {
-            if (norm != 1.0f)
-                rotated_query[d] = aligned_query_float[d] = static_cast<float>(query[d]) / norm;
-            else
-                rotated_query[d] = aligned_query_float[d] = static_cast<float>(query[d]);
-        }
-    }
-};
-
 void aggregate_coords(const std::vector<unsigned> &ids, const uint8_t *all_coords, const uint64_t ndims, uint8_t *out);
 
 void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_nchunks, const float *pq_dists,
@@ -107,10 +67,18 @@ DISKANN_DLLEXPORT int generate_opq_pivots(const float *train_data, size_t num_tr
                                           unsigned num_pq_chunks, std::string opq_pivots_path,
                                           bool make_zero_mean = false);
 
+DISKANN_DLLEXPORT int generate_pq_pivots_simplified(const float *train_data, size_t num_train, size_t dim,
+                                                    size_t num_pq_chunks, std::vector<float> &pivot_data_vector);
+
 template <typename T>
 int generate_pq_data_from_pivots(const std::string &data_file, unsigned num_centers, unsigned num_pq_chunks,
                                  const std::string &pq_pivots_path, const std::string &pq_compressed_vectors_path,
                                  bool use_opq = false);
+
+DISKANN_DLLEXPORT int generate_pq_data_from_pivots_simplified(const float *data, const size_t num,
+                                                              const float *pivot_data, const size_t pivots_num,
+                                                              const size_t dim, const size_t num_pq_chunks,
+                                                              std::vector<uint8_t> &pq);
 
 template <typename T>
 void generate_disk_quantized_data(const std::string &data_file_to_use, const std::string &disk_pq_pivots_path,

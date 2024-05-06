@@ -19,8 +19,12 @@
 #include "windows_customizations.h"
 #include "scratch.h"
 #include "in_mem_data_store.h"
+#include "in_mem_graph_store.h"
 #include "abstract_index.h"
 #include <bitset>
+
+#include "quantized_distance.h"
+#include "pq_data_store.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -32,7 +36,7 @@ namespace diskann
 inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree)
 {
     double size_of_data = ((double)size) * ROUND_UP(dim, 8) * datasize;
-    double size_of_graph = ((double)size) * degree * sizeof(uint32_t) * GRAPH_SLACK_FACTOR;
+    double size_of_graph = ((double)size) * degree * sizeof(uint32_t) * defaults::GRAPH_SLACK_FACTOR;
     double size_of_locks = ((double)size) * sizeof(non_recursive_mutex);
     double size_of_outer_vector = ((double)size) * sizeof(ptrdiff_t);
 
@@ -163,21 +167,18 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   public:
     // Constructor for Bulk operations and for creating the index object solely
     // for loading a prexisting index.
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points = 1, const bool dynamic_index = false,
-                            const bool enable_tags = false, const bool concurrent_consolidate = false,
-                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false, const size_t num_frozen_pts = 0,
-                            const bool init_data_store = true);
+    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store,
+                            std::unique_ptr<AbstractGraphStore> graph_store,
+                            std::shared_ptr<AbstractDataStore<T>> pq_data_store = nullptr);
 
     // Constructor for incremental index
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points, const bool dynamic_index,
-                            const IndexWriteParameters &indexParameters, const uint32_t initial_search_list_size,
-                            const uint32_t search_threads, const bool enable_tags = false,
-                            const bool concurrent_consolidate = false, const bool pq_dist_build = false,
-                            const size_t num_pq_chunks = 0, const bool use_opq = false);
-
-    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::unique_ptr<AbstractDataStore<T>> data_store
-                            /* std::unique_ptr<AbstractGraphStore> graph_store*/);
+    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
+                            const std::shared_ptr<IndexWriteParameters> index_parameters,
+                            const std::shared_ptr<IndexSearchParams> index_search_params,
+                            const size_t num_frozen_pts = 0, const bool dynamic_index = false,
+                            const bool enable_tags = false, const bool concurrent_consolidate = false,
+                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
+                            const bool use_opq = false, const bool filtered_index = false);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -203,31 +204,31 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
-                                 const IndexWriteParameters &parameters,
                                  const std::vector<TagT> &tags = std::vector<TagT>());
 
     // Batch build from a file. Optionally pass tags file.
-    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
-                                 const IndexWriteParameters &parameters, const char *tag_filename);
+    DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load, const char *tag_filename);
 
     // Batch build from a data array, which must pad vectors to aligned_dim
-    DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                                 const std::vector<TagT> &tags);
+    DISKANN_DLLEXPORT void build(const T *data, const size_t num_points_to_load, const std::vector<TagT> &tags);
 
+    // Based on filter params builds a filtered or unfiltered index
     DISKANN_DLLEXPORT void build(const std::string &data_file, const size_t num_points_to_load,
-                                 IndexBuildParams &build_params);
+                                 IndexFilterParams &filter_params);
 
     // Filtered Support
     DISKANN_DLLEXPORT void build_filtered_index(const char *filename, const std::string &label_file,
-                                                const size_t num_points_to_load, IndexWriteParameters &parameters,
+                                                const size_t num_points_to_load,
                                                 const std::vector<TagT> &tags = std::vector<TagT>());
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
     // Get converted integer label from string to int map (_label_map)
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
+    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label) const;
 
-    DISKANN_DLLEXPORT bool is_label_valid(const std::string& raw_label);
+    DISKANN_DLLEXPORT bool is_label_valid(const std::string& raw_label) const override;
+
+    DISKANN_DLLEXPORT bool is_set_universal_label() const override;
 
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.
@@ -251,7 +252,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
-                                              float *distances, std::vector<T *> &res_vectors);
+                                              float *distances, std::vector<T *> &res_vectors, bool use_filters = false,
+                                              const std::string filter_label = "");
 
     // Filter support search
     template <typename IndexType>
@@ -261,6 +263,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
+
+    // Will fail if tag already in the index or if tag=0.
+    DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag, const std::vector<LabelT> &label);
 
     // call this before issuing deletions to sets relevant flags
     DISKANN_DLLEXPORT int enable_delete();
@@ -313,8 +318,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
   protected:
     // overload of abstract index virtual methods
-    virtual void _build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                        TagVector &tags) override;
+    virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) override;
 
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) override;
@@ -324,6 +328,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                float *distances) override;
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
+    virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;
 
     virtual int _lazy_delete(const TagType &tag) override;
 
@@ -338,7 +343,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) override;
 
     virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
-                                     float *distances, DataVector &res_vectors) override;
+                                     float *distances, DataVector &res_vectors, bool use_filters = false,
+                                     const std::string filter_label = "") override;
+
+    virtual void _set_universal_label(const LabelType universal_label) override;
 
     // No copy/assign.
     Index(const Index<T, TagT, LabelT> &) = delete;
@@ -346,7 +354,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Use after _data and _nd have been populated
     // Acquire exclusive _update_lock before calling
-    void build_with_data_populated(const IndexWriteParameters &parameters, const std::vector<TagT> &tags);
+    void build_with_data_populated(const std::vector<TagT> &tags);
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
@@ -367,9 +375,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
-    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(const T *node_coords, const uint32_t Lindex,
-                                                         const std::vector<uint32_t> &init_ids,
-                                                         InMemQueryScratch<T> *scratch, bool use_filter,
+    // The query to use is placed in scratch->aligned_query
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
+                                                         const std::vector<uint32_t> &init_ids, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
@@ -396,7 +404,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch);
 
     // Acquire exclusive _update_lock before calling
-    void link(const IndexWriteParameters &parameters);
+    void link();
 
     // Acquire exclusive _tag_lock and _delete_lock before calling
     int reserve_location();
@@ -449,16 +457,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   private:
     // Distance functions
     Metric _dist_metric = diskann::L2;
-    std::shared_ptr<Distance<T>> _distance;
 
     // Data
-    std::unique_ptr<AbstractDataStore<T>> _data_store;
-    char *_opt_graph = nullptr;
+    std::shared_ptr<AbstractDataStore<T>> _data_store;
 
     // Graph related data structures
-    std::vector<std::vector<uint32_t>> _final_graph;
+    std::unique_ptr<AbstractGraphStore> _graph_store;
 
-    T *_data = nullptr; // coordinates of all base points
+    char *_opt_graph = nullptr;
+
     // Dimensions
     size_t _dim = 0;
     size_t _nd = 0;         // number of active points i.e. existing in the graph
@@ -470,15 +477,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // needed for a dynamic index. The frozen points have consecutive locations.
     // See also _start below.
     size_t _num_frozen_pts = 0;
-    size_t _max_range_of_loaded_graph = 0;
+    size_t _frozen_pts_used = 0;
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;
 
-    uint32_t _max_observed_degree = 0;
-    // Start point of the search. When _num_frozen_pts is greater than zero,
-    // this is the location of the first frozen point. Otherwise, this is a
-    // location of one of the points in index.
+    //  Start point of the search. When _num_frozen_pts is greater than zero,
+    //  this is the location of the first frozen point. Otherwise, this is a
+    //  location of one of the points in index.
     uint32_t _start = 0;
 
     bool _has_built = false;
@@ -492,11 +498,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Filter Support
 
     bool _filtered_index = false;
-    std::vector<std::vector<LabelT>> _pts_to_labels;
+    // Location to label is only updated during insert_point(), all other reads are protected by
+    // default as a location can only be released at end of consolidate deletes
+    std::vector<std::vector<LabelT>> _location_to_labels;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
-    std::unordered_map<LabelT, uint32_t> _label_to_medoid_id;
+    std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
+
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
@@ -507,6 +516,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _indexingRange;
     uint32_t _indexingMaxC;
     float _indexingAlpha;
+    uint32_t _indexingThreads;
 
     // Query scratch data structures
     ConcurrentQueue<InMemQueryScratch<T> *> _query_scratch;
@@ -515,7 +525,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _pq_dist = false;
     bool _use_opq = false;
     size_t _num_pq_chunks = 0;
-    uint8_t *_pq_data = nullptr;
+    // REFACTOR
+    // uint8_t *_pq_data = nullptr;
+    std::shared_ptr<QuantizedDistance<T>> _pq_distance_fn = nullptr;
+    std::shared_ptr<AbstractDataStore<T>> _pq_data_store = nullptr;
     bool _pq_generated = false;
     FixedChunkPQTable _pq_table;
 
@@ -545,11 +558,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_timed_mutex // Ensure only one consolidate or compact_data is
         _consolidate_lock;  // ever active
     std::shared_timed_mutex // RW lock for _tag_to_location,
-        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points
+        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points, _label_to_start_id
     std::shared_timed_mutex // RW Lock on _delete_set and _data_compacted
         _delete_lock;       // variable
 
-    // Per node lock, cardinality=_max_points
+    // Per node lock, cardinality=_max_points + _num_frozen_points
     std::vector<non_recursive_mutex> _locks;
 
     simple_bitmask_buf _bitmask_buf;

@@ -42,11 +42,10 @@ class AbstractIndex
     virtual ~AbstractIndex() = default;
 
     virtual void build(const std::string &data_file, const size_t num_points_to_load,
-                       IndexBuildParams &build_params) = 0;
+                       IndexFilterParams &build_params) = 0;
 
     template <typename data_type, typename tag_type>
-    void build(const data_type *data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-               const std::vector<tag_type> &tags);
+    void build(const data_type *data, const size_t num_points_to_load, const std::vector<tag_type> &tags);
 
     virtual void save(const char *filename, bool compact_before_save = false) = 0;
 
@@ -63,7 +62,8 @@ class AbstractIndex
     // Initialize space for res_vectors before calling.
     template <typename data_type, typename tag_type>
     size_t search_with_tags(const data_type *query, const uint64_t K, const uint32_t L, tag_type *tags,
-                            float *distances, std::vector<data_type *> &res_vectors);
+                            float *distances, std::vector<data_type *> &res_vectors, bool use_filters = false,
+                            const std::string filter_label = "");
 
     // Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
@@ -79,10 +79,17 @@ class AbstractIndex
                                                       const size_t K, const uint32_t L, IndexType *indices,
                                                       float *distances);
 
+    // insert points with labels, labels should be present for filtered index
+    template <typename data_type, typename tag_type, typename label_type>
+    int insert_point(const data_type *point, const tag_type tag, const std::vector<label_type> &labels);
+
+    // insert point for unfiltered index build. do not use with filtered index
     template <typename data_type, typename tag_type> int insert_point(const data_type *point, const tag_type tag);
 
+    // delete point with tag, or return -1 if point can not be deleted
     template <typename tag_type> int lazy_delete(const tag_type &tag);
 
+    // batch delete tags and populates failed tags if unabke to delete given tags.
     template <typename tag_type>
     void lazy_delete(const std::vector<tag_type> &tags, std::vector<tag_type> &failed_tags);
 
@@ -97,14 +104,19 @@ class AbstractIndex
     // memory should be allocated for vec before calling this function
     template <typename tag_type, typename data_type> int get_vector_by_tag(tag_type &tag, data_type *vec);
 
+    template <typename label_type> void set_universal_label(const label_type universal_label);
+
+    virtual bool is_label_valid(const std::string &raw_label) const = 0;
+    virtual bool is_set_universal_label() const = 0;
+
   private:
-    virtual void _build(const DataType &data, const size_t num_points_to_load, const IndexWriteParameters &parameters,
-                        TagVector &tags) = 0;
+    virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) = 0;
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::string &filter_label,
                                                                const size_t K, const uint32_t L, std::any &indices,
                                                                float *distances) = 0;
+    virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) = 0;
     virtual int _insert_point(const DataType &data_point, const TagType tag) = 0;
     virtual int _lazy_delete(const TagType &tag) = 0;
     virtual void _lazy_delete(TagVector &tags, TagVector &failed_tags) = 0;
@@ -112,7 +124,9 @@ class AbstractIndex
     virtual void _set_start_points_at_random(DataType radius, uint32_t random_seed = 0) = 0;
     virtual int _get_vector_by_tag(TagType &tag, DataType &vec) = 0;
     virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
-                                     float *distances, DataVector &res_vectors) = 0;
+                                     float *distances, DataVector &res_vectors, bool use_filters = false,
+                                     const std::string filter_label = "") = 0;
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) = 0;
+    virtual void _set_universal_label(const LabelType universal_label) = 0;
 };
 } // namespace diskann

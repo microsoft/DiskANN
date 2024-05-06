@@ -107,6 +107,8 @@ int main(int argc, char **argv)
         metric = diskann::Metric::L2;
     else if (dist_fn == std::string("mips"))
         metric = diskann::Metric::INNER_PRODUCT;
+    else if (dist_fn == std::string("cosine"))
+        metric = diskann::Metric::COSINE;
     else
     {
         std::cout << "Error. Only l2 and mips distance functions are supported" << std::endl;

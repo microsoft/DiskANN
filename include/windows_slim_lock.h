@@ -34,6 +34,11 @@ class windows_exclusive_slim_lock
         return AcquireSRWLockExclusive(&_lock);
     }
 
+    void lock_shared()
+    {
+        return AcquireSRWLockShared(&_lock);
+    }
+
     bool try_lock()
     {
         return TryAcquireSRWLockExclusive(&_lock) != FALSE;
@@ -42,6 +47,11 @@ class windows_exclusive_slim_lock
     void unlock()
     {
         return ReleaseSRWLockExclusive(&_lock);
+    }
+
+    void unlock_shared()
+    {
+        return ReleaseSRWLockShared(&_lock);
     }
 
   private:
