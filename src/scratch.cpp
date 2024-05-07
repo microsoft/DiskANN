@@ -43,6 +43,11 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
 
     resize_for_new_L(std::max(search_l, indexing_l));
+
+    //TODO: remove hardcoding to use either a constant or a parameter.
+    //Currently, doing this introduces some circular dependency. 
+    _dot_product_scratch = new float[8];
+
 }
 
 template <typename T> void InMemQueryScratch<T>::clear()
@@ -84,6 +89,13 @@ template <typename T> InMemQueryScratch<T>::~InMemQueryScratch()
 
     delete this->_pq_scratch;
     delete _inserted_into_pool_bs;
+
+    if (this->_dot_product_scratch != nullptr)
+    {
+        delete[] _dot_product_scratch;
+        _dot_product_scratch = nullptr;
+    }
+ 
 }
 
 //

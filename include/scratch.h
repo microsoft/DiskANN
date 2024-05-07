@@ -109,6 +109,10 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
         _last_intersection.removeRangeClosed(_last_intersection.minimum(), _last_intersection.maximum());
         return _last_intersection;
     }
+    inline float *dot_product_scratch()
+    {
+        return _dot_product_scratch;
+    }
 
   private:
     uint32_t _L;
@@ -153,6 +157,9 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     // _to calculate the closest clusters during filtered search in clustered index
     std::vector<uint32_t> _closest_clusters;
     float* _aligned_query_float;
+
+    //for LSH
+    float *_dot_product_scratch;
 };
 
 //

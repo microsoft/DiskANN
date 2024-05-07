@@ -25,6 +25,7 @@
 
 #include "index.h"
 
+
 #define MAX_POINTS_FOR_USING_BITSET 40000000
 
 namespace diskann
@@ -536,6 +537,23 @@ size_t Index<T, TagT, LabelT>::load_delete_set(const std::string &filename)
     return npts;
 }
 
+//LSH Filtering
+template<typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::load_lsh(const std::string &lsh_hashes_file, const std::string &lsh_axes_file, uint64_t num_pts, uint64_t num_dims)
+{
+    uint64_t num_pts32, num_axes, num_hash_dims, num_axis_dims;
+
+    diskann::load_bin<uint8_t>(lsh_hashes_file, _lsh_hashes, num_pts32, num_hash_dims);
+    assert(_lsh_hashes != nullptr);
+    assert(num_hash_dims == 1);
+    assert(num_pts32 == num_pts);
+
+    diskann::load_bin<float>(lsh_axes_file, _lsh_axes, num_axes, num_axis_dims);
+    assert(_lsh_axes != nullptr);
+    assert(num_axes == LSH_NUM_AXES);
+    assert(num_axis_dims == num_dims);
+}
+
 // load the index from file and update the max_degree, cur (navigating
 // node loc), and _final_graph (adjacency list)
 template <typename T, typename TagT, typename LabelT>
@@ -560,6 +578,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
     std::string sample_label_file = mem_index_file + "_sample_labels.txt";
+    std::string lsh_hashes_file = mem_index_file + "_lsh_hashes.txt";
+    std::string lsh_axes_file = mem_index_file + "_lsh_axes.txt";
 
     if (!_save_as_one_file)
     {
@@ -569,6 +589,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         std::string data_file = std::string(filename) + ".data";
         std::string tags_file = std::string(filename) + ".tags";
         std::string delete_set_file = std::string(filename) + ".del";
+
         std::string graph_file = std::string(filename);
         data_file_num_pts = load_data(data_file);
         if (file_exists(delete_set_file))
@@ -679,6 +700,13 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     for (auto i = _nd; i < _max_points; i++)
     {
         _empty_slots.insert((uint32_t)i);
+    }
+
+    if (file_exists(lsh_hashes_file))
+    {
+        load_lsh(lsh_hashes_file, lsh_axes_file, data_file_num_pts, _dim);
+        _hasher = std::make_unique<diskann::LSH>(_dim, LSH_NUM_AXES, _lsh_axes.get());
+        _use_lsh = true;
     }
 
     reposition_frozen_point_to_end();
@@ -964,6 +992,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
 
+    uint8_t query_hash = 0;
+    if (_use_lsh)
+    {
+        query_hash = _hasher->get_hash(scratch->get_query_float(), scratch->dot_product_scratch());
+    }
+
     uint32_t cmps = 0;
     uint32_t hops = 0;
 #ifdef INSTRUMENT
@@ -973,6 +1007,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
     x++;
     for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
     {
+        if (_use_lsh)
+        {
+            //TODO: Check for more stringent conditions too.
+            auto vector_hash = *(_lsh_hashes.get() + *i); 
+            if ((query_hash & vector_hash) == 0)
+            {
+                continue;
+            }
+        }
         float distance = _data_store->get_distance(aligned_query, *i);
         if (x != init_ids.end())
         {
