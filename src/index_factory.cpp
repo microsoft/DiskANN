@@ -1,4 +1,5 @@
 #include "index_factory.h"
+#include "tag_uint128.h"
 #include "pq_l2_distance.h"
 
 namespace diskann
@@ -183,6 +184,10 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &
     else if (tag_type == std::string("uint64"))
     {
         return create_instance<data_type, uint64_t>(label_type);
+    }
+    else if (tag_type == std::string("tag_uint128"))
+    {
+        return create_instance<data_type, tag_uint128>(label_type);
     }
     else
         throw ANNException("Error: unsupported tag_type please choose from [int32/uint32/int64/uint64]", -1);
