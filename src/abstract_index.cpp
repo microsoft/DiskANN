@@ -140,6 +140,15 @@ template DISKANN_DLLEXPORT void AbstractIndex::build<int8_t, uint64_t>(const int
 template DISKANN_DLLEXPORT void AbstractIndex::build<uint8_t, uint64_t>(const uint8_t *data,
                                                                         const size_t num_points_to_load,
                                                                         const std::vector<uint64_t> &tags);
+template DISKANN_DLLEXPORT void AbstractIndex::build<float, tag_uint128>(const float* data,
+    const size_t num_points_to_load,
+    const std::vector<tag_uint128>& tags);
+template DISKANN_DLLEXPORT void AbstractIndex::build<int8_t, tag_uint128>(const int8_t* data,
+    const size_t num_points_to_load,
+    const std::vector<tag_uint128>& tags);
+template DISKANN_DLLEXPORT void AbstractIndex::build<uint8_t, tag_uint128>(const uint8_t* data,
+    const size_t num_points_to_load,
+    const std::vector<tag_uint128>& tags);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search<float, uint32_t>(
     const float *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
@@ -211,6 +220,18 @@ template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_tags<int8_t, uint64
     const int8_t *query, const uint64_t K, const uint32_t L, uint64_t *tags, float *distances,
     std::vector<int8_t *> &res_vectors, bool use_filters, const std::string filter_label);
 
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_tags<float, tag_uint128>(
+    const float* query, const uint64_t K, const uint32_t L, tag_uint128* tags, float* distances,
+    std::vector<float*>& res_vectors, bool use_filters, const std::string filter_label);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_tags<uint8_t, tag_uint128>(
+    const uint8_t* query, const uint64_t K, const uint32_t L, tag_uint128* tags, float* distances,
+    std::vector<uint8_t*>& res_vectors, bool use_filters, const std::string filter_label);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_tags<int8_t, tag_uint128>(
+    const int8_t* query, const uint64_t K, const uint32_t L, tag_uint128* tags, float* distances,
+    std::vector<int8_t*>& res_vectors, bool use_filters, const std::string filter_label);
+
 template DISKANN_DLLEXPORT void AbstractIndex::search_with_optimized_layout<float>(const float *query, size_t K,
                                                                                    size_t L, uint32_t *indices);
 template DISKANN_DLLEXPORT void AbstractIndex::search_with_optimized_layout<uint8_t>(const uint8_t *query, size_t K,
@@ -233,6 +254,10 @@ template DISKANN_DLLEXPORT int AbstractIndex::insert_point<int8_t, int64_t>(cons
 template DISKANN_DLLEXPORT int AbstractIndex::insert_point<float, uint64_t>(const float *point, const uint64_t tag);
 template DISKANN_DLLEXPORT int AbstractIndex::insert_point<uint8_t, uint64_t>(const uint8_t *point, const uint64_t tag);
 template DISKANN_DLLEXPORT int AbstractIndex::insert_point<int8_t, uint64_t>(const int8_t *point, const uint64_t tag);
+
+template DISKANN_DLLEXPORT int AbstractIndex::insert_point<float, tag_uint128>(const float* point, const tag_uint128 tag);
+template DISKANN_DLLEXPORT int AbstractIndex::insert_point<uint8_t, tag_uint128>(const uint8_t* point, const tag_uint128 tag);
+template DISKANN_DLLEXPORT int AbstractIndex::insert_point<int8_t, tag_uint128>(const int8_t* point, const tag_uint128 tag);
 
 template DISKANN_DLLEXPORT int AbstractIndex::insert_point<float, int32_t, uint16_t>(
     const float *point, const int32_t tag, const std::vector<uint16_t> &labels);
@@ -262,6 +287,13 @@ template DISKANN_DLLEXPORT int AbstractIndex::insert_point<uint8_t, uint64_t, ui
 template DISKANN_DLLEXPORT int AbstractIndex::insert_point<int8_t, uint64_t, uint16_t>(
     const int8_t *point, const uint64_t tag, const std::vector<uint16_t> &labels);
 
+template DISKANN_DLLEXPORT int AbstractIndex::insert_point<float, tag_uint128, uint16_t>(
+    const float* point, const tag_uint128 tag, const std::vector<uint16_t>& labels);
+template DISKANN_DLLEXPORT int AbstractIndex::insert_point<uint8_t, tag_uint128, uint16_t>(
+    const uint8_t* point, const tag_uint128 tag, const std::vector<uint16_t>& labels);
+template DISKANN_DLLEXPORT int AbstractIndex::insert_point<int8_t, tag_uint128, uint16_t>(
+    const int8_t* point, const tag_uint128 tag, const std::vector<uint16_t>& labels);
+
 template DISKANN_DLLEXPORT int AbstractIndex::insert_point<float, int32_t, uint32_t>(
     const float *point, const int32_t tag, const std::vector<uint32_t> &labels);
 template DISKANN_DLLEXPORT int AbstractIndex::insert_point<uint8_t, int32_t, uint32_t>(
@@ -290,10 +322,18 @@ template DISKANN_DLLEXPORT int AbstractIndex::insert_point<uint8_t, uint64_t, ui
 template DISKANN_DLLEXPORT int AbstractIndex::insert_point<int8_t, uint64_t, uint32_t>(
     const int8_t *point, const uint64_t tag, const std::vector<uint32_t> &labels);
 
+template DISKANN_DLLEXPORT int AbstractIndex::insert_point<float, tag_uint128, uint32_t>(
+    const float* point, const tag_uint128 tag, const std::vector<uint32_t>& labels);
+template DISKANN_DLLEXPORT int AbstractIndex::insert_point<uint8_t, tag_uint128, uint32_t>(
+    const uint8_t* point, const tag_uint128 tag, const std::vector<uint32_t>& labels);
+template DISKANN_DLLEXPORT int AbstractIndex::insert_point<int8_t, tag_uint128, uint32_t>(
+    const int8_t* point, const tag_uint128 tag, const std::vector<uint32_t>& labels);
+
 template DISKANN_DLLEXPORT int AbstractIndex::lazy_delete<int32_t>(const int32_t &tag);
 template DISKANN_DLLEXPORT int AbstractIndex::lazy_delete<uint32_t>(const uint32_t &tag);
 template DISKANN_DLLEXPORT int AbstractIndex::lazy_delete<int64_t>(const int64_t &tag);
 template DISKANN_DLLEXPORT int AbstractIndex::lazy_delete<uint64_t>(const uint64_t &tag);
+template DISKANN_DLLEXPORT int AbstractIndex::lazy_delete<tag_uint128>(const tag_uint128& tag);
 
 template DISKANN_DLLEXPORT void AbstractIndex::lazy_delete<int32_t>(const std::vector<int32_t> &tags,
                                                                     std::vector<int32_t> &failed_tags);
@@ -303,11 +343,14 @@ template DISKANN_DLLEXPORT void AbstractIndex::lazy_delete<int64_t>(const std::v
                                                                     std::vector<int64_t> &failed_tags);
 template DISKANN_DLLEXPORT void AbstractIndex::lazy_delete<uint64_t>(const std::vector<uint64_t> &tags,
                                                                      std::vector<uint64_t> &failed_tags);
+template DISKANN_DLLEXPORT void AbstractIndex::lazy_delete<tag_uint128>(const std::vector<tag_uint128>& tags,
+    std::vector<tag_uint128>& failed_tags);
 
 template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<int32_t>(tsl::robin_set<int32_t> &active_tags);
 template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<uint32_t>(tsl::robin_set<uint32_t> &active_tags);
 template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<int64_t>(tsl::robin_set<int64_t> &active_tags);
 template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<uint64_t>(tsl::robin_set<uint64_t> &active_tags);
+template DISKANN_DLLEXPORT void AbstractIndex::get_active_tags<tag_uint128>(tsl::robin_set<tag_uint128>& active_tags);
 
 template DISKANN_DLLEXPORT void AbstractIndex::set_start_points_at_random<float>(float radius, uint32_t random_seed);
 template DISKANN_DLLEXPORT void AbstractIndex::set_start_points_at_random<uint8_t>(uint8_t radius,
@@ -327,6 +370,10 @@ template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<int64_t, int8_t>
 template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint64_t, float>(uint64_t &tag, float *vec);
 template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint64_t, uint8_t>(uint64_t &tag, uint8_t *vec);
 template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<uint64_t, int8_t>(uint64_t &tag, int8_t *vec);
+
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<tag_uint128, float>(tag_uint128& tag, float* vec);
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<tag_uint128, uint8_t>(tag_uint128& tag, uint8_t* vec);
+template DISKANN_DLLEXPORT int AbstractIndex::get_vector_by_tag<tag_uint128, int8_t>(tag_uint128& tag, int8_t* vec);
 
 template DISKANN_DLLEXPORT void AbstractIndex::set_universal_label<uint16_t>(const uint16_t label);
 template DISKANN_DLLEXPORT void AbstractIndex::set_universal_label<uint32_t>(const uint32_t label);
