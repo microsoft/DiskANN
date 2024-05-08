@@ -18,7 +18,7 @@
 #include "defaults.h"
 #include "concurrent_queue.h"
 
-#define RECOMMENDED_NUM_CLUSTERS 5000
+#define MAX_NUM_CLUSTERS 500
 
 namespace diskann
 {

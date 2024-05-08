@@ -6,6 +6,8 @@
 #include "cluster_store.h"
 #include "math_utils.h"
 #include "utils.h"
+#include <mkl.h>
+
 
 namespace diskann
 {
@@ -149,8 +151,33 @@ template <typename data_t> void InMemClusterStore<data_t>::get_closest_clusters(
 
     auto &x = scratch->closest_clusters();
     closest_clusters.resize(num_closest);
-    math_utils::compute_closest_centers(query_float, 1, this->_dim, this->_cluster_centroids, this->_num_clusters, num_closest,
-                                            closest_clusters.data());
+    auto &cluster_distances = scratch->get_cluster_distance_vector();
+
+    std::memcpy(cluster_distances.data(), this->_cluster_norms, this->_num_clusters*sizeof(float));
+
+    cblas_sgemv(CblasRowMajor, CblasNoTrans, (MKL_INT)this->_num_clusters, (MKL_INT)this->_dim, -2.0f,
+                this->_cluster_centroids, (MKL_INT)this->_dim, query_float, (MKL_INT)1, 1, cluster_distances.data(), (MKL_INT)1);
+
+            std::priority_queue<PivotContainer> top_k_queue;
+            for (size_t j = 0; j < this->_num_clusters; j++)
+            {
+                PivotContainer this_piv(j, cluster_distances[j]);
+                top_k_queue.push(this_piv);
+            }
+            for (size_t j = 0; j < num_closest; j++)
+            {
+                PivotContainer this_piv = top_k_queue.top();
+                closest_clusters[j] = (uint32_t)this_piv.piv_id;
+                top_k_queue.pop();
+            }
+        
+
+
+//    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT)num_points, (MKL_INT)num_centers, (MKL_INT)dim, -2.0f,
+//                data, (MKL_INT)dim, centers, (MKL_INT)dim, 1.0f, dist_matrix, (MKL_INT)num_centers);
+
+//    math_utils::compute_closest_centers(query_float, 1, this->_dim, this->_cluster_centroids, this->_num_clusters, num_closest,
+//                                            closest_clusters.data());
 
     //delete[] query_float;
 }
