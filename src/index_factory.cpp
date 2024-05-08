@@ -43,10 +43,10 @@ void IndexFactory::check_config()
     }
 
     if (_config->tag_type != "int32" && _config->tag_type != "uint32" && _config->tag_type != "int64" &&
-        _config->tag_type != "uint64")
+        _config->tag_type != "uint64" && _config->tag_type != "tag_uint128")
     {
         throw ANNException("ERROR: invalid data type : + " + _config->tag_type +
-                               " is not supported. please select from [int32, uint32, int64, uint64]",
+                               " is not supported. please select from [int32, uint32, int64, uint64, tag_uint128]",
                            -1);
     }
 }
