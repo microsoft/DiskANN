@@ -652,14 +652,30 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         {
             RoaringIdList curr_list;
             _ivf_clusters->get_cluster_members(i, curr_list);
+            _clusters_to_labels_to_points[i].resize(_labels.size()+1);
+
+/*            for (auto &lbl : _labels)
             for (roaring::Roaring::const_iterator j = curr_list.list.begin(); j != curr_list.list.end(); j++)
             {
                 for (auto const &filter : _location_to_labels[*j])
                 {
-                    _clusters_to_labels_to_points[i].reserve(_labels.size());
+                    _clusters_to_labels_to_points[i].resize(_labels.size()+1);
+//                    std::cout <<i<<","<<filter<<" " << std::flush;
                     _clusters_to_labels_to_points[i][filter].add(*j);
                 }
+            }*/
+            for (auto &lbl : _labels) {
+                _clusters_to_labels_to_points[i][lbl] = _labels_to_points[lbl];
+                _clusters_to_labels_to_points[i][lbl] &= curr_list.list;
             }
+/*            for (roaring::Roaring::const_iterator j = curr_list.list.begin(); j != curr_list.list.end(); j++)
+            {
+                for (auto const &filter : _location_to_labels[*j])
+                {
+//                    std::cout <<i<<","<<filter<<" " << std::flush;
+                    _clusters_to_labels_to_points[i][filter].add(*j);
+                }
+            } */
         }
 
         std::string universal_label_file(filename);

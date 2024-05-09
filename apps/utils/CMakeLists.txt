@@ -58,6 +58,10 @@ add_executable(compute_filtered_groundtruth compute_filtered_groundtruth.cpp)
 target_include_directories(compute_filtered_groundtruth PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
 target_link_libraries(compute_filtered_groundtruth ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
 
+add_executable(get_false_positive_rate get_false_positive_rate.cpp)
+target_include_directories(get_false_positive_rate PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
+target_link_libraries(get_false_positive_rate ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
+
 
 add_executable(generate_pq generate_pq.cpp)
 target_link_libraries(generate_pq ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS})
