@@ -117,8 +117,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _filter_penalty_threshold = index_config.index_search_params->filter_penalty_threshold;
         _bruteforce_threshold = index_config.index_search_params->bruteforce_threshold;
         _clustering_threshold = index_config.index_search_params->clustering_threshold;
+        _dist_cmp_cutoff = index_config.index_search_params->dist_cmp_cutoff;
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
+        diskann::cout << "Inside Index, dist_cmp_cutoff is " << _dist_cmp_cutoff << std::endl;
     }
     //    if (_filtered_index) {
     //    }
@@ -950,8 +952,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(co
             Neighbor nn = Neighbor(*i, distance);
             best_L_nodes.insert(nn);
             cmps++;
+            // if(cmps>_dist_cmp_cutoff)
+            // {
+            //     goto endOfComparisons;
+            // }
         }
     }
+
+    // endOfComparisons:
+
     /* _ivf_clusters->get_cluster_members(closest_clusters[0], tmp); */
     //    std::cout<<"#"<<tmp.size()<<"#";
     /* cluster_results.union_list(tmp); */

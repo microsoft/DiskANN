@@ -434,6 +434,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _clustering_threshold = 0;
     float _prob = 0.1;
     std::unordered_map<std::string, LabelT> _label_map;
+    uint32_t _dist_cmp_cutoff = 0;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;
