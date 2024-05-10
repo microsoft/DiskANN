@@ -271,7 +271,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     std::vector<std::pair<LabelT, uint32_t>> sort_filter_counts(const std::vector<LabelT> &filter_label);
 
-    uint32_t sample_intersection(roaring::Roaring &intersection_bitmap, const std::vector<LabelT> &filter_label);
+    std::pair<uint32_t,uint32_t> sample_intersection(roaring::Roaring &intersection_bitmap, const std::vector<LabelT> &filter_label);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
@@ -417,6 +417,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::vector<roaring::Roaring> _labels_to_points;
     std::vector<roaring::Roaring> _labels_to_points_sample;
+    uint32_t* _sample_map = nullptr;
     float _sample_prob = 0;
     std::vector<std::vector<roaring::Roaring>> _clusters_to_labels_to_points;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;

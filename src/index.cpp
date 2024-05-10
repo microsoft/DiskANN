@@ -189,6 +189,8 @@ template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~I
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         manager.destroy();
     }
+    if (_sample_map != nullptr)
+        delete[] _sample_map;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -613,6 +615,9 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         if (file_exists(sample_label_file)) {
             uint64_t num_samples;
             parse_sample_label_file(sample_label_file, num_samples);
+            std::string rev_map = sample_label_file + "_map.bin";
+            uint64_t n1,n2;
+            diskann::load_bin<uint32_t>(rev_map, _sample_map, n1, n2);
             _sample_prob = (1.0*num_samples)/(1.0*label_num_pts);
             std::cout<<"Loaded sample file with rate " << _sample_prob << std::endl;
         }
@@ -2140,7 +2145,8 @@ void Index<T, TagT, LabelT>::parse_sample_label_file(const std::string &label_fi
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = (LabelT)std::stoul(token);
+//            LabelT token_as_num = (LabelT)std::stoul(token);
+            LabelT token_as_num = get_converted_label(token);
             lbls.push_back(token_as_num);
             sample_labels.insert(token_as_num);
             try
@@ -2425,7 +2431,7 @@ std::vector<std::pair<LabelT, uint32_t>> Index<T, TagT, LabelT>::sort_filter_cou
 }
 
 template <typename T, typename TagT, typename LabelT>
-uint32_t Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap,
+std::pair<uint32_t,uint32_t> Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap,
                                                      const std::vector<LabelT> &filter_label)
 {
     intersection_bitmap = _labels_to_points_sample[filter_label[0]];
@@ -2433,8 +2439,15 @@ uint32_t Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersect
     {
         intersection_bitmap &= _labels_to_points_sample[filter_label[i]];
     }
-    return (uint32_t)(intersection_bitmap.cardinality() * (1.0 / (_sample_prob)));
+    uint32_t val = std::numeric_limits<uint32_t>::max();
+    auto x = intersection_bitmap.begin();
+    if (x != intersection_bitmap.end()) {
+        val = _sample_map[*x];
+    }
+//    std::cout<<intersection_bitmap.cardinality() << " " << val << std::endl;
+    return std::make_pair((uint32_t)(intersection_bitmap.cardinality() * (1.0 / (_sample_prob))), val);
 }
+
 
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
@@ -2466,21 +2479,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
-    if (_dynamic_index)
-        tl.lock();
-
-    if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end())
-    {
-        init_ids.emplace_back(_label_to_start_id[filter_label[0]]);
-    }
-    else
-    {
-        diskann::cout << "No filtered medoid found. exitting "
-                      << std::endl; // RKNOTE: If universal label found start there
-        throw diskann::ANNException("No filtered medoid found. exitting ", -1);
-    }
-    if (_dynamic_index)
-        tl.unlock();
 
     for (auto &lbl : filter_label)
         filter_vec.push_back(lbl);
@@ -2528,6 +2526,26 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         }
         break;
         case 2:
+    if (_dynamic_index)
+        tl.lock();
+
+    if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end())
+    {
+        init_ids.emplace_back(_label_to_start_id[filter_label[0]]);
+    }
+    else
+    {
+        diskann::cout << "No filtered medoid found. exitting "
+                      << std::endl; // RKNOTE: If universal label found start there
+        throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+    }
+    if (_dynamic_index)
+        tl.unlock();
+
+            uint32_t cand = sample_intersection(scratch->get_valid_bitmap(), filter_label).second;
+            if (cand < std::numeric_limits<uint32_t>::max())
+                init_ids.emplace_back(cand);
+
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
             break;
         }
@@ -2540,7 +2558,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         uint32_t estimated_match = 0;
         /* uint32_t sample_size = _clustering_threshold + 1; */
         if (sorted_filters[0].second > _bruteforce_threshold) {
-        estimated_match = sample_intersection(scratch->get_valid_bitmap(), filter_label);
+        estimated_match = sample_intersection(scratch->get_valid_bitmap(), filter_label).first;
         } else {
         estimated_match = sorted_filters[0].second;
         }
