@@ -184,6 +184,7 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
     std::unordered_map<std::string, uint32_t> string_int_map;
     std::ofstream label_writer(outFileName);
     std::ifstream label_reader(inFileName);
+    std::cout<<"WARNING: Modified the code to convert string labels to integers, since we are assuming consecutive integer labels for expt purposes " << std::endl;
     if (unv_label != "")
         string_int_map[unv_label] = 0; // if universal label is provided map it to 0 always
     std::string line, token;
@@ -197,7 +198,8 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             if (string_int_map.find(token) == string_int_map.end())
             {
-                uint32_t nextId = (uint32_t)string_int_map.size() + 1;
+//                uint32_t nextId = (uint32_t)string_int_map.size() + 1;
+                uint32_t nextId = (uint32_t) std::stoul(token);
                 string_int_map[token] = nextId; // nextId can never be 0
             }
             lbls.push_back(string_int_map[token]);
