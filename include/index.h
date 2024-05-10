@@ -109,7 +109,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                      const std::vector<LabelT> &incoming_labels);
 
     DISKANN_DLLEXPORT inline uint32_t detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                            const std::vector<LabelT> &incoming_labels);
+                                                            const std::vector<LabelT> &incoming_labels, bool rerank_use = false);
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
@@ -164,7 +164,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query,
                                                                         const std::vector<LabelT> &filter_label,
                                                                         const size_t K, const uint32_t L,
-                                                                        IndexType *indices, float *distances);
+                                                                        IndexType *indices, float *distances, const std::vector<LabelT> &filter_label_rerank);
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
@@ -230,7 +230,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query,
                                                                const std::vector<std::string> &filter_label_raw,
                                                                const size_t K, const uint32_t L, std::any &indices,
-                                                               float *distances) override;
+                                                               float *distances, const std::vector<std::string> &raw_label_rerank = std::vector<std::string>()) override;
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
     virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;
@@ -269,6 +269,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t calculate_entry_point();
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
+    void parse_label_file_rerank(const std::string &label_file, size_t &num_points);    
 
     void parse_sample_label_file(const std::string &label_file, size_t &num_samples);
 
@@ -420,6 +421,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::vector<roaring::Roaring> _labels_to_points;
+    std::vector<roaring::Roaring> _labels_to_points_rerank;    
     std::vector<roaring::Roaring> _labels_to_points_sample;
     uint32_t *_sample_map = nullptr;
     float _sample_prob = 0;
