@@ -1074,7 +1074,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
             else
             {
-                if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+                if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                     continue;
             }
         }
@@ -1207,7 +1207,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                     else
                     {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+                        if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                             continue;
                     }
                 }
@@ -2550,7 +2550,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             uint32_t cand = sample_intersection(scratch->get_valid_bitmap(), filter_label).second;
             if (cand < std::numeric_limits<uint32_t>::max())
             {
-                std::cout << detect_filter_penalty(cand, true, filter_label) << std::endl;
                 init_ids.emplace_back(cand);
             }
 
