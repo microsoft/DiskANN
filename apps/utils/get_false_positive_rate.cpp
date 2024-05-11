@@ -46,9 +46,8 @@ template <class T> T div_round_up(const T numerator, const T denominator)
     return (numerator % denominator == 0) ? (numerator / denominator) : 1 + (numerator / denominator);
 }
 
-
-inline void parse_base_label_file(const std::string &map_file,
-                                      std::vector<tsl::robin_set<std::string>> &pts_to_labels, uint32_t start_id = 0)
+inline void parse_base_label_file(const std::string &map_file, std::vector<tsl::robin_set<std::string>> &pts_to_labels,
+                                  uint32_t start_id = 0)
 {
     pts_to_labels.clear();
     std::ifstream infile(map_file);
@@ -58,8 +57,9 @@ inline void parse_base_label_file(const std::string &map_file,
     infile.seekg(0, std::ios::beg);
     uint32_t line_no = 0;
     while (std::getline(infile, line))
-    { 
-        if (line_no < start_id) {
+    {
+        if (line_no < start_id)
+        {
             line_no++;
             continue;
         }
@@ -76,10 +76,10 @@ inline void parse_base_label_file(const std::string &map_file,
             lbls.insert(token);
             labels.insert(token);
         }
-//        std::sort(lbls.begin(), lbls.end());
+        //        std::sort(lbls.begin(), lbls.end());
         pts_to_labels.push_back(lbls);
         if (pts_to_labels.size() >= PARTSIZE)
-        break;
+            break;
     }
     std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
               << pts_to_labels.size() << " points" << std::endl;
@@ -87,7 +87,7 @@ inline void parse_base_label_file(const std::string &map_file,
 
 // outer vector is # queries,  inner vector is size of the AND predicate
 inline void parse_query_label_file(const std::string &query_label_file,
-                                      std::vector<std::vector<std::string>> &query_labels)
+                                   std::vector<std::vector<std::string>> &query_labels)
 {
     query_labels.clear();
     std::ifstream infile(query_label_file);
@@ -109,17 +109,19 @@ inline void parse_query_label_file(const std::string &query_label_file,
             lbls.push_back(token);
             labels.insert(token);
         }
-//        std::sort(lbls.begin(), lbls.end());
+        //        std::sort(lbls.begin(), lbls.end());
         query_labels.push_back(lbls);
     }
     std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
               << query_labels.size() << " queries" << std::endl;
 }
 
-
-//template<typename A, typename B>
+// template<typename A, typename B>
 // add UNIVERSAL LABEL SUPPORT
-int identify_matching_points(const std::string &base, const size_t start_id, const std::string &query, const std::string &unv_label, std::vector<boost::dynamic_bitset<>> &matching_points, std::vector<std::pair<uint32_t, uint32_t>> &query_stats) {
+int identify_matching_points(const std::string &base, const size_t start_id, const std::string &query,
+                             const std::string &unv_label, std::vector<boost::dynamic_bitset<>> &matching_points,
+                             std::vector<std::pair<uint32_t, uint32_t>> &query_stats)
+{
     std::vector<tsl::robin_set<std::string>> base_labels;
     std::vector<std::vector<std::string>> query_labels;
     parse_base_label_file(base, base_labels, start_id);
@@ -130,50 +132,54 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
     matching_points.resize(num_query);
     for (auto &x : matching_points)
         x.resize(num_base);
-    std::cout<<"Starting to identify matching points "<< std::endl;
+    std::cout << "Starting to identify matching points " << std::endl;
     std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for schedule(dynamic, 128)
-    for (uint32_t i = 0; i < num_query; i++) {
-//        if (i % 100 == 0)
-//        std::cout<<"."<< std::flush;
-//        tsl::robin_set<uint32_t> matches;
-        for (uint32_t j = 0; j < num_base; j++) {
+    for (uint32_t i = 0; i < num_query; i++)
+    {
+        //        if (i % 100 == 0)
+        //        std::cout<<"."<< std::flush;
+        //        tsl::robin_set<uint32_t> matches;
+        for (uint32_t j = 0; j < num_base; j++)
+        {
             bool pass = true;
-            if (unv_label.empty() || (base_labels[j].find(unv_label) == base_labels[j].end())) {
-            for (uint32_t k = 0; k < query_labels[i].size(); k++) {
-                if (base_labels[j].find(query_labels[i][k]) == base_labels[j].end()) {
-                    pass = false;
-                    break;
+            if (unv_label.empty() || (base_labels[j].find(unv_label) == base_labels[j].end()))
+            {
+                for (uint32_t k = 0; k < query_labels[i].size(); k++)
+                {
+                    if (base_labels[j].find(query_labels[i][k]) == base_labels[j].end())
+                    {
+                        pass = false;
+                        break;
+                    }
                 }
             }
-            }
-            if (pass) {
+            if (pass)
+            {
                 matching_points[i][j] = 1;
                 query_stats[i].second++;
             }
         }
     }
- std::chrono::high_resolution_clock::time_point t2 = std::chrono::high_resolution_clock::now();
+    std::chrono::high_resolution_clock::time_point t2 = std::chrono::high_resolution_clock::now();
 
-  std::chrono::duration<double> time_span = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+    std::chrono::duration<double> time_span = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
 
-  std::cout << "It took me " << time_span.count() << " seconds." << std::endl;    
+    std::cout << "It took me " << time_span.count() << " seconds." << std::endl;
     return 0;
 }
 
-
-
-void get_fp_rate(const std::string &base_labels, const std::string &base_labels_bloom, const std::string &query_labels,const std::string &query_labels_bloom, const std::string &unv_label,
-                                                                            size_t &nqueries, size_t &npoints)
+void get_fp_rate(const std::string &base_labels, const std::string &base_labels_bloom, const std::string &query_labels,
+                 const std::string &query_labels_bloom, const std::string &unv_label, size_t &nqueries, size_t &npoints)
 {
-//    int num_parts = get_num_parts<T>(base_labels.c_str());
-    uint32_t num_parts =
-        (npoints % PARTSIZE) == 0 ? npoints / PARTSIZE : (uint32_t)std::floor(npoints / PARTSIZE) + 1;
+    //    int num_parts = get_num_parts<T>(base_labels.c_str());
+    uint32_t num_parts = (npoints % PARTSIZE) == 0 ? npoints / PARTSIZE : (uint32_t)std::floor(npoints / PARTSIZE) + 1;
 
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
     std::vector<std::pair<uint32_t, uint32_t>> query_stats(nqueries);
-    for (uint32_t i = 0; i < nqueries; i++) {
+    for (uint32_t i = 0; i < nqueries; i++)
+    {
         query_stats[i].first = i;
         query_stats[i].second = 0;
     }
@@ -183,38 +189,41 @@ void get_fp_rate(const std::string &base_labels, const std::string &base_labels_
     for (int p = 0; p < num_parts; p++)
     {
         size_t start_id = p * PARTSIZE;
-//        load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
+        //        load_bin_as_float<T>(base_file.c_str(), base_data, npoints, dim, p);
         size_t end_id = start_id + npoints;
 
         std::vector<boost::dynamic_bitset<>> matching_points;
         std::vector<boost::dynamic_bitset<>> matching_points_bloom;
         identify_matching_points(base_labels, start_id, query_labels, unv_label, matching_points, query_stats);
-        identify_matching_points(base_labels_bloom, start_id, query_labels_bloom, unv_label, matching_points_bloom, query_stats);
+        identify_matching_points(base_labels_bloom, start_id, query_labels_bloom, unv_label, matching_points_bloom,
+                                 query_stats);
         for (size_t i = 0; i < nqueries; i++)
         {
             corrects[i] += matching_points[i].count();
             positives[i] += matching_points_bloom[i].count();
         }
-
     }
     float fp_rate = 0;
     uint32_t good_queries = 0;
-        for (size_t i = 0; i < nqueries; i++)
+    for (size_t i = 0; i < nqueries; i++)
+    {
+        if (corrects[i] > 0)
         {
-            if (corrects[i] > 0) {
-                fp_rate += (1.0*positives[i])/(1.0*corrects[i]);
-                good_queries++;
-            }
-            if (corrects[i] > positives[i]) {
-                std::cout<<"ERROR! False negative(s) detected." << std::endl;
-            }
+            fp_rate += (1.0 * positives[i]) / (1.0 * corrects[i]);
+            good_queries++;
         }
+        if (corrects[i] > positives[i])
+        {
+            std::cout << "ERROR! False negative(s) detected." << std::endl;
+        }
+    }
 
     fp_rate /= good_queries;
-    std::cout<<"FP rate: " << fp_rate << std::endl;
+    std::cout << "FP rate: " << fp_rate << std::endl;
 };
 
-uint64_t get_label_file_num_pts(std::string file) {
+uint64_t get_label_file_num_pts(std::string file)
+{
     uint64_t num_lines = 0;
     std::ifstream infile(file);
     std::string line, token;
@@ -225,12 +234,14 @@ uint64_t get_label_file_num_pts(std::string file) {
     {
         num_lines++;
     }
-    std::cout<<"Identified " << num_lines <<" lines in " << file << std::endl;
+    std::cout << "Identified " << num_lines << " lines in " << file << std::endl;
     return num_lines;
 }
 
 // add UNIVERSAL LABEL SUPPORT
-int aux_main(const std::string &base_labels,const std::string &base_labels_bloom, const std::string &query_labels, const std::string &query_labels_bloom,const std::string &unv_label, const std::string &tags_file = std::string(""))
+int aux_main(const std::string &base_labels, const std::string &base_labels_bloom, const std::string &query_labels,
+             const std::string &query_labels_bloom, const std::string &unv_label,
+             const std::string &tags_file = std::string(""))
 {
     size_t npoints, nqueries, dim;
 
@@ -243,8 +254,6 @@ int aux_main(const std::string &base_labels,const std::string &base_labels_bloom
 
     // load tags
     const bool tags_enabled = tags_file.empty() ? false : true;
-
-
 
     get_fp_rate(base_labels, base_labels_bloom, query_labels, query_labels_bloom, unv_label, nqueries, npoints);
 
@@ -289,7 +298,7 @@ int main(int argc, char **argv)
 
     try
     {
-            aux_main(base_labels,base_labels_bloom, query_labels, query_labels_bloom, unv_label);
+        aux_main(base_labels, base_labels_bloom, query_labels, query_labels_bloom, unv_label);
     }
     catch (const std::exception &e)
     {

@@ -26,10 +26,9 @@ template <typename T> int aux_main(int argc, char **argv)
     std::string output_prefix(argv[3]);
     float sampling_rate = (float)(std::atof(argv[4]));
 
-    std::string label_file="";
+    std::string label_file = "";
     if (argc == 6)
         label_file = std::string(argv[5]);
-
 
     gen_random_slice<T>(base_file, output_prefix, sampling_rate, label_file);
     return 0;
@@ -45,7 +44,6 @@ int main(int argc, char **argv)
                   << std::endl;
         exit(-1);
     }
-
 
     if (std::string(argv[1]) == std::string("float"))
     {

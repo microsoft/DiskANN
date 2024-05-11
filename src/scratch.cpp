@@ -28,9 +28,9 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     alloc_aligned(((void **)&this->_aligned_query_T), aligned_dim * sizeof(T), alignment_factor * sizeof(T));
     memset(this->_aligned_query_T, 0, aligned_dim * sizeof(T));
 
-    alloc_aligned(((void **)&this->_aligned_query_float), aligned_dim * sizeof(float), alignment_factor * sizeof(float));
+    alloc_aligned(((void **)&this->_aligned_query_float), aligned_dim * sizeof(float),
+                  alignment_factor * sizeof(float));
     memset(this->_aligned_query_float, 0, aligned_dim * sizeof(float));
-
 
     if (init_pq_scratch)
         this->_pq_scratch = new PQScratch<T>(defaults::MAX_GRAPH_DEGREE, aligned_dim);
@@ -71,7 +71,7 @@ template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l
         _L = new_l;
         _pool.reserve(3 * _L + _R);
         _best_l_nodes.reserve(_L);
-        _closest_clusters.reserve(2*_L);
+        _closest_clusters.reserve(2 * _L);
         _inserted_into_pool_rs.reserve(20 * _L);
     }
 }

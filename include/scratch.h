@@ -40,7 +40,7 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _L;
     }
-    inline float* get_query_float()
+    inline float *get_query_float()
     {
         return _aligned_query_float;
     }
@@ -159,8 +159,7 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     // _to calculate the closest clusters during filtered search in clustered index
     std::vector<uint32_t> _closest_clusters;
     std::vector<float> _cluster_distances;
-    float* _aligned_query_float;
-
+    float *_aligned_query_float;
 };
 
 //

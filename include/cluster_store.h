@@ -48,7 +48,7 @@ template <typename data_t> class AbstractClusterStore
     // potentially after pre-processing the vectors if the metric deems so
     // e.g., normalizing vectors for cosine distance over floating-point vectors
     // useful for bulk or static index building.
-    virtual void assign_data_to_clusters( data_t *vectors, std::vector<uint32_t> &ids) = 0;
+    virtual void assign_data_to_clusters(data_t *vectors, std::vector<uint32_t> &ids) = 0;
 
     // operations on vectors
     // like populate_data function, but over one vector at a time useful for

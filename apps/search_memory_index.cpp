@@ -124,8 +124,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
                   << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency" << std::setw(20)
-                  << "get valid pts" << std::setw(20) << "closest clusters" << std::setw(20)
-                  << "intersect" << std::setw(24) << "filter match+dist. cmp" << std::setw(20) << "dtct pnlty" << std::setw(20)
+                  << "get valid pts" << std::setw(20) << "closest clusters" << std::setw(20) << "intersect"
+                  << std::setw(24) << "filter match+dist. cmp" << std::setw(20) << "dtct pnlty" << std::setw(20)
                   << "estimate time" << std::endl;
         table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 24 + 20 + 20;
     }
@@ -166,7 +166,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         time_to_get_valid = 0;
         time_to_cluster = 0;
         time_to_intersect = 0;
-        time_to_filter_check_and_compare  = 0;
+        time_to_filter_check_and_compare = 0;
         time_to_detect_penalty = 0;
         uint32_t L = Lvec[test_id];
         /*        if (L < recall_at)
@@ -309,10 +309,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15)
                       << (float)latency_stats[(uint64_t)(0.999 * query_num)] << std::setw(20)
-                      << time_to_get_valid*1000000/query_num  << std::setw(20) << time_to_cluster*100000/query_num << std::setw(20)
-                      << time_to_intersect*1000000/query_num << std::setw(20)
-                      << time_to_filter_check_and_compare*1000000/query_num << std::setw(24)
-                      << time_to_detect_penalty*1000000/query_num << std::setw(24)
+                      << time_to_get_valid * 1000000 / query_num << std::setw(20)
+                      << time_to_cluster * 100000 / query_num << std::setw(20)
+                      << time_to_intersect * 1000000 / query_num << std::setw(20)
+                      << time_to_filter_check_and_compare * 1000000 / query_num << std::setw(24)
+                      << time_to_detect_penalty * 1000000 / query_num << std::setw(24)
                       << time_to_estimate * 1000000 / query_num;
         }
         for (double recall : recalls)

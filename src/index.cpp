@@ -612,14 +612,15 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
 
-        if (file_exists(sample_label_file)) {
+        if (file_exists(sample_label_file))
+        {
             uint64_t num_samples;
             parse_sample_label_file(sample_label_file, num_samples);
             std::string rev_map = sample_label_file + "_map.bin";
-            uint64_t n1,n2;
+            uint64_t n1, n2;
             diskann::load_bin<uint32_t>(rev_map, _sample_map, n1, n2);
-            _sample_prob = (1.0*num_samples)/(1.0*label_num_pts);
-            std::cout<<"Loaded sample file with rate " << _sample_prob << std::endl;
+            _sample_prob = (1.0 * num_samples) / (1.0 * label_num_pts);
+            std::cout << "Loaded sample file with rate " << _sample_prob << std::endl;
         }
 
         assert(label_num_pts == data_file_num_pts - _num_frozen_pts);
@@ -657,30 +658,33 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         {
             RoaringIdList curr_list;
             _ivf_clusters->get_cluster_members(i, curr_list);
-            _clusters_to_labels_to_points[i].resize(_labels.size()+1);
+            _clusters_to_labels_to_points[i].resize(_labels.size() + 1);
 
-/*            for (auto &lbl : _labels)
-            for (roaring::Roaring::const_iterator j = curr_list.list.begin(); j != curr_list.list.end(); j++)
+            /*            for (auto &lbl : _labels)
+                        for (roaring::Roaring::const_iterator j = curr_list.list.begin(); j != curr_list.list.end();
+            j++)
+                        {
+                            for (auto const &filter : _location_to_labels[*j])
+                            {
+                                _clusters_to_labels_to_points[i].resize(_labels.size()+1);
+            //                    std::cout <<i<<","<<filter<<" " << std::flush;
+                                _clusters_to_labels_to_points[i][filter].add(*j);
+                            }
+                        }*/
+            for (auto &lbl : _labels)
             {
-                for (auto const &filter : _location_to_labels[*j])
-                {
-                    _clusters_to_labels_to_points[i].resize(_labels.size()+1);
-//                    std::cout <<i<<","<<filter<<" " << std::flush;
-                    _clusters_to_labels_to_points[i][filter].add(*j);
-                }
-            }*/
-            for (auto &lbl : _labels) {
                 _clusters_to_labels_to_points[i][lbl] = _labels_to_points[lbl];
                 _clusters_to_labels_to_points[i][lbl] &= curr_list.list;
             }
-/*            for (roaring::Roaring::const_iterator j = curr_list.list.begin(); j != curr_list.list.end(); j++)
-            {
-                for (auto const &filter : _location_to_labels[*j])
-                {
-//                    std::cout <<i<<","<<filter<<" " << std::flush;
-                    _clusters_to_labels_to_points[i][filter].add(*j);
-                }
-            } */
+            /*            for (roaring::Roaring::const_iterator j = curr_list.list.begin(); j != curr_list.list.end();
+            j++)
+                        {
+                            for (auto const &filter : _location_to_labels[*j])
+                            {
+            //                    std::cout <<i<<","<<filter<<" " << std::flush;
+                                _clusters_to_labels_to_points[i][filter].add(*j);
+                            }
+                        } */
         }
 
         std::string universal_label_file(filename);
@@ -856,7 +860,7 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
                                                               const std::vector<LabelT> &incoming_labels)
 {
 
-//    auto s = std::chrono::high_resolution_clock::now();
+    //    auto s = std::chrono::high_resolution_clock::now();
 
     // not implemented for build-time use case, since we need to understand universal labels for multiple filters
     //    if (!search_invocation)
@@ -893,8 +897,8 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
     //        return true;
 
     //    return false;
-//    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-//    time_to_detect_penalty += diff.count();
+    //    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    //    time_to_detect_penalty += diff.count();
 
     return incoming_labels.size() - overlap;
 }
@@ -2111,7 +2115,6 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
 }
 
-
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::parse_sample_label_file(const std::string &label_file, size_t &num_samples)
 {
@@ -2145,7 +2148,7 @@ void Index<T, TagT, LabelT>::parse_sample_label_file(const std::string &label_fi
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-//            LabelT token_as_num = (LabelT)std::stoul(token);
+            //            LabelT token_as_num = (LabelT)std::stoul(token);
             LabelT token_as_num = get_converted_label(token);
             lbls.push_back(token_as_num);
             sample_labels.insert(token_as_num);
@@ -2162,10 +2165,9 @@ void Index<T, TagT, LabelT>::parse_sample_label_file(const std::string &label_fi
         line_cnt++;
     }
     num_samples = (size_t)line_cnt;
-    diskann::cout << "Identified " << num_samples << " samples for estimation purposes, and it covers " << sample_labels.size() << " distinct labels." << std::endl;
+    diskann::cout << "Identified " << num_samples << " samples for estimation purposes, and it covers "
+                  << sample_labels.size() << " distinct labels." << std::endl;
 }
-
-
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::_set_universal_label(const LabelType universal_label)
@@ -2287,7 +2289,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         _ivf_clusters->assign_data_to_clusters(raw_vectors, default_ids);
     }
 
-   // this->build(filename, num_points_to_load, tags);
+    // this->build(filename, num_points_to_load, tags);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2431,8 +2433,8 @@ std::vector<std::pair<LabelT, uint32_t>> Index<T, TagT, LabelT>::sort_filter_cou
 }
 
 template <typename T, typename TagT, typename LabelT>
-std::pair<uint32_t,uint32_t> Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap,
-                                                     const std::vector<LabelT> &filter_label)
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap,
+                                                                          const std::vector<LabelT> &filter_label)
 {
     intersection_bitmap = _labels_to_points_sample[filter_label[0]];
     for (size_t i = 1; i < filter_label.size(); i++)
@@ -2441,13 +2443,13 @@ std::pair<uint32_t,uint32_t> Index<T, TagT, LabelT>::sample_intersection(roaring
     }
     uint32_t val = std::numeric_limits<uint32_t>::max();
     auto x = intersection_bitmap.begin();
-    if (x != intersection_bitmap.end()) {
+    if (x != intersection_bitmap.end())
+    {
         val = _sample_map[*x];
     }
-//    std::cout<<intersection_bitmap.cardinality() << " " << val << std::endl;
+    //    std::cout<<intersection_bitmap.cardinality() << " " << val << std::endl;
     return std::make_pair((uint32_t)(intersection_bitmap.cardinality() * (1.0 / (_sample_prob))), val);
 }
-
 
 template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
@@ -2526,25 +2528,28 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         }
         break;
         case 2:
-    if (_dynamic_index)
-        tl.lock();
+            if (_dynamic_index)
+                tl.lock();
 
-    if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end())
-    {
-        init_ids.emplace_back(_label_to_start_id[filter_label[0]]);
-    }
-    else
-    {
-        diskann::cout << "No filtered medoid found. exitting "
-                      << std::endl; // RKNOTE: If universal label found start there
-        throw diskann::ANNException("No filtered medoid found. exitting ", -1);
-    }
-    if (_dynamic_index)
-        tl.unlock();
+            if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end())
+            {
+                init_ids.emplace_back(_label_to_start_id[filter_label[0]]);
+            }
+            else
+            {
+                diskann::cout << "No filtered medoid found. exitting "
+                              << std::endl; // RKNOTE: If universal label found start there
+                throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+            }
+            if (_dynamic_index)
+                tl.unlock();
 
             uint32_t cand = sample_intersection(scratch->get_valid_bitmap(), filter_label).second;
             if (cand < std::numeric_limits<uint32_t>::max())
+            {
+                std::cout << detect_filter_penalty(cand, true, filter_label) << std::endl;
                 init_ids.emplace_back(cand);
+            }
 
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
             break;
@@ -2557,10 +2562,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 #endif
         uint32_t estimated_match = 0;
         /* uint32_t sample_size = _clustering_threshold + 1; */
-        if (sorted_filters[0].second > _bruteforce_threshold) {
-        estimated_match = sample_intersection(scratch->get_valid_bitmap(), filter_label).first;
-        } else {
-        estimated_match = sorted_filters[0].second;
+        if (sorted_filters[0].second > _bruteforce_threshold)
+        {
+            estimated_match = sample_intersection(scratch->get_valid_bitmap(), filter_label).first;
+        }
+        else
+        {
+            estimated_match = sorted_filters[0].second;
         }
 #ifdef INSTRUMENT
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;

@@ -132,8 +132,8 @@ void exact_knn(const size_t dim, const size_t k,
                                                  // corresponding closes_points
                size_t npoints,
                float *points_in, // points in Col major
-               size_t nqueries, float *queries_in,
-               diskann::Metric metric, std::vector<boost::dynamic_bitset<>> &matching_points) // queries in Col major
+               size_t nqueries, float *queries_in, diskann::Metric metric,
+               std::vector<boost::dynamic_bitset<>> &matching_points) // queries in Col major
 {
     float *points_l2sq = new float[npoints];
     float *queries_l2sq = new float[nqueries];
@@ -214,20 +214,22 @@ void exact_knn(const size_t dim, const size_t k,
         for (long long q = q_b; q < q_e; q++)
         {
             maxPQIFCS point_dist;
-//            for (size_t p = 0; p < k; p++) {
-//                if (matching_points[q][p] == true)
-//                point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
-//            }
+            //            for (size_t p = 0; p < k; p++) {
+            //                if (matching_points[q][p] == true)
+            //                point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) *
+            //                (ptrdiff_t)npoints]);
+            //            }
             for (size_t p = 0; p < npoints; p++)
             {
                 if (matching_points[q][p] == false)
-                continue;
-                if (point_dist.size() < k || point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
+                    continue;
+                if (point_dist.size() < k ||
+                    point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
                     point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
                 if (point_dist.size() > k)
                     point_dist.pop();
             }
-//            for (ptrdiff_t l = 0; l < (ptrdiff_t)k; ++l)
+            //            for (ptrdiff_t l = 0; l < (ptrdiff_t)k; ++l)
             ptrdiff_t l = 0;
             while (point_dist.size() > 0)
             {
@@ -236,9 +238,12 @@ void exact_knn(const size_t dim, const size_t k,
                 point_dist.pop();
                 l++;
             }
-            while (l < k) {
-                closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] = std::numeric_limits<uint64_t>::max();
-                dist_closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] = std::numeric_limits<float>::max();
+            while (l < k)
+            {
+                closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] =
+                    std::numeric_limits<uint64_t>::max();
+                dist_closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] =
+                    std::numeric_limits<float>::max();
                 l++;
             }
             assert(std::is_sorted(dist_closest_points + (ptrdiff_t)q * (ptrdiff_t)k,
@@ -347,9 +352,8 @@ inline void save_groundtruth_as_one_file(const std::string filename, int32_t *da
     std::cout << "Finished writing truthset" << std::endl;
 }
 
-
-inline void parse_base_label_file(const std::string &map_file,
-                                      std::vector<tsl::robin_set<std::string>> &pts_to_labels, uint32_t start_id = 0)
+inline void parse_base_label_file(const std::string &map_file, std::vector<tsl::robin_set<std::string>> &pts_to_labels,
+                                  uint32_t start_id = 0)
 {
     pts_to_labels.clear();
     std::ifstream infile(map_file);
@@ -359,8 +363,9 @@ inline void parse_base_label_file(const std::string &map_file,
     infile.seekg(0, std::ios::beg);
     uint32_t line_no = 0;
     while (std::getline(infile, line))
-    { 
-        if (line_no < start_id) {
+    {
+        if (line_no < start_id)
+        {
             line_no++;
             continue;
         }
@@ -377,10 +382,10 @@ inline void parse_base_label_file(const std::string &map_file,
             lbls.insert(token);
             labels.insert(token);
         }
-//        std::sort(lbls.begin(), lbls.end());
+        //        std::sort(lbls.begin(), lbls.end());
         pts_to_labels.push_back(lbls);
         if (pts_to_labels.size() >= PARTSIZE)
-        break;
+            break;
     }
     std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
               << pts_to_labels.size() << " points" << std::endl;
@@ -388,7 +393,7 @@ inline void parse_base_label_file(const std::string &map_file,
 
 // outer vector is # queries,  inner vector is size of the AND predicate
 inline void parse_query_label_file(const std::string &query_label_file,
-                                      std::vector<std::vector<std::string>> &query_labels)
+                                   std::vector<std::vector<std::string>> &query_labels)
 {
     query_labels.clear();
     std::ifstream infile(query_label_file);
@@ -410,30 +415,35 @@ inline void parse_query_label_file(const std::string &query_label_file,
             lbls.push_back(token);
             labels.insert(token);
         }
-//        std::sort(lbls.begin(), lbls.end());
+        //        std::sort(lbls.begin(), lbls.end());
         query_labels.push_back(lbls);
     }
     std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
               << query_labels.size() << " queries" << std::endl;
 }
 
+void print_query_stats(std::vector<std::pair<uint32_t, uint32_t>> &v)
+{
 
-void print_query_stats(std::vector<std::pair<uint32_t, uint32_t>> &v) {
+    std::sort(v.begin(), v.end(), [](const std::pair<uint32_t, uint32_t> &a, const std::pair<uint32_t, uint32_t> &b) {
+        return a.second < b.second;
+    });
 
-  std::sort(v.begin(), v.end(), [](const std::pair<uint32_t, uint32_t>& a, const std::pair<uint32_t, uint32_t>& b) {
-    return a.second < b.second;
-  });
-
-    for (uint32_t pct = 0; pct < 100; pct+=5) {
-        std::cout<<v[(v.size()*pct*1.0)/100].second<<" is pass-rate of query with percentile " << pct << std::endl;
+    for (uint32_t pct = 0; pct < 100; pct += 5)
+    {
+        std::cout << v[(v.size() * pct * 1.0) / 100].second << " is pass-rate of query with percentile " << pct
+                  << std::endl;
     }
 
     return;
 }
 
-//template<typename A, typename B>
+// template<typename A, typename B>
 // add UNIVERSAL LABEL SUPPORT
-int identify_matching_points(const std::string &base, const size_t start_id, const std::string &query, const std::string &unv_label, std::vector<boost::dynamic_bitset<>> &matching_points, std::vector<std::pair<uint32_t, uint32_t>> &query_stats) {
+int identify_matching_points(const std::string &base, const size_t start_id, const std::string &query,
+                             const std::string &unv_label, std::vector<boost::dynamic_bitset<>> &matching_points,
+                             std::vector<std::pair<uint32_t, uint32_t>> &query_stats)
+{
     std::vector<tsl::robin_set<std::string>> base_labels;
     std::vector<std::vector<std::string>> query_labels;
     parse_base_label_file(base, base_labels, start_id);
@@ -444,52 +454,56 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
     matching_points.resize(num_query);
     for (auto &x : matching_points)
         x.resize(num_base);
-    std::cout<<"Starting to identify matching points "<< std::endl;
+    std::cout << "Starting to identify matching points " << std::endl;
     std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for schedule(dynamic, 128)
-    for (uint32_t i = 0; i < num_query; i++) {
-//        if (i % 100 == 0)
-//        std::cout<<"."<< std::flush;
-//        tsl::robin_set<uint32_t> matches;
-        for (uint32_t j = 0; j < num_base; j++) {
+    for (uint32_t i = 0; i < num_query; i++)
+    {
+        //        if (i % 100 == 0)
+        //        std::cout<<"."<< std::flush;
+        //        tsl::robin_set<uint32_t> matches;
+        for (uint32_t j = 0; j < num_base; j++)
+        {
             bool pass = true;
-            if (unv_label.empty() || (base_labels[j].find(unv_label) == base_labels[j].end())) {
-            for (uint32_t k = 0; k < query_labels[i].size(); k++) {
-                if (base_labels[j].find(query_labels[i][k]) == base_labels[j].end()) {
-                    pass = false;
-                    break;
+            if (unv_label.empty() || (base_labels[j].find(unv_label) == base_labels[j].end()))
+            {
+                for (uint32_t k = 0; k < query_labels[i].size(); k++)
+                {
+                    if (base_labels[j].find(query_labels[i][k]) == base_labels[j].end())
+                    {
+                        pass = false;
+                        break;
+                    }
                 }
             }
-            }
-            if (pass) {
+            if (pass)
+            {
                 matching_points[i][j] = 1;
                 query_stats[i].second++;
             }
         }
     }
- std::chrono::high_resolution_clock::time_point t2 = std::chrono::high_resolution_clock::now();
+    std::chrono::high_resolution_clock::time_point t2 = std::chrono::high_resolution_clock::now();
 
-  std::chrono::duration<double> time_span = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+    std::chrono::duration<double> time_span = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
 
-  std::cout << "It took me " << time_span.count() << " seconds.";    
+    std::cout << "It took me " << time_span.count() << " seconds.";
     return 0;
 }
 
-
-
 template <typename T>
-std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(const std::string &base_file, const std::string &base_labels, const std::string &query_labels, const std::string &unv_label,
-                                                                            size_t &nqueries, size_t &npoints,
-                                                                            size_t &dim, size_t &k, float *query_data,
-                                                                            const diskann::Metric &metric,
-                                                                            std::vector<uint32_t> &location_to_tag)
+std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(
+    const std::string &base_file, const std::string &base_labels, const std::string &query_labels,
+    const std::string &unv_label, size_t &nqueries, size_t &npoints, size_t &dim, size_t &k, float *query_data,
+    const diskann::Metric &metric, std::vector<uint32_t> &location_to_tag)
 {
     float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
     std::vector<std::pair<uint32_t, uint32_t>> query_stats(nqueries);
-    for (uint32_t i = 0; i < nqueries; i++) {
+    for (uint32_t i = 0; i < nqueries; i++)
+    {
         query_stats[i].first = i;
         query_stats[i].second = 0;
     }
@@ -502,7 +516,6 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
 
         std::vector<boost::dynamic_bitset<>> matching_points;
         identify_matching_points(base_labels, start_id, query_labels, unv_label, matching_points, query_stats);
-
 
         size_t *closest_points_part = new size_t[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
@@ -528,19 +541,17 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         delete[] dist_closest_points_part;
 
         diskann::aligned_free(base_data);
-
     }
-        print_query_stats(query_stats);
+    print_query_stats(query_stats);
 
     return res;
 };
 
-
-
 // add UNIVERSAL LABEL SUPPORT
 template <typename T>
 int aux_main(const std::string &base_file, const std::string &query_file, const std::string &gt_file, size_t k,
-             const diskann::Metric &metric, const std::string &base_labels, const std::string &query_labels, const std::string &unv_label, const std::string &tags_file = std::string(""))
+             const diskann::Metric &metric, const std::string &base_labels, const std::string &query_labels,
+             const std::string &unv_label, const std::string &tags_file = std::string(""))
 {
     size_t npoints, nqueries, dim;
 
@@ -558,7 +569,8 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     float *dist_closest_points = new float[nqueries * k];
 
     std::vector<std::vector<std::pair<uint32_t, float>>> results =
-        processUnfilteredParts<T>(base_file, base_labels, query_labels, unv_label, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+        processUnfilteredParts<T>(base_file, base_labels, query_labels, unv_label, nqueries, npoints, dim, k,
+                                  query_data, metric, location_to_tag);
 
     for (size_t i = 0; i < nqueries; i++)
     {
@@ -727,9 +739,11 @@ int main(int argc, char **argv)
         if (data_type == std::string("float"))
             aux_main<float>(base_file, query_file, gt_file, K, metric, base_labels, query_labels, unv_label, tags_file);
         if (data_type == std::string("int8"))
-            aux_main<int8_t>(base_file, query_file, gt_file, K, metric, base_labels,  query_labels, unv_label, tags_file);
+            aux_main<int8_t>(base_file, query_file, gt_file, K, metric, base_labels, query_labels, unv_label,
+                             tags_file);
         if (data_type == std::string("uint8"))
-            aux_main<uint8_t>(base_file, query_file, gt_file, K, metric, base_labels,  query_labels, unv_label, tags_file);
+            aux_main<uint8_t>(base_file, query_file, gt_file, K, metric, base_labels, query_labels, unv_label,
+                              tags_file);
     }
     catch (const std::exception &e)
     {

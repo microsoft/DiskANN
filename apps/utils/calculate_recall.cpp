@@ -41,17 +41,17 @@ int main(int argc, char **argv)
     uint32_t recall_at = std::atoi(argv[3]);
     uint32_t r2 = recall_at;
     if (argc == 5)
-    r2 = std::atoi(argv[4]);    
+        r2 = std::atoi(argv[4]);
 
     if ((dim_or < r2) || (recall_at > dim_gs))
     {
         std::cout << "ground truth has size " << dim_gs << "; our set has " << dim_or << " points. Asking for recall "
-                  << recall_at <<"@" << r2 << ". Fix the mismatch in requirements." << std::endl;
+                  << recall_at << "@" << r2 << ". Fix the mismatch in requirements." << std::endl;
         return -1;
     }
-    std::cout << "Calculating "<<recall_at<<"-recall@" << r2 << std::endl;
+    std::cout << "Calculating " << recall_at << "-recall@" << r2 << std::endl;
     double recall_val = diskann::calculate_recall((uint32_t)points_num, gold_std, gs_dist, (uint32_t)dim_gs,
-                                                  our_results, (uint32_t)dim_or, (uint32_t)recall_at, (uint32_t) r2);
+                                                  our_results, (uint32_t)dim_or, (uint32_t)recall_at, (uint32_t)r2);
 
     //  double avg_recall = (recall*1.0)/(points_num*1.0);
     std::cout << "Avg. recall@" << recall_at << " is " << recall_val << "\n";

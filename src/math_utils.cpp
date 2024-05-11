@@ -160,7 +160,7 @@ void compute_closest_centers(float *data, size_t num_points, size_t dim, float *
     if (!is_norm_given_for_pts)
         pts_norms_squared = new float[num_points];
 
-//    size_t PAR_BLOCK_SIZE = num_points;
+    //    size_t PAR_BLOCK_SIZE = num_points;
 
     size_t PAR_BLOCK_SIZE = 1000000;
 
