@@ -2289,7 +2289,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
         _ivf_clusters->assign_data_to_clusters(raw_vectors, default_ids);
     }
 
-    // this->build(filename, num_points_to_load, tags);
+    this->build(filename, num_points_to_load, tags);
 }
 
 template <typename T, typename TagT, typename LabelT>
