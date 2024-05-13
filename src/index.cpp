@@ -2492,6 +2492,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         switch (_bruteforce_threshold)
         {
         case 0: {
+            num_brutes++;
             // last_intersection has the common elements across all filters in sorted_filters
 #ifdef INSTRUMENT
             auto s = std::chrono::high_resolution_clock::now();
@@ -2511,6 +2512,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         }
         break;
         case 1: {
+            num_clusters++;
 #ifdef INSTRUMENT
             auto s = std::chrono::high_resolution_clock::now();
 #endif
@@ -2528,6 +2530,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         }
         break;
         case 2:
+        num_graphs++;
             if (_dynamic_index)
                 tl.lock();
 
