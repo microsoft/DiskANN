@@ -1033,6 +1033,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     float *pq_dists = nullptr;
 
+    if (curr_query == 1)
+    {
+        std::ofstream out("query_stats1.txt", std::ios_base::app);
+        out << "starting search\n" << std::endl;
+        out.close();
+    }
+
     _pq_data_store->preprocess_query(aligned_query, scratch);
 
     if (expanded_nodes.size() > 0 || id_scratch.size() > 0)
@@ -1069,8 +1076,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             if (search_invocation)
             {
-                if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
+                uint32_t res;
+                if ((res = detect_filter_penalty(id, search_invocation, filter_labels)) > _filter_penalty_threshold)
                     continue;
+                if (curr_query == 1)
+                {
+                    std::ofstream out("query_stats1.txt", std::ios_base::app);
+                    out << "starting id " << id << " has (filter labels - overlap) size " << res << " and filters ";
+                    for (auto const &filter : _location_to_labels[id])
+                    {
+                        out << filter << " ";
+                    }
+                    out << std::endl;
+                    out.close();
+                }
             }
             else
             {
@@ -1104,10 +1123,29 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
+    if (curr_query == 1)
+    {
+        std::ofstream out("query_stats1.txt", std::ios_base::app);
+        out << std::endl;
+        out.close();
+    }
+
     while (best_L_nodes.has_unexpanded_node())
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
+
+        if (curr_query == 1)
+        {
+            std::ofstream out("query_stats1.txt", std::ios_base::app);
+            out << "looking at id " << n << " with filters ";
+            for (auto const &filter : _location_to_labels[n])
+            {
+                out << filter << " ";
+            }
+            out << std::endl;
+            out.close();
+        }
 
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
@@ -1171,6 +1209,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         else
         {
             std::vector<location_t> nbrs;
+            size_t id_iter = 0;
             if (search_invocation)
             {
                 nbrs = _graph_store->get_neighbours(n);
@@ -1200,10 +1239,27 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
+                    uint32_t res;
                     if (search_invocation)
                     {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
+                        res = detect_filter_penalty(id, search_invocation, filter_labels);
+                        if (res > _filter_penalty_threshold)
+                        {
+                            id_iter++;
                             continue;
+                        }
+                        if (curr_query == 1)
+                        {
+                            std::ofstream out("query_stats1.txt", std::ios_base::app);
+                            out << id_iter << ". looking at " << res << " nbr " << id << " with filters ";
+                            for (auto const &filter : _location_to_labels[id])
+                            {
+                                out << filter << " ";
+                            }
+                            out << std::endl;
+                            out.close();
+                        }
+                        id_iter++;
                     }
                     else
                     {
@@ -1211,9 +1267,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             continue;
                     }
                 }
-
                 id_scratch.push_back(id);
             }
+        }
+
+        if (curr_query == 1)
+        {
+            std::ofstream out("query_stats1.txt", std::ios_base::app);
+            out << std::endl;
+            out.close();
         }
 
         // Mark nodes visited
@@ -1261,6 +1323,15 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
             tl.unlock();
 
         _data_store->get_vector(location, scratch->aligned_query());
+        // get all combinations of common filters
+        for (auto const &lbl1 : _location_to_labels[location])
+        {
+            for (auto const &lbl2 : _location_to_labels[location])
+            {
+                if (lbl1 == lbl2)
+                    continue;
+            }
+        }
         iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
                                _location_to_labels[location], false);
 
@@ -2111,6 +2182,20 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
         _location_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
+
+    /* _location_to_label_combos.resize(_location_to_labels.size()); */
+    /* for (size_t i = 0; i < _location_to_labels.size(); i++) */
+    /* { */
+    /*     std::vector<LabelT> curr_lbls = _location_to_labels[i]; */
+    /*     for (size_t j = 0; j < curr_lbls.size(); j++) */
+    /*     { */
+    /*         for (size_t k = j + 1; k < curr_lbls.size(); k++) */
+    /*         { */
+    /*             LabelT a = curr_lbls[j], b = curr_lbls[k]; */
+    /*             _location_to_label_combos[i].push_back(std::make_pair(a, b)); */
+    /*         } */
+    /*     } */
+    /* } */
     num_points = (size_t)line_cnt;
     diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
 }
@@ -2475,10 +2560,32 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
 
     std::vector<LabelT> filter_vec;
-    std::vector<uint32_t> init_ids = get_init_ids();
+    /* std::vector<uint32_t> init_ids = get_init_ids(); */
+    std::vector<uint32_t> init_ids;
 
     std::vector<std::pair<LabelT, uint32_t>> sorted_filters = sort_filter_counts(filter_label);
 
+    /* std::ofstream out("query_sizes.txt", std::ios_base::app); */
+    /* auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label); */
+    /* for (auto const &filt : filter_label) */
+    /* { */
+    /*     out << filt << "/" << _labels_to_points[filt].cardinality() << " "; */
+    /* } */
+    /* out << "and intersection estimate " << inter_estim << std::endl; */
+    /* out << std::endl; */
+    /* out.close(); */
+    /* return std::make_pair(0, 0); */
+
+    if (curr_query == 1)
+    {
+        std::ofstream out("query_stats1.txt", std::ios_base::app);
+        for (auto const &filt : filter_label)
+        {
+            out << filt << "/" << _labels_to_points[filt].cardinality() << " ";
+        }
+        out << std::endl;
+        out.close();
+    }
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
 
@@ -2530,7 +2637,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         }
         break;
         case 2:
-        num_graphs++;
+            num_graphs++;
             if (_dynamic_index)
                 tl.lock();
 
@@ -2547,12 +2654,19 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             if (_dynamic_index)
                 tl.unlock();
 
-            uint32_t cand = sample_intersection(scratch->get_valid_bitmap(), filter_label).second;
+            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
             if (cand < std::numeric_limits<uint32_t>::max())
             {
                 init_ids.emplace_back(cand);
             }
 
+            if (curr_query == 1)
+            {
+                std::ofstream out("query_stats1.txt", std::ios_base::app);
+                out << "estimated intersection size is " << inter_estim << std::endl;
+                out << "setting up init ids with id " << cand << std::endl;
+                out.close();
+            }
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
             break;
         }

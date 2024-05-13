@@ -199,6 +199,13 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         {
             //            time_to_get_valid = 0;
             //            time_to_compare = 0;
+            curr_query = i;
+            if (curr_query == 1)
+            {
+                std::ofstream out("query_sizes.txt", std::ios_base::app);
+                out << "Search path for query " << i << " with filters/specificities ";
+                out.close();
+            }
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search && !tags)
             {

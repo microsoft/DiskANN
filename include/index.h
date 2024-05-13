@@ -44,6 +44,7 @@ inline uint32_t num_brutes = 0;
 inline uint32_t num_clusters = 0;
 inline uint32_t num_graphs = 0;
 inline uint32_t min_inter_size = 2;
+inline int64_t curr_query = 0;
 
 namespace diskann
 {
