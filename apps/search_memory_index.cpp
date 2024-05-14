@@ -124,7 +124,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
                   << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "Recall" << std::setw(20)
-                  << "Brute Latency (mus)" << std::setw(20) << "Brute Recall" << std::setw(20) << "Cluster Latency (mus)"
+                  << "Brute Latency (mus)" << std::setw(20) << "Brute Recall" << std::setw(20) << "Clus. Latency (mus)"
                   << std::setw(20) << "Clus. Recall" << std::setw(20) << "Graph Latency (mus)" << std::setw(20)
                   << "Graph Recall" << std::endl;
         table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20 + 20;
