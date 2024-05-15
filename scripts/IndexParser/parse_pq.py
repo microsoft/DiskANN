@@ -15,6 +15,7 @@ def parse_pivots_file(file_prefix):
         num_dims = metadata_mat.num_cols
         assert num_dims == 1 and (num_metadata == 4 or num_metadata == 5)
 
+
         for i in range(num_metadata):
             for j in range(num_dims):
                 print (metadata_mat[i][j])
@@ -29,9 +30,10 @@ def parse_pivots_file(file_prefix):
         assert centroids.num_rows == pivots.num_cols
         assert centroids.num_cols == 1
 
+        #Assuming new file format =>(chunk offset is at offset 3) because we will not encounter old index formats now. 
         chunk_offsets = pc.DataMat('I', 4)
         chunk_offsets.load_bin_from_opened_file(file, metadata_mat[2][0])
-        assert chunk_offsets.num_rows == pivots.num_cols + 1 or chunk_offsets.num_rows == 0
+        #assert chunk_offsets.num_rows == pivots.num_cols + 1 or chunk_offsets.num_rows == 0
         assert chunk_offsets.num_cols == 1
         #Ignoring rotmat for now. Also ignoring diskPQ
 

@@ -58,6 +58,7 @@ def parse_index_with_PQ_vectors(index_path_prefix, data_type_code, data_type_siz
                         node.vector = compressed_vector
                     out_file.write(str(node))
                     out_file.write("\n")
+                out_file.flush()
                 nodes_read += len(nodes)
                 sector_num += 1
                 index_file.seek(sector_num * parse_common.SECTOR_LEN, 0)

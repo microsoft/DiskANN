@@ -49,7 +49,7 @@ class DataMat:
     def load_bin_metadata_from_opened_file(self, file):
         self.num_rows = struct.unpack('I', file.read(4))[0]
         self.num_cols = struct.unpack('I', file.read(4))[0]
-        print("Binary file: #rows: " + str(self.num_rows) + ", #cols: " + str(self.num_cols))
+        print(file.name + ": #rows: " + str(self.num_rows) + ", #cols: " + str(self.num_cols))
 
     def load_bin_from_opened_file(self, file, file_offset_data=0): 
         file.seek(file_offset_data, 0)
@@ -67,6 +67,7 @@ class DataMat:
     def __len__(self):
         return self.num_rows
     
+ 
     def __getitem__(self, key):
         return self.data[key*self.num_cols:(key+1)*self.num_cols]   
 
