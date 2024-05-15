@@ -17,7 +17,6 @@ const uint32_t FILTER_PENALTY_THRESHOLD = std::numeric_limits<uint32_t>::max();
 const uint32_t BRUTEFORCE_THRESHOLD = 0;
 const uint32_t NUM_FROZEN_POINTS_STATIC = 0;
 const uint32_t NUM_FROZEN_POINTS_DYNAMIC = 1;
-const uint32_t DIST_CMP_CUTOFF = 100000;
 
 // In-mem index related limits
 const float GRAPH_SLACK_FACTOR = 1.3f;
