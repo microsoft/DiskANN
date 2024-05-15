@@ -28,7 +28,6 @@
 #include "quantized_distance.h"
 #include "pq_data_store.h"
 #include "roaring.hh"
-#include "LSH.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -287,9 +286,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::pair<uint32_t, uint32_t> brute_force_filters(const T *query, const uint32_t Lsize,
                                                       const roaring::Roaring &init_ids, InMemQueryScratch<T> *scratch);
 
-    //LSH filtering
-    void load_lsh(const std::string &lsh_hashes_file, const std::string &lsh_axes_file, uint64_t num_pts, uint64_t num_dims);
-
     // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,
@@ -488,12 +484,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Per node lock, cardinality=_max_points + _num_frozen_points
     std::vector<non_recursive_mutex> _locks;
-
-    //LSH_based filtering
-    bool _use_lsh = false;
-    std::unique_ptr<uint8_t[]> _lsh_hashes = nullptr;
-    std::unique_ptr<float[]> _lsh_axes = nullptr; 
-    std::unique_ptr<diskann::LSH> _hasher = nullptr;
 
     static const float INDEX_GROWTH_FACTOR;
 };
