@@ -129,29 +129,29 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                   << "Graph Recall" << std::endl;
         table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20 + 20;
     }
-/*    uint32_t recalls_to_print = 0;
-    const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
-    if (calc_recall_flag)
-    {
-        for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
+    /*    uint32_t recalls_to_print = 0;
+        const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
+        if (calc_recall_flag)
         {
-            std::cout << std::setw(12) << ("Recall@" + std::to_string(curr_recall));
-        }
-        recalls_to_print = recall_at + 1 - first_recall;
-        table_width += recalls_to_print * 12;
-    } */
+            for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
+            {
+                std::cout << std::setw(12) << ("Recall@" + std::to_string(curr_recall));
+            }
+            recalls_to_print = recall_at + 1 - first_recall;
+            table_width += recalls_to_print * 12;
+        } */
     std::cout << std::endl;
     std::cout << std::string(table_width, '=') << std::endl;
 
     std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
     std::vector<std::vector<uint32_t>> query_result_class(Lvec.size());
-    std::vector<float> brute_recalls(Lvec.size(),0);
-    std::vector<float> cluster_recalls(Lvec.size(),0);
-    std::vector<float> graph_recalls(Lvec.size(),0);
-    std::vector<float> brute_lat(Lvec.size(),0);
-    std::vector<float> cluster_lat(Lvec.size(),0);
-    std::vector<float> graph_lat(Lvec.size(),0);
+    std::vector<float> brute_recalls(Lvec.size(), 0);
+    std::vector<float> cluster_recalls(Lvec.size(), 0);
+    std::vector<float> graph_recalls(Lvec.size(), 0);
+    std::vector<float> brute_lat(Lvec.size(), 0);
+    std::vector<float> cluster_lat(Lvec.size(), 0);
+    std::vector<float> graph_lat(Lvec.size(), 0);
     for (auto &x : query_result_class)
         x.resize(query_num, 0);
     std::vector<float> latency_stats(query_num, 0);
@@ -191,7 +191,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         query_result_ids[test_id].resize(recall_at * query_num);
         query_result_dists[test_id].resize(recall_at * query_num);
         std::vector<T *> res = std::vector<T *>();
-                        int method_used  = 0;
+        int method_used = 0;
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
@@ -199,6 +199,13 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         {
             //            time_to_get_valid = 0;
             //            time_to_compare = 0;
+            curr_query = i;
+            if (curr_query == 1)
+            {
+                std::ofstream out("query_stats1.txt", std::ios_base::app);
+                out << "Search path for query " << i << " with filters/specificities ";
+                out.close();
+            }
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search && !tags)
             {
@@ -216,7 +223,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                     method_used = 1;
                 else if (num_graphs > old_g)
                     method_used = 2;
-                else method_used = 0;
+                else
+                    method_used = 0;
                 cmp_stats[i] = retval.second;
                 //                filter_match_time[i] = time_to_get_valid*1000000;
                 //                dist_cmp_time[i] = time_to_compare*1000000;
@@ -258,10 +266,20 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             auto qe = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> diff = qe - qs;
             latency_stats[i] = (float)(diff.count() * 1000000);
-            switch(method_used) {
-                case 0: query_result_class[test_id][i] = 0; brute_lat[test_id] += latency_stats[i]; break;
-                case 1: query_result_class[test_id][i] = 1; cluster_lat[test_id] += latency_stats[i]; break;
-                case 2: query_result_class[test_id][i] = 2; graph_lat[test_id] += latency_stats[i]; break;
+            switch (method_used)
+            {
+            case 0:
+                query_result_class[test_id][i] = 0;
+                brute_lat[test_id] += latency_stats[i];
+                break;
+            case 1:
+                query_result_class[test_id][i] = 1;
+                cluster_lat[test_id] += latency_stats[i];
+                break;
+            case 2:
+                query_result_class[test_id][i] = 2;
+                graph_lat[test_id] += latency_stats[i];
+                break;
             }
         }
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
@@ -316,39 +334,45 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
             recalls.reserve(1);
 
-                for (size_t i = 0; i < query_num; i++)
+            for (size_t i = 0; i < query_num; i++)
+            {
+                std::set<uint32_t> gt, res;
+                uint32_t *gt_vec = gt_ids + gt_dim * i;
+                uint32_t *res_vec = query_result_ids[test_id].data() + recall_at * i;
+                size_t tie_breaker = recall_at;
+                if (gt_dists != nullptr)
                 {
-                    std::set<uint32_t> gt, res;
-                    uint32_t *gt_vec = gt_ids + gt_dim * i;
-                    uint32_t *res_vec = query_result_ids[test_id].data() + recall_at * i;
-                    size_t tie_breaker = recall_at;
-                    if (gt_dists != nullptr)
-                    {
-                        tie_breaker = recall_at - 1;
-                        float *gt_dist_vec = gt_dists + gt_dim * i;
-                        while (tie_breaker < gt_dim && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
-                            tie_breaker++;
-                    }
+                    tie_breaker = recall_at - 1;
+                    float *gt_dist_vec = gt_dists + gt_dim * i;
+                    while (tie_breaker < gt_dim && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
+                        tie_breaker++;
+                }
 
-                    gt.insert(gt_vec, gt_vec + tie_breaker);
-                    res.insert(res_vec,
-                               res_vec + recall_at); // change to recall_at for recall k@k
-                                                     // or dim_or for k@dim_or
-                    uint32_t cur_recall = 0;
-                    for (auto &v : gt)
+                gt.insert(gt_vec, gt_vec + tie_breaker);
+                res.insert(res_vec,
+                           res_vec + recall_at); // change to recall_at for recall k@k
+                                                 // or dim_or for k@dim_or
+                uint32_t cur_recall = 0;
+                for (auto &v : gt)
+                {
+                    if (res.find(v) != res.end())
                     {
-                        if (res.find(v) != res.end())
-                        {
-                            cur_recall++;
-                        }
-                    }
-                    switch(query_result_class[test_id][i]) {
-                        case 0: brute_recalls[test_id] += cur_recall; break;
-                        case 1: cluster_recalls[test_id] += cur_recall; break;
-                        case 2: graph_recalls[test_id] += cur_recall;break;
+                        cur_recall++;
                     }
                 }
-            
+                switch (query_result_class[test_id][i])
+                {
+                case 0:
+                    brute_recalls[test_id] += cur_recall;
+                    break;
+                case 1:
+                    cluster_recalls[test_id] += cur_recall;
+                    break;
+                case 2:
+                    graph_recalls[test_id] += cur_recall;
+                    break;
+                }
+            }
 
             for (uint32_t curr_recall = recall_at; curr_recall <= recall_at; curr_recall++)
             {
@@ -371,16 +395,21 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         else
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
-                      << std::setw(20) << (float)mean_latency << std::setw(15)
-                      << (float)recalls[0] 
-                      << std::setw(20) << (float)(brute_lat[test_id]*1.0)/(num_brutes*1.0) << std::setw(20) << (float)(brute_recalls[test_id]*100.0)/(num_brutes*recall_at*1.0)
-                      << std::setw(20) << (float)(cluster_lat[test_id]*1.0)/(num_clusters*1.0) << std::setw(20) << (float)(cluster_recalls[test_id]*100.0)/(num_clusters*recall_at*1.0)
-                      << std::setw(20) << (float)(graph_lat[test_id]*1.0)/(num_graphs*1.0) << std::setw(20) << (float)(graph_recalls[test_id]*100.0)/(num_graphs*recall_at*1.0)
-//                      << std::setw(20) << (float)(brute_lat[test_id]*1.0) << std::setw(20) << (float)(brute_recalls[test_id]*100.0)
-//                      << std::setw(20) << (float)(cluster_lat[test_id]*1.0) << std::setw(20) << (float)(cluster_recalls[test_id]*100.0)
-//                     << std::setw(20) << (float)(graph_lat[test_id]*1.0) << std::setw(20) << (float)(graph_recalls[test_id]*100.0)
-                       << std::endl;
-    }
+                      << std::setw(20) << (float)mean_latency << std::setw(15) << (float)recalls[0] << std::setw(20)
+                      << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
+                      << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) << std::setw(20)
+                      << (float)(cluster_lat[test_id] * 1.0) / (num_clusters * 1.0) << std::setw(20)
+                      << (float)(cluster_recalls[test_id] * 100.0) / (num_clusters * recall_at * 1.0) << std::setw(20)
+                      << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(20)
+                      << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0)
+                      //                      << std::setw(20) << (float)(brute_lat[test_id]*1.0) << std::setw(20) <<
+                      //                      (float)(brute_recalls[test_id]*100.0)
+                      //                      << std::setw(20) << (float)(cluster_lat[test_id]*1.0) << std::setw(20) <<
+                      //                      (float)(cluster_recalls[test_id]*100.0)
+                      //                     << std::setw(20) << (float)(graph_lat[test_id]*1.0) << std::setw(20) <<
+                      //                     (float)(graph_recalls[test_id]*100.0)
+                      << std::endl;
+        }
     }
     std::cout << "Done searching. Now saving results " << std::endl;
     uint64_t test_id = 0;
@@ -402,9 +431,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         test_id++;
     }
 
-    std::cout << "num_graphs " << num_graphs  << std::endl;
-    std::cout << "num_clusters " << num_clusters  << std::endl;
-    std::cout << "num_brutes " << num_brutes  << std::endl;
+    std::cout << "num_graphs " << num_graphs << std::endl;
+    std::cout << "num_clusters " << num_clusters << std::endl;
+    std::cout << "num_brutes " << num_brutes << std::endl;
 
     diskann::aligned_free(query);
     return best_recall >= fail_if_recall_below ? 0 : -1;

@@ -27,6 +27,7 @@ int main(int argc, char **argv)
     std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
     uint32_t num_threads, R, L, Lf, build_PQ_bytes;
     float alpha;
+    float inter_size;
     bool use_pq_build, use_opq;
 
     po::options_description desc{
@@ -70,6 +71,9 @@ int main(int argc, char **argv)
                                        program_options_utils::FILTERED_LBUILD);
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);
+        optional_configs.add_options()(
+            "min_inter", po::value<float>(&inter_size)->default_value(0.01),
+            "Sets the minimum intersection size between filter sets. Defaults to 1, giving filtered-diskann");
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
@@ -119,6 +123,7 @@ int main(int argc, char **argv)
 
         size_t data_num, data_dim;
         diskann::get_bin_metadata(data_path, data_num, data_dim);
+        min_inter_size = inter_size;
 
         auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
                                       .with_filter_list_size(Lf)
