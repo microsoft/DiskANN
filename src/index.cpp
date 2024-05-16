@@ -893,6 +893,8 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
         }
         else
         {
+            if (lbl >= _labels_to_points_bloom.size())
+            std::cout<<"Trying to access out of scope label " << lbl << std::endl;
             if (_labels_to_points_bloom[lbl].contains(point_id))
             {
                 overlap++;
@@ -2282,6 +2284,8 @@ void Index<T, TagT, LabelT>::parse_label_file_bloom(const std::string &label_fil
     }
     num_points = (size_t)line_cnt;
     diskann::cout << "Identified " << labels_rr.size() << " distinct label(s) for bloom-filter purposes" << std::endl;
+    diskann::cout << "Resized bloom labels to points to size " << _labels_to_points_bloom.size() << std::endl;
+    
 }
 
 
@@ -2726,10 +2730,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         case 2:
             num_graphs++;
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
-            /* if (cand < std::numeric_limits<uint32_t>::max()) */
-            /* { */
-            /*     init_ids.emplace_back(cand); */
-            /* } */
+             if (cand < std::numeric_limits<uint32_t>::max()) 
+             { 
+                 init_ids.emplace_back(cand); 
+             } 
             local_print = true;
             if (print_qstats)
             {
@@ -2798,7 +2802,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 out << std::endl;
                 out.close();
             }
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label_bloom, true);
         }
     }
 
