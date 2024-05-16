@@ -1271,7 +1271,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             continue;
                         }
                         penalty = res * penalty_scale;
-                        dist_pens.push_back(penalty);
                         if (curr_query == 1)
                         {
                             std::ofstream out("query_stats1.txt", std::ios_base::app);
@@ -1292,6 +1291,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             continue;
                     }
                 }
+                dist_pens.push_back(penalty);
                 id_scratch.push_back(id);
             }
         }
@@ -2623,7 +2623,7 @@ std::pair<uint32_t,uint32_t> Index<T, TagT, LabelT>::sample_intersection(roaring
     if (x != intersection_bitmap.end()) {
         val = _sample_map[*x];
     }
-//    std::cout<<intersection_bitmap.cardinality() << " " << val << std::endl;
+    //std::cout<<intersection_bitmap.cardinality() << " " << val << std::endl;
     return std::make_pair((uint32_t)(intersection_bitmap.cardinality() * (1.0 / (_sample_prob))), val);
 }
 
@@ -2745,11 +2745,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             if (_dynamic_index)
                 tl.unlock();
 
-            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
-            /* if (cand < std::numeric_limits<uint32_t>::max()) */
-            /* { */
-            /*     init_ids.emplace_back(cand); */
-            /* } */
+            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label_rerank);
+             if (cand < std::numeric_limits<uint32_t>::max()) 
+             { 
+                 init_ids.emplace_back(cand); 
+             } 
 
             if (curr_query == 1)
             {
@@ -2767,16 +2767,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 #ifdef INSTRUMENT
         auto s = std::chrono::high_resolution_clock::now();
 #endif
-        uint32_t estimated_match = 0;
+ //       uint32_t estimated_match = 0;
+ //       uint32_t cand = 0;
         /* uint32_t sample_size = _clustering_threshold + 1; */
-        if (sorted_filters[0].second > _bruteforce_threshold)
-        {
-            estimated_match = sample_intersection(scratch->get_valid_bitmap(), filter_label).first;
-        }
-        else
-        {
-            estimated_match = sorted_filters[0].second;
-        }
+//        if (sorted_filters[0].second > _bruteforce_threshold)
+//        {
+            auto [estimated_match, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label_rerank);
+//        }
+//        else
+//        {
+//            estimated_match = sorted_filters[0].second;
+//        }
 #ifdef INSTRUMENT
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
         time_to_estimate += diff.count();
@@ -2817,6 +2818,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         else
         {
             num_graphs++;
+              if (cand < std::numeric_limits<uint32_t>::max()) 
+             { 
+                 init_ids.emplace_back(cand); 
+             } 
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
         }
     }
