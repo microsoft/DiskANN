@@ -219,7 +219,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
                                                          query_result_ids[test_id].data() + i * recall_at,
-                                                         query_result_dists[test_id].data() + i * recall_at);
+                                                         query_result_dists[test_id].data() + i * recall_at, raw_filter_rr);
                 if (num_clusters > old_c)
                     method_used = 1;
                 else if (num_graphs > old_g)
