@@ -43,8 +43,9 @@ inline double time_to_estimate = 0;
 inline uint32_t num_brutes = 0;
 inline uint32_t num_clusters = 0;
 inline uint32_t num_graphs = 0;
-inline float min_inter_size = 0.15;
-inline int64_t curr_query = 0;
+inline uint32_t min_inter_size = 2;
+inline bool print_qstats = false;
+inline int64_t curr_query = -1;
 inline uint32_t penalty_scale = 10;
 
 namespace diskann
