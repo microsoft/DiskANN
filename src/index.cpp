@@ -564,10 +564,10 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     std::string mem_index_file(filename);
     std::string labels_file = mem_index_file + "_labels.txt";
-    std::string rerank_labels_file = labels_file;
+    std::string bloom_labels_file = labels_file;
 
-    if (file_exists(labels_file + "_rerank"))
-        rerank_labels_file = labels_file + "_rerank";
+    if (file_exists(labels_file + "_bloom"))
+        bloom_labels_file = labels_file + "_bloom";
 
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
@@ -621,7 +621,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
-        parse_label_file_rerank(rerank_labels_file, label_num_pts);        
+        parse_label_file_bloom(bloom_labels_file, label_num_pts);        
 
         if (file_exists(sample_label_file))
         {
@@ -868,7 +868,7 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
 // TODO: modify for handling universal label
 template <typename T, typename TagT, typename LabelT>
 inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                              const std::vector<LabelT> &incoming_labels, bool rerank_use)
+                                                              const std::vector<LabelT> &incoming_labels, bool bloom_use)
 {
 
     //    auto s = std::chrono::high_resolution_clock::now();
@@ -884,13 +884,13 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
     {
         //        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
         //        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
-        if (! rerank_use) {
+        if (! bloom_use) {
         if (_labels_to_points[lbl].contains(point_id))
         {
             overlap++;
         }
         } else {
-        if (_labels_to_points_rerank[lbl].contains(point_id))
+        if (_labels_to_points_bloom[lbl].contains(point_id))
         {
             overlap++;
         }   
@@ -1096,7 +1096,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             if (search_invocation)
             {
                 uint32_t res;
-                if ((res = detect_filter_penalty(id, search_invocation, filter_labels)) > _filter_penalty_threshold)
+                if ((res = detect_filter_penalty(id, search_invocation, filter_labels, true)) > _filter_penalty_threshold)
                     continue;
                 penalty = res * penalty_scale;
                 if (curr_query == 1)
@@ -1214,12 +1214,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     // TODO: CHECK ABOUT UNIVERSAL LABELS
                     if (search_invocation)
                     {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
+                        if (detect_filter_penalty(id, search_invocation, filter_labels, true) > _filter_penalty_threshold)
                             continue;
                     }
                     else
                     {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+                        if (detect_filter_penalty(id, search_invocation, filter_labels, true) == filter_labels.size())
                             continue;
                     }
                 }
@@ -1264,7 +1264,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     uint32_t res;
                     if (search_invocation)
                     {
-                        res = detect_filter_penalty(id, search_invocation, filter_labels);
+                        res = detect_filter_penalty(id, search_invocation, filter_labels, true);
                         if (res > _filter_penalty_threshold)
                         {
                             id_iter++;
@@ -2228,7 +2228,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::parse_label_file_rerank(const std::string &label_file, size_t &num_points)
+void Index<T, TagT, LabelT>::parse_label_file_bloom(const std::string &label_file, size_t &num_points)
 {
     // Format of Label txt file: filters with comma separators
 
@@ -2265,12 +2265,12 @@ void Index<T, TagT, LabelT>::parse_label_file_rerank(const std::string &label_fi
             labels_rr.insert(token_as_num);
             try
             {
-                _labels_to_points_rerank.at(token_as_num).add(line_cnt);
+                _labels_to_points_bloom.at(token_as_num).add(line_cnt);
             }
             catch (const std::out_of_range &oor)
             {
-                _labels_to_points_rerank.resize(token_as_num + 1);
-                _labels_to_points_rerank.at(token_as_num).add(line_cnt);
+                _labels_to_points_bloom.resize(token_as_num + 1);
+                _labels_to_points_bloom.at(token_as_num).add(line_cnt);
             }
         }
 
@@ -2279,7 +2279,7 @@ void Index<T, TagT, LabelT>::parse_label_file_rerank(const std::string &label_fi
         line_cnt++;
     }
     num_points = (size_t)line_cnt;
-    diskann::cout << "Identified " << labels_rr.size() << " distinct label(s) for reranking purposes" << std::endl;
+    diskann::cout << "Identified " << labels_rr.size() << " distinct label(s) for bloom-filter purposes" << std::endl;
 }
 
 
@@ -2559,7 +2559,7 @@ template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const DataType &query,
                                                                            const std::vector<std::string> &raw_label,
                                                                            const size_t K, const uint32_t L,
-                                                                           std::any &indices, float *distances, const std::vector<std::string> &raw_label_rerank)
+                                                                           std::any &indices, float *distances, const std::vector<std::string> &raw_label_bloom)
 {
     std::vector<LabelT> converted_labels;
     converted_labels.reserve(raw_label.size());
@@ -2569,23 +2569,23 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
         converted_labels.push_back(converted_label);
     }
 
-    std::vector<LabelT> converted_labels_rerank;
-    converted_labels_rerank.reserve(raw_label_rerank.size());
-    for (auto &x : raw_label_rerank)
+    std::vector<LabelT> converted_labels_bloom;
+    converted_labels_bloom.reserve(raw_label_bloom.size());
+    for (auto &x : raw_label_bloom)
     {
         auto converted_label = (LabelT) std::stoul(x);
-        converted_labels_rerank.push_back(converted_label);
+        converted_labels_bloom.push_back(converted_label);
     }
 
     if (typeid(uint64_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint64_t *>(indices);
-        return this->search_with_filters(std::any_cast<T *>(query), converted_labels, K, L, ptr, distances, converted_labels_rerank);
+        return this->search_with_filters(std::any_cast<T *>(query), converted_labels, K, L, ptr, distances, converted_labels_bloom);
     }
     else if (typeid(uint32_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint32_t *>(indices);
-        return this->search_with_filters(std::any_cast<T *>(query), converted_labels, K, L, ptr, distances, converted_labels_rerank);
+        return this->search_with_filters(std::any_cast<T *>(query), converted_labels, K, L, ptr, distances, converted_labels_bloom);
     }
     else
     {
@@ -2632,7 +2632,7 @@ template <typename IdType>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query,
                                                                           const std::vector<LabelT> &filter_label,
                                                                           const size_t K, const uint32_t L,
-                                                                          IdType *indices, float *distances, const std::vector<LabelT> &filter_label_rerank)
+                                                                          IdType *indices, float *distances, const std::vector<LabelT> &filter_label_bloom)
 {
     /*    if (K > (uint64_t)L)
         {
@@ -2745,7 +2745,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             if (_dynamic_index)
                 tl.unlock();
 
-            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label_rerank);
+            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
              if (cand < std::numeric_limits<uint32_t>::max()) 
              { 
                  init_ids.emplace_back(cand); 
@@ -2758,7 +2758,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 out << "setting up init ids with id " << cand << std::endl;
                 out.close();
             }
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label_bloom, true);
             break;
         }
     }
@@ -2772,7 +2772,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         /* uint32_t sample_size = _clustering_threshold + 1; */
 //        if (sorted_filters[0].second > _bruteforce_threshold)
 //        {
-            auto [estimated_match, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label_rerank);
+            auto [estimated_match, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
 //        }
 //        else
 //        {
@@ -2818,6 +2818,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         else
         {
             num_graphs++;
+            if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end())
+            {
+                init_ids.emplace_back(_label_to_start_id[filter_label[0]]);
+            }
+            else
+            {
+                diskann::cout << "No filtered medoid found. exitting "
+                              << std::endl; // RKNOTE: If universal label found start there
+                throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+            }
               if (cand < std::numeric_limits<uint32_t>::max()) 
              { 
                  init_ids.emplace_back(cand); 
@@ -2842,7 +2852,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
-        if (best_L_nodes[i].id >= _max_points || (detect_filter_penalty(best_L_nodes[i].id, true, filter_label_rerank, true) != 0))
+        if (best_L_nodes[i].id >= _max_points || (detect_filter_penalty(best_L_nodes[i].id, true, filter_label) != 0))
             continue;
 
         indices[pos] = (IdType)best_L_nodes[i].id;
@@ -4134,19 +4144,19 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, 
               uint64_t *indices, float *distances,const std::vector<uint32_t> &raw_label_reran );
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const float *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L,
-              uint32_t *indices, float *distances,const std::vector<uint32_t> &raw_label_rerank);
+              uint32_t *indices, float *distances,const std::vector<uint32_t> &raw_label_bloom);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const uint8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L,
-              uint64_t *indices, float *distances,const std::vector<uint32_t> &raw_label_rerank);
+              uint64_t *indices, float *distances,const std::vector<uint32_t> &raw_label_bloom);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const uint8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L,
-              uint32_t *indices, float *distances,const std::vector<uint32_t> &raw_label_rerank);
+              uint32_t *indices, float *distances,const std::vector<uint32_t> &raw_label_bloom);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint64_t>(const int8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L,
-              uint64_t *indices, float *distances,const std::vector<uint32_t> &raw_label_rerank);
+              uint64_t *indices, float *distances,const std::vector<uint32_t> &raw_label_bloom);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
     uint32_t>(const int8_t *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L,
-              uint32_t *indices, float *distances,const std::vector<uint32_t> &raw_label_rerank);
+              uint32_t *indices, float *distances,const std::vector<uint32_t> &raw_label_bloom);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
     uint64_t>(const float *query, const std::vector<uint32_t> &filter_label, const size_t K, const uint32_t L,

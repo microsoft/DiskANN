@@ -269,7 +269,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t calculate_entry_point();
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
-    void parse_label_file_rerank(const std::string &label_file, size_t &num_points);    
+    void parse_label_file_bloom(const std::string &label_file, size_t &num_points);    
 
     void parse_sample_label_file(const std::string &label_file, size_t &num_samples);
 
@@ -421,7 +421,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::vector<roaring::Roaring> _labels_to_points;
-    std::vector<roaring::Roaring> _labels_to_points_rerank;    
+    std::vector<roaring::Roaring> _labels_to_points_bloom;    
     std::vector<roaring::Roaring> _labels_to_points_sample;
     uint32_t *_sample_map = nullptr;
     float _sample_prob = 0;
