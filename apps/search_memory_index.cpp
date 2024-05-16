@@ -200,12 +200,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             //            time_to_get_valid = 0;
             //            time_to_compare = 0;
             curr_query = i;
-            if (curr_query == 1)
-            {
-                std::ofstream out("query_stats1.txt", std::ios_base::app);
-                out << "Search path for query " << i << " with filters/specificities ";
-                out.close();
-            }
+            if (L_for_print == L)
+                print_qstats = true;
+            else
+                print_qstats = false;
+
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search && !tags)
             {
@@ -411,6 +410,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << std::endl;
         }
     }
+    std::cout << "num_graphs " << num_graphs << std::endl;
+    std::cout << "num_clusters " << num_clusters << std::endl;
+    std::cout << "num_brutes " << num_brutes << std::endl;
+
     std::cout << "Done searching. Now saving results " << std::endl;
     uint64_t test_id = 0;
     for (auto L : Lvec)
@@ -430,10 +433,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
         test_id++;
     }
-
-    std::cout << "num_graphs " << num_graphs << std::endl;
-    std::cout << "num_clusters " << num_clusters << std::endl;
-    std::cout << "num_brutes " << num_brutes << std::endl;
 
     diskann::aligned_free(query);
     return best_recall >= fail_if_recall_below ? 0 : -1;

@@ -1032,14 +1032,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     T *aligned_query = scratch->aligned_query();
 
     float *pq_dists = nullptr;
-/*
-    if (curr_query == 1)
+
+    if (print_qstats)
     {
-        std::ofstream out("query_stats1.txt", std::ios_base::app);
+        std::ofstream out("query_stats.txt", std::ios_base::app);
         out << "starting search\n" << std::endl;
         out.close();
     }
-*/
+
     _pq_data_store->preprocess_query(aligned_query, scratch);
 
     if (expanded_nodes.size() > 0 || id_scratch.size() > 0)
@@ -1081,10 +1081,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if ((res = detect_filter_penalty(id, search_invocation, filter_labels)) > _filter_penalty_threshold)
                     continue;
                 penalty = res * penalty_scale;
-                /*
-                if (curr_query == 1)
+                if (print_qstats)
                 {
-                    std::ofstream out("query_stats1.txt", std::ios_base::app);
+                    std::ofstream out("query_stats.txt", std::ios_base::app);
                     out << "starting id " << id << " has (filter labels - overlap) size " << res << " and filters ";
                     for (auto const &filter : _location_to_labels[id])
                     {
@@ -1092,11 +1091,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                     out << std::endl;
                     out.close();
-                } */
+                } 
             }
             else
             {
-                if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size * filter_labels.size())
+                if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                     continue;
             }
         }
@@ -1125,22 +1124,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     uint32_t hops = 0;
     uint32_t cmps = 0;
-/*
-    if (curr_query == 1)
+
+    if (print_qstats)
     {
-        std::ofstream out("query_stats1.txt", std::ios_base::app);
+        std::ofstream out("query_stats.txt", std::ios_base::app);
         out << std::endl;
         out.close();
     }
-*/
+
     while (best_L_nodes.has_unexpanded_node())
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
-/*
-        if (curr_query == 1)
+
+        if (print_qstats)
         {
-            std::ofstream out("query_stats1.txt", std::ios_base::app);
+            std::ofstream out("query_stats.txt", std::ios_base::app);
             out << "looking at id " << n << " with filters ";
             for (auto const &filter : _location_to_labels[n])
             {
@@ -1149,7 +1148,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             out << std::endl;
             out.close();
         }
-*/
+
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
         {
@@ -1254,10 +1253,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             continue;
                         }
                         penalty = res * penalty_scale;
-                        dist_pens.push_back(penalty);
-/*                        if (curr_query == 1)
+
+                        if (print_qstats)
                         {
-                            std::ofstream out("query_stats1.txt", std::ios_base::app);
+                            std::ofstream out("query_stats.txt", std::ios_base::app);
                             out << id_iter << ". looking at " << res << " nbr " << id << " with filters ";
                             for (auto const &filter : _location_to_labels[id])
                             {
@@ -1265,27 +1264,27 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             }
                             out << std::endl;
                             out.close();
-                        }*/
+                        }
                         id_iter++;
                     }
                     else
                     {
-                        if (detect_common_filters(id, search_invocation, filter_labels) <
-                            min_inter_size * filter_labels.size())
+                        if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                             continue;
                     }
                 }
+                dist_pens.push_back(penalty);
                 id_scratch.push_back(id);
             }
         }
-/*
-        if (curr_query == 1)
+
+        if (print_qstats)
         {
-            std::ofstream out("query_stats1.txt", std::ios_base::app);
+            std::ofstream out("query_stats.txt", std::ios_base::app);
             out << std::endl;
             out.close();
         }
-*/
+
         // Mark nodes visited
         /*        for (auto id : id_scratch)
                 {
@@ -2559,6 +2558,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
+    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
+    bool local_print = false;
 
     if (L > scratch->get_L())
     {
@@ -2571,6 +2573,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     std::vector<LabelT> filter_vec;
     std::vector<uint32_t> init_ids = get_init_ids();
     /* std::vector<uint32_t> init_ids; */
+
+    if (_dynamic_index)
+        tl.lock();
+
+    if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end())
+    {
+        init_ids.emplace_back(_label_to_start_id[filter_label[0]]);
+    }
+    else
+    {
+        diskann::cout << "No filtered medoid found. exitting "
+                      << std::endl; // RKNOTE: If universal label found start there
+        throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+    }
+    if (_dynamic_index)
+        tl.unlock();
 
     std::vector<std::pair<LabelT, uint32_t>> sorted_filters = sort_filter_counts(filter_label);
 
@@ -2595,8 +2613,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         out << std::endl;
         out.close();
     }*/
-    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
-    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
 
     for (auto &lbl : filter_label)
         filter_vec.push_back(lbl);
@@ -2629,53 +2645,24 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         break;
         case 1: {
             num_clusters++;
-#ifdef INSTRUMENT
-            auto s = std::chrono::high_resolution_clock::now();
-#endif
-            /* auto &last_intersection = scratch->get_valid_bitmap(); */
-            /* last_intersection = _labels_to_points[sorted_filters[0].first]; */
-            /* for (size_t i = 1; i < sorted_filters.size(); i++) */
-            /* { */
-            /*     last_intersection &= _labels_to_points[sorted_filters[i].first]; */
-            /* } */
-#ifdef INSTRUMENT
-            std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-            time_to_get_valid += diff.count();
-#endif
             retval = closest_cluster_filters(scratch->aligned_query(), L, filter_vec, scratch);
         }
         break;
         case 2:
             num_graphs++;
-            if (_dynamic_index)
-                tl.lock();
-
-            if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end())
-            {
-                init_ids.emplace_back(_label_to_start_id[filter_label[0]]);
-            }
-            else
-            {
-                diskann::cout << "No filtered medoid found. exitting "
-                              << std::endl; // RKNOTE: If universal label found start there
-                throw diskann::ANNException("No filtered medoid found. exitting ", -1);
-            }
-            if (_dynamic_index)
-                tl.unlock();
-
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
              if (cand < std::numeric_limits<uint32_t>::max()) 
              { 
                  init_ids.emplace_back(cand); 
              } 
-/*
-            if (curr_query == 1)
-            {
-                std::ofstream out("query_stats1.txt", std::ios_base::app);
+
+            local_print = true;
+            if (print_qstats) {
+                std::ofstream out("query_stats.txt", std::ios_base::app);
                 out << "estimated intersection size is " << inter_estim << std::endl;
                 out << "setting up init ids with id " << cand << std::endl;
                 out.close();
-            }*/
+            }
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
             break;
         }
@@ -2685,25 +2672,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 #ifdef INSTRUMENT
         auto s = std::chrono::high_resolution_clock::now();
 #endif
-        uint32_t estimated_match = 0;
-        /* uint32_t sample_size = _clustering_threshold + 1; */
-        if (sorted_filters[0].second > _bruteforce_threshold)
-        {
-            estimated_match = sample_intersection(scratch->get_valid_bitmap(), filter_label).first;
-        }
-        else
-        {
-            estimated_match = sorted_filters[0].second;
-        }
+        auto [estimated_match, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
 #ifdef INSTRUMENT
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
         time_to_estimate += diff.count();
 #endif
-        /* if (sorted_filters[0].second < _bruteforce_threshold || */
-        /*     (sample_size = sample_intersection(scratch->get_valid_bitmap(), filter_label)) <
-         * _bruteforce_threshold)
-         */
-        /* if (sorted_filters[0].second < _bruteforce_threshold) */
         if (estimated_match < _bruteforce_threshold)
         {
             num_brutes++;
@@ -2715,21 +2688,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             }
             retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
         }
-        /* else if (sorted_filters[0].second < _clustering_threshold || */
-        /*          (sample_size = (sample_size < _clustering_threshold) */
-        /*                             ? sample_intersection(scratch->get_valid_bitmap(), filter_label) */
-        /*                             : sample_size) < */
-        /*              _clustering_threshold) // this is very cursed, is there a better way to do this? */
-        /* else if (sorted_filters[0].second < _clustering_threshold) */
         else if (estimated_match < _clustering_threshold)
         {
             num_clusters++;
-            /* auto &last_intersection = scratch->get_valid_bitmap(); */
-            /* last_intersection = _labels_to_points[sorted_filters[0].first]; */
-            /* for (size_t i = 1; i < sorted_filters.size(); i++) */
-            /* { */
-            /*     last_intersection &= _labels_to_points[sorted_filters[i].first]; */
-            /* } */
             retval = closest_cluster_filters(scratch->aligned_query(), L, filter_vec, scratch);
         }
         else
@@ -2757,16 +2718,29 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                  init_ids.emplace_back(cand); 
              } 
 
+            local_print = true;
+            if (print_qstats)
+            {
+                std::ofstream out("query_stats.txt", std::ios_base::app);
+                out << "Search path for query " << curr_query << " with filters/specificities ";
+                for (auto const &filt : filter_label)
+                    out << filt << "/" << _labels_to_points[filt].cardinality() << " ";
+                out << std::endl;
+                out << "estimated intersection size is " << estimated_match << std::endl;
+                out << "setting up init ids with id " << cand << std::endl;
+                out << std::endl;
+                out.close();
+            }
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
         }
     }
 
     auto best_L_nodes = scratch->best_l_nodes();
 
-    size_t pos = 0; 
-    /* if (curr_query == 1)
+    size_t pos = 0;
+    if (print_qstats && local_print)
     {
-        std::ofstream out("query_stats1.txt", std::ios_base::app);
+        std::ofstream out("query_stats.txt", std::ios_base::app);
         out << "final results for L size " << best_L_nodes.size() << ": ";
         for (size_t i = 0; i < best_L_nodes.size(); ++i)
         {
@@ -2774,7 +2748,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         }
         out << std::endl << std::endl;
         out.close();
-    }*/
+    }
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
         if (best_L_nodes[i].id >= _max_points || (detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) != 0))
