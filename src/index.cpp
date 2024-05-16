@@ -1118,7 +1118,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
             else
             {
-                printf("test\n");
                 if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                     continue;
             }
