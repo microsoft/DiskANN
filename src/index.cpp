@@ -2141,8 +2141,8 @@ std::unordered_map<std::string, LabelT> Index<T, TagT, LabelT>::load_label_map(c
 template <typename T, typename TagT, typename LabelT>
 LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
 {
-    return std::stoul(raw_label);
-/*    if (_label_map.find(raw_label) != _label_map.end())
+//    return std::stoul(raw_label);
+    if (_label_map.find(raw_label) != _label_map.end())
     {
         return _label_map[raw_label];
     }
@@ -2153,7 +2153,7 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     std::stringstream stream;
     stream << "Unable to find label " << raw_label << " in the Label Map";
     diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__); */
+    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__); 
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2369,6 +2369,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                      num_points_labels); // determines medoid for each label and identifies
                                          // the points to label mapping
 
+    std::cout<<num_points_to_load<<" pts loaded." << std::endl;
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
 
     for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
