@@ -768,26 +768,21 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_univers
 }
 
 // lsh_test
-//template <typename T, typename LabelT>
-//void PQFlashIndex<T, LabelT>::load_lsh_data(const std::string &lsh_hash_file, const std::string &lsh_axes_file)
-//{
-//    //currently read from text file. Will be binary later.
-//    std::ifstream hash_in(lsh_hash_file);
-//    uint32_t value;
-//    while (hash_in.good()){
-//        hash_in >> value;
-//        _lsh_hashes.push_back((uint8_t)value);
-//    }
-//    hash_in.close();
-//
-//    std::ifstream axes_in(lsh_axes_file);
-//    float fval; 
-//    while (axes_in.good()) {
-//        axes_in >> fval;
-//        _lsh_axes.push_back(fval);
-//    }
-//    axes_in.close();
-//}
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::load_lsh_data(const std::string &lsh_hash_file, const std::string &lsh_axes_file)
+{
+    //Skipping verification. Should be added later. 
+    size_t num_pts, num_hash_dims, num_axes, num_axes_dim;
+
+    std::ifstream hash_in(lsh_hash_file, std::ios::binary);
+    diskann::load_bin<HashT>(lsh_hash_file, _lsh_hashes, num_pts, num_hash_dims);
+
+    std::ifstream axes_in(lsh_axes_file, std::ios::binary);
+    diskann::load_bin<float>(lsh_axes_file, _lsh_axes, num_axes, num_axes_dim);
+
+    _lsh_hasher = std::make_unique<diskann::LSH<HashT>>((uint32_t)num_axes_dim, (uint32_t)num_axes, _lsh_axes);
+    _lsh_opt = true;
+}
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
@@ -832,14 +827,14 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string dummy_map_file = _disk_index_file + "_dummy_map.txt";
     std::string labels_map_file = _disk_index_file + "_labels_map.txt";
 
-    //std::string lsh_hashes_file = _disk_index_file + "_hashes.txt";
-    //std::string lsh_axes_file = _disk_index_file + "_axes.txt";
+    std::string lsh_hashes_file = _disk_index_file + "_hashes.bin";
+    std::string lsh_axes_file = _disk_index_file + "_axes.bin";
 
-    //if (file_exists(lsh_hashes_file) && file_exists(lsh_axes_file))
-    //{
-    //    load_lsh_data(lsh_hashes_file, lsh_axes_file);
-    //    _lsh_opt = true;
-    //}
+    if (file_exists(lsh_hashes_file) && file_exists(lsh_axes_file))
+    {
+        load_lsh_data(lsh_hashes_file, lsh_axes_file);
+        _lsh_opt = true;
+    }
 
     size_t num_pts_in_label_file = 0;
 
@@ -1398,6 +1393,12 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     };
     Timer query_timer, io_timer, cpu_timer;
 
+    HashT query_hash = 0;
+    if (_lsh_opt)
+    {
+        query_hash = _lsh_hasher->get_hash(query_float, query_scratch->lsh_dot_prod_scratch);
+    }
+
     tsl::robin_set<uint64_t> &visited = query_scratch->visited;
     NeighborPriorityQueue &retset = query_scratch->retset;
     retset.reserve(l_search);
@@ -1474,6 +1475,14 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         {
             auto nbr = retset.closest_unexpanded();
             num_seen++;
+            if (_lsh_opt)
+            {
+                if ((_lsh_hashes[nbr.id] & query_hash) == 0)
+                {
+                    stats->n_lsh_saves++;
+                    continue;
+                }
+            }
             auto iter = _nhood_cache.find(nbr.id);
             if (iter != _nhood_cache.end())
             {

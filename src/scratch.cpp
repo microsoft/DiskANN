@@ -6,6 +6,7 @@
 
 #include "scratch.h"
 #include "pq_scratch.h"
+#include "LSH.h"
 
 namespace diskann
 {
@@ -107,7 +108,7 @@ template <typename T> void SSDQueryScratch<T>::reset()
     full_retset.clear();
 }
 
-template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve)
+template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, size_t lsh_num_axes)
 {
     size_t coord_alloc_size = ROUND_UP(sizeof(T) * aligned_dim, 256);
 
@@ -123,6 +124,9 @@ template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, si
 
     visited.reserve(visited_reserve);
     full_retset.reserve(visited_reserve);
+
+    lsh_query_scratch = new float[aligned_dim];
+    lsh_dot_prod_scratch = new float[lsh_num_axes]; //TODO: Must be a parameter.
 }
 
 template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
@@ -130,6 +134,17 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
     diskann::aligned_free((void *)coord_scratch);
     diskann::aligned_free((void *)sector_scratch);
     diskann::aligned_free((void *)this->_aligned_query_T);
+
+    if (lsh_query_scratch != nullptr)
+    {
+        delete[] lsh_query_scratch;
+        lsh_query_scratch = nullptr;
+    }
+    if (lsh_dot_prod_scratch != nullptr)
+    {
+        delete[] lsh_dot_prod_scratch;
+        lsh_dot_prod_scratch = nullptr;
+    }
 
     delete this->_pq_scratch;
 }

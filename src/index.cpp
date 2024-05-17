@@ -111,10 +111,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         }
     }
 
-    if (_use_lsh_for_build)
-    {
-        _ls_hasher = std::make_unique<diskann::LSH>((uint32_t)index_config.dimension, (uint32_t)LSH_NUM_AXES);
-    }
+    //if (_use_lsh_for_build)
+    //{
+    //    _ls_hasher = std::make_unique<diskann::LSH<HashT>>((uint32_t)index_config.dimension, (uint32_t)sizeof(HashT)*8);
+    //}
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -812,17 +812,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     T *aligned_query = scratch->aligned_query();
     _pq_data_store->preprocess_query(aligned_query, scratch);
 
-    std::bitset<LSH_NUM_AXES> query_lsh = 0;
-    if (_use_lsh_for_build)
-    {
-        float *fp_query = scratch->lsh_query_scratch();
-        if (std::is_floating_point<T>()) {
-            memcpy(fp_query, aligned_query, sizeof(float) * _dim);
-        } else {
-            convert_types(aligned_query, fp_query, 1, _dim);
-        }
-        query_lsh = std::bitset<LSH_NUM_AXES>(_ls_hasher->get_hash(fp_query, scratch->lsh_dp_scratch()));
-    }
+    //std::bitset<LSH_NUM_AXES> query_lsh = 0;
+    //if (_use_lsh_for_build)
+    //{
+    //    float *fp_query = scratch->lsh_query_scratch();
+    //    if (std::is_floating_point<T>()) {
+    //        memcpy(fp_query, aligned_query, sizeof(float) * _dim);
+    //    } else {
+    //        convert_types(aligned_query, fp_query, 1, _dim);
+    //    }
+    //    query_lsh = std::bitset<LSH_NUM_AXES>(_ls_hasher->get_hash(fp_query, scratch->lsh_dp_scratch()));
+    //}
 
     if (expanded_nodes.size() > 0 || id_scratch.size() > 0)
     {
@@ -904,14 +904,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
         {
-            if (_use_lsh_for_build)
-            {
-                auto region_match = query_lsh & _lsh_hashes[n];
-                if (region_match.count() < LSH_MIN_REGION_MATCH)
-                {
-                    goto skip_add;
-                }
-            }
+            //if (_use_lsh_for_build)
+            //{
+            //    auto region_match = query_lsh & _lsh_hashes[n];
+            //    if (region_match.count() < LSH_MIN_REGION_MATCH)
+            //    {
+            //        goto skip_add;
+            //    }
+            //}
                                 
             if (!use_filter)
             {
@@ -966,10 +966,10 @@ skip_add:
                     if (!detect_common_filters(id, search_invocation, filter_labels))
                         continue;
                 }
-                if (_use_lsh_for_build && ((query_lsh & _lsh_hashes[id]).count() < LSH_MIN_REGION_MATCH))
-                {
-                    continue;
-                }
+                //if (_use_lsh_for_build && ((query_lsh & _lsh_hashes[id]).count() < LSH_MIN_REGION_MATCH))
+                //{
+                //    continue;
+                //}
 
                 if (is_not_visited(id))
                 {
@@ -1570,40 +1570,40 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
                                  _data_store->get_aligned_dim());
     }
 
-    if (_use_lsh_for_build)
-    {
-        diskann::cout << "Generating LSH hashes...";
-        auto start = std::chrono::high_resolution_clock::now();
-        _lsh_hashes.resize(_data_store->capacity());
-
-#pragma omp parallel num_threads(num_threads_index) 
-        {
-            //float dot_product[LSH_NUM_AXES];
-            float *dot_product = new float[LSH_NUM_AXES];
-
-            T *data_vec = new T[_dim];
-            float *data_vec_as_float = new float[_dim];
-            //std::unique_ptr<T[]> data_vec = std::make_unique<T[]>(_dim);
-            //std::unique_ptr<float[]> data_vec_as_float = std::make_unique<float[]>(_dim);
-
-#pragma omp for schedule(static)
-            for (int64_t i = 0; i < _data_store->capacity(); i++) {
-                _data_store->get_vector((location_t)i, data_vec);
-                if (false == std::is_floating_point<T>()) {
-                    convert_types(data_vec, data_vec_as_float, 1, _dim);
-                } else {
-                    memcpy((float*)data_vec_as_float, data_vec, sizeof(float) * _dim);
-                }
-                _lsh_hashes[i] =
-                    std::bitset<LSH_NUM_AXES>(this->_ls_hasher->get_hash(data_vec_as_float, dot_product));
-            }
-
-            //delete[] data_vec;
-            //delete[] data_vec_as_float;
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-        diskann::cout << "done (in" << (end - start).count() << "s)." << std::endl;
-    }
+//    if (_use_lsh_for_build)
+//    {
+//        diskann::cout << "Generating LSH hashes...";
+//        auto start = std::chrono::high_resolution_clock::now();
+//        _lsh_hashes.resize(_data_store->capacity());
+//
+//#pragma omp parallel num_threads(num_threads_index) 
+//        {
+//            //float dot_product[LSH_NUM_AXES];
+//            float *dot_product = new float[LSH_NUM_AXES];
+//
+//            T *data_vec = new T[_dim];
+//            float *data_vec_as_float = new float[_dim];
+//            //std::unique_ptr<T[]> data_vec = std::make_unique<T[]>(_dim);
+//            //std::unique_ptr<float[]> data_vec_as_float = std::make_unique<float[]>(_dim);
+//
+//#pragma omp for schedule(static)
+//            for (int64_t i = 0; i < _data_store->capacity(); i++) {
+//                _data_store->get_vector((location_t)i, data_vec);
+//                if (false == std::is_floating_point<T>()) {
+//                    convert_types(data_vec, data_vec_as_float, 1, _dim);
+//                } else {
+//                    memcpy((float*)data_vec_as_float, data_vec, sizeof(float) * _dim);
+//                }
+//                _lsh_hashes[i] =
+//                    std::bitset<LSH_NUM_AXES>(this->_ls_hasher->get_hash(data_vec_as_float, dot_product));
+//            }
+//
+//            //delete[] data_vec;
+//            //delete[] data_vec_as_float;
+//        }
+//        auto end = std::chrono::high_resolution_clock::now();
+//        diskann::cout << "done (in" << (end - start).count() << "s)." << std::endl;
+//    }
 
     generate_frozen_point();
     link();

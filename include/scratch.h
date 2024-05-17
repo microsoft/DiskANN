@@ -21,6 +21,9 @@ namespace diskann
 {
 template <typename T> class PQScratch;
 
+typedef uint64_t HashT;
+
+
 //
 // AbstractScratch space for in-memory index based search
 //
@@ -161,8 +164,10 @@ template <typename T> class SSDQueryScratch : public AbstractScratch<T>
     tsl::robin_set<size_t> visited;
     NeighborPriorityQueue retset;
     std::vector<Neighbor> full_retset;
+    float *lsh_query_scratch;
+    float *lsh_dot_prod_scratch;
 
-    SSDQueryScratch(size_t aligned_dim, size_t visited_reserve);
+    SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, size_t lsh_hash_size = sizeof(HashT)*8);
     ~SSDQueryScratch();
 
     void reset();

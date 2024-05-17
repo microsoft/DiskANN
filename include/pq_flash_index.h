@@ -16,6 +16,8 @@
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 
+#include "LSH.h"
+
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 
 namespace diskann
@@ -137,7 +139,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
 
     //lsh_test
-    //void load_lsh_data(const std::string &lsh_hash_file, const std::string &lsh_axes_file);
+    void load_lsh_data(const std::string &lsh_hash_file, const std::string &lsh_axes_file);
 
     // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
@@ -236,6 +238,13 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     tsl::robin_map<uint32_t, uint32_t> _dummy_to_real_map;
     tsl::robin_map<uint32_t, std::vector<uint32_t>> _real_to_dummy_map;
     std::unordered_map<std::string, LabelT> _label_map;
+
+    //lsh search optimization
+    std::unique_ptr<HashT[]> _lsh_hashes;
+    float* _lsh_axes; //ownership will transfer to the hasher object.
+    bool _lsh_opt = false;
+    std::unique_ptr<diskann::LSH<HashT>> _lsh_hasher;
+
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate

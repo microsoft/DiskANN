@@ -47,6 +47,62 @@ void print_stats(std::string category, std::vector<float> percentiles, std::vect
     diskann::cout << std::endl;
 }
 
+float convert_score_per_metric(float score, diskann::Metric dist_metric)
+{
+    switch (dist_metric)
+    {
+    case diskann::Metric::L2:
+        return score;
+    case diskann::Metric::COSINE:
+        return score / 2;
+    default:
+        return score;
+    }
+}
+
+float simple_recall_calc(const uint32_t qid, const uint32_t *gt_ids, const float *gt_dists, uint32_t gt_dim,
+                          uint32_t *rslt_ids, float *rslt_dists,
+                          uint32_t recall_at, diskann::Metric dist_metric)
+{
+    static const float EPS = 0.0001f;
+    uint32_t matches = 0;
+    for (auto i = 0; i < recall_at; i++)
+    {
+        if (gt_ids[(qid * gt_dim) + i] == rslt_ids[(qid * recall_at) + i])
+        {
+            matches++;
+        }
+        //else
+        //{
+        //    float score = convert_score_per_metric(rslt_ids[(qid * recall_at) + i], dist_metric);
+        //    if (score / gt_dists[(qid * gt_dim) + i] <= EPS)
+        //    {
+        //        matches++;
+        //    }
+        //}
+    }
+    return ((float)matches) / recall_at;
+}
+
+void output_stats_to_file(uint32_t test_id, uint32_t bw, uint32_t query_num, uint32_t *gt_ids, float *gt_dists, uint32_t gt_dim,
+                          std::vector<uint32_t> &query_result_ids, std::vector<float> &query_result_dists,
+                          uint32_t recall_at, diskann::Metric dist_metric, diskann::QueryStats *stats)
+{
+    std::string out_file = ".\\per_query_results_L" + std::to_string(test_id) + "_BW" + std::to_string(bw) + ".tsv ";
+    std::ofstream os(out_file);
+
+    os << "query_id\trecall\tlatency(us)\tnum_cmps\tnum_hops\tcpu_time(us)\tio_time(us)\tlsh_saves" << std::endl;
+
+    for (uint32_t i = 0; i < query_num; i++)
+    {
+        float recall =
+            simple_recall_calc(i, gt_ids, gt_dists, gt_dim, query_result_ids.data(), query_result_dists.data(), recall_at, dist_metric);
+        os << i << "\t" << recall << "\t" << stats->total_us << "\t" 
+           << stats->n_cmps << "\t" << stats->n_hops << "\t"
+           << stats->cpu_us << "\t" << stats->io_us << "\t" << stats->n_lsh_saves << std::endl;
+    }
+}
+
 template <typename T, typename LabelT = uint32_t>
 int search_disk_index(diskann::Metric &metric, const std::string &index_path_prefix,
                       const std::string &result_output_prefix, const std::string &query_file, std::string &gt_file,
@@ -277,6 +333,9 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                                                query_result_ids[test_id].data(), recall_at, recall_at);
             best_recall = std::max(recall, best_recall);
         }
+
+        output_stats_to_file(test_id, optimized_beamwidth, (uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim, query_result_ids[test_id],
+                             query_result_dists[test_id], recall_at, metric, stats);
 
         diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth << std::setw(16) << qps
                       << std::setw(16) << mean_latency << std::setw(16) << latency_999 << std::setw(16) << mean_ios

@@ -26,7 +26,6 @@
 #include "pq_data_store.h"
 #include "LSH.h"
 
-
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
@@ -413,9 +412,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     FixedChunkPQTable _pq_table;
 
     //LSH Optimization
-    std::unique_ptr<diskann::LSH> _ls_hasher = nullptr;
-    bool _use_lsh_for_build = true;
-    std::vector<std::bitset<LSH_NUM_AXES>> _lsh_hashes;
+    //std::unique_ptr<diskann::LSH<HashT>> _ls_hasher = nullptr;
+    //bool _use_lsh_for_build = true;
+    //std::vector<std::bitset<sizeof(HashT)*8>> _lsh_hashes;
 
     //
     // Data structures, locks and flags for dynamic indexing and tags
