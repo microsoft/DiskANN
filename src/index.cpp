@@ -1081,7 +1081,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 uint32_t res;
                 if ((res = detect_filter_penalty(id, search_invocation, filter_labels)) > _filter_penalty_threshold)
                     continue;
-                /* penalty = res * penalty_scale; */
+                penalty = res * penalty_scale;
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1253,7 +1253,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             id_iter++;
                             continue;
                         }
-                        /* penalty = res * penalty_scale; */
+                        penalty = res * penalty_scale;
 
                         if (print_qstats)
                         {
@@ -2665,9 +2665,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 out << "estimated intersection size is " << inter_estim << std::endl;
                 out << "setting up init ids with id " << cand << std::endl;
                 out.close();
-                retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
-                break;
             }
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            break;
         }
     }
     else
