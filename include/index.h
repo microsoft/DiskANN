@@ -47,6 +47,7 @@ inline uint32_t min_inter_size = 2;
 inline bool print_qstats = false;
 inline int64_t curr_query = -1;
 inline uint32_t penalty_scale = 10;
+inline uint32_t num_sp = 2;
 
 namespace diskann
 {
@@ -421,6 +422,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::vector<roaring::Roaring> _labels_to_points;
+    std::unordered_map<LabelT, tsl::robin_set<uint32_t>> _labels_to_points_set;
     std::vector<roaring::Roaring> _labels_to_points_sample;
     uint32_t *_sample_map = nullptr;
     float _sample_prob = 0;

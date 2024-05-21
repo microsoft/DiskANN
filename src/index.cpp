@@ -873,7 +873,8 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
     {
         //        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
         //        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
-        if (_labels_to_points[lbl].contains(point_id))
+        /* if (_labels_to_points[lbl].contains(point_id)) */
+        if (_labels_to_points_set[lbl].count(point_id))
         {
             overlap++;
         }
@@ -1080,7 +1081,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 uint32_t res;
                 if ((res = detect_filter_penalty(id, search_invocation, filter_labels)) > _filter_penalty_threshold)
                     continue;
-                penalty = res * penalty_scale;
+                /* penalty = res * penalty_scale; */
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1091,7 +1092,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                     out << std::endl;
                     out.close();
-                } 
+                }
             }
             else
             {
@@ -1252,7 +1253,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             id_iter++;
                             continue;
                         }
-                        penalty = res * penalty_scale;
+                        /* penalty = res * penalty_scale; */
 
                         if (print_qstats)
                         {
@@ -2174,6 +2175,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             lbls.push_back(token_as_num);
             //_location_to_labels_bitmap[line_cnt].add(token_as_num);
             //_location_to_labels_robin[line_cnt].insert(token_as_num);
+            _labels_to_points_set[token_as_num].insert(line_cnt);
             _labels.insert(token_as_num);
             try
             {
@@ -2571,24 +2573,24 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
 
     std::vector<LabelT> filter_vec;
-    std::vector<uint32_t> init_ids = get_init_ids();
-    /* std::vector<uint32_t> init_ids; */
+    /* std::vector<uint32_t> init_ids = get_init_ids(); */
+    std::vector<uint32_t> init_ids;
 
-    if (_dynamic_index)
-        tl.lock();
-
-    if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end())
-    {
-        init_ids.emplace_back(_label_to_start_id[filter_label[0]]);
-    }
-    else
-    {
-        diskann::cout << "No filtered medoid found. exitting "
-                      << std::endl; // RKNOTE: If universal label found start there
-        throw diskann::ANNException("No filtered medoid found. exitting ", -1);
-    }
-    if (_dynamic_index)
-        tl.unlock();
+    /* if (_dynamic_index) */
+    /*     tl.lock(); */
+    /**/
+    /* if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) */
+    /* { */
+    /*     init_ids.emplace_back(_label_to_start_id[filter_label[0]]); */
+    /* } */
+    /* else */
+    /* { */
+    /*     diskann::cout << "No filtered medoid found. exitting " */
+    /*                   << std::endl; // RKNOTE: If universal label found start there */
+    /*     throw diskann::ANNException("No filtered medoid found. exitting ", -1); */
+    /* } */
+    /* if (_dynamic_index) */
+    /*     tl.unlock(); */
 
     std::vector<std::pair<LabelT, uint32_t>> sorted_filters = sort_filter_counts(filter_label);
 
@@ -2602,17 +2604,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     /* out << std::endl; */
     /* out.close(); */
     /* return std::make_pair(0, 0); */
-/*
-    if (curr_query == 1)
-    {
-        std::ofstream out("query_stats1.txt", std::ios_base::app);
-        for (auto const &filt : filter_label)
+    /*
+        if (curr_query == 1)
         {
-            out << filt << "/" << _labels_to_points[filt].cardinality() << " ";
-        }
-        out << std::endl;
-        out.close();
-    }*/
+            std::ofstream out("query_stats1.txt", std::ios_base::app);
+            for (auto const &filt : filter_label)
+            {
+                out << filt << "/" << _labels_to_points[filt].cardinality() << " ";
+            }
+            out << std::endl;
+            out.close();
+        }*/
 
     for (auto &lbl : filter_label)
         filter_vec.push_back(lbl);
@@ -2651,20 +2653,21 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         case 2:
             num_graphs++;
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
-             if (cand < std::numeric_limits<uint32_t>::max()) 
-             { 
-                 init_ids.emplace_back(cand); 
-             } 
+            if (cand < std::numeric_limits<uint32_t>::max())
+            {
+                init_ids.emplace_back(cand);
+            }
 
             local_print = true;
-            if (print_qstats) {
+            if (print_qstats)
+            {
                 std::ofstream out("query_stats.txt", std::ios_base::app);
                 out << "estimated intersection size is " << inter_estim << std::endl;
                 out << "setting up init ids with id " << cand << std::endl;
                 out.close();
+                retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+                break;
             }
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
-            break;
         }
     }
     else
@@ -2696,27 +2699,26 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         else
         {
             num_graphs++;
-            if (_dynamic_index)
-                tl.lock();
+            /* if (_dynamic_index) */
+            /*     tl.lock(); */
+            /**/
+            /* if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) */
+            /* { */
+            /*     init_ids.emplace_back(_label_to_start_id[filter_label[0]]); */
+            /* } */
+            /* else */
+            /* { */
+            /*     diskann::cout << "No filtered medoid found. exitting " */
+            /*                   << std::endl; // RKNOTE: If universal label found start there */
+            /*     throw diskann::ANNException("No filtered medoid found. exitting ", -1); */
+            /* } */
+            /* if (_dynamic_index) */
+            /*     tl.unlock(); */
 
-            if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end())
+            if (cand < std::numeric_limits<uint32_t>::max())
             {
-                init_ids.emplace_back(_label_to_start_id[filter_label[0]]);
+                init_ids.emplace_back(cand);
             }
-            else
-            {
-                diskann::cout << "No filtered medoid found. exitting "
-                              << std::endl; // RKNOTE: If universal label found start there
-                throw diskann::ANNException("No filtered medoid found. exitting ", -1);
-            }
-            if (_dynamic_index)
-                tl.unlock();
-
-            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
-             if (cand < std::numeric_limits<uint32_t>::max()) 
-             { 
-                 init_ids.emplace_back(cand); 
-             } 
 
             local_print = true;
             if (print_qstats)
