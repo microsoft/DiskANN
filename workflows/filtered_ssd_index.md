@@ -54,7 +54,7 @@ Searching a filtered index uses the `apps/search_disk_index.cpp`:
 9. **-K**: search for *K* neighbors and measure *K*-recall@*K*, meaning the intersection between the retrieved top-*K* nearest neighbors and ground truth *K* nearest neighbors.
 10. **--result_path**: Search results will be stored in files with specified prefix, in bin format.
 11. **-L (--search_list)**: A list of search_list sizes to perform search with. Larger parameters will result in slower latencies, but higher accuracies. Must be atleast the value of *K* in arg (9).
-12. **--filter_label**: The filter to be used when searching an index with filters. For each query, a search is performed with this filter.
+12. **--filter_label**: Filters to be used when searching an index with filters. Multiple filters can be specified, separated by '|' and are treated as OR predicates. For each query, a search is performed with these filters.
 
 
 Example with SIFT10K:
