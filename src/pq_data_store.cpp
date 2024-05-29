@@ -25,7 +25,8 @@ PQDataStore<data_t>::PQDataStore(size_t dim, location_t num_points, size_t num_p
                                  std::unique_ptr<QuantizedDistance<data_t>> pq_distance_fn,
                                  const std::string &codebook_path)
 #endif
-    : AbstractDataStore<data_t>(num_points, num_pq_chunks), _num_chunks(num_pq_chunks)
+    : AbstractDataStore<data_t>(num_points, num_pq_chunks), _num_chunks(num_pq_chunks),
+      _pq_pivot_file_path(codebook_path)
 {
     if (num_pq_chunks > dim)
     {
@@ -99,7 +100,10 @@ template <typename data_t> void PQDataStore<data_t>::populate_data(const std::st
 
     double p_val = std::min(1.0, ((double)MAX_PQ_TRAINING_SET_SIZE / (double)file_num_points));
 
-    auto pivots_file = get_pivot_data_filename(filename, _use_opq, static_cast<uint32_t>(_num_chunks));
+    auto pivots_file = _pq_pivot_file_path.empty()
+                           ? get_pivot_data_filename(filename, _use_opq, static_cast<uint32_t>(_num_chunks))
+                           : _pq_pivot_file_path;
+
     auto compressed_file = get_quantized_vectors_filename(filename, _use_opq, static_cast<uint32_t>(_num_chunks));
 
     generate_quantized_data<data_t>(filename, pivots_file, compressed_file, _distance_fn->get_metric(), p_val,
@@ -130,7 +134,8 @@ template <typename data_t> void PQDataStore<data_t>::get_vector(const location_t
     // REFACTOR TODO: Should we inflate the compressed vector here?
     if (i < this->capacity())
     {
-        memcpy(dest, _quantized_data + i * _aligned_dim, this->_dim * sizeof(data_t));
+        const FixedChunkPQTable &pq_table = _pq_distance_fn->get_pq_table();
+        pq_table.inflate_vector<data_t, data_t>((data_t *)(_quantized_data + i * _aligned_dim), dest);
     }
     else
     {
@@ -157,7 +162,6 @@ template <typename data_t> void PQDataStore<data_t>::set_vector(const location_t
     uint64_t num_chunks = _num_chunks;
 
     std::vector<float> vector_float(full_dimension);
-
     diskann::convert_types<data_t, float>(vector, vector_float.data(), 1, full_dimension);
     std::vector<uint8_t> compressed_vector(num_chunks * sizeof(data_t));
     std::vector<data_t> compressed_vector_T(num_chunks);
@@ -249,17 +253,12 @@ void PQDataStore<data_t>::preprocess_query(const data_t *aligned_query, Abstract
 
 template <typename data_t> float PQDataStore<data_t>::get_distance(const data_t *query, const location_t loc) const
 {
-    // Probably should return PQ distance.
-    return _distance_fn->compare(query, reinterpret_cast<data_t *>(_quantized_data) + _aligned_dim * loc,
-                                 (uint32_t)_aligned_dim);
+    throw diskann::ANNException("get_distance(const data_t *query, const location_t loc) hasn't been implemented for PQDataStore", -1);
 }
 
 template <typename data_t> float PQDataStore<data_t>::get_distance(const location_t loc1, const location_t loc2) const
 {
-    // Probably should return PQ distance.
-    return _distance_fn->compare(reinterpret_cast<data_t *>(_quantized_data) + loc1 * _aligned_dim,
-                                 reinterpret_cast<data_t *>(_quantized_data) + loc2 * _aligned_dim,
-                                 (uint32_t)this->_aligned_dim);
+    throw diskann::ANNException("get_distance(const location_t loc1, const location_t loc2) hasn't been implemented for PQDataStore", -1);
 }
 
 template <typename data_t>

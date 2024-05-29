@@ -228,14 +228,15 @@ namespace diskann
     }
 
     // assumes no rotation is involved
-    void FixedChunkPQTable::inflate_vector(uint8_t *base_vec, float *out_vec)
+    template <typename InputType, typename OutputType>
+    void FixedChunkPQTable::inflate_vector(InputType *base_vec, OutputType *out_vec) const
     {
         for (size_t chunk = 0; chunk < n_chunks; chunk++)
         {
             for (size_t j = chunk_offsets[chunk]; j < chunk_offsets[chunk + 1]; j++)
             {
                 const float *centers_dim_vec = tables_tr + (256 * j);
-                out_vec[j] = centers_dim_vec[base_vec[chunk]] + centroid[j];
+                out_vec[j] = static_cast<OutputType> (centers_dim_vec[static_cast<uint8_t>(base_vec[chunk])] + centroid[j]);
             }
         }
     }
@@ -263,4 +264,9 @@ namespace diskann
             }
         }
     }
-} // namespace diskann
+
+    template void FixedChunkPQTable::inflate_vector<uint8_t, float>(uint8_t *base_vec, float *out_vec) const;
+    template void FixedChunkPQTable::inflate_vector<uint8_t, uint8_t>(uint8_t *base_vec, uint8_t *out_vec) const;
+    template void FixedChunkPQTable::inflate_vector<int8_t, int8_t>(int8_t *base_vec, int8_t *out_vec) const;
+    template void FixedChunkPQTable::inflate_vector<float, float>(float *base_vec, float *out_vec) const;
+    } // namespace diskann

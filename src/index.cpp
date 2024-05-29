@@ -1026,7 +1026,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
     if (!use_filter)
     {
-        _data_store->get_vector(location, scratch->aligned_query());
+        _pq_data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
     }
     else
@@ -1041,7 +1041,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         if (_dynamic_index)
             tl.unlock();
 
-        _data_store->get_vector(location, scratch->aligned_query());
+        _pq_data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
                                _location_to_labels[location], false);
 
@@ -1055,7 +1055,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         // clear scratch for finding unfiltered candidates
         scratch->clear();
 
-        _data_store->get_vector(location, scratch->aligned_query());
+        _pq_data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
 
         for (auto unfiltered_neighbour : scratch->pool())
@@ -1622,11 +1622,6 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
     {
         throw ANNException("Do not call build with 0 points", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-    if (_pq_dist)
-    {
-        throw ANNException("ERROR: DO not use this build interface with PQ distance", -1, __FUNCSIG__, __FILE__,
-                           __LINE__);
-    }
 
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
 
@@ -1635,6 +1630,7 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
         _nd = num_points_to_load;
 
         _data_store->populate_data(data, (location_t)num_points_to_load);
+        _pq_data_store->populate_data(data, (location_t)num_points_to_load);
     }
 
     build_with_data_populated(tags);
@@ -2236,14 +2232,7 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
 
             if (res_vectors.size() > 0)
             {
-                if (_pq_dist)
-                {
-                    _pq_data_store->get_vector(node.id, res_vectors[pos]);
-                }
-                else
-                {
-                    _data_store->get_vector(node.id, res_vectors[pos]);
-                }
+                _pq_data_store->get_vector(node.id, res_vectors[pos]);
             }
 
             if (distances != nullptr)

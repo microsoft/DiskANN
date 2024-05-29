@@ -99,6 +99,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
 
     Metric _distance_metric;
     std::unique_ptr<Distance<data_t>> _distance_fn = nullptr;
+    std::string _pq_pivot_file_path;
     std::unique_ptr<QuantizedDistance<data_t>> _pq_distance_fn = nullptr;
 };
 } // namespace diskann

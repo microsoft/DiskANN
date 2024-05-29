@@ -85,7 +85,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       .is_enable_tags(tags)
                       .is_concurrent_consolidate(false)
                       .is_pq_dist_build(use_pq_build)
-                      .is_use_opq(use_pq_build)
+                      .is_use_opq(use_opq)
                       .with_num_pq_chunks(pq_num_chunks)
                       .with_num_frozen_pts(num_frozen_pts)
                       .with_pq_codebook_path(codebook_file)
