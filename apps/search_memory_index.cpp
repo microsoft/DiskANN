@@ -91,6 +91,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       .with_pq_codebook_path(codebook_file)
                       .build();
 
+    std::cout << "******************** Attach Debugger ********************" << std::endl;
+    Sleep(60000);
+
     auto index_factory = diskann::IndexFactory(config);
     auto index = index_factory.create_instance();
     index->load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));

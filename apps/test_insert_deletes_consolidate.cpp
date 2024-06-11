@@ -512,6 +512,9 @@ int main(int argc, char **argv)
                                                    .with_filter_list_size(Lf)
                                                    .build();
 
+
+        std::cout << "********** Attach Debugger Test insert delete consolidate **********" << std::endl;
+
         if (data_type == std::string("int8"))
             build_incremental_index<int8_t>(
                 data_path, params, points_to_skip, max_points_to_insert, beginning_index_size, start_point_norm,
