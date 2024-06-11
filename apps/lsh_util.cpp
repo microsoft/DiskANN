@@ -236,11 +236,11 @@ void cluster(const std::string &hash_file_name, const std::string &clusters_file
     std::vector<HashT> lsh_hashes;
     std::ifstream hash_file(hash_file_name);
 
-    HashT value;
+    uint64_t value;
     while (hash_file.good())
     {
         hash_file >> value;
-        lsh_hashes.push_back(value);
+        lsh_hashes.push_back((HashT)value);
     }
 
     std::cout << "Read " << lsh_hashes.size() << " hashes" << std::endl;
