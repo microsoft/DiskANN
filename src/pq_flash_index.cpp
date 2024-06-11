@@ -1015,7 +1015,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         // chunk_offsets file the correct value
         _disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0);
 #endif
-        _disk_pq_n_chunks = _disk_pq_table.get_num_chunks();
+        _disk_pq_n_chunks = _disk_pq_table.n_chunks;
         _disk_bytes_per_point =
             _disk_pq_n_chunks * sizeof(uint8_t); // revising disk_bytes_per_point since DISK PQ is used.
         diskann::cout << "Disk index uses PQ data compressed down to " << _disk_pq_n_chunks << " bytes per point."
