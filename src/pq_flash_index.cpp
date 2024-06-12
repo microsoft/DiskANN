@@ -674,7 +674,6 @@ inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, LabelT l
 template <typename T, typename LabelT>
 bool PQFlashIndex<T, LabelT>::point_has_any_label(uint32_t point_id, const std::vector<LabelT> &label_ids)
 {
-    uint32_t start_vec = _pts_to_label_offsets[point_id];
     bool ret_val = false;
     for (auto &cur_lbl : label_ids)
     {
