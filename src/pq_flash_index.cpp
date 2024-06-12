@@ -705,10 +705,9 @@ void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile,
     uint32_t num_pts_in_label_file;
     uint32_t num_total_labels;
     get_label_file_metadata(buffer, num_pts_in_label_file, num_total_labels);
-    _num_total_labels = num_total_labels;
 
     _pts_to_label_offsets = new uint32_t[num_pts_in_label_file];
-    _pts_to_label_counts = new uint32_t[num_total_labels];
+    _pts_to_label_counts = new uint32_t[num_pts_in_label_file];
     _pts_to_labels = new LabelT[num_total_labels];
     uint32_t labels_seen_so_far = 0;
 
