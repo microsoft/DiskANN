@@ -21,6 +21,7 @@
 #include "in_mem_data_store.h"
 #include "in_mem_graph_store.h"
 #include "abstract_index.h"
+#include <bitset>
 
 #include "quantized_distance.h"
 #include "pq_data_store.h"
@@ -41,6 +42,117 @@ inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, u
 
     return OVERHEAD_FACTOR * (size_of_data + size_of_graph + size_of_locks + size_of_outer_vector);
 }
+
+struct simple_bitmask_val
+{
+    size_t _index = 0;
+    std::uint64_t _mask = 0;
+};
+
+struct simple_bitmask_full_val
+{
+    simple_bitmask_full_val()
+    {
+    }
+
+    void merge_bitmask_val(simple_bitmask_val& bitmask_val)
+    {
+        _mask[bitmask_val._index] |= bitmask_val._mask;
+    }
+
+    std::uint64_t* _mask = nullptr;
+};
+
+struct simple_bitmask_buf
+{
+    std::uint64_t* get_bitmask(std::uint64_t index)
+    {
+        return _buf.data() + index * _bitmask_size;
+    }
+
+    std::vector<std::uint64_t> _buf;
+    std::uint64_t _bitmask_size = 0;
+
+};
+
+class simple_bitmask
+{
+public:
+    simple_bitmask(std::uint64_t* bitsets, std::uint64_t bitmask_size)
+        : _bitsets(bitsets)
+        , _bitmask_size(bitmask_size)
+    {
+    }
+
+    bool test(size_t pos) const
+    {
+        std::uint64_t mask = (std::uint64_t)1 << (pos & (8 * sizeof(std::uint64_t) - 1));
+        size_t index = pos / 8 / sizeof(std::uint64_t);
+        std::uint64_t val = _bitsets[index];
+        return 0 != (val & mask);
+    }
+
+    static simple_bitmask_val get_bitmask_val(size_t pos)
+    {
+        simple_bitmask_val bitmask_val;
+        bitmask_val._mask = (std::uint64_t)1 << (pos & (8 * sizeof(std::uint64_t) - 1));
+        bitmask_val._index = pos / 8 / sizeof(std::uint64_t);
+
+        return bitmask_val;
+    }
+
+    static std::uint64_t get_bitmask_size(std::uint64_t totalBits)
+    {
+        std::uint64_t bytes = (totalBits + 7) / 8;
+        std::uint64_t aligned_bytes = bytes + sizeof(std::uint64_t) - 1;
+        aligned_bytes = aligned_bytes - (aligned_bytes % sizeof(std::uint64_t));
+        return aligned_bytes / sizeof(std::uint64_t);
+    }
+
+    bool test_mask_val(const simple_bitmask_val& bitmask_val) const
+    {
+        std::uint64_t val = _bitsets[bitmask_val._index];
+        return 0 != (val & bitmask_val._mask);
+    }
+
+    bool test_full_mask_val(const simple_bitmask_full_val& bitmask_full_val) const
+    {
+        for (size_t i = 0; i < _bitmask_size; i++)
+        {
+            if ((bitmask_full_val._mask[i] & _bitsets[i]) != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool test_full_mask_contain(const simple_bitmask& bitmask_full_val) const
+    {
+        for (size_t i = 0; i < _bitmask_size; i++)
+        {
+            auto mask = bitmask_full_val._bitsets[i];
+            if ((mask & _bitsets[i]) != mask)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    void set(size_t pos)
+    {
+        std::uint64_t mask = (std::uint64_t)1 << (pos & (8 * sizeof(std::uint64_t) - 1));
+        size_t index = pos / 8 / sizeof(std::uint64_t);
+        _bitsets[index] |= mask;
+    }
+
+private:
+    std::uint64_t* _bitsets;
+    std::uint64_t _bitmask_size;
+};
 
 template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> class Index : public AbstractIndex
 {
@@ -112,7 +224,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
     // Get converted integer label from string to int map (_label_map)
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label);
+    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &raw_label) const;
+
+    DISKANN_DLLEXPORT bool is_label_valid(const std::string& raw_label) const override;
+
+    DISKANN_DLLEXPORT bool is_set_universal_label() const override;
 
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.
@@ -249,6 +365,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
 
+    void parse_label_file_in_bitset(const std::string& label_file, size_t& num_points, size_t num_labels);
+
+    void convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels);
+
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
     // Returns the locations of start point and frozen points suitable for use
@@ -312,7 +432,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                         const uint32_t maxc, const float alpha, InMemQueryScratch<T> *scratch);
 
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l, uint32_t indexing_l, uint32_t r,
-                                  uint32_t maxc, size_t dim);
+                                  uint32_t maxc, size_t dim, size_t bitmask_size = 0);
 
     // Do not call without acquiring appropriate locks
     // call public member functions save and load to invoke these.
@@ -331,6 +451,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 #endif
+
+    size_t search_string_range(const std::string& str, char ch, size_t start, size_t end);
 
   private:
     // Distance functions
@@ -442,6 +564,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Per node lock, cardinality=_max_points + _num_frozen_points
     std::vector<non_recursive_mutex> _locks;
+
+    simple_bitmask_buf _bitmask_buf;
 
     static const float INDEX_GROWTH_FACTOR;
 };

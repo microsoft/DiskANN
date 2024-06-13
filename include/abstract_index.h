@@ -106,6 +106,9 @@ class AbstractIndex
 
     template <typename label_type> void set_universal_label(const label_type universal_label);
 
+    virtual bool is_label_valid(const std::string &raw_label) const = 0;
+    virtual bool is_set_universal_label() const = 0;
+
   private:
     virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,

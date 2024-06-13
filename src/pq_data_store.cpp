@@ -115,7 +115,7 @@ template <typename data_t> void PQDataStore<data_t>::set_vector(const location_t
     throw std::logic_error("Not implemented yet");
 }
 
-template <typename data_t> void PQDataStore<data_t>::prefetch_vector(const location_t loc)
+template <typename data_t> void PQDataStore<data_t>::prefetch_vector(const location_t loc) const
 {
     const uint8_t *ptr = _quantized_data + ((size_t)loc) * _num_chunks * sizeof(data_t);
     diskann::prefetch_vector((const char *)ptr, _num_chunks * sizeof(data_t));

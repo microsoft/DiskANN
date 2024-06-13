@@ -8,6 +8,7 @@
 #include "pq_scratch.h"
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
+#include <limits>
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -210,9 +211,9 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     size_t num_cached_nodes = node_list.size();
 
     // borrow thread data
-    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-    auto this_thread_data = manager.scratch_space();
-    IOContext &ctx = this_thread_data->ctx;
+    //ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    //auto this_thread_data = manager.scratch_space();
+    //IOContext &ctx = this_thread_data->ctx;
 
     // Allocate space for neighborhood cache
     _nhood_cache_buf = new uint32_t[num_cached_nodes * (_max_degree + 1)];
@@ -371,9 +372,9 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
     diskann::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
 
     // borrow thread data
-    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-    auto this_thread_data = manager.scratch_space();
-    IOContext &ctx = this_thread_data->ctx;
+    //ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    //auto this_thread_data = manager.scratch_space();
+    //IOContext &ctx = this_thread_data->ctx;
 
     std::unique_ptr<tsl::robin_set<uint32_t>> cur_level, prev_level;
     cur_level = std::make_unique<tsl::robin_set<uint32_t>>();
@@ -507,9 +508,9 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
     std::memset(_centroid_data, 0, _num_medoids * _aligned_dim * sizeof(float));
 
     // borrow ctx
-    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-    auto data = manager.scratch_space();
-    IOContext &ctx = data->ctx;
+    //ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    //auto data = manager.scratch_space();
+    //IOContext &ctx = data->ctx;
     diskann::cout << "Loading centroid data from medoids vector data of " << _num_medoids << " medoid(s)" << std::endl;
 
     std::vector<uint32_t> nodes_to_read;
@@ -600,14 +601,14 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
     {
         return _label_map[filter_label];
     }
-    if (_use_universal_label)
+    else if (_use_universal_label)
     {
         return _universal_filter_label;
     }
-    std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    else
+    {
+        return std::numeric_limits<LabelT>::max();
+    }
 }
 
 template <typename T, typename LabelT>
@@ -615,6 +616,17 @@ void PQFlashIndex<T, LabelT>::reset_stream_for_reading(std::basic_istream<char> 
 {
     infile.clear();
     infile.seekg(0);
+}
+
+template <typename T, typename LabelT>
+bool PQFlashIndex<T, LabelT>::is_label_valid(const std::string& filter_label)
+{
+    if (_label_map.find(filter_label) != _label_map.end())
+    {
+        return true;
+    }
+
+    return false;
 }
 
 template <typename T, typename LabelT>
@@ -641,7 +653,7 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &fileCon
         size_t next_lbl_pos = 0;
         while (lbl_pos < next_pos && lbl_pos != std::string::npos)
         {
-            next_lbl_pos = fileContent.find(',', lbl_pos);
+            next_lbl_pos = search_string_range(fileContent, ',', lbl_pos, next_pos);
             if (next_lbl_pos == std::string::npos) // the last label
             {
                 next_lbl_pos = next_pos;
@@ -679,7 +691,7 @@ inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, LabelT l
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile, size_t &num_points_labels)
+void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char>& infile, size_t &num_points_labels)
 {
     infile.seekg(0, std::ios::end);
     size_t file_size = infile.tellg();
@@ -720,7 +732,7 @@ void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile,
         size_t next_lbl_pos = 0;
         while (lbl_pos < next_pos && lbl_pos != std::string::npos)
         {
-            next_lbl_pos = buffer.find(',', lbl_pos);
+            next_lbl_pos = search_string_range(buffer, ',', lbl_pos, next_pos);
             if (next_lbl_pos == std::string::npos) // the last label in the whole file
             {
                 next_lbl_pos = next_pos;
@@ -777,13 +789,19 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
 #endif
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
     std::string pq_compressed_vectors = std::string(index_prefix) + "_pq_compressed.bin";
-    std::string _disk_index_file = std::string(index_prefix) + "_disk.index";
+    std::string disk_index_file = std::string(index_prefix) + "_disk.index";
+    std::string labels_file = std::string(index_prefix) + "_labels.txt";
+    std::string labels_to_medoids = std::string(index_prefix) + "_labels_to_medoids.txt";
+    std::string labels_map_file = std::string(index_prefix) + "_labels_map.txt";
+    std::string univ_label_file = std::string(index_prefix) + "_universal_label.txt";
 #ifdef EXEC_ENV_OLS
-    return load_from_separate_paths(files, num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
-                                    pq_compressed_vectors.c_str());
+    return load_from_separate_paths(files, num_threads, disk_index_file.c_str(), pq_table_bin.c_str(),
+        pq_compressed_vectors.c_str(), labels_file.c_str(), labels_to_medoids.c_str(),
+        labels_map_file.c_str(), univ_label_file.c_str());
 #else
-    return load_from_separate_paths(num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
-                                    pq_compressed_vectors.c_str());
+    return load_from_separate_paths(num_threads, disk_index_file.c_str(), pq_table_bin.c_str(),
+        pq_compressed_vectors.c_str(), labels_file.c_str(), labels_to_medoids.c_str(),
+        labels_map_file.c_str(), univ_label_file.c_str());
 #endif
 }
 
@@ -791,12 +809,16 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
 template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load_from_separate_paths(diskann::MemoryMappedFiles &files, uint32_t num_threads,
                                                       const char *index_filepath, const char *pivots_filepath,
-                                                      const char *compressed_filepath)
+                                                      const char *compressed_filepath,
+                                                      const char* labels_filepath, const char* labels_to_medoids_filepath,
+                                                      const char* labels_map_filepath, const char* unv_label_filepath)
 {
 #else
 template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
-                                                      const char *pivots_filepath, const char *compressed_filepath)
+                                                      const char *pivots_filepath, const char *compressed_filepath,
+                                                      const char* labels_filepath, const char* labels_to_medoids_filepath,
+                                                      const char* labels_map_filepath, const char* unv_label_filepath)
 {
 #endif
     std::string pq_table_bin = pivots_filepath;
@@ -805,10 +827,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string medoids_file = std::string(_disk_index_file) + "_medoids.bin";
     std::string centroids_file = std::string(_disk_index_file) + "_centroids.bin";
 
-    std::string labels_file = std ::string(_disk_index_file) + "_labels.txt";
-    std::string labels_to_medoids = std ::string(_disk_index_file) + "_labels_to_medoids.txt";
+    std::string labels_file = (labels_filepath == nullptr ? "" : labels_filepath);
+    std::string labels_to_medoids = (labels_to_medoids_filepath == nullptr ? "" : labels_to_medoids_filepath);
     std::string dummy_map_file = std ::string(_disk_index_file) + "_dummy_map.txt";
-    std::string labels_map_file = std ::string(_disk_index_file) + "_labels_map.txt";
+    std::string labels_map_file = (labels_map_filepath == nullptr ? "" : labels_map_filepath);
     size_t num_pts_in_label_file = 0;
 
     size_t pq_file_dim, pq_file_num_centroids;
@@ -913,14 +935,14 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
                 throw FileException(labels_to_medoids, e, __FUNCSIG__, __FILE__, __LINE__);
             }
         }
-        std::string univ_label_file = std ::string(_disk_index_file) + "_universal_label.txt";
+        std::string univ_label_file = (unv_label_filepath == nullptr ? "" : unv_label_filepath);
 
 #ifdef EXEC_ENV_OLS
         if (files.fileExists(univ_label_file))
         {
-            FileContent &content_univ_label = files.getContent(univ_label_file);
+            FileContent& content_univ_label = files.getContent(univ_label_file);
             std::stringstream universal_label_reader(
-                std::string((const char *)content_univ_label._content, content_univ_label._size));
+                std::string((const char*)content_univ_label._content, content_univ_label._size));
 #else
         if (file_exists(univ_label_file))
         {
@@ -1764,6 +1786,20 @@ template <typename T, typename LabelT> uint64_t PQFlashIndex<T, LabelT>::get_dat
 template <typename T, typename LabelT> diskann::Metric PQFlashIndex<T, LabelT>::get_metric()
 {
     return this->metric;
+}
+
+template <typename T, typename LabelT>
+size_t PQFlashIndex<T, LabelT>::search_string_range(const std::string& str, char ch, size_t start, size_t end)
+{
+    for (; start != end; start++)
+    {
+        if (str[start] == ch)
+        {
+            return start;
+        }
+    }
+
+    return std::string::npos;
 }
 
 #ifdef EXEC_ENV_OLS

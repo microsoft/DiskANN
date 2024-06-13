@@ -173,7 +173,7 @@ template <typename data_t> void InMemDataStore<data_t>::set_vector(const locatio
     }
 }
 
-template <typename data_t> void InMemDataStore<data_t>::prefetch_vector(const location_t loc)
+template <typename data_t> void InMemDataStore<data_t>::prefetch_vector(const location_t loc) const
 {
     diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)loc * sizeof(data_t),
                              sizeof(data_t) * _aligned_dim);
@@ -206,7 +206,7 @@ void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t 
                                           AbstractScratch<data_t> *scratch_space) const
 {
     for (location_t i = 0; i < location_count; i++)
-    {
+    {       
         distances[i] = _distance_fn->compare(query, _data + locations[i] * _aligned_dim, (uint32_t)this->_aligned_dim);
     }
 }

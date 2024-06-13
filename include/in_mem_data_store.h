@@ -38,7 +38,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 
     virtual void get_vector(const location_t i, data_t *target) const override;
     virtual void set_vector(const location_t i, const data_t *const vector) override;
-    virtual void prefetch_vector(const location_t loc) override;
+    virtual void prefetch_vector(const location_t loc) const override;
 
     virtual void move_vectors(const location_t old_location_start, const location_t new_location_start,
                               const location_t num_points) override;

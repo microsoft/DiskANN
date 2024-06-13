@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include <omp.h>
+#include <array>
 
 #include <type_traits>
 
@@ -22,6 +23,7 @@
 #endif
 
 #include "index.h"
+#include <limits>
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
@@ -104,9 +106,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
 
         if (index_config.index_search_params != nullptr)
         {
+            std::uint32_t default_queue_size = (std::max)(_indexingQueueSize, _filterIndexingQueueSize);
             uint32_t num_scratch_spaces = index_config.index_search_params->num_search_threads + _indexingThreads;
             initialize_query_scratch(num_scratch_spaces, index_config.index_search_params->initial_search_list_size,
-                                     _indexingQueueSize, _indexingRange, _indexingMaxC, _data_store->get_dims());
+                default_queue_size, _indexingRange, _indexingMaxC, _data_store->get_dims());
         }
     }
 }
@@ -183,12 +186,12 @@ template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~I
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint32_t search_l, uint32_t indexing_l,
-                                                      uint32_t r, uint32_t maxc, size_t dim)
+                                                      uint32_t r, uint32_t maxc, size_t dim, size_t bitmask_size)
 {
     for (uint32_t i = 0; i < num_threads; i++)
     {
         auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _data_store->get_aligned_dim(),
-                                                _data_store->get_alignment_factor(), _pq_dist);
+                                                _data_store->get_alignment_factor(), _pq_dist, bitmask_size);
         _query_scratch.push(scratch);
     }
 }
@@ -591,7 +594,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     if (file_exists(labels_file))
     {
         _label_map = load_label_map(labels_map_file);
-        parse_label_file(labels_file, label_num_pts);
+        parse_label_file_in_bitset(labels_file, label_num_pts, _label_map.size());
         assert(label_num_pts == data_file_num_pts - _num_frozen_pts);
         if (file_exists(labels_to_medoids))
         {
@@ -654,8 +657,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     // initialize_q_s().
     if (_query_scratch.size() == 0)
     {
-        initialize_query_scratch(num_threads, search_l, search_l, (uint32_t)_graph_store->get_max_range_of_graph(),
-                                 _indexingMaxC, _dim);
+        initialize_query_scratch(num_threads, search_l, search_l, (uint32_t)_graph_store->get_max_range_of_graph(), _indexingMaxC,
+                                 _dim, _bitmask_buf._bitmask_size);
     }
 }
 
@@ -803,6 +806,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     assert(id_scratch.size() == 0);
 
     T *aligned_query = scratch->aligned_query();
+    std::vector<std::uint64_t>& query_bitmask_buf = scratch->query_label_bitmask();
 
     float *pq_dists = nullptr;
 
@@ -839,6 +843,35 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         _pq_data_store->get_distance(scratch->aligned_query(), ids, dists_out, scratch);
     };
 
+    // only support one filter label
+    std::array<std::uint64_t, 10> local_buf;
+    simple_bitmask_full_val bitmask_full_val;
+    if (use_filter)
+    {
+        if (_bitmask_buf._bitmask_size <= 10)
+        {
+            local_buf.fill(0);
+            bitmask_full_val._mask = local_buf.data();
+        }
+        else
+        {
+            query_bitmask_buf.resize(_bitmask_buf._bitmask_size, 0);
+            bitmask_full_val._mask = query_bitmask_buf.data();
+        }
+        
+        for (size_t i = 0; i < filter_labels.size(); i++)
+        {
+            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_labels[i]);
+            bitmask_full_val.merge_bitmask_val(bitmask_val);
+        }
+
+        if (_use_universal_label)
+        {
+            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_label);
+            bitmask_full_val.merge_bitmask_val(bitmask_val);
+        }
+    }
+
     // Initialize the candidate pool with starting points
     for (auto id : init_ids)
     {
@@ -851,8 +884,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         if (use_filter)
         {
-            if (!detect_common_filters(id, search_invocation, filter_labels))
+            simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
+            
+            if (!bm.test_full_mask_val(bitmask_full_val))
+            {
                 continue;
+            }
         }
 
         if (is_not_visited(id))
@@ -879,6 +916,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     uint32_t hops = 0;
     uint32_t cmps = 0;
+    cmps += static_cast<uint32_t>(init_ids.size());
+    std::vector<location_t> tmp_neighbor_list;
 
     while (best_L_nodes.has_unexpanded_node())
     {
@@ -913,39 +952,57 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 assert(id < _max_points + _num_frozen_pts);
 
+                if (!is_not_visited(id))
+                {
+                    continue;
+                }
+                cmps++;
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (!detect_common_filters(id, search_invocation, filter_labels))
+                    simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
+
+                    if (!bm.test_full_mask_val(bitmask_full_val))
+                    {
                         continue;
+                    }
                 }
 
-                if (is_not_visited(id))
-                {
-                    id_scratch.push_back(id);
-                }
+                id_scratch.push_back(id);
+                
             }
         }
         else
         {
-            _locks[n].lock();
-            auto nbrs = _graph_store->get_neighbours(n);
-            _locks[n].unlock();
-            for (auto id : nbrs)
+            tmp_neighbor_list.clear();
+            _locks[n].lock_shared();
+            auto& nbrs = _graph_store->get_neighbours(n);
+            tmp_neighbor_list.resize(nbrs.size());
+            memcpy(tmp_neighbor_list.data(), nbrs.data(), nbrs.size() * sizeof(location_t));
+            _locks[n].unlock_shared();
+            for (auto id : tmp_neighbor_list)
             {
                 assert(id < _max_points + _num_frozen_pts);
 
+                if (!is_not_visited(id))
+                {
+                    continue;
+                }
+                cmps++;
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (!detect_common_filters(id, search_invocation, filter_labels))
+                    simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
+
+                    if (!bm.test_full_mask_val(bitmask_full_val))
+                    {
                         continue;
+                    }
                 }
 
-                if (is_not_visited(id))
-                {
-                    id_scratch.push_back(id);
-                }
+
+                id_scratch.push_back(id);
+                
             }
         }
 
@@ -962,7 +1019,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
         }
 
-        assert(dist_scratch.capacity() >= id_scratch.size());
+        dist_scratch.resize(id_scratch.size());
+        //assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
         cmps += (uint32_t)id_scratch.size();
 
@@ -1005,30 +1063,33 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
                                _location_to_labels[location], false);
 
-        // combine candidate pools obtained with filter and unfiltered criteria.
-        std::set<Neighbor> best_candidate_pool;
-        for (auto filtered_neighbor : scratch->pool())
+        if (Lindex > 0)
         {
-            best_candidate_pool.insert(filtered_neighbor);
-        }
-
-        // clear scratch for finding unfiltered candidates
-        scratch->clear();
-
-        _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
-
-        for (auto unfiltered_neighbour : scratch->pool())
-        {
-            // insert if this neighbour is not already in best_candidate_pool
-            if (best_candidate_pool.find(unfiltered_neighbour) == best_candidate_pool.end())
+            // combine candidate pools obtained with filter and unfiltered criteria.
+            std::set<Neighbor> best_candidate_pool;
+            for (auto filtered_neighbor : scratch->pool())
             {
-                best_candidate_pool.insert(unfiltered_neighbour);
+                best_candidate_pool.insert(filtered_neighbor);
             }
-        }
 
-        scratch->pool().clear();
-        std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
+            // clear scratch for finding unfiltered candidates
+            scratch->clear();
+
+            _data_store->get_vector(location, scratch->aligned_query());
+            iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+
+            for (auto unfiltered_neighbour : scratch->pool())
+            {
+                // insert if this neighbour is not already in best_candidate_pool
+                if (best_candidate_pool.find(unfiltered_neighbour) == best_candidate_pool.end())
+                {
+                    best_candidate_pool.insert(unfiltered_neighbour);
+                }
+            }
+
+            scratch->pool().clear();
+            std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
+        }
     }
 
     auto &pool = scratch->pool();
@@ -1111,18 +1172,11 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     uint32_t a = iter->id;
                     uint32_t b = iter2->id;
-                    if (_location_to_labels.size() < b || _location_to_labels.size() < a)
-                        continue;
-                    for (auto &x : _location_to_labels[b])
-                    {
-                        if (std::find(_location_to_labels[a].begin(), _location_to_labels[a].end(), x) ==
-                            _location_to_labels[a].end())
-                        {
-                            prune_allowed = false;
-                        }
-                        if (!prune_allowed)
-                            break;
-                    }
+                    
+                    simple_bitmask bm1(_bitmask_buf.get_bitmask(a), _bitmask_buf._bitmask_size);
+                    simple_bitmask bm2(_bitmask_buf.get_bitmask(b), _bitmask_buf._bitmask_size);
+
+                    prune_allowed = bm1.test_full_mask_contain(bm2);
                 }
                 if (!prune_allowed)
                     continue;
@@ -1205,28 +1259,40 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
 
     assert(!src_pool.empty());
 
+    // des_pool contains the neighbors of the neighbors of n
+    std::vector<uint32_t> copy_of_neighbors;
+
     for (auto des : src_pool)
     {
         // des.loc is the loc of the neighbors of n
         assert(des < _max_points + _num_frozen_pts);
-        // des_pool contains the neighbors of the neighbors of n
-        std::vector<uint32_t> copy_of_neighbors;
+        
         bool prune_needed = false;
         {
-            LockGuard guard(_locks[des]);
+            copy_of_neighbors.clear();
+        //    LockGuard guard(_locks[des]);
+            _locks[des].lock_shared();
             auto &des_pool = _graph_store->get_neighbours(des);
-            if (std::find(des_pool.begin(), des_pool.end(), n) == des_pool.end())
+            copy_of_neighbors.reserve(des_pool.size() + 1);
+            for (auto& des_n : des_pool)
             {
-                if (des_pool.size() < (uint64_t)(defaults::GRAPH_SLACK_FACTOR * range))
+                copy_of_neighbors.push_back(des_n);
+            }
+            _locks[des].unlock_shared();
+
+            if (std::find(copy_of_neighbors.begin(), copy_of_neighbors.end(), n) == copy_of_neighbors.end())
+            {
+                if (copy_of_neighbors.size() < (uint64_t)(defaults::GRAPH_SLACK_FACTOR * range))
                 {
+                    LockGuard guard(_locks[des]);
                     // des_pool.emplace_back(n);
                     _graph_store->add_neighbour(des, n);
                     prune_needed = false;
                 }
                 else
                 {
-                    copy_of_neighbors.reserve(des_pool.size() + 1);
-                    copy_of_neighbors = des_pool;
+                //    copy_of_neighbors.reserve(des_pool.size() + 1);
+                //    copy_of_neighbors = des_pool;
                     copy_of_neighbors.push_back(n);
                     prune_needed = true;
                 }
@@ -1537,7 +1603,8 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
 
     if (_query_scratch.size() == 0)
     {
-        initialize_query_scratch(5 + num_threads_index, index_L, index_L, index_R, maxc,
+        std::uint32_t default_queue_size = (std::max)(_indexingQueueSize, _filterIndexingQueueSize);
+        initialize_query_scratch(5 + num_threads_index, default_queue_size, default_queue_size, index_R, maxc,
                                  _data_store->get_aligned_dim());
     }
 
@@ -1743,13 +1810,14 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
     else
     {
         // TODO: this should ideally happen in save()
+        uint32_t unv_label_as_num = 0;
         std::string labels_file_to_use = filter_params.save_path_prefix + "_label_formatted.txt";
         std::string mem_labels_int_map_file = filter_params.save_path_prefix + "_labels_map.txt";
         convert_labels_string_to_int(filter_params.label_file, labels_file_to_use, mem_labels_int_map_file,
-                                     filter_params.universal_label);
+                                     filter_params.universal_label, unv_label_as_num);
         if (filter_params.universal_label != "")
         {
-            LabelT unv_label_as_num = 0;
+//            LabelT unv_label_as_num = 0;
             this->set_universal_label(unv_label_as_num);
         }
         this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load);
@@ -1779,20 +1847,38 @@ std::unordered_map<std::string, LabelT> Index<T, TagT, LabelT>::load_label_map(c
 }
 
 template <typename T, typename TagT, typename LabelT>
-LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
+LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label) const
 {
-    if (_label_map.find(raw_label) != _label_map.end())
+    auto iter = _label_map.find(raw_label);
+    if (iter != _label_map.end())
     {
-        return _label_map[raw_label];
+        return iter->second;
     }
-    if (_use_universal_label)
+    else if (_use_universal_label)
     {
         return _universal_label;
     }
-    std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    else
+    {
+        return std::numeric_limits<LabelT>::max();
+    }
+}
+
+template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::is_set_universal_label() const
+{
+    return _use_universal_label;
+}
+
+template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::is_label_valid(const std::string& raw_label) const
+{
+    if (_label_map.find(raw_label) != _label_map.end())
+    {
+        return true;
+    }
+
+    return false;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1843,6 +1929,129 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
 }
 
 template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels)
+{
+    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels);
+    _bitmask_buf._buf.resize(pts_to_labels.size() * _bitmask_buf._bitmask_size, 0);
+
+    for (size_t i = 0; i < pts_to_labels.size(); i++)
+    {
+        for (size_t j = 0; j < pts_to_labels[i].size(); j++)
+        {
+            simple_bitmask bm(_bitmask_buf.get_bitmask(i), _bitmask_buf._bitmask_size);
+            bm.set(pts_to_labels[i][j]);
+        }
+    }
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label_file, size_t& num_points, size_t num_labels)
+{
+    std::ifstream infile(label_file, std::ios::binary);
+    if (infile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+    infile.seekg(0, std::ios::end);
+    size_t file_size = infile.tellg();
+
+    std::string buffer(file_size, ' ');
+
+    infile.seekg(0, std::ios::beg);
+    infile.read(&buffer[0], file_size);
+    infile.close();
+
+    unsigned line_cnt = 0;
+
+    size_t cur_pos = 0;
+    size_t next_pos = 0;
+    while (cur_pos < file_size && cur_pos != std::string::npos)
+    {
+        next_pos = buffer.find('\n', cur_pos);
+        if (next_pos == std::string::npos)
+        {
+            break;
+        }
+
+        cur_pos = next_pos + 1;
+
+        line_cnt++;
+    }
+
+    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels);
+    _bitmask_buf._buf.resize(line_cnt * _bitmask_buf._bitmask_size, 0);
+    
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
+
+    std::string label_str;
+    cur_pos = 0;
+    next_pos = 0;
+    while (cur_pos < file_size && cur_pos != std::string::npos)
+    {
+        next_pos = buffer.find('\n', cur_pos);
+        if (next_pos == std::string::npos)
+        {
+            break;
+        }
+
+        size_t lbl_pos = cur_pos;
+        size_t next_lbl_pos = 0;
+        while (lbl_pos < next_pos && lbl_pos != std::string::npos)
+        {
+            next_lbl_pos = search_string_range(buffer, ',', lbl_pos, next_pos);
+            if (next_lbl_pos == std::string::npos) // the last label in the whole file
+            {
+                next_lbl_pos = next_pos;
+            }
+
+            if (next_lbl_pos > next_pos) // the last label in one line
+            {
+                next_lbl_pos = next_pos;
+            }
+
+            label_str.assign(buffer.c_str() + lbl_pos, next_lbl_pos - lbl_pos);
+            if (label_str[label_str.length() - 1] == '\t')
+            {
+                label_str.erase(label_str.length() - 1);
+            }
+
+            LabelT token_as_num = (LabelT)std::stoul(label_str);
+            simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
+            bm.set(token_as_num);
+            _labels.insert(token_as_num);
+
+            lbl_pos = next_lbl_pos + 1;
+        }
+
+        cur_pos = next_pos + 1;
+
+        line_cnt++;
+    }
+
+    //while (std::getline(infile, line))
+    //{
+    //    std::istringstream iss(line);
+    //    std::vector<LabelT> lbls(0);
+    //    getline(iss, token, '\t');
+    //    std::istringstream new_iss(token);
+    //    while (getline(new_iss, token, ','))
+    //    {
+    //        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+    //        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+    //        LabelT token_as_num = std::stoul(token);
+    //        simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
+    //        bm.set(token_as_num);
+    //        _labels.insert(token_as_num);
+    //    }
+    //    line_cnt++;
+    //}
+    num_points = (size_t)line_cnt;
+    diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
+}
+
+template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::_set_universal_label(const LabelType universal_label)
 {
     this->set_universal_label(std::any_cast<const LabelT>(universal_label));
@@ -1867,27 +2076,42 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                      num_points_labels); // determines medoid for each label and identifies
                                          // the points to label mapping
 
-    std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
+    convert_pts_label_to_bitmask(_location_to_labels, _bitmask_buf, _labels.size());
 
-    for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
+    std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
+    std::vector<std::uint64_t> label_bitmask;
+    for (int lbl = 0; lbl < _labels.size(); lbl++)
     {
-        for (auto label : _location_to_labels[point_id])
+        auto itr = _labels.begin();
+        std::advance(itr, lbl);
+        auto &x = *itr;
+        
+        label_bitmask.clear();
+        label_bitmask.resize(_bitmask_buf._bitmask_size, 0);
+
+        simple_bitmask_full_val bitmask_full_val;
+        bitmask_full_val._mask = label_bitmask.data();
+        auto bitmask_val = simple_bitmask::get_bitmask_val(x);
+        bitmask_full_val.merge_bitmask_val(bitmask_val);
+        if (_use_universal_label)
         {
-            if (label != _universal_label)
+            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_label);
+            bitmask_full_val.merge_bitmask_val(bitmask_val);
+        }
+
+        std::vector<uint32_t> labeled_points;
+        for (uint32_t point_id = 0; point_id < num_points_to_load; point_id++)
+        {
+            simple_bitmask bm(_bitmask_buf.get_bitmask(point_id), _bitmask_buf._bitmask_size);
+            bool pt_has_lbl = bm.test_full_mask_val(bitmask_full_val);
+
+            if (pt_has_lbl)
             {
-                label_to_points[label].emplace_back(point_id);
-            }
-            else
-            {
-                for (typename tsl::robin_set<LabelT>::size_type lbl = 0; lbl < _labels.size(); lbl++)
-                {
-                    auto itr = _labels.begin();
-                    std::advance(itr, lbl);
-                    auto &x = *itr;
-                    label_to_points[x].emplace_back(point_id);
-                }
+                labeled_points.emplace_back(point_id);
             }
         }
+
+        label_to_points[x] = labeled_points;
     }
 
     uint32_t num_cands = 25;
@@ -2028,12 +2252,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
     if (typeid(uint64_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint64_t *>(indices);
-        return this->search_with_filters(std::any_cast<T *>(query), converted_label, K, L, ptr, distances);
+        return this->search_with_filters(std::any_cast<const T *>(query), converted_label, K, L, ptr, distances);
     }
     else if (typeid(uint32_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint32_t *>(indices);
-        return this->search_with_filters(std::any_cast<T *>(query), converted_label, K, L, ptr, distances);
+        return this->search_with_filters(std::any_cast<const T *>(query), converted_label, K, L, ptr, distances);
     }
     else
     {
@@ -3318,6 +3542,20 @@ void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t
     }
 }
 
+template <typename T, typename TagT, typename LabelT>
+size_t Index<T, TagT, LabelT>::search_string_range(const std::string& str, char ch, size_t start, size_t end)
+{
+    for (; start != end; start++)
+    {
+        if (str[start] == ch)
+        {
+            return start;
+        }
+    }
+
+    return std::string::npos;
+}
+
 /*  Internals of the library */
 template <typename T, typename TagT, typename LabelT> const float Index<T, TagT, LabelT>::INDEX_GROWTH_FACTOR = 1.5f;
 
@@ -3481,5 +3719,4 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
               float *distances);
-
 } // namespace diskann
