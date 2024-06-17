@@ -42,10 +42,10 @@ template <typename data_t> location_t InMemDataStore<data_t>::load(const std::st
     return load_impl(filename, offset);
 }
 
-template <typename data_t> location_t InMemDataStore<data_t>::load(AlignedFileReader &reader, size_t offset)
-{
-    return load_impl(reader, offset);
-}
+//template <typename data_t> location_t InMemDataStore<data_t>::load(AlignedFileReader &reader, size_t offset)
+//{
+//    return load_impl(reader, offset);
+//}
 
 #ifdef EXEC_ENV_OLS
 template <typename data_t> location_t InMemDataStore<data_t>::load_impl(AlignedFileReader &reader, size_t offset)

@@ -31,7 +31,7 @@ typedef int FileHandle;
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
-#include "memory_mapped_files.h"
+#include "memory_mapper.h"
 #endif
 
 // taken from
@@ -56,6 +56,7 @@ typedef int FileHandle;
 
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 60
+#define FILTER_OR_SEPARATOR "|"
 
 inline bool file_exists_impl(const std::string &name, bool dirCheck = false)
 {
@@ -681,6 +682,8 @@ DISKANN_DLLEXPORT double calculate_recall(unsigned num_queries, unsigned *gold_s
 DISKANN_DLLEXPORT double calculate_range_search_recall(unsigned num_queries,
                                                        std::vector<std::vector<uint32_t>> &groundtruth,
                                                        std::vector<std::vector<uint32_t>> &our_results);
+DISKANN_DLLEXPORT void split_string(const std::string &string_to_split, const std::string &delimiter,
+                                    std::vector<std::string> &pieces);
 
 template <typename T>
 inline void load_bin(const std::string &bin_file, std::unique_ptr<T[]> &data, size_t &npts, size_t &dim,
