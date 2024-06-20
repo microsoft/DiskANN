@@ -1554,6 +1554,12 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
         if (pool.size() < 2)
             cnt++;
     }
+
+    _empty_slots.clear();
+    for (size_t i = _nd; _data_compacted && i < _max_points; i++)
+    {
+        _empty_slots.insert(i);
+    }
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
 
