@@ -117,7 +117,8 @@ template <typename T, typename LabelT> inline T *PQFlashIndex<T, LabelT>::offset
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve)
+void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve, uint64_t max_degree,
+                                                uint64_t max_filters_per_query)
 {
     diskann::cout << "Setting up thread-specific contexts for nthreads: " << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
@@ -126,7 +127,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
     {
 #pragma omp critical
         {
-            SSDThreadData<T> *data = new SSDThreadData<T>(this->_aligned_dim, visited_reserve);
+            SSDThreadData<T> *data = new SSDThreadData<T>(this->_aligned_dim, visited_reserve, max_degree, max_filters_per_query);
             this->reader->register_thread();
             data->ctx = this->reader->get_ctx();
             this->_thread_data.push(data);
@@ -1309,7 +1310,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  const bool use_filter, const LabelT &filter_label,
                                                  const bool use_reorder_data, QueryStats *stats)
 {
-    std::vector<LabelT> filters(1);
+    std::vector<LabelT> filters;
     filters.push_back(filter_label);
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filters,
                        std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);

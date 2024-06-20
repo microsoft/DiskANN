@@ -30,5 +30,9 @@ const uint32_t MAX_DEGREE = 64;
 const uint32_t BUILD_LIST_SIZE = 100;
 const uint32_t SATURATE_GRAPH = false;
 const uint32_t SEARCH_LIST_SIZE = 100;
+
+const size_t VISITED_RESERVE = 4096;
+const size_t MAX_FILTERS_PER_QUERY = 4096;
+
 } // namespace defaults
 } // namespace diskann

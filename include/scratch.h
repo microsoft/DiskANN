@@ -150,7 +150,7 @@ template <typename T> class SSDQueryScratch : public AbstractScratch<T>
     NeighborPriorityQueue retset;
     std::vector<Neighbor> full_retset;
 
-    SSDQueryScratch(size_t aligned_dim, size_t visited_reserve);
+    SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, size_t max_degree, size_t max_filters_per_query);
     ~SSDQueryScratch();
 
     void reset();
@@ -162,7 +162,7 @@ template <typename T> class SSDThreadData
     SSDQueryScratch<T> scratch;
     IOContext ctx;
 
-    SSDThreadData(size_t aligned_dim, size_t visited_reserve);
+    SSDThreadData(size_t aligned_dim, size_t visited_reserve, size_t max_degree, size_t max_filters_per_query);
     void clear();
 };
 

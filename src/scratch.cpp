@@ -93,12 +93,14 @@ template <typename T> void SSDQueryScratch<T>::reset()
     full_retset.clear();
 }
 
-template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve)
+template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, size_t max_degree, size_t max_filters_per_query)
 {
     size_t coord_alloc_size = ROUND_UP(sizeof(T) * aligned_dim, 256);
+    size_t sector_scratch_size =
+        std::max(max_degree, std::max(max_filters_per_query, (size_t)defaults::MAX_N_SECTOR_READS));
 
     diskann::alloc_aligned((void **)&coord_scratch, coord_alloc_size, 256);
-    diskann::alloc_aligned((void **)&sector_scratch, defaults::MAX_N_SECTOR_READS * defaults::SECTOR_LEN,
+    diskann::alloc_aligned((void **)&sector_scratch, sector_scratch_size * defaults::SECTOR_LEN,
                            defaults::SECTOR_LEN);
     diskann::alloc_aligned((void **)&this->_aligned_query_T, aligned_dim * sizeof(T), 8 * sizeof(T));
 
@@ -121,7 +123,9 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
 }
 
 template <typename T>
-SSDThreadData<T>::SSDThreadData(size_t aligned_dim, size_t visited_reserve) : scratch(aligned_dim, visited_reserve)
+SSDThreadData<T>::SSDThreadData(size_t aligned_dim, size_t visited_reserve, size_t max_degree,
+                                size_t max_filters_per_query)
+    : scratch(aligned_dim, visited_reserve, max_degree, max_filters_per_query)
 {
 }
 
