@@ -65,7 +65,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 
     virtual location_t load_impl(const std::string &filename, size_t offset);
 #ifdef EXEC_ENV_OLS
-    //virtual location_t load_impl(AlignedFileReader &reader, size_t offset);
+    virtual location_t load_impl(AlignedFileReader &reader, size_t offset);
 #endif
 
   private:
