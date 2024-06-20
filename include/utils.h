@@ -31,7 +31,9 @@ typedef int FileHandle;
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
-#include "memory_mapper.h"
+//#include "memory_mapper.h"
+//This file is supplied by DLVS team.
+#include "memory_mapped_files.h"
 #endif
 
 // taken from

@@ -25,7 +25,9 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     virtual ~InMemDataStore();
 
     virtual location_t load(const std::string &filename, size_t offset = 0) override;
-    //virtual location_t load(AlignedFileReader &reader, size_t offset = 0) override;
+#ifdef EXEC_ENV_OLS
+    virtual location_t load(AlignedFileReader &reader, size_t offset = 0) override;
+#endif
     virtual size_t save(const std::string &filename, const location_t num_pts) override;
     virtual size_t save(std::ofstream &writer, const location_t num_pts, size_t offset) override;
 

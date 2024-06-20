@@ -24,7 +24,9 @@ template <typename data_t> class AbstractDataStore
 
     // Return number of points returned
     virtual location_t load(const std::string &filename, size_t offset) = 0;
-    //virtual location_t load(AlignedFileReader &reader, size_t offset) = 0;
+#ifdef EXEC_ENV_OLS
+    virtual location_t load(AlignedFileReader &reader, size_t offset) = 0;
+#endif
 
     // Why does store take num_pts? Since store only has capacity, but we allow
     // resizing we can end up in a situation where the store has spare capacity.
