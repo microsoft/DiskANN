@@ -164,7 +164,7 @@ struct DiskANNIndex {
     std::vector<_u64>    u64_ids(knn * num_queries);
     diskann::QueryStats *stats = new diskann::QueryStats[num_queries];
 
-#pragma omp parallel for schedule(dynamic, 1)
+#pragma omp parallel for schedule(static, 100)
     for (_u64 i = 0; i < num_queries; i++) {
       pq_flash_index->cached_beam_search(
           queries.data(i), knn, l_search, u64_ids.data() + i * knn,
