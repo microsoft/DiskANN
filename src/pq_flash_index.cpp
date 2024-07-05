@@ -876,6 +876,8 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_labels
 #ifndef EXEC_ENV_OLS
         infile.close();
 #endif
+        diskann::cout << "Labels file: " << labels_file << " loaded with " << num_pts_in_label_file << " points"
+                      << std::endl;
 
 #ifdef EXEC_ENV_OLS
         FileContent &content_labels_map = files.getContent(labels_map_file);
@@ -888,6 +890,8 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_labels
 #ifndef EXEC_ENV_OLS
         map_reader.close();
 #endif
+
+        diskann::cout << "Labels map file: " << labels_map_file << " loaded." << std::endl;
 
 #ifdef EXEC_ENV_OLS
         if (files.fileExists(labels_to_medoids))
@@ -902,7 +906,16 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_labels
             assert(medoid_stream.is_open());
 #endif
             load_label_medoid_map(labels_to_medoids, medoid_stream);
+            diskann::cout << "Loaded labels_to_medoids map from: " << labels_to_medoids << std::endl;
         }
+        else
+        {
+            std::stringstream ss;
+            ss << "Filter support is enabled but " << labels_to_medoids << " file cannot be opened." << std::endl;
+            diskann::cerr << ss.str();
+            throw diskann::ANNException(ss.str(), -1);
+        }
+
         std::string univ_label_file = std ::string(_disk_index_file) + "_universal_label.txt";
 
 #ifdef EXEC_ENV_OLS
@@ -944,6 +957,13 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_labels
 #endif
             diskann::cout << "Loaded dummy map" << std::endl;
         }
+        else
+        {
+            std::stringstream ss;
+            ss << "Note: Filter support is enabled but " << dummy_map_file << " file cannot be opened" << std::endl;
+            diskann::cerr << ss.str();
+        }
+
     }
     else
     {

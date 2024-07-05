@@ -103,13 +103,21 @@ int main(int argc, char **argv)
 
     bool use_filters = (label_file != "") ? true : false;
     diskann::Metric metric;
-    if (dist_fn == std::string("l2"))
+    if (dist_fn == std::string("l2")) 
+    {
         metric = diskann::Metric::L2;
+    }
     else if (dist_fn == std::string("mips"))
+    {
         metric = diskann::Metric::INNER_PRODUCT;
+    }
+    else if (dist_fn == std::string("cosine"))
+    {
+        metric = diskann::Metric::COSINE;
+    }
     else
     {
-        std::cout << "Error. Only l2 and mips distance functions are supported" << std::endl;
+        std::cout << "Error. Only l2, cosine, and mips distance functions are supported" << std::endl;
         return -1;
     }
 

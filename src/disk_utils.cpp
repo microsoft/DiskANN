@@ -1239,7 +1239,9 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
         if (filter_threshold != 0)
         {
-            dummy_remap_file = index_prefix_path + "_dummy_remap.txt";
+            //Changing this filename to "_disk.index_dummy_map.txt" from "_dummy_map.txt" to conform 
+            //to the convention that index files all  share the _disk.index prefix.
+            dummy_remap_file = index_prefix_path + "_disk.index_dummy_map.txt";
             breakup_dense_points<T>(data_file_to_use, labels_file_to_use, filter_threshold, augmented_data_file,
                                     augmented_labels_file,
                                     dummy_remap_file); // RKNOTE: This has large memory footprint,
