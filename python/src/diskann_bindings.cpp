@@ -160,15 +160,22 @@ struct DiskANNIndex {
       const _u64 l_search, const _u64 beam_width, const int num_threads) {
     py::array_t<unsigned> ids({num_queries, knn});
     py::array_t<float>    dists({num_queries, knn});
-    auto start = std::chrono::high_resolution_clock::now();
+    // auto start = std::chrono::high_resolution_clock::now();
     std::vector<_u64>    u64_ids(knn * num_queries);
     diskann::QueryStats *stats = new diskann::QueryStats[num_queries];
 
 #pragma omp parallel for schedule(static, 100)
     for (_u64 i = 0; i < num_queries; i++) {
+      auto start = std::chrono::high_resolution_clock::now();
       pq_flash_index->cached_beam_search(
           queries.data(i), knn, l_search, u64_ids.data() + i * knn,
           dists.mutable_data(i), beam_width, stats + i);
+      auto stop = std::chrono::high_resolution_clock::now();
+
+      auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+
+      std::cout << "Time taken by function: "
+          << duration.count() << " microseconds" << std::endl;
     }
 
     auto r = ids.mutable_unchecked();
@@ -190,12 +197,6 @@ struct DiskANNIndex {
         stats, num_queries,
         [](const diskann::QueryStats &stats) { return stats.n_cmps; });
     delete[] stats;
-    auto stop = std::chrono::high_resolution_clock::now();
-
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
-
-    std::cout << "Time taken by function: "
-         << duration.count() << " microseconds" << std::endl;
 
     return std::make_pair(std::make_pair(ids, dists), collective_stats);
   }
