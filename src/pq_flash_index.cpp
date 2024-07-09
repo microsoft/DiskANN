@@ -121,7 +121,7 @@ template <typename T, typename LabelT> inline T *PQFlashIndex<T, LabelT>::offset
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve)
+void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve, uint64_t max_filters_per_query)
 {
     diskann::cout << "Setting up thread-specific contexts for nthreads: " << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
@@ -130,7 +130,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
     {
 #pragma omp critical
         {
-            SSDThreadData<T> *data = new SSDThreadData<T>(this->_aligned_dim, visited_reserve);
+            SSDThreadData<T> *data = new SSDThreadData<T>(this->_aligned_dim, visited_reserve, max_filters_per_query);
             this->reader->register_thread();
             data->ctx = this->reader->get_ctx();
             this->_thread_data.push(data);
@@ -588,7 +588,8 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
         return _universal_filter_label;
     }
     std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
+    stream << "Unable to find label " << filter_label
+           << " in the Label Map ";
     diskann::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 }
@@ -664,8 +665,6 @@ inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, LabelT l
 template <typename T, typename LabelT>
 bool PQFlashIndex<T, LabelT>::point_has_any_label(uint32_t point_id, const std::vector<LabelT> &label_ids)
 {
-    uint32_t start_vec = _pts_to_label_offsets[point_id];
-    uint32_t num_lbls = _pts_to_label_counts[start_vec];
     bool ret_val = false;
     for (auto &cur_lbl : label_ids)
     {
@@ -940,10 +939,10 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_labels
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
-int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix)
+int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix, uint32_t max_filters_per_query)
 {
 #else
-template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix)
+template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix, uint32_t max_filters_per_query)
 {
 #endif
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
@@ -951,10 +950,10 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
     std::string _disk_index_file = std::string(index_prefix) + "_disk.index";
 #ifdef EXEC_ENV_OLS
     return load_from_separate_paths(files, num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
-                                    pq_compressed_vectors.c_str());
+                                    pq_compressed_vectors.c_str(), max_filters_per_query);
 #else
     return load_from_separate_paths(num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
-                                    pq_compressed_vectors.c_str());
+                                    pq_compressed_vectors.c_str(), max_filters_per_query);
 #endif
 }
 
@@ -962,12 +961,13 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
 template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load_from_separate_paths(diskann::MemoryMappedFiles &files, uint32_t num_threads,
                                                       const char *index_filepath, const char *pivots_filepath,
-                                                      const char *compressed_filepath)
+                                                      const char *compressed_filepath, uint32_t max_filters_per_query)
 {
 #else
 template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
-                                                      const char *pivots_filepath, const char *compressed_filepath)
+                                                      const char *pivots_filepath, const char *compressed_filepath,
+                                                      uint32_t max_filters_per_query)
 {
 #endif
     std::string pq_table_bin = pivots_filepath;
@@ -1057,7 +1057,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     // bytes are needed to store the header and read in that many using our
     // 'standard' aligned file reader approach.
     reader->open(_disk_index_file);
-    this->setup_thread_data(num_threads);
+    this->setup_thread_data(num_threads, DEFAULT_VISITED_RESERVE_SIZE, max_filters_per_query);
     this->_max_nthreads = num_threads;
 
     char *bytes = getHeaderBytes();
@@ -1293,7 +1293,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  const bool use_filter, const LabelT &filter_label,
                                                  const bool use_reorder_data, QueryStats *stats)
 {
-    std::vector<LabelT> filters(1);
+    std::vector<LabelT> filters;
     filters.push_back(filter_label);
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filters,
                        std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
@@ -1479,8 +1479,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     const std::vector<LabelT>& label_ids = filter_labels; //avoid renaming. 
     std::vector<LabelT> lbl_vec;
 
-    retset.sort();
-
     while (retset.has_unexpanded_node() && num_ios < max_ios_for_query)
     {
         // clear iteration state
@@ -1494,8 +1492,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
 
         for (const auto &lbl : label_ids)
-        { // assuming that number of OR labels is
-          // less than max frontier size allowed
+        { 
             uint32_t lbl_marker = 0;
             while (lbl_marker < cur_list_size)
             {
@@ -1606,24 +1603,12 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     cur_expanded_dist = _disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
                         query_float, (uint8_t *)node_fp_coords_copy);
             }
-            if (use_filters)
+            location_t real_id = cached_nhood.first;
+            if (full_retset_ids.find(real_id) == full_retset_ids.end())
             {
-                location_t real_id = cached_nhood.first;
-                if (_dummy_pts.find(real_id) != _dummy_pts.end())
-                {
-                    real_id = _dummy_to_real_map[real_id];
-                }
-                if (full_retset_ids.find(real_id) == full_retset_ids.end())
-                {
-                    full_retset.push_back(Neighbor((uint32_t)real_id, cur_expanded_dist));
-                    full_retset_ids.insert(real_id);
-                }
+                full_retset.push_back(Neighbor((uint32_t)real_id, cur_expanded_dist));
+                full_retset_ids.insert(real_id);
             }
-            else
-            {
-                full_retset.push_back(Neighbor((unsigned)cached_nhood.first, cur_expanded_dist));
-            }
-
 
             uint64_t nnbrs = cached_nhood.second.first;
             uint32_t *node_nbrs = cached_nhood.second.second;
@@ -1688,23 +1673,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 else
                     cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
             }
-            if (use_filters)
+            location_t real_id = frontier_nhood.first;
+            if (full_retset_ids.find(real_id) == full_retset_ids.end())
             {
-                location_t real_id = frontier_nhood.first;
-                if (_dummy_pts.find(real_id) != _dummy_pts.end())
-                {
-                    real_id = _dummy_to_real_map[real_id];
-                }
-
-                if (full_retset_ids.find(real_id) == full_retset_ids.end())
-                {
-                    full_retset.push_back(Neighbor(real_id, cur_expanded_dist));
-                    full_retset_ids.insert(real_id);
-                }
-            }
-            else
-            {
-                full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
+                full_retset.push_back(Neighbor(real_id, cur_expanded_dist));
+                full_retset_ids.insert(real_id);
             }
             
             uint32_t *node_nbrs = (node_buf + 1);

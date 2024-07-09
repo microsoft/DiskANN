@@ -57,7 +57,7 @@ typedef int FileHandle;
 
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 60
-#define MULTIPLE_LABEL_SEPARATOR "|"
+#define FILTER_OR_SEPARATOR "|"
 
 inline bool file_exists_impl(const std::string &name, bool dirCheck = false)
 {
