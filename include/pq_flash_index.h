@@ -18,6 +18,11 @@
 #include "tsl/robin_set.h"
 
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
+#define DEFAULT_VISITED_RESERVE_SIZE 4096
+//default max filters per query is set to the same 
+//as what we expect Bing to provide. If this is overkill,
+//it can be set by clients in the load() function
+#define DEFAULT_MAX_FILTERS_PER_QUERY 4096
 
 namespace diskann
 {
@@ -30,24 +35,28 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT ~PQFlashIndex();
 
 #ifdef EXEC_ENV_OLS
-    DISKANN_DLLEXPORT int load(diskann::MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix);
+    DISKANN_DLLEXPORT int load(diskann::MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix,
+                               uint32_t max_filters_per_query = DEFAULT_MAX_FILTERS_PER_QUERY);
 #else
     // load compressed data, and obtains the handle to the disk-resident index
-    DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *index_prefix);
+    DISKANN_DLLEXPORT int load(uint32_t num_threads, const char *index_prefix,
+                               uint32_t max_filters_per_query = DEFAULT_MAX_FILTERS_PER_QUERY);
 #endif
 
-    DISKANN_DLLEXPORT void load_labels(const std::string& disk_index_filepath);
-    DISKANN_DLLEXPORT void load_label_medoid_map(
-        const std::string &labels_to_medoids_filepath, std::istream &medoid_stream);
-    DISKANN_DLLEXPORT void load_dummy_map(const std::string& dummy_map_filepath, std::istream &dummy_map_stream);
+    DISKANN_DLLEXPORT void load_labels(const std::string &disk_index_filepath);
+    DISKANN_DLLEXPORT void load_label_medoid_map(const std::string &labels_to_medoids_filepath,
+                                                 std::istream &medoid_stream);
+    DISKANN_DLLEXPORT void load_dummy_map(const std::string &dummy_map_filepath, std::istream &dummy_map_stream);
 
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT int load_from_separate_paths(diskann::MemoryMappedFiles &files, uint32_t num_threads,
                                                    const char *index_filepath, const char *pivots_filepath,
-                                                   const char *compressed_filepath);
+                                                   const char *compressed_filepath,
+                                                   uint32_t max_filters_per_query);
 #else
     DISKANN_DLLEXPORT int load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
-                                                   const char *pivots_filepath, const char *compressed_filepath);
+                                                   const char *pivots_filepath, const char *compressed_filepath,
+                                                   uint32_t max_filters_per_query);
 #endif
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
@@ -116,7 +125,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
   protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
-    DISKANN_DLLEXPORT void setup_thread_data(uint64_t nthreads, uint64_t visited_reserve = 4096);
+    DISKANN_DLLEXPORT void setup_thread_data(uint64_t nthreads, uint64_t visited_reserve = DEFAULT_VISITED_RESERVE_SIZE,
+                                             uint64_t max_filters_per_query = DEFAULT_MAX_FILTERS_PER_QUERY);
 
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
@@ -189,7 +199,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // chunk_size = chunk size of each dimension chunk
     // pq_tables = float* [[2^8 * [chunk_size]] * _n_chunks]
     uint8_t *data = nullptr;
-    uint64_t _n_chunks;
+    uint64_t _n_chunks = 0;
     FixedChunkPQTable _pq_table;
 
     // distance comparator
@@ -207,7 +217,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // we can optionally have multiple starting points
     uint32_t *_medoids = nullptr;
     // defaults to 1
-    size_t _num_medoids;
+    size_t _num_medoids = 1;
     // by default, it is empty. If there are multiple
     // centroids, we pick the medoid corresponding to the
     // closest centroid as the starting point of search

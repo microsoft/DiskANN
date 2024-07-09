@@ -29,8 +29,100 @@
 #endif
 
 #define WARMUP false
+#define DISKANN_DEBUG_INDIVIDUAL_RESULTS
 
 namespace po = boost::program_options;
+
+#ifdef DISKANN_DEBUG_INDIVIDUAL_RESULTS
+void dump_individual_results(uint64_t test_id, uint64_t query_num, uint32_t *gt_ids, float *gt_dists, uint64_t gt_dim,
+                             const std::vector<uint32_t> &query_result_ids,
+                             const std::vector<float> &query_result_dists, uint64_t recall_at,
+                             const std::string &result_output_prefix)
+{
+    uint32_t cumulative_dist_matches = 0;
+    uint32_t cumulative_id_matches = 0;
+    std::stringstream results_stream;
+    std::stringstream per_query_stats_stream;
+
+    per_query_stats_stream << "query_id\tid_matches\tdist_matches\ttotal_matches\trecall" << std::endl;
+    for (int qid = 0; qid < query_num; qid++)
+    {
+        results_stream << qid << "\t";
+        uint32_t per_query_dist_matches = 0;
+        uint32_t per_query_id_matches = 0;
+
+        for (uint64_t i = 0; i < recall_at; i++)
+        {
+            auto rindex = qid * recall_at + i;
+            results_stream << "(" << query_result_ids[rindex] << "," << query_result_dists[rindex] << ",";
+
+            bool id_match = false;
+            bool dist_match = false;
+            for (uint64_t j = 0; j < recall_at; j++)
+            {
+                auto gindex = qid * gt_dim + j;
+                if (query_result_ids[rindex] == gt_ids[gindex])
+                {
+                    per_query_id_matches++;
+                    id_match = true;
+                    break;
+                }
+                else if (query_result_dists[rindex] / gt_dists[gindex] <= 1.0f)
+                {
+                    per_query_dist_matches++;
+                    dist_match = true;
+                    break;
+                }
+            }
+            std::string code = "X";
+            if (id_match)
+            {
+                code = "I";
+            }
+            else if (dist_match)
+            {
+                code = "D";
+            }
+            results_stream << code << "),";
+        }
+
+        results_stream << std::endl;
+
+        cumulative_id_matches += per_query_id_matches;
+        cumulative_dist_matches += per_query_dist_matches;
+        per_query_stats_stream << qid << "\t" << per_query_id_matches << "\t" << per_query_dist_matches << "\t"
+                               << per_query_id_matches + per_query_dist_matches << "\t"
+                               << (per_query_id_matches + per_query_dist_matches) * 1.0f / recall_at << std::endl;
+    }
+    {
+
+        std::string results_file = result_output_prefix + "_L" + std::to_string(test_id) + "_results.tsv";
+        std::ofstream out(results_file);
+        out << results_stream.str() << std::endl;
+    }
+    {
+        std::string per_query_stats_file = result_output_prefix + "_L" + std::to_string(test_id) + "_query_stats.tsv";
+        std::ofstream out(per_query_stats_file);
+        out << per_query_stats_stream.str() << std::endl;
+    }
+}
+
+void write_gt_to_tsv(const std::string &cur_result_path, uint64_t query_num, uint32_t *gt_ids, float *gt_dists,
+                     uint64_t gt_dim)
+{
+    std::ofstream gt_out(cur_result_path + "_gt.tsv");
+    for (int i = 0; i < query_num; i++)
+    {
+        gt_out << i << "\t";
+        for (int j = 0; j < gt_dim; j++)
+        {
+            gt_out << "(" << gt_ids[i * gt_dim + j] << "," << gt_dists[i * gt_dim + j] << "),";
+        }
+        gt_out << std::endl;
+    }
+}
+#endif
+
 
 void print_stats(std::string category, std::vector<float> percentiles, std::vector<float> results)
 {
@@ -54,7 +146,7 @@ void parse_labels_of_query(const std::string &filters_for_query,
                                       std::vector<LabelT> &label_ids_for_query)
 {
     std::vector<std::string> label_strs_for_query;
-    diskann::split_string(filters_for_query, MULTIPLE_LABEL_SEPARATOR, label_strs_for_query);
+    diskann::split_string(filters_for_query, FILTER_OR_SEPARATOR, label_strs_for_query);
     for (auto &label_str_for_query : label_strs_for_query)
     {
         label_ids_for_query.push_back(pFlashIndex->get_converted_label(label_str_for_query));
@@ -70,7 +162,7 @@ void populate_label_ids(const std::vector<std::string> &filters_of_queries,
     {
         std::vector<LabelT> label_ids_of_query;
         parse_labels_of_query(filters_of_queries[0], pFlashIndex, label_ids_of_query);
-        for (auto i = 0; i < query_count; i++)
+        for (uint32_t i = 0; i < query_count; i++)
         {
             label_ids_of_queries.push_back(label_ids_of_query);
         }
@@ -318,6 +410,10 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                                                query_result_ids[test_id].data(), recall_at, recall_at);
             best_recall = std::max(recall, best_recall);
         }
+#ifdef DISKANN_DEBUG_INDIVIDUAL_RESULTS
+        dump_individual_results(test_id, query_num, gt_ids, gt_dists, gt_dim, query_result_ids[test_id],
+                                query_result_dists[test_id], recall_at, result_output_prefix);
+#endif
 
         diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth << std::setw(16) << qps
                       << std::setw(16) << mean_latency << std::setw(16) << latency_999 << std::setw(16) << mean_ios
@@ -327,31 +423,14 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             diskann::cout << std::setw(16) << recall << std::endl ; 
         }
         else
+        {
             diskann::cout << std::endl;
-
-        //std::stringstream rslts_string; 
-        //for (auto x = 0; x < query_num; x++)
-        //{
-        //    rslts_string << "-----------------------------------------" << std::endl;
-        //    rslts_string << "Query: " << x << std::endl;
-        //    rslts_string << "GT: {";
-        //    for (auto rx = 0; rx < recall_at; rx++)
-        //    {
-        //        rslts_string << "(" << gt_ids[x* gt_dim + rx] << "," << gt_dists[x * gt_dim + rx] << "), ";
-        //    }
-        //    rslts_string << "}" << std::endl;
-        //    rslts_string << "Results: {";
-        //    for (auto rx = 0; rx < recall_at; rx++)
-        //    {
-        //        rslts_string << "(" << query_result_ids[test_id][x * recall_at + rx] << ","
-        //                   << query_result_dists[test_id][x * recall_at + rx] << "), ";
-        //    }
-        //    rslts_string << "}" << std::endl;
-        //    rslts_string << "-----------------------------------------" << std::endl;
-        //}
-        //diskann::cout << rslts_string.str() << std::endl;
+        }
         delete[] stats;
     }
+#ifdef DISKANN_DEBUG_INDIVIDUAL_RESULTS
+    write_gt_to_tsv(result_output_prefix, query_num, gt_ids, gt_dists, gt_dim);
+#endif
 
     diskann::cout << "Done searching. Now saving results " << std::endl;
     uint64_t test_id = 0;
