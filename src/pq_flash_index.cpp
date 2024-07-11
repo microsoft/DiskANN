@@ -132,6 +132,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
             this->_thread_data.push(data);
         }
     }
+    this->_thread_data.push_notify_all();
     _load_flag = true;
 }
 
@@ -501,10 +502,6 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
     alloc_aligned(((void **)&_centroid_data), _num_medoids * _aligned_dim * sizeof(float), 32);
     std::memset(_centroid_data, 0, _num_medoids * _aligned_dim * sizeof(float));
 
-    // borrow ctx
-    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-    auto data = manager.scratch_space();
-    IOContext &ctx = data->ctx;
     diskann::cout << "Loading centroid data from medoids vector data of " << _num_medoids << " medoid(s)" << std::endl;
 
     std::vector<uint32_t> nodes_to_read;
@@ -1432,6 +1429,9 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         }
         compute_dists(&best_medoid, 1, dist_scratch);
         retset.insert(Neighbor(best_medoid, dist_scratch[0]));
+#ifdef DISKANN_DEBUG_PRINT_RETSET
+        stats->query_retset.push_back(Neighbor(best_medoid, dist_scratch[0]));
+#endif
         visited.insert(best_medoid);
         cur_list_size = 1;
     } else {
@@ -1639,6 +1639,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     float dist = dist_scratch[m];
                     Neighbor nn(id, dist);
                     retset.insert(nn);
+#ifdef DISKANN_DEBUG_PRINT_RETSET
+                    stats->query_retset.push_back(nn);
+#endif
+
                 }
             }
         }
@@ -1713,6 +1717,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
                     Neighbor nn(id, dist);
                     retset.insert(nn);
+#ifdef DISKANN_DEBUG_PRINT_RETSET
+                    stats->query_retset.push_back(nn);
+#endif
+
                 }
             }
 
@@ -1725,6 +1733,18 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     }
     // re-sort by distance
     std::sort(full_retset.begin(), full_retset.end());
+
+#ifdef DISKANN_DEBUG_PRINT_RETSET
+    {
+        for (int i = 0; i < retset.size(); i++)
+        {
+            if (stats != nullptr)
+            {
+                stats->query_retset.push_back(retset[i]);
+            }
+        }
+    }
+#endif
 
     if (use_reorder_data)
     {

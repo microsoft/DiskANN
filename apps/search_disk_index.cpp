@@ -33,6 +33,31 @@
 
 namespace po = boost::program_options;
 
+#ifdef DISKANN_DEBUG_PRINT_RETSET 
+void dump_retset(uint64_t test_id, uint64_t query_num, diskann::QueryStats *stats, const std::string &result_output_prefix)
+{
+    std::stringstream ss;
+    if (stats != nullptr)
+    {
+        for (int i = 0; i < query_num; i++)
+        {
+            ss << i << "\t";
+            for (int j = 0; j < (stats + i)->query_retset.size(); j++)
+            {
+                ss << "(" << (stats + i)->query_retset[j].id << ", " << (stats + i)->query_retset[j].distance
+                   << "), ";
+            }
+            ss << std::endl;
+        }
+
+    }
+    std::string results_file = result_output_prefix + "_L" + std::to_string(test_id) + "_retset.tsv";
+    std::ofstream writer(results_file);
+    writer << ss.str() << std::endl;
+    writer.close();
+}
+#endif
+
 #ifdef DISKANN_DEBUG_INDIVIDUAL_RESULTS
 void dump_individual_results(uint64_t test_id, uint64_t query_num, uint32_t *gt_ids, float *gt_dists, uint64_t gt_dim,
                              const std::vector<uint32_t> &query_result_ids,
@@ -413,6 +438,9 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 #ifdef DISKANN_DEBUG_INDIVIDUAL_RESULTS
         dump_individual_results(test_id, query_num, gt_ids, gt_dists, gt_dim, query_result_ids[test_id],
                                 query_result_dists[test_id], recall_at, result_output_prefix);
+#endif
+#ifdef DISKANN_DEBUG_PRINT_RETSET
+        dump_retset(test_id, query_num, stats, result_output_prefix);
 #endif
 
         diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth << std::setw(16) << qps
