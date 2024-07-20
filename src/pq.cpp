@@ -8,6 +8,11 @@
 #include "math_utils.h"
 #include "tsl/robin_map.h"
 
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+#include "gperftools/malloc_extension.h"
+#endif
+
+
 // block size for reading/processing large files and matrices in blocks
 #define BLOCK_SIZE 5000000
 
