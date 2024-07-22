@@ -12,6 +12,8 @@ jobs:
     name: DiskANN Build Documentation
     uses: ./.github/workflows/build-python-pdoc.yml
   release:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     needs: python-release-wheels
     steps:

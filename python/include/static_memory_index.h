@@ -26,6 +26,10 @@ template <typename DT> class StaticMemoryIndex
     NeighborsAndDistances<StaticIdType> search(py::array_t<DT, py::array::c_style | py::array::forcecast> &query,
                                                uint64_t knn, uint64_t complexity);
 
+    NeighborsAndDistances<StaticIdType> search_with_filter(
+        py::array_t<DT, py::array::c_style | py::array::forcecast> &query, uint64_t knn, uint64_t complexity,
+        filterT filter);
+
     NeighborsAndDistances<StaticIdType> batch_search(
         py::array_t<DT, py::array::c_style | py::array::forcecast> &queries, uint64_t num_queries, uint64_t knn,
         uint64_t complexity, uint32_t num_threads);

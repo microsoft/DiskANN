@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include <memory>
+#include "abstract_scratch.h"
 #include "in_mem_data_store.h"
 
 #include "utils.h"
@@ -157,6 +158,7 @@ void InMemDataStore<data_t>::extract_data_to_bin(const std::string &filename, co
 
 template <typename data_t> void InMemDataStore<data_t>::get_vector(const location_t i, data_t *dest) const
 {
+    // REFACTOR TODO: Should we denormalize and return values?
     memcpy(dest, _data + i * _aligned_dim, this->_dim * sizeof(data_t));
 }
 
@@ -173,7 +175,24 @@ template <typename data_t> void InMemDataStore<data_t>::set_vector(const locatio
 
 template <typename data_t> void InMemDataStore<data_t>::prefetch_vector(const location_t loc)
 {
-    diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)loc, sizeof(data_t) * _aligned_dim);
+    diskann::prefetch_vector((const char *)_data + _aligned_dim * (size_t)loc * sizeof(data_t),
+                             sizeof(data_t) * _aligned_dim);
+}
+
+template <typename data_t>
+void InMemDataStore<data_t>::preprocess_query(const data_t *query, AbstractScratch<data_t> *query_scratch) const
+{
+    if (query_scratch != nullptr)
+    {
+        memcpy(query_scratch->aligned_query_T(), query, sizeof(data_t) * this->get_dims());
+    }
+    else
+    {
+        std::stringstream ss;
+        ss << "In InMemDataStore::preprocess_query: Query scratch is null";
+        diskann::cerr << ss.str() << std::endl;
+        throw diskann::ANNException(ss.str(), -1);
+    }
 }
 
 template <typename data_t> float InMemDataStore<data_t>::get_distance(const data_t *query, const location_t loc) const
@@ -183,7 +202,8 @@ template <typename data_t> float InMemDataStore<data_t>::get_distance(const data
 
 template <typename data_t>
 void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t *locations,
-                                          const uint32_t location_count, float *distances) const
+                                          const uint32_t location_count, float *distances,
+                                          AbstractScratch<data_t> *scratch_space) const
 {
     for (location_t i = 0; i < location_count; i++)
     {
@@ -196,6 +216,17 @@ float InMemDataStore<data_t>::get_distance(const location_t loc1, const location
 {
     return _distance_fn->compare(_data + loc1 * _aligned_dim, _data + loc2 * _aligned_dim,
                                  (uint32_t)this->_aligned_dim);
+}
+
+template <typename data_t>
+void InMemDataStore<data_t>::get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
+                                          std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const
+{
+    for (int i = 0; i < ids.size(); i++)
+    {
+        distances[i] =
+            _distance_fn->compare(preprocessed_query, _data + ids[i] * _aligned_dim, (uint32_t)this->_aligned_dim);
+    }
 }
 
 template <typename data_t> location_t InMemDataStore<data_t>::expand(const location_t new_size)
@@ -358,7 +389,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::calculate_medoid()
     return min_idx;
 }
 
-template <typename data_t> Distance<data_t> *InMemDataStore<data_t>::get_dist_fn()
+template <typename data_t> Distance<data_t> *InMemDataStore<data_t>::get_dist_fn() const
 {
     return this->_distance_fn.get();
 }

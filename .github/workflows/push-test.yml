@@ -7,6 +7,8 @@ jobs:
     name: DiskANN Common Build Checks
     uses: ./.github/workflows/common.yml
   build-documentation:
+    permissions:
+      contents: write
     strategy:
       fail-fast: true
     name: DiskANN Build Documentation

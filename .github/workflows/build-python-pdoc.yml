@@ -2,6 +2,8 @@ name: DiskANN Build PDoc Documentation
 on: [workflow_call]
 jobs:
   build-reference-documentation:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

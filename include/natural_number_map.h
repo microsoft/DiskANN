@@ -26,9 +26,6 @@ template <typename Key, typename Value> class natural_number_map
 {
   public:
     static_assert(std::is_trivial<Key>::value, "Key must be a trivial type");
-    // Some of the class member prototypes are done with this assumption to
-    // minimize verbosity since it's the only use case.
-    static_assert(std::is_trivial<Value>::value, "Value must be a trivial type");
 
     // Represents a reference to a element in the map. Used while iterating
     // over map entries.
