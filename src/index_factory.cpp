@@ -1,4 +1,5 @@
 #include "index_factory.h"
+#include "tag_uint128.h"
 #include "pq_l2_distance.h"
 
 namespace diskann
@@ -42,10 +43,10 @@ void IndexFactory::check_config()
     }
 
     if (_config->tag_type != "int32" && _config->tag_type != "uint32" && _config->tag_type != "int64" &&
-        _config->tag_type != "uint64")
+        _config->tag_type != "uint64" && _config->tag_type != "tag_uint128")
     {
         throw ANNException("ERROR: invalid data type : + " + _config->tag_type +
-                               " is not supported. please select from [int32, uint32, int64, uint64]",
+                               " is not supported. please select from [int32, uint32, int64, uint64, tag_uint128]",
                            -1);
     }
 }
@@ -127,7 +128,7 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
     {
         pq_data_store =
-            construct_pq_datastore<data_type>(_config->data_strategy, num_points + _config->num_frozen_pts, dim,
+            construct_pq_datastore<data_type>(_config->data_strategy, num_points, dim,
                                               _config->metric, _config->num_pq_chunks, _config->use_opq);
     }
     else
@@ -138,7 +139,7 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
         (size_t)(defaults::GRAPH_SLACK_FACTOR * 1.05 *
                  (_config->index_write_params == nullptr ? 0 : _config->index_write_params->max_degree));
     std::unique_ptr<AbstractGraphStore> graph_store =
-        construct_graphstore(_config->graph_strategy, num_points + _config->num_frozen_pts, max_reserve_degree);
+        construct_graphstore(_config->graph_strategy, num_points, max_reserve_degree);
 
     // REFACTOR TODO: Must construct in-memory PQDatastore if strategy == ONDISK and must construct
     // in-mem and on-disk PQDataStore if strategy == ONDISK and diskPQ is required.
@@ -183,6 +184,10 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &
     else if (tag_type == std::string("uint64"))
     {
         return create_instance<data_type, uint64_t>(label_type);
+    }
+    else if (tag_type == std::string("tag_uint128"))
+    {
+        return create_instance<data_type, tag_uint128>(label_type);
     }
     else
         throw ANNException("Error: unsupported tag_type please choose from [int32/uint32/int64/uint64]", -1);

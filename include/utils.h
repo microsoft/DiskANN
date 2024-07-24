@@ -1193,6 +1193,11 @@ template <> inline const char *diskann_type_to_name<int64_t>()
     return "int64";
 }
 
+template <> inline const char* diskann_type_to_name<diskann::tag_uint128>()
+{
+    return "tag_uint128";
+}
+
 #ifdef _WINDOWS
 #include <intrin.h>
 #include <Psapi.h>
