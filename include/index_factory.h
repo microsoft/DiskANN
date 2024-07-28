@@ -1,3 +1,5 @@
+#pragma once
+
 #include "index.h"
 #include "abstract_graph_store.h"
 #include "in_mem_graph_store.h"
