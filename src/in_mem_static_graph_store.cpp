@@ -173,6 +173,11 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphStore::load_impl(const st
             std::cout << "." << std::flush;
 
         ++nodes_read;
+
+        if (k > _max_range_of_graph)
+        {
+            _max_range_of_graph = k;
+        }
     }
 
     diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to " << start
