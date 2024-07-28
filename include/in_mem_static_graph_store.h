@@ -45,9 +45,10 @@ public:
         throw std::runtime_error("static memory graph only use for searching");
     }
 
-    virtual size_t resize_graph(const size_t /*new_size*/) override
+    virtual size_t resize_graph(const size_t new_size) override
     {
-        throw std::runtime_error("static memory graph only use for searching");
+        // not action taken, the graph is initialized in loading
+        return new_size;
     }
 
     virtual void clear_graph() override
