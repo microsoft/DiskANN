@@ -948,7 +948,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         if (_dynamic_index)
         {
             LockGuard guard(_locks[n]);
-            for (auto id : _graph_store->get_neighbours(n))
+            auto neighbour_list = _graph_store->get_neighbours(n);
+            for (auto id : neighbour_list)
             {
                 assert(id < _max_points + _num_frozen_pts);
 
@@ -976,7 +977,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             tmp_neighbor_list.clear();
             _locks[n].lock_shared();
-            auto& nbrs = _graph_store->get_neighbours(n);
+            auto nbrs = _graph_store->get_neighbours(n);
             tmp_neighbor_list.resize(nbrs.size());
             memcpy(tmp_neighbor_list.data(), nbrs.data(), nbrs.size() * sizeof(location_t));
             _locks[n].unlock_shared();
@@ -1272,7 +1273,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
             copy_of_neighbors.clear();
         //    LockGuard guard(_locks[des]);
             _locks[des].lock_shared();
-            auto &des_pool = _graph_store->get_neighbours(des);
+            auto des_pool = _graph_store->get_neighbours(des);
             copy_of_neighbors.reserve(des_pool.size() + 1);
             for (auto& des_n : des_pool)
             {
@@ -1416,7 +1417,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             std::vector<Neighbor> dummy_pool(0);
             std::vector<uint32_t> new_out_neighbors;
 
-            for (auto cur_nbr : _graph_store->get_neighbours((location_t)node))
+            auto neighbour_list = _graph_store->get_neighbours((location_t)node);
+            for (auto cur_nbr : neighbour_list)
             {
                 if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != node)
                 {
@@ -1461,7 +1463,8 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
                 ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
                 auto scratch = manager.scratch_space();
 
-                for (auto cur_nbr : _graph_store->get_neighbours((location_t)node))
+                auto neighbour_list = _graph_store->get_neighbours((location_t)node);
+                for (auto cur_nbr : neighbour_list)
                 {
                     if (dummy_visited.find(cur_nbr) == dummy_visited.end() && cur_nbr != node)
                     {
@@ -1484,7 +1487,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
     {
         if (i < _nd || i >= _max_points)
         {
-            const std::vector<uint32_t> &pool = _graph_store->get_neighbours((location_t)i);
+            const auto pool = _graph_store->get_neighbours((location_t)i);
             max = (std::max)(max, pool.size());
             min = (std::min)(min, pool.size());
             total += pool.size();
@@ -1614,7 +1617,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
     size_t max = 0, min = SIZE_MAX, total = 0, cnt = 0;
     for (size_t i = 0; i < _nd; i++)
     {
-        auto &pool = _graph_store->get_neighbours((location_t)i);
+        auto pool = _graph_store->get_neighbours((location_t)i);
         max = std::max(max, pool.size());
         min = std::min(min, pool.size());
         total += pool.size();
@@ -2536,7 +2539,8 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
         std::unique_lock<non_recursive_mutex> adj_list_lock;
         if (_conc_consolidate)
             adj_list_lock = std::unique_lock<non_recursive_mutex>(_locks[loc]);
-        adj_list = _graph_store->get_neighbours((location_t)loc);
+        auto adj_neighbor_list = _graph_store->get_neighbours((location_t)loc);
+        adj_neighbor_list.convert_to_vector(adj_list);
     }
 
     bool modify = false;
@@ -2553,7 +2557,8 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
             std::unique_lock<non_recursive_mutex> ngh_lock;
             if (_conc_consolidate)
                 ngh_lock = std::unique_lock<non_recursive_mutex>(_locks[ngh]);
-            for (auto j : _graph_store->get_neighbours((location_t)ngh))
+            auto neighbour_list = _graph_store->get_neighbours((location_t)ngh);
+            for (auto j : neighbour_list)
                 if (j != loc && old_delete_set.find(j) == old_delete_set.end())
                     expanded_nodes_set.insert(j);
         }
@@ -2768,8 +2773,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         if ((new_location[old] < _max_points) // If point continues to exist
             || (old >= _max_points && old < _max_points + _num_frozen_pts))
         {
-            new_adj_list.reserve(_graph_store->get_neighbours((location_t)old).size());
-            for (auto ngh_iter : _graph_store->get_neighbours((location_t)old))
+            auto neighbour_list = _graph_store->get_neighbours((location_t)old);
+            new_adj_list.reserve(neighbour_list.size());
+            for (auto ngh_iter : neighbour_list)
             {
                 if (empty_locations.find(ngh_iter) != empty_locations.end())
                 {
@@ -2918,8 +2924,9 @@ void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint
     std::vector<location_t> updated_neighbours_location;
     for (uint32_t i = 0; i < _max_points + _num_frozen_pts; i++)
     {
-        auto &i_neighbours = _graph_store->get_neighbours((location_t)i);
-        std::vector<location_t> i_neighbours_copy(i_neighbours.begin(), i_neighbours.end());
+        auto i_neighbours = _graph_store->get_neighbours((location_t)i);
+        std::vector<location_t> i_neighbours_copy;
+        i_neighbours.convert_to_vector(i_neighbours_copy);
         for (auto &loc : i_neighbours_copy)
         {
             if (loc >= old_location_start && loc < old_location_start + num_locations)
@@ -3389,7 +3396,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             break;
         for (auto node : bfs_sets[l])
         {
-            for (auto nghbr : _graph_store->get_neighbours((location_t)node))
+            auto neighbour_list = _graph_store->get_neighbours((location_t)node);
+            for (auto nghbr : neighbour_list)
             {
                 if (!visited.test(nghbr))
                 {
@@ -3428,9 +3436,10 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         std::memcpy(cur_node_offset + sizeof(float), cur_vec, _data_len - sizeof(float));
 
         cur_node_offset += _data_len;
-        uint32_t k = (uint32_t)_graph_store->get_neighbours(i).size();
+        auto neighbour_list = _graph_store->get_neighbours(i);
+        uint32_t k = (uint32_t)neighbour_list.size();
         std::memcpy(cur_node_offset, &k, sizeof(uint32_t));
-        std::memcpy(cur_node_offset + sizeof(uint32_t), _graph_store->get_neighbours(i).data(), k * sizeof(uint32_t));
+        std::memcpy(cur_node_offset + sizeof(uint32_t), neighbour_list.data(), k * sizeof(uint32_t));
         // std::vector<uint32_t>().swap(_graph_store->get_neighbours(i));
         _graph_store->clear_neighbours(i);
     }

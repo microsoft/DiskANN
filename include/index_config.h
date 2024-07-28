@@ -10,7 +10,8 @@ enum class DataStoreStrategy
 
 enum class GraphStoreStrategy
 {
-    MEMORY
+    MEMORY,
+    STATICMEMORY
 };
 
 struct IndexConfig
@@ -228,7 +229,7 @@ class IndexConfigBuilder
 
   private:
     DataStoreStrategy _data_strategy;
-    GraphStoreStrategy _graph_strategy;
+    GraphStoreStrategy _graph_strategy = GraphStoreStrategy::MEMORY;
 
     Metric _metric;
     size_t _dimension;

@@ -6,6 +6,7 @@
 
 namespace diskann
 {
+
 InMemGraphStore::InMemGraphStore(const size_t total_pts, const size_t reserve_graph_degree)
     : AbstractGraphStore(total_pts, reserve_graph_degree)
 {
@@ -26,9 +27,10 @@ int InMemGraphStore::store(const std::string &index_path_prefix, const size_t nu
 {
     return save_graph(index_path_prefix, num_points, num_frozen_points, start);
 }
-const std::vector<location_t> &InMemGraphStore::get_neighbours(const location_t i) const
+const NeighborList InMemGraphStore::get_neighbours(const location_t i) const
 {
-    return _graph.at(i);
+    auto& neighbor_vector = _graph.at(i);
+    return NeighborList(neighbor_vector.data(), neighbor_vector.size());
 }
 
 void InMemGraphStore::add_neighbour(const location_t i, location_t neighbour_id)
