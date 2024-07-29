@@ -126,7 +126,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphStore::load_impl(const st
 
     // first round to calculate memory size needed.
     size_t cur_index = 0;
-    while (cur_index + sizeof(uint32_t) < graph_size)
+    while (cur_index + sizeof(uint32_t) <= graph_size)
     {
         uint32_t k;
         memcpy((char*)&k, buffer.data() + cur_index, sizeof(uint32_t));
@@ -150,7 +150,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphStore::load_impl(const st
     // second round to insert graph data
     nodes_read = 0;
     cur_index = 0;
-    while (cur_index + sizeof(uint32_t) < graph_size)
+    while (cur_index + sizeof(uint32_t) <= graph_size)
     {
         uint32_t k;
         memcpy((char*)&k, buffer.data() + cur_index, sizeof(uint32_t));
