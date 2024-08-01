@@ -201,7 +201,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             {
                 cmp_stats[i] = index
                                    ->search(query + i * query_aligned_dim, recall_at, L,
-                                            query_result_ids[test_id].data() + i * recall_at)
+                                            query_result_ids[test_id].data() + i * recall_at,
+                                            query_result_dists[test_id].data() + i * recall_at)
                                    .second;
             }
             auto qe = std::chrono::high_resolution_clock::now();
