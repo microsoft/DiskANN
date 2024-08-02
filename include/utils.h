@@ -57,6 +57,7 @@ typedef int FileHandle;
 
 #define PBSTR "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
 #define PBWIDTH 60
+#define FILTER_OR_SEPARATOR "|"
 
 inline bool file_exists_impl(const std::string &name, bool dirCheck = false)
 {
@@ -683,6 +684,9 @@ DISKANN_DLLEXPORT double calculate_range_search_recall(unsigned num_queries,
                                                        std::vector<std::vector<uint32_t>> &groundtruth,
                                                        std::vector<std::vector<uint32_t>> &our_results);
 
+DISKANN_DLLEXPORT void split_string(const std::string &string_to_split, const std::string &delimiter,
+                                    std::vector<std::string> &pieces);
+
 template <typename T>
 inline void load_bin(const std::string &bin_file, std::unique_ptr<T[]> &data, size_t &npts, size_t &dim,
                      size_t offset = 0)
@@ -1100,11 +1104,6 @@ inline std::vector<std::string> read_file_to_vector_of_strings(const std::string
             if (line.empty())
             {
                 break;
-            }
-            if (line.find(',') != std::string::npos)
-            {
-                std::cerr << "Every query must have exactly one filter" << std::endl;
-                exit(-1);
             }
             if (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
             {

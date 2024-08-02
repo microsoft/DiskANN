@@ -33,6 +33,10 @@ struct QueryStats
     unsigned n_cmps = 0;       // # cmps
     unsigned n_cache_hits = 0; // # cache_hits
     unsigned n_hops = 0;       // # search hops
+
+#ifdef DISKANN_DEBUG_PRINT_RETSET
+    std::vector<Neighbor> query_retset; //copy of the retset to debug PQ distances.
+#endif
 };
 
 template <typename T>
