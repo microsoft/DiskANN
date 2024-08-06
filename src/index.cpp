@@ -1601,6 +1601,10 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         }
     }
 
+#if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
+    MallocExtension::instance()->ReleaseFreeMemory();
+#endif
+
     if (_nd > 0)
     {
         diskann::cout << "Starting final cleanup.." << std::flush;
