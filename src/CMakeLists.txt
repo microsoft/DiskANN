@@ -6,7 +6,6 @@ set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
 if(MSVC)
     add_subdirectory(dll)
-    add_subdirectory(builddll)
 else()
     #file(GLOB CPP_SOURCES *.cpp)
     set(CPP_SOURCES abstract_data_store.cpp ann_exception.cpp disk_utils.cpp 
