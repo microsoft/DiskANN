@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 #include "ann_exception.h"
-#include <stdint.h>
 #include <sstream>
 #include <string>
 
