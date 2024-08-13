@@ -160,6 +160,7 @@ elseif(APPLE)
     find_library(ACCELERATE_LIBRARY Accelerate)
     message(STATUS "Found Accelerate (${ACCELERATE_LIBRARY})")
     set(DISKANN_ACCEL_LINK_OPTIONS ${ACCELERATE_LIBRARY})
+    add_compile_definitions(ACCELERATE_NEW_LAPACK)
 else()
     # expected path for manual intel mkl installs
     set(POSSIBLE_OMP_PATHS "/opt/intel/oneapi/compiler/latest/linux/compiler/lib/intel64_lin/libiomp5.so;/usr/lib/x86_64-linux-gnu/libiomp5.so;/opt/intel/lib/intel64_lin/libiomp5.so")
