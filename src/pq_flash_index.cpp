@@ -137,6 +137,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
             this->_thread_data.push(data);
         }
     }
+    this->_thread_data.push_notify_all();
     _load_flag = true;
 }
 
