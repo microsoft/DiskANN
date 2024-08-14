@@ -1700,7 +1700,9 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     }
 
     // copy k_search values
-    for (uint64_t i = 0; i < k_search; i++)
+    uint64_t ret_count = full_retset.size() > k_search
+        ? k_search : full_retset.size();
+    for (uint64_t i = 0; i < ret_count; i++)
     {
         indices[i] = full_retset[i].id;
         auto key = (uint32_t)indices[i];
