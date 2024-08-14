@@ -145,7 +145,9 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphStore::load_impl(const st
     // resize graph
     _node_index.resize(nodes_read + 1);
     _node_index[0] = 0;
-    _graph.resize(cc);
+    // add one more slot than actually need to avoid read invaild address
+    // while the last point is no neighbor
+    _graph.resize(cc + 1); 
 
     // second round to insert graph data
     nodes_read = 0;
