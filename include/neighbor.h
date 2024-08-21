@@ -93,6 +93,38 @@ class NeighborPriorityQueue
         }
     }
 
+
+    // Deletes the item if found.
+    void delete_id(const uint32_t &id)
+    {
+        size_t lo = 0, hi = _size;
+        size_t loc = std::numeric_limits<uint64_t>::max();
+        while (lo < hi)
+        {
+            size_t mid = (lo + hi) >> 1;
+            if (id < _data[mid].id)
+            {
+                hi = mid;
+            }
+            else if (_data[mid].id == id)
+            {
+                loc = mid;
+                break;
+            }
+            else
+            {
+                lo = mid + 1;
+            }
+        }
+
+        if (loc != std::numeric_limits<uint64_t>::max())
+        {
+            std::memmove(&_data[loc], &_data[loc+1], (_size - loc - 1) * sizeof(Neighbor));
+            _size--;
+        }
+    }
+
+
     Neighbor closest_unexpanded()
     {
         _data[_cur].expanded = true;
