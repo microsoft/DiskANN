@@ -791,11 +791,19 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
-    const std::vector<LabelT> &filter_labels, bool search_invocation)
+    const std::vector<LabelT> &filter_labels, bool search_invocation, uint32_t maxLperSeller)
 {
+    bool diverse_search = false;
+    if (maxLperSeller == 0)
+        maxLperSeller = Lsize;
+    else
+        diverse_search = true;
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
+
+    tsl::robin_map<uint32_t, NeighborPriorityQueue> color_to_nodes;
+
     tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
@@ -874,6 +882,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
+            if (diverse_search) {
+                auto &col = _location_to_seller[id];
+                if (color_to_nodes.find(col) == color_to_nodes.end())
+                    color_to_nodes[col] = NeighborPriorityQueue(maxLperSeller);
+                color_to_nodes[col].insert(nn);
+            }
         }
     }
 
@@ -969,7 +983,39 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
+            if (diverse_search) {
+                auto cur_id = id_scratch[n];
+                auto cur_dist = dist_scratch[m];
+            if (color_to_nodes.find(_location_to_seller[cur_id]) == color_to_nodes.end()) {
+                    color_to_nodes[_location_to_seller[cur_id]] = NeighborPriorityQueue(maxLperSeller);
+            }
+                auto &cur_list = color_to_nodes[_location_to_seller[cur_id]];
+                if (cur_list.size() < maxLperSeller && best_L_nodes.size() < Lsize) {
+                    cur_list.insert(Neighbor(cur_id, cur_dist));
+                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));
+                } else if (cur_list.size() == maxLperSeller && best_L_nodes.size() < Lsize) {
+                    if (cur_dist < cur_list[maxLperSeller-1].distance) {
+                     best_L_nodes.delete_id(cur_list[maxLperSeller-1].id);   
+                    cur_list.insert(Neighbor(cur_id, cur_dist));
+                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
+                    }
+                } else if (cur_list.size() < maxLperSeller && best_L_nodes.size() == Lsize) {
+                    if (cur_dist < best_L_nodes[Lsize-1].distance) {
+                     color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].delete_id(best_L_nodes[Lsize-1].id);
+                     cur_list.insert(Neighbor(cur_id, cur_dist));
+                     best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
+                    }
+                } else {
+                    if (cur_dist < cur_list[maxLperSeller-1].distance) {
+                     best_L_nodes.delete_id(cur_list[maxLperSeller-1].id);   
+                    cur_list.insert(Neighbor(cur_id, cur_dist));
+                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
+                    }
+                }
+            }
+            else {
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+            }
         }
     }
     return std::make_pair(hops, cmps);
@@ -1053,6 +1099,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     assert(_graph_store->get_total_points() == _max_points + _num_frozen_pts);
 }
 
+/*
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha,
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
@@ -1148,6 +1195,101 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
         cur_alpha *= 1.2f;
     }
 }
+*/
+
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha,
+                                          const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
+                                          InMemQueryScratch<T> *scratch,
+                                          const tsl::robin_set<uint32_t> *const delete_set_ptr)
+{
+    if (pool.size() == 0)
+        return;
+
+    // Truncate pool at maxc and initialize scratch spaces
+    assert(std::is_sorted(pool.begin(), pool.end()));
+    assert(result.size() == 0);
+    if (pool.size() > maxc)
+        pool.resize(maxc);
+    std::vector<float> &occlude_factor = scratch->occlude_factor();
+    // occlude_list can be called with the same scratch more than once by
+    // search_for_point_and_add_link through inter_insert.
+    occlude_factor.clear();
+    // Initialize occlude_factor to pool.size() many 0.0f values for correctness
+    occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
+    float  cur_alpha = alpha;
+    {
+        // used for MIPS, where we store a value of eps in cur_alpha to
+        // denote pruned out entries which we can skip in later rounds.
+        float eps = cur_alpha + 0.01f;
+        for (auto iter = pool.begin(); result.size() < degree && iter != pool.end(); ++iter)
+        {
+            if (occlude_factor[iter - pool.begin()] > cur_alpha)
+            {
+                continue;
+            }
+            // Set the entry to float::max so that is not considered again
+            occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
+            // Add the entry to the result if its not been deleted, and doesn't
+            // add a self loop
+            if (delete_set_ptr == nullptr || delete_set_ptr->find(iter->id) == delete_set_ptr->end())
+            {
+                if (iter->id != location)
+                {
+                    result.push_back(iter->id);
+                }
+            }
+
+            // Update occlude factor for points from iter+1 to pool.end()
+            for (auto iter2 = iter + 1; iter2 != pool.end(); iter2++)
+            {
+                auto t = iter2 - pool.begin();
+                if (occlude_factor[t] > alpha)
+                    continue;
+
+                bool prune_allowed = true;
+                if (_filtered_index)
+                {
+                    uint32_t a = iter->id;
+                    uint32_t b = iter2->id;
+                    if (_location_to_labels.size() < b || _location_to_labels.size() < a)
+                        continue;
+                    for (auto &x : _location_to_labels[b])
+                    {
+                        if (std::find(_location_to_labels[a].begin(), _location_to_labels[a].end(), x) ==
+                            _location_to_labels[a].end())
+                        {
+                            prune_allowed = false;
+                        }
+                        if (!prune_allowed)
+                            break;
+                    }
+                }
+                if (!prune_allowed)
+                    continue;
+
+                float djk = _data_store->get_distance(iter2->id, iter->id);
+                if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
+                {
+                    occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
+                                                   : std::max(occlude_factor[t], iter2->distance / djk);
+                }
+                else if (_dist_metric == diskann::Metric::INNER_PRODUCT)
+                {
+                    // Improvization for flipping max and min dist for MIPS
+                    float x = -iter2->distance;
+                    float y = -djk;
+                    if (y > cur_alpha * x)
+                    {
+                        occlude_factor[t] = std::max(occlude_factor[t], eps);
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool,
