@@ -101,6 +101,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _filterIndexingQueueSize = index_config.index_write_params->filter_list_size;
         _indexingThreads = index_config.index_write_params->num_threads;
         _saturate_graph = index_config.index_write_params->saturate_graph;
+        _diverse_index = index_config.index_write_params->diversity_index;
+        _seller_file = index_config.index_write_params->base_seller_labels;
 
         if (index_config.index_search_params != nullptr)
         {
@@ -110,7 +112,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         }
     }
 }
-
+// RK: Add diversity to below constructor
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points,
                               const std::shared_ptr<IndexWriteParameters> index_parameters,
@@ -1213,24 +1215,40 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     if (pool.size() > maxc)
         pool.resize(maxc);
     std::vector<float> &occlude_factor = scratch->occlude_factor();
+    std::vector<tsl::robin_set<uint32_t>> blockers(pool.size());
     // occlude_list can be called with the same scratch more than once by
     // search_for_point_and_add_link through inter_insert.
     occlude_factor.clear();
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
-    float  cur_alpha = alpha;
+    float  cur_alpha = 1;
+    while (cur_alpha <= alpha && result.size() < degree)    
     {
+        std::vector<tsl::robin_set<uint32_t>> blockers(pool.size());
         // used for MIPS, where we store a value of eps in cur_alpha to
         // denote pruned out entries which we can skip in later rounds.
         float eps = cur_alpha + 0.01f;
         for (auto iter = pool.begin(); result.size() < degree && iter != pool.end(); ++iter)
         {
+            bool need_to_add_edge= true;
+            bool edge_added = false;
+            if (occlude_factor[iter - pool.begin()] == std::numeric_limits<float>::min()) {
+                need_to_add_edge = false; // added as an edge in earlier round
+                edge_added =true;
+            }
             if (occlude_factor[iter - pool.begin()] > cur_alpha)
             {
-                continue;
+                if (blockers[iter - pool.begin()].size() >= _num_diverse_build)
+                need_to_add_edge = false;
+                else if (blockers[iter - pool.begin()].find(_location_to_seller[iter->id]) != blockers[iter - pool.begin()].end())
+                need_to_add_edge = false;
             }
-            // Set the entry to float::max so that is not considered again
-            occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
+
+            // Set the entry to float::max so that is not considered again, similarly add its own color as a blocking color
+//            blockers[iter - pool.begin()].insert(_location_to_seller[iter->id]);
+
+            if (need_to_add_edge) {
+            occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::min();
             // Add the entry to the result if its not been deleted, and doesn't
             // add a self loop
             if (delete_set_ptr == nullptr || delete_set_ptr->find(iter->id) == delete_set_ptr->end())
@@ -1240,13 +1258,15 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     result.push_back(iter->id);
                 }
             }
+            }
 
+            if (need_to_add_edge || edge_added) {
             // Update occlude factor for points from iter+1 to pool.end()
             for (auto iter2 = iter + 1; iter2 != pool.end(); iter2++)
             {
                 auto t = iter2 - pool.begin();
-                if (occlude_factor[t] > alpha)
-                    continue;
+//                if (occlude_factor[t] > alpha)
+//                    continue;
 
                 bool prune_allowed = true;
                 if (_filtered_index)
@@ -1274,6 +1294,9 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
                                                    : std::max(occlude_factor[t], iter2->distance / djk);
+                    if (iter2->distance / djk > cur_alpha) {
+                        blockers[t].insert(_location_to_seller[iter->id]);
+                    }
                 }
                 else if (_dist_metric == diskann::Metric::INNER_PRODUCT)
                 {
@@ -1283,10 +1306,13 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     if (y > cur_alpha * x)
                     {
                         occlude_factor[t] = std::max(occlude_factor[t], eps);
+                        blockers[t].insert(_location_to_seller[iter->id]);
                     }
                 }
             }
+            }
         }
+        cur_alpha *= 1.2f;
     }
 }
 
@@ -1672,6 +1698,12 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
         }
     }
 
+    if (_diverse_index) {
+        uint64_t nrows;
+        parse_seller_file(_seller_file, nrows);
+        std::cout<<"Parsed seller file with " << nrows <<" rows" << std::endl;
+    }
+
     uint32_t index_R = _indexingRange;
     uint32_t num_threads_index = _indexingThreads;
     uint32_t index_L = _indexingQueueSize;
@@ -1982,6 +2014,53 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     }
     num_points = (size_t)line_cnt;
     diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
+}
+
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::parse_seller_file(const std::string &label_file, size_t &num_points)
+{
+    // Format of Label txt file: filters with comma separators
+
+    std::ifstream infile(label_file);
+    if (infile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+
+    std::string line, token;
+    uint32_t line_cnt = 0;
+    std::set<uint32_t> sellers;
+    while (std::getline(infile, line))
+    {
+        line_cnt++;
+    }
+    _location_to_seller.resize(line_cnt);
+
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
+
+    while (std::getline(infile, line))
+    {
+        std::istringstream iss(line);
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        uint32_t seller;
+        while (getline(new_iss, token, ','))
+        {
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+            uint32_t token_as_num = (uint32_t)std::stoul(token);
+            seller = token_as_num;
+            sellers.insert(seller);
+        }
+
+        _location_to_seller[line_cnt] = seller;
+        line_cnt++;
+    }
+    num_points = (size_t)line_cnt;
+    diskann::cout << "Identified " << sellers.size() << " distinct seller(s)" << std::endl;
 }
 
 template <typename T, typename TagT, typename LabelT>

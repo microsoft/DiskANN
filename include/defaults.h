@@ -30,5 +30,9 @@ const uint32_t MAX_DEGREE = 64;
 const uint32_t BUILD_LIST_SIZE = 100;
 const uint32_t SATURATE_GRAPH = false;
 const uint32_t SEARCH_LIST_SIZE = 100;
+
+const bool DIVERSE_INDEX = false;
+const std::string EMPTY_STRING = "";
+const bool NUM_DIVERSE_BUILD = 1;
 } // namespace defaults
 } // namespace diskann

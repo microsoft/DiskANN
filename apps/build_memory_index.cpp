@@ -24,10 +24,11 @@ namespace po = boost::program_options;
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
-    uint32_t num_threads, R, L, Lf, build_PQ_bytes;
+    std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type, seller_file;
+    uint32_t num_threads, R, L, Lf, build_PQ_bytes, num_diverse_build;
     float alpha;
     bool use_pq_build, use_opq;
+    bool diverse_index=false;
 
     po::options_description desc{
         program_options_utils::make_program_description("build_memory_index", "Build a memory-based DiskANN index.")};
@@ -70,6 +71,12 @@ int main(int argc, char **argv)
                                        program_options_utils::FILTERED_LBUILD);
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);
+        optional_configs.add_options()("seller_file", po::value<std::string>(&seller_file)->default_value(""),
+                                       program_options_utils::DIVERSITY_FILE);
+        optional_configs.add_options()("NumDiverse", po::value<uint32_t>(&Lf)->default_value(1),
+                                       program_options_utils::NUM_DIVERSE);
+
+
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
@@ -112,6 +119,9 @@ int main(int argc, char **argv)
         return -1;
     }
 
+    if(seller_file != "")
+    diverse_index = true;
+
     try
     {
         diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
@@ -125,6 +135,9 @@ int main(int argc, char **argv)
                                       .with_alpha(alpha)
                                       .with_saturate_graph(false)
                                       .with_num_threads(num_threads)
+                                      .with_diverse_index(diverse_index)
+                                      .with_seller_file(seller_file)
+                                      .with_num_diverse_build(num_diverse_build)
                                       .build();
 
         auto filter_params = diskann::IndexFilterParamsBuilder()
