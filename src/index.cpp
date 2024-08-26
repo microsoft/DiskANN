@@ -884,6 +884,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
+        hops++;
+        if(search_invocation){std::cout<<"hop number: "<<hops<<std::endl;}
 
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
@@ -967,10 +969,19 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         cmps += (uint32_t)id_scratch.size();
 
         // Insert <id, dist> pairs into the pool of candidates
+        if (search_invocation){
+            std::cout<<"comparisons for current hop "<<(uint32_t)id_scratch.size()<<std::endl;
+            std::cout<<"distances for current hop"<<std::endl;
+        }
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
+            if(search_invocation){std::cout<<"#"<<m<<": "<<dist_scratch[m]<<std::endl;}
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
+    }
+    if (search_invocation){
+        std::cout<<"Total hops: "<<hops<<std::endl;
+        std::cout<<"Total comparisons: "<<cmps<<std::endl;        
     }
     return std::make_pair(hops, cmps);
 }
