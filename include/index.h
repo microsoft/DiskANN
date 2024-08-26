@@ -132,7 +132,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // can customize L on a per-query basis without tampering with "Parameters"
     template <typename IDType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const uint32_t L,
-                                                           IDType *indices, float *distances = nullptr);
+                                                           IDType *indices, float *distances = nullptr, const uint32_t maxLperSeller = 0);
+
+    template <typename IDType>
+    std::pair<uint32_t, uint32_t> diverse_search(const T *query, const size_t K, const uint32_t L, const uint32_t maxLperSeller, IDType *indices,
+                                         float *distances = nullptr);
 
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
@@ -210,6 +214,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                const std::string &filter_label_raw, const size_t K,
                                                                const uint32_t L, std::any &indices,
                                                                float *distances) override;
+    virtual std::pair<uint32_t, uint32_t> _diverse_search(const DataType &query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
+                                                  std::any &indices, float *distances = nullptr) override;
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
     virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;
