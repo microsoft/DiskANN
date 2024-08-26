@@ -73,7 +73,7 @@ int main(int argc, char **argv)
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);
         optional_configs.add_options()("seller_file", po::value<std::string>(&seller_file)->default_value(""),
                                        program_options_utils::DIVERSITY_FILE);
-        optional_configs.add_options()("NumDiverse", po::value<uint32_t>(&Lf)->default_value(1),
+        optional_configs.add_options()("NumDiverse", po::value<uint32_t>(&num_diverse_build)->default_value(1),
                                        program_options_utils::NUM_DIVERSE);
 
 
@@ -129,6 +129,8 @@ int main(int argc, char **argv)
 
         size_t data_num, data_dim;
         diskann::get_bin_metadata(data_path, data_num, data_dim);
+
+        std::cout<<"Num diverse build: " << num_diverse_build << std::endl;
 
         auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
                                       .with_filter_list_size(Lf)

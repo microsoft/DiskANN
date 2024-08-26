@@ -68,6 +68,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
     }
 
+    query_num = 1;
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
     auto config = diskann::IndexConfigBuilder()
@@ -159,6 +160,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
         uint32_t maxLperSeller = (num_diverse_sellers > 0) ? (1.0*L)/(1.0*num_diverse_sellers) : L;
         maxLperSeller = (maxLperSeller == 0)? 1 : maxLperSeller;
+        std::cout<<"MaxLperSeller = " << maxLperSeller << std::endl;
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
