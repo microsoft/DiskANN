@@ -913,12 +913,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     while (best_L_nodes.has_unexpanded_node())
     {
-        for (auto &x : color_to_nodes) {
+/*        for (auto &x : color_to_nodes) {
             if (x.second.size() > 0) {
                 std::cout<<x.first <<" " << x.second.size()<<" ";
             }
         }
-        std::cout<<std::endl;
+        std::cout<<" " <<best_L_nodes.size()<<std::endl; */
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
 //        std::cout<<n<<" is going to be expanded" << std::endl;
@@ -983,13 +983,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (is_not_visited(id))
                 {
                     id_scratch.push_back(id);
-                }
-            }
-        }
-
-        // Mark nodes visited
-        for (auto id : id_scratch)
-        {
             if (fast_iterate)
             {
                 inserted_into_pool_bs[id] = 1;
@@ -998,7 +991,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 inserted_into_pool_rs.insert(id);
             }
+
+                }
+            }
         }
+
 
         assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
@@ -1007,6 +1004,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
+/*            std::cout<<"Going to insert " << id_scratch[m] << " (nbr of " << n <<"), color " << _location_to_seller[id_scratch[m]] << std::endl;
+        for (auto &x : color_to_nodes) {
+            if (x.second.size() > 0) {
+                std::cout<<x.first <<" " << x.second.size()<<": ";
+                for (auto y = 0; y < x.second.size(); y++)
+                    std::cout<<x.second[y].id <<",";
+                std::cout<<" || ";
+            }
+        }
+        std::cout<<" == " <<best_L_nodes.size()<<std::endl; */
+
             if (diverse_search) {
                 auto cur_id = id_scratch[m];
                 auto cur_dist = dist_scratch[m];
@@ -1018,23 +1026,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (cur_list.size() < maxLperSeller && best_L_nodes.size() < Lsize) {
                     cur_list.insert(Neighbor(cur_id, cur_dist));
                     best_L_nodes.insert(Neighbor(cur_id, cur_dist));
-                } else if (cur_list.size() == maxLperSeller && best_L_nodes.size() < Lsize) {
+                } else if (cur_list.size() == maxLperSeller) {
                     if (cur_dist < cur_list[maxLperSeller-1].distance) {
-                     best_L_nodes.delete_id(cur_list[maxLperSeller-1].id);   
+                     best_L_nodes.delete_id(cur_list[maxLperSeller-1]);   
                     cur_list.insert(Neighbor(cur_id, cur_dist));
                     best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
                     }
                 } else if (cur_list.size() < maxLperSeller && best_L_nodes.size() == Lsize) {
                     if (cur_dist < best_L_nodes[Lsize-1].distance) {
-                     color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].delete_id(best_L_nodes[Lsize-1].id);
+/*                        if (color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].size() == 0) {
+                            std::cout<<"Trying to delete from empty Q. " << best_L_nodes[Lsize-1].id <<" of color " << _location_to_seller[best_L_nodes[Lsize-1].id] << std::endl;
+                        }*/
+                     color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].delete_id(best_L_nodes[Lsize-1]);
                      cur_list.insert(Neighbor(cur_id, cur_dist));
                      best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
-                    }
-                } else {
-                    if (cur_dist < cur_list[maxLperSeller-1].distance) {
-                     best_L_nodes.delete_id(cur_list[maxLperSeller-1].id);   
-                    cur_list.insert(Neighbor(cur_id, cur_dist));
-                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
                     }
                 }
             }
@@ -2295,9 +2300,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
         if (pos == K)
             break;
     }
-    if (pos < K)
+    while (pos < K)
     {
-        diskann::cerr << "Found pos: " << pos << "fewer than K elements " << K << " for query" << std::endl;
+          indices[pos] = std::numeric_limits<IdType>::max();
+          pos++;
+//        diskann::cerr << "Found pos: " << pos << "fewer than K elements " << K << " for query" << std::endl;
     }
 
     return retval;

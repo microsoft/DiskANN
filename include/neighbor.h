@@ -95,18 +95,18 @@ class NeighborPriorityQueue
 
 
     // Deletes the item if found.
-    void delete_id(const uint32_t &id)
+    void delete_id(const Neighbor &nbr)
     {
         size_t lo = 0, hi = _size;
         size_t loc = std::numeric_limits<uint64_t>::max();
         while (lo < hi)
         {
             size_t mid = (lo + hi) >> 1;
-            if (id < _data[mid].id)
+            if (nbr.distance < _data[mid].distance)
             {
                 hi = mid;
             }
-            else if (_data[mid].id == id)
+            else if (_data[mid].id == nbr.id)
             {
                 loc = mid;
                 break;
@@ -121,6 +121,16 @@ class NeighborPriorityQueue
         {
             std::memmove(&_data[loc], &_data[loc+1], (_size - loc - 1) * sizeof(Neighbor));
             _size--;
+            _cur = 0;
+            while (_cur < _size && _data[_cur].expanded) // RK: inefficient!
+            {
+                _cur++;
+            }
+        } else {
+            std::cout<<"Found a problem! " << lo <<" " << hi <<" " <<nbr.id << " " << _size << std::endl;
+            for (auto &x : this->_data)
+                std::cout<<x.id<<" " << std::flush;
+            std::cout<<std::endl;
         }
     }
 
