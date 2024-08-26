@@ -104,6 +104,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _diverse_index = index_config.index_write_params->diversity_index;
         _seller_file = index_config.index_write_params->base_seller_labels;
         _num_diverse_build = index_config.index_write_params->num_diverse_sellers;
+        std::cout<<"Set _num_diverse_build to " << _num_diverse_build << std::endl;
 
         if (index_config.index_search_params != nullptr)
         {
@@ -912,8 +913,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     while (best_L_nodes.has_unexpanded_node())
     {
+        for (auto &x : color_to_nodes) {
+            if (x.second.size() > 0) {
+                std::cout<<x.first <<" " << x.second.size()<<" ";
+            }
+        }
+        std::cout<<std::endl;
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
+//        std::cout<<n<<" is going to be expanded" << std::endl;
 
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
@@ -1000,8 +1008,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
             if (diverse_search) {
-                auto cur_id = id_scratch[n];
+                auto cur_id = id_scratch[m];
                 auto cur_dist = dist_scratch[m];
+            //std::cout<<cur_id << _location_to_seller[cur_id] << " : " << std::flush;
             if (color_to_nodes.find(_location_to_seller[cur_id]) == color_to_nodes.end()) {
                     color_to_nodes[_location_to_seller[cur_id]] = NeighborPriorityQueue(maxLperSeller);
             }
@@ -2079,7 +2088,7 @@ void Index<T, TagT, LabelT>::parse_seller_file(const std::string &label_file, si
         line_cnt++;
     }
     num_points = (size_t)line_cnt;
-    diskann::cout << "Identified " << sellers.size() << " distinct seller(s)" << std::endl;
+    diskann::cout << "Identified " << sellers.size() << " distinct seller(s) across " << num_points <<" points." << std::endl;
 }
 
 template <typename T, typename TagT, typename LabelT>
