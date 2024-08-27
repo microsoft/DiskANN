@@ -884,8 +884,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
+
+        if(search_invocation){
+            std::vector<uint32_t> id_scratch_temp = {n};
+            std::vector<float> dist_scratch_temp = {0.0};
+            compute_dists(id_scratch_temp, dist_scratch_temp);
+            std::cout<<"hop #"<<hops+1<<": "<<dist_scratch_temp[0]<<std::endl;     
+        }
         hops++;
-        if(search_invocation){std::cout<<"hop number: "<<hops<<std::endl;}
 
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
@@ -970,12 +976,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         // Insert <id, dist> pairs into the pool of candidates
         if (search_invocation){
-            std::cout<<"comparisons for current hop "<<(uint32_t)id_scratch.size()<<std::endl;
-            std::cout<<"distances for current hop"<<std::endl;
+            std::cout<<"Comparisons "<<(uint32_t)id_scratch.size()<<std::endl;
+            std::cout<<"Distances"<<std::endl;
         }
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            if(search_invocation){std::cout<<"#"<<m<<": "<<dist_scratch[m]<<std::endl;}
+            if(search_invocation){
+                float cur_dist = _pq_data_store->get_distance(id_scratch[m], n);
+                std::cout<<"pt #"<<m+1<<": "<<cur_dist<<std::setw(10)<<dist_scratch[m]<<std::endl;
+            }
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
     }
