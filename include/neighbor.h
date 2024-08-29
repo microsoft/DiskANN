@@ -99,21 +99,34 @@ class NeighborPriorityQueue
     {
         size_t lo = 0, hi = _size;
         size_t loc = std::numeric_limits<uint64_t>::max();
-        while (lo < hi)
+        while ((lo < hi) && loc == std::numeric_limits<uint64_t>::max())
         {
             size_t mid = (lo + hi) >> 1;
             if (nbr.distance < _data[mid].distance)
             {
                 hi = mid;
             }
-            else if (_data[mid].id == nbr.id)
+            else if (nbr.distance > _data[mid].distance)
             {
-                loc = mid;
-                break;
+                lo = mid+1;
             }
             else
             {
-                lo = mid + 1;
+                uint32_t itr = 0;
+                for (;; itr++) {
+                    if (mid + itr < hi) {
+                    if (_data[mid+itr].id == nbr.id) {
+                    loc = mid+itr;
+                    break;
+                    }
+                    }
+                    if(mid - itr >= lo) {
+                    if (_data[mid-itr].id == nbr.id) {
+                    loc = mid-itr;
+                    break;
+                    }                    
+                    }
+                }
             }
         }
 
@@ -127,9 +140,12 @@ class NeighborPriorityQueue
                 _cur++;
             }
         } else {
-            std::cout<<"Found a problem! " << lo <<" " << hi <<" " <<nbr.id << " " << _size << std::endl;
-            for (auto &x : this->_data)
-                std::cout<<x.id<<" " << std::flush;
+            std::cout<<"Found a problem! " << lo <<" " << hi <<" " <<nbr.id << "," << nbr.distance << " " <<_size << std::endl;
+            uint32_t pos = 0;
+            for (auto &x : this->_data) {
+                std::cout<<pos<<":" <<x.id<<"," << x.distance <<" " << std::flush;
+                pos++;
+            }
             std::cout<<std::endl;
         }
     }

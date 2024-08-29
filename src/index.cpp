@@ -913,12 +913,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     while (best_L_nodes.has_unexpanded_node())
     {
-/*        for (auto &x : color_to_nodes) {
-            if (x.second.size() > 0) {
-                std::cout<<x.first <<" " << x.second.size()<<" ";
-            }
-        }
-        std::cout<<" " <<best_L_nodes.size()<<std::endl; */
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
 //        std::cout<<n<<" is going to be expanded" << std::endl;
@@ -1014,7 +1008,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
         }
         std::cout<<" == " <<best_L_nodes.size()<<std::endl; */
-
+            int32_t run_flag = 0;
             if (diverse_search) {
                 auto cur_id = id_scratch[m];
                 auto cur_dist = dist_scratch[m];
@@ -1026,11 +1020,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (cur_list.size() < maxLperSeller && best_L_nodes.size() < Lsize) {
                     cur_list.insert(Neighbor(cur_id, cur_dist));
                     best_L_nodes.insert(Neighbor(cur_id, cur_dist));
+                    run_flag = 1;
                 } else if (cur_list.size() == maxLperSeller) {
                     if (cur_dist < cur_list[maxLperSeller-1].distance) {
                      best_L_nodes.delete_id(cur_list[maxLperSeller-1]);   
                     cur_list.insert(Neighbor(cur_id, cur_dist));
                     best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
+                    run_flag = 2;
                     }
                 } else if (cur_list.size() < maxLperSeller && best_L_nodes.size() == Lsize) {
                     if (cur_dist < best_L_nodes[Lsize-1].distance) {
@@ -1040,12 +1036,30 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                      color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].delete_id(best_L_nodes[Lsize-1]);
                      cur_list.insert(Neighbor(cur_id, cur_dist));
                      best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
+                     run_flag = 3;
                     }
                 }
             }
             else {
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
             }
+        uint32_t sum_local_lists = 0;
+        for (auto &x : color_to_nodes) {
+            if (x.second.size() > 0) {
+//                std::cout<<x.first <<" " << x.second.size()<<" ";
+                sum_local_lists += x.second.size();
+            }
+        }
+        if (sum_local_lists != best_L_nodes.size()) {
+        for (auto &x : color_to_nodes) {
+            if (x.second.size() > 0) {
+                std::cout<<x.first <<" " << x.second.size()<<" ";
+            }
+        }            
+        std::cout<<" " <<best_L_nodes.size()<<" vs " << sum_local_lists <<", run_flag = " << run_flag << std::endl; 
+        exit(-1);
+        }
+
         }
     }
     return std::make_pair(hops, cmps);
