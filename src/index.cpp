@@ -879,17 +879,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     uint32_t hops = 0;
     uint32_t cmps = 0;
-
+    size_t iter_count = 1;
     while (best_L_nodes.has_unexpanded_node())
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
+        diskann::cout<<"Iteration: "<<iter_count<<std::endl;
+        diskann::cout<<"L size: "<<best_L_nodes.size()<<std::endl;
+        diskann::cout<<"Node expanded: "<<nbr.id<<std::endl;
 
         if(search_invocation){
             std::vector<uint32_t> id_scratch_temp = {n};
             std::vector<float> dist_scratch_temp = {0.0};
             compute_dists(id_scratch_temp, dist_scratch_temp);
-            std::cout<<"hop #"<<hops+1<<": "<<dist_scratch_temp[0]<<std::endl;     
+            diskann::cout<<"hop #"<<hops+1<<": "<<dist_scratch_temp[0]<<std::endl;     
         }
         hops++;
 
@@ -976,21 +979,26 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
         // Insert <id, dist> pairs into the pool of candidates
         if (search_invocation){
-            std::cout<<"Comparisons "<<(uint32_t)id_scratch.size()<<std::endl;
-            std::cout<<"Distances"<<std::endl;
+            diskann::cout<<"Comparisons "<<(uint32_t)id_scratch.size()<<std::endl;
+            diskann::cout<<"Distances"<<std::endl;
         }
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
             if(search_invocation){
                 float cur_dist = _pq_data_store->get_distance(id_scratch[m], n);
-                std::cout<<"pt #"<<m+1<<": "<<cur_dist<<std::setw(10)<<dist_scratch[m]<<std::endl;
+                diskann::cout<<"pt #"<<m+1<<": "<<cur_dist<<std::setw(10)<<dist_scratch[m]<<std::endl;
             }
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
     }
     if (search_invocation){
-        std::cout<<"Total hops: "<<hops<<std::endl;
-        std::cout<<"Total comparisons: "<<cmps<<std::endl;        
+        diskann::cout<<"Total hops: "<<hops<<std::endl;
+        diskann::cout<<"Total comparisons: "<<cmps<<std::endl;
+        diskann::cout<<"L size: "<<best_L_nodes.size()<<std::endl;
+        diskann::cout<<"Expanded Nodes "<<scratch->expanded_nodes_vec().size()<<std::endl;
+        for(auto neighbor : scratch->expanded_nodes_vec()){
+            diskann::cout<<neighbor.id<<std::endl;
+        }       
     }
     return std::make_pair(hops, cmps);
 }
