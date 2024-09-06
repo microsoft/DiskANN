@@ -30,7 +30,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
                         const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
-                        const std::vector<std::string> &query_filters, const float fail_if_recall_below, const uint32_t num_diverse_sellers = 0)
+                        const std::vector<std::string> &query_filters, const float fail_if_recall_below, const uint32_t max_L_per_seller = 0)
 {
     using TagT = uint32_t;
     // Load the query file
@@ -158,9 +158,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         query_result_dists[test_id].resize(recall_at * query_num);
         std::vector<T *> res = std::vector<T *>();
 
-        uint32_t maxLperSeller = (num_diverse_sellers > 0) ? (1.0*L)/(1.0*num_diverse_sellers) : L;
+        uint32_t maxLperSeller = (max_L_per_seller > 0) ? max_L_per_seller : L;
         maxLperSeller = (maxLperSeller == 0)? 1 : maxLperSeller;
-        std::cout<<"MaxLperSeller = " << maxLperSeller << std::endl;
+
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
@@ -290,7 +290,7 @@ int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path, query_file, gt_file, filter_label, label_type,
         query_filters_file;
-    uint32_t num_threads, K, num_diverse_sellers;
+    uint32_t num_threads, K, max_L_per_seller;
     std::vector<uint32_t> Lvec;
     bool print_all_recalls, dynamic, tags, show_qps_per_thread;
     float fail_if_recall_below = 0.0f;
@@ -334,9 +334,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("num_threads,T",
                                        po::value<uint32_t>(&num_threads)->default_value(omp_get_num_procs()),
                                        program_options_utils::NUMBER_THREADS_DESCRIPTION);
-        optional_configs.add_options()("num_diverse_sellers",
-                                       po::value<uint32_t>(&num_diverse_sellers)->default_value(0),
-                                       "How many diverse sellers we want search results to contain");
+        optional_configs.add_options()("max_L_per_seller",
+                                       po::value<uint32_t>(&max_L_per_seller)->default_value(0),
+                                       "How many results per seller we want search results to contain");
         optional_configs.add_options()(
             "dynamic", po::value<bool>(&dynamic)->default_value(false),
             "Whether the index is dynamic. Dynamic indices must have associated tags.  Default false.");
@@ -435,19 +435,19 @@ int main(int argc, char **argv)
             {
                 return search_memory_index<int8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, num_diverse_sellers);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, num_diverse_sellers);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float, uint16_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                            show_qps_per_thread, query_filters, fail_if_recall_below, num_diverse_sellers);
+                                                            show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
             }
             else
             {
@@ -461,19 +461,19 @@ int main(int argc, char **argv)
             {
                 return search_memory_index<int8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                   show_qps_per_thread, query_filters, fail_if_recall_below, num_diverse_sellers);
+                                                   show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                     num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                    show_qps_per_thread, query_filters, fail_if_recall_below, num_diverse_sellers);
+                                                    show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                   num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                  show_qps_per_thread, query_filters, fail_if_recall_below, num_diverse_sellers);
+                                                  show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
             }
             else
             {

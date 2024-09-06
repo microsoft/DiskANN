@@ -1039,10 +1039,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                      run_flag = 3;
                     }
                 }
-            }
-            else {
-            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
-            }
+
         uint32_t sum_local_lists = 0;
         for (auto &x : color_to_nodes) {
             if (x.second.size() > 0) {
@@ -1060,6 +1057,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         exit(-1);
         }
 
+            }
+            else {
+            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+            }
+        
         }
     }
     return std::make_pair(hops, cmps);
@@ -1285,10 +1287,14 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
             }
             if (occlude_factor[iter - pool.begin()] > cur_alpha)
             {
+                if (_diverse_index) {
                 if (blockers[iter - pool.begin()].size() >= _num_diverse_build)
                 need_to_add_edge = false;
                 else if (blockers[iter - pool.begin()].find(_location_to_seller[iter->id]) != blockers[iter - pool.begin()].end())
                 need_to_add_edge = false;
+                } else {
+                    need_to_add_edge = false;
+                }
             }
 
             // Set the entry to float::max so that is not considered again, similarly add its own color as a blocking color
@@ -1341,8 +1347,10 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
                                                    : std::max(occlude_factor[t], iter2->distance / djk);
+                    if (_diverse_index) {
                     if (iter2->distance / djk > cur_alpha) {
                         blockers[t].insert(_location_to_seller[iter->id]);
+                    }
                     }
                 }
                 else if (_dist_metric == diskann::Metric::INNER_PRODUCT)
@@ -1353,7 +1361,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     if (y > cur_alpha * x)
                     {
                         occlude_factor[t] = std::max(occlude_factor[t], eps);
-                        blockers[t].insert(_location_to_seller[iter->id]);
+                        if (_diverse_index)
+                            blockers[t].insert(_location_to_seller[iter->id]);
                     }
                 }
             }
