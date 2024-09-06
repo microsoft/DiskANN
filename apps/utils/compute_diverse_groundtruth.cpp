@@ -28,6 +28,7 @@
 #endif
 #include "filter_utils.h"
 #include "utils.h"
+#include "neighbor.h"
 
 // WORKS FOR UPTO 2 BILLION POINTS (as we use INT INSTEAD OF UNSIGNED)
 
@@ -104,6 +105,51 @@ void distsq_to_points(const size_t dim,
         delete[] ones_vec;
 }
 
+
+struct bestCandidates {
+    diskann::NeighborPriorityQueue best_L_nodes;
+    tsl::robin_map<uint32_t, diskann::NeighborPriorityQueue> color_to_nodes;
+    uint32_t _Lsize = 0;
+    uint32_t _maxLperSeller = 0;
+    std::vector<uint32_t> &_location_to_seller;
+
+    bestCandidates(uint32_t Lsize, uint32_t maxLperSeller, std::vector<uint32_t> &location_to_seller) : _location_to_seller(location_to_seller) {
+        _Lsize = Lsize;
+        _maxLperSeller = maxLperSeller;
+        best_L_nodes = diskann::NeighborPriorityQueue(_Lsize);
+    }
+    void insert(uint32_t cur_id, float cur_dist) {
+            //std::cout<<cur_id << _location_to_seller[cur_id] << " : " << std::flush;
+            if (color_to_nodes.find(_location_to_seller[cur_id]) == color_to_nodes.end()) {
+                    color_to_nodes[_location_to_seller[cur_id]] = diskann::NeighborPriorityQueue(_maxLperSeller);
+            }
+                auto &cur_list = color_to_nodes[_location_to_seller[cur_id]];
+                if (cur_list.size() < _maxLperSeller && best_L_nodes.size() < _Lsize) {
+                    cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
+                    best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));
+                    
+                } else if (cur_list.size() == _maxLperSeller) {
+                    if (cur_dist < cur_list[_maxLperSeller-1].distance) {
+                     best_L_nodes.delete_id(cur_list[_maxLperSeller-1]);   
+                    cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
+                    best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));                    
+                    
+                    }
+                } else if (cur_list.size() < _maxLperSeller && best_L_nodes.size() == _Lsize) {
+                    if (cur_dist < best_L_nodes[_Lsize-1].distance) {
+/*                        if (color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].size() == 0) {
+                            std::cout<<"Trying to delete from empty Q. " << best_L_nodes[Lsize-1].id <<" of color " << _location_to_seller[best_L_nodes[Lsize-1].id] << std::endl;
+                        }*/
+                     color_to_nodes[_location_to_seller[best_L_nodes[_Lsize-1].id]].delete_id(best_L_nodes[_Lsize-1]);
+                     cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
+                     best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));                    
+                    
+                    }
+                }
+    }
+};
+
+
 void inner_prod_to_points(const size_t dim,
                           float *dist_matrix, // Col Major, cols are queries, rows are points
                           size_t npoints, const float *const points, size_t nqueries, const float *const queries,
@@ -123,15 +169,21 @@ void inner_prod_to_points(const size_t dim,
         delete[] ones_vec;
 }
 
+
+
+
+
+
+
 void exact_knn(const size_t dim, const size_t k,
                size_t *const closest_points,     // k * num_queries preallocated, col
                                                  // major, queries columns
                float *const dist_closest_points, // k * num_queries
                                                  // preallocated, Dist to
                                                  // corresponding closes_points
-               size_t npoints,
+               size_t npoints, size_t start_id, 
                float *points_in, // points in Col major
-               size_t nqueries, float *queries_in,
+               size_t nqueries, float *queries_in, uint32_t kPerSeller, std::vector<bestCandidates> &running_results, 
                diskann::Metric metric = diskann::Metric::L2) // queries in Col major
 {
     float *points_l2sq = new float[npoints];
@@ -212,24 +264,15 @@ void exact_knn(const size_t dim, const size_t k,
 #pragma omp parallel for schedule(dynamic, 16)
         for (long long q = q_b; q < q_e; q++)
         {
-            maxPQIFCS point_dist;
-            for (size_t p = 0; p < k; p++)
-                point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
-            for (size_t p = k; p < npoints; p++)
+            bestCandidates & cur_query_best_results = running_results[q];
+//            for (size_t p = 0; p < k; p++)
+//                point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
+            for (size_t p = 0; p < npoints; p++)
             {
-                if (point_dist.top().second > dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints])
-                    point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
-                if (point_dist.size() > k)
-                    point_dist.pop();
+                uint32_t cur_id = p + start_id;
+                float cur_dist = dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints];
+                cur_query_best_results.insert(cur_id, cur_dist);
             }
-            for (ptrdiff_t l = 0; l < (ptrdiff_t)k; ++l)
-            {
-                closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] = point_dist.top().first;
-                dist_closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] = point_dist.top().second;
-                point_dist.pop();
-            }
-            assert(std::is_sorted(dist_closest_points + (ptrdiff_t)q * (ptrdiff_t)k,
-                                  dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t)k));
         }
         std::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e << ")" << std::endl;
     }
@@ -344,6 +387,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
     float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
+    std::vector<bestCandidates> running_results(nqueries, bestCandidates(k, kperseller, location_to_seller));
     for (int p = 0; p < num_parts; p++)
     {
         size_t start_id = p * PARTSIZE;
@@ -353,19 +397,22 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         float *dist_closest_points_part = new float[nqueries * k];
 
         auto part_k = k < npoints ? k : npoints;
-        exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, base_data, nqueries, query_data,
+        exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, start_id, base_data, nqueries, query_data, kperseller, running_results,
                   metric);
 
         for (size_t i = 0; i < nqueries; i++)
         {
-            for (size_t j = 0; j < part_k; j++)
+            auto & cur_results = running_results[i];
+//            for (size_t j = 0; j < part_k; j++)
+            for (uint32_t x = 0; x < cur_results.best_L_nodes.size(); x++)
             {
+                auto &nbr = cur_results.best_L_nodes[x];
                 if (!location_to_tag.empty())
-                    if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+                    if (location_to_tag[nbr.id] == 0)
                         continue;
 
-                res[i].push_back(std::make_pair((uint32_t)(closest_points_part[i * part_k + j] + start_id),
-                                                dist_closest_points_part[i * part_k + j]));
+                res[i].push_back(std::make_pair((uint32_t)(nbr.id),
+                                                nbr.distance));
             }
         }
 
@@ -431,7 +478,7 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     size_t npoints, nqueries, dim;
 
     float *query_data;
-
+    std::cout<<"Inside k=" << k <<", and kPerSeller=" << kperseller << std::endl;
     load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
     if (nqueries > PARTSIZE)
         std::cerr << "WARNING: #Queries provided (" << nqueries << ") is greater than " << PARTSIZE
@@ -616,7 +663,7 @@ int main(int argc, char **argv)
         if (data_type == std::string("float"))
             aux_main<float>(base_file, query_file, seller_file, gt_file, K, KperSeller, metric, tags_file);
         if (data_type == std::string("int8"))
-            aux_main<int8_t>(base_file, query_file, seller_file, gt_file, K, KperSeller,metric, tags_file);
+            aux_main<int8_t>(base_file, query_file, seller_file, gt_file, K, KperSeller, metric, tags_file);
         if (data_type == std::string("uint8"))
             aux_main<uint8_t>(base_file, query_file, seller_file, gt_file, K, KperSeller, metric, tags_file);
     }
