@@ -884,15 +884,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
-        diskann::cout<<"Iteration: "<<iter_count<<std::endl;
-        diskann::cout<<"L size: "<<best_L_nodes.size()<<std::endl;
-        diskann::cout<<"Node expanded: "<<nbr.id<<std::endl;
-
+        
         if(search_invocation){
             std::vector<uint32_t> id_scratch_temp = {n};
             std::vector<float> dist_scratch_temp = {0.0};
             compute_dists(id_scratch_temp, dist_scratch_temp);
-            diskann::cout<<"hop #"<<hops+1<<": "<<dist_scratch_temp[0]<<std::endl;     
+            diskann::cout<<"hop #"<<hops+1<<": "<<dist_scratch_temp[0]<<std::endl;
+            diskann::cout<<"Iteration: "<<iter_count<<std::endl;
+            diskann::cout<<"L size: "<<best_L_nodes.size()<<std::endl;
+            diskann::cout<<"Node expanded: "<<nbr.id<<std::endl;     
         }
         hops++;
 
