@@ -12,6 +12,8 @@ enum Metric
     FAST_L2 = 3
 };
 
+Metric get_metric_from_string(const std::string &dist_fn_str, const std::string &data_type_str = "");
+
 template <typename T> class Distance
 {
   public:

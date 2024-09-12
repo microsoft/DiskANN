@@ -90,30 +90,11 @@ int main(int argc, char **argv)
         std::cerr << ex.what() << '\n';
         return -1;
     }
-
-    diskann::Metric metric;
-    if (dist_fn == std::string("mips"))
-    {
-        metric = diskann::Metric::INNER_PRODUCT;
-    }
-    else if (dist_fn == std::string("l2"))
-    {
-        metric = diskann::Metric::L2;
-    }
-    else if (dist_fn == std::string("cosine"))
-    {
-        metric = diskann::Metric::COSINE;
-    }
-    else
-    {
-        std::cout << "Unsupported distance function. Currently only L2/ Inner "
-                     "Product/Cosine are supported."
-                  << std::endl;
-        return -1;
-    }
-
+    
     try
     {
+        diskann::Metric metric = diskann::get_metric_from_string(dist_fn, data_type);
+     
         diskann::cout << "Starting index build with R: " << R << "  Lbuild: " << L << "  alpha: " << alpha
                       << "  #threads: " << num_threads << std::endl;
 
