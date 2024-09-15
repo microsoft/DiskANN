@@ -429,10 +429,17 @@ void print_query_stats(std::vector<std::pair<uint32_t, uint32_t>> &v)
         return a.second < b.second;
     });
 
-    for (uint32_t pct = 0; pct < 100; pct += 5)
+    for (uint32_t pct = 0; pct < 100; pct += 1)
     {
         std::cout << v[(v.size() * pct * 1.0) / 100].second << " is pass-rate of query with percentile " << pct
                   << std::endl;
+    }
+    std::cout<<"\n Top 10 pass-rates" << std::endl;
+    for (uint32_t i = 0; i < 10; i += 1)
+    {
+        if (i == v.size())
+            break;
+        std::cout << v[v.size() - (i + 1)].second << " is pass-rate of query of rank " << (i+1)<< std::endl;
     }
 
     return;
