@@ -393,7 +393,7 @@ inline void parse_base_label_file(const std::string &map_file, std::vector<tsl::
 
 // outer vector is # queries,  inner vector is size of the AND predicate
 inline void parse_query_label_file(const std::string &query_label_file,
-                                   std::vector<std::vector<std::string>> &query_labels)
+                                   std::vector<std::vector<std::vector<std::string>>> &query_labels)
 {
     query_labels.clear();
     std::ifstream infile(query_label_file);
@@ -401,22 +401,37 @@ inline void parse_query_label_file(const std::string &query_label_file,
     std::set<std::string> labels;
     infile.clear();
     infile.seekg(0, std::ios::beg);
+    uint32_t line_cnt = 0;
+    bool print_flag = true;
     while (std::getline(infile, line))
     {
         std::istringstream iss(line);
-        std::vector<std::string> lbls(0);
+        std::vector<std::vector<std::string>> lbls(0);
 
         getline(iss, token, '\t');
         std::istringstream new_iss(token);
         while (getline(new_iss, token, '&'))
         {
-            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            lbls.push_back(token);
-            labels.insert(token);
+            std::vector<std::string> or_clause(0);
+            std::istringstream inner_iss(token);
+            while (getline(inner_iss, token, '|'))
+            {
+                if (print_flag)
+                    std::cout<<token<<" || ";
+                token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+                token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+                or_clause.push_back(token);
+                labels.insert(token);
+            }
+            if (print_flag)
+                std::cout<<" && ";
+            lbls.push_back(or_clause);
         }
         //        std::sort(lbls.begin(), lbls.end());
         query_labels.push_back(lbls);
+        line_cnt++;
+        if (line_cnt>10)
+                print_flag = false;
     }
     std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
               << query_labels.size() << " queries" << std::endl;
@@ -452,7 +467,7 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
                              std::vector<std::pair<uint32_t, uint32_t>> &query_stats)
 {
     std::vector<tsl::robin_set<std::string>> base_labels;
-    std::vector<std::vector<std::string>> query_labels;
+    std::vector<std::vector<std::vector<std::string>>> query_labels;
     parse_base_label_file(base, base_labels, start_id);
     parse_query_label_file(query, query_labels);
     matching_points.clear();
@@ -477,11 +492,19 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
             {
                 for (uint32_t k = 0; k < query_labels[i].size(); k++)
                 {
-                    if (base_labels[j].find(query_labels[i][k]) == base_labels[j].end())
+                    bool or_pass = false;
+                for (uint32_t l = 0; l < query_labels[i][k].size(); l++)
+                {
+                    if (base_labels[j].find(query_labels[i][k][l]) != base_labels[j].end())
                     {
-                        pass = false;
+                        or_pass = true;
                         break;
                     }
+                }
+                if (or_pass == false) {
+                    pass = false;
+                    break;
+                }
                 }
             }
             if (pass)
