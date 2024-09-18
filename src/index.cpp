@@ -4,7 +4,7 @@
 #include <omp.h>
 
 #include <type_traits>
-
+#include <filesystem>
 #include "boost/dynamic_bitset.hpp"
 #include "id_list.h"
 #include "index_factory.h"
@@ -2094,7 +2094,14 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
             this->set_universal_label(unv_label_as_num);
         }
         this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load);
+        std::string sample_label_file = filter_params.save_path_prefix + "_sample";
+        float p_val = 1000000.0/num_points_to_load;
+        p_val = (p_val > 1) ? 1 : p_val;
+        gen_random_slice<T>(data_file, sample_label_file, p_val,
+                      labels_file_to_use);
+        std::filesystem::copy(sample_label_file+"_ids.bin", sample_label_file+"_labels.txt_map.bin");
     }
+
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
 }
@@ -2243,8 +2250,8 @@ void Index<T, TagT, LabelT>::parse_sample_label_file(const std::string &label_fi
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            //            LabelT token_as_num = (LabelT)std::stoul(token);
-            LabelT token_as_num = get_converted_label(token);
+                        LabelT token_as_num = (LabelT)std::stoul(token);
+            //LabelT token_as_num = get_converted_label(token);
             lbls.push_back(token_as_num);
             sample_labels.insert(token_as_num);
             try
