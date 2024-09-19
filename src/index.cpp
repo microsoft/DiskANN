@@ -1078,8 +1078,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             if (search_invocation)
             {
-                uint32_t res;
-                if ((res = detect_filter_penalty(id, search_invocation, filter_labels)) > _filter_penalty_threshold)
+                uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
+                if ((res) > _filter_penalty_threshold)
                     continue;
                 penalty = res * penalty_scale;
                 if (print_qstats)
@@ -2663,6 +2663,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             if (cand < std::numeric_limits<uint32_t>::max())
             {
                 init_ids.emplace_back(cand);
+            } else {
+                if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+                { 
+                    init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+                } 
             }
 
             local_print = true;
@@ -2725,6 +2730,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             if (cand < std::numeric_limits<uint32_t>::max())
             {
                 init_ids.emplace_back(cand);
+            } else {
+                if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+                { 
+                    init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+                } 
             }
 
             local_print = true;
