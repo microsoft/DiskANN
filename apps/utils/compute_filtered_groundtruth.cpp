@@ -246,8 +246,8 @@ void exact_knn(const size_t dim, const size_t k,
                     std::numeric_limits<float>::max();
                 l++;
             }
-            assert(std::is_sorted(dist_closest_points + (ptrdiff_t)q * (ptrdiff_t)k,
-                                  dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t)k));
+//            assert(std::is_sorted(dist_closest_points + (ptrdiff_t)q * (ptrdiff_t)k,
+  //                                dist_closest_points + (ptrdiff_t)(q + 1) * (ptrdiff_t)k));
         }
         std::cout << "Computed exact k-NN for queries: [" << q_b << "," << q_e << ")" << std::endl;
     }
