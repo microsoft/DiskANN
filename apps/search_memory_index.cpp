@@ -166,7 +166,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         query_result_tags.resize(recall_at * query_num);
     }
-
+    //query_num = 2;
     // query_num = 1;
     double best_recall = 0.0;
 
@@ -200,6 +200,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             //            time_to_get_valid = 0;
             //            time_to_compare = 0;
             curr_query = i;
+/*            std::cout<<"\n\nQuery #" <<i <<"\n*******************\n";
+            for (uint32_t rnr =  0; rnr < L; rnr++) {
+                std::cout<<std::setw(10)<< gt_ids[i*gt_dim+rnr]<<":" << gt_dists[i*gt_dim+rnr]<<"\t";
+            }
+            std::cout<<std::endl;*/
             if (L_for_print == L)
                 print_qstats = true;
             else

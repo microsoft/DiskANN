@@ -1135,6 +1135,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     while (best_L_nodes.has_unexpanded_node())
     {
+/*        for (uint32_t rnr = 0; rnr < best_L_nodes.size(); rnr++) {
+            auto &x = best_L_nodes[rnr];
+            std::cout<<std::setw(10)<<x.id<<":"<<x.distance<<"\t";
+        }
+        std::cout<<std::endl;*/
+
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
 
@@ -2663,6 +2669,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             if (cand < std::numeric_limits<uint32_t>::max())
             {
                 init_ids.emplace_back(cand);
+                //init_ids.emplace_back(_start);
             } else {
                 if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
                 { 
