@@ -2666,16 +2666,19 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         case 2:
             num_graphs++;
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
+            if (!use_global_start) {
             if (cand < std::numeric_limits<uint32_t>::max())
             {
                 init_ids.emplace_back(cand);
-                //init_ids.emplace_back(_start);
             } else {
                 if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
                 { 
                     init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
                 } 
             }
+             } else {
+                init_ids.emplace_back(_start);
+             }
 
             local_print = true;
             if (print_qstats)
@@ -2734,6 +2737,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             /* if (_dynamic_index) */
             /*     tl.unlock(); */
 
+            if (!use_global_start) {
             if (cand < std::numeric_limits<uint32_t>::max())
             {
                 init_ids.emplace_back(cand);
@@ -2743,6 +2747,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                     init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
                 } 
             }
+             } else {
+                init_ids.emplace_back(_start);
+             }
 
             local_print = true;
             if (print_qstats)

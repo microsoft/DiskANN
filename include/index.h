@@ -48,6 +48,7 @@ inline bool print_qstats = false;
 inline int64_t curr_query = -1;
 inline uint32_t penalty_scale = 10;
 inline uint32_t num_sp = 2;
+inline bool use_global_start = false;
 
 namespace diskann
 {

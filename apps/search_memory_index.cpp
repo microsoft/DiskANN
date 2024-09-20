@@ -449,7 +449,7 @@ int main(int argc, char **argv)
         query_filters_file;
     uint32_t num_threads, K, filter_penalty_threshold, bruteforce_threshold, clustering_threshold, L_for_print;
     std::vector<uint32_t> Lvec;
-    bool print_all_recalls, dynamic, tags, show_qps_per_thread;
+    bool print_all_recalls, dynamic, tags, show_qps_per_thread, global_start;
     float fail_if_recall_below = 0.0f;
 
     uint32_t maxN;
@@ -496,6 +496,10 @@ int main(int argc, char **argv)
         optional_configs.add_options()("clustering_threshold",
                                        po::value<uint32_t>(&clustering_threshold)->default_value(0),
                                        "Threshold under which we use clustering for the filtered search");
+        optional_configs.add_options()("use_global_start",
+                                       po::value<bool>(&global_start)->default_value(false),
+                                       "Whether or not to use global start or predicate-aware starting point in graph search");
+
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);
         optional_configs.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string("null")),
@@ -601,6 +605,8 @@ int main(int argc, char **argv)
     {
         query_filters = read_file_to_vector_of_strings(query_filters_file);
     }
+
+    use_global_start = global_start;
 
     try
     {
