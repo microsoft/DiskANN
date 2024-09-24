@@ -75,7 +75,7 @@ class NeighborPriorityQueue
             else
             {
                 lo = mid + 1;
-            }
+                }
         }
 
         if (lo < _capacity)
@@ -202,7 +202,7 @@ class NeighborPriorityQueue
         _cur = 0;
     }
 
-  private:
+  public:
     size_t _size, _capacity, _cur;
     std::vector<Neighbor> _data;
 };

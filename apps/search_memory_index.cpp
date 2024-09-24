@@ -25,6 +25,97 @@
 
 namespace po = boost::program_options;
 
+struct bestCandidates {
+    diskann::NeighborPriorityQueue best_L_nodes;
+    tsl::robin_map<uint32_t, diskann::NeighborPriorityQueue> color_to_nodes;
+    uint32_t _Lsize = 0;
+    uint32_t _maxLperSeller = 0;
+    std::vector<uint32_t> &_location_to_seller;
+
+    bestCandidates(uint32_t Lsize, uint32_t maxLperSeller, std::vector<uint32_t> &location_to_seller) : _location_to_seller(location_to_seller) {
+        _Lsize = Lsize;
+        _maxLperSeller = maxLperSeller;
+        best_L_nodes = diskann::NeighborPriorityQueue(_Lsize);
+    }
+    void insert(uint32_t cur_id, float cur_dist) {
+            //std::cout<<cur_id << _location_to_seller[cur_id] << " : " << std::flush;
+            if (color_to_nodes.find(_location_to_seller[cur_id]) == color_to_nodes.end()) {
+                    color_to_nodes[_location_to_seller[cur_id]] = diskann::NeighborPriorityQueue(_maxLperSeller);
+            }
+                auto &cur_list = color_to_nodes[_location_to_seller[cur_id]];
+                if (cur_list.size() < _maxLperSeller && best_L_nodes.size() < _Lsize) {
+                    cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
+                    best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));
+                    
+                } else if (cur_list.size() == _maxLperSeller) {
+                    if (cur_dist < cur_list[_maxLperSeller-1].distance) {
+                     best_L_nodes.delete_id(cur_list[_maxLperSeller-1]);   
+                    cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
+                    best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));                    
+                    
+                    }
+                } else if (cur_list.size() < _maxLperSeller && best_L_nodes.size() == _Lsize) {
+                    if (cur_dist < best_L_nodes[_Lsize-1].distance) {
+/*                        if (color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].size() == 0) {
+                            std::cout<<"Trying to delete from empty Q. " << best_L_nodes[Lsize-1].id <<" of color " << _location_to_seller[best_L_nodes[Lsize-1].id] << std::endl;
+                        }*/
+                     color_to_nodes[_location_to_seller[best_L_nodes[_Lsize-1].id]].delete_id(best_L_nodes[_Lsize-1]);
+                     cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
+                     best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));                    
+                    
+                    }
+                }
+    }
+};
+
+
+void parse_seller_file(const std::string &label_file, size_t &num_points, std::vector<uint32_t> &location_to_seller)
+{
+    // Format of Label txt file: filters with comma separators
+
+    std::ifstream infile(label_file);
+    if (infile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+
+    std::string line, token;
+    uint32_t line_cnt = 0;
+    std::set<uint32_t> sellers;
+    while (std::getline(infile, line))
+    {
+        line_cnt++;
+    }
+    location_to_seller.resize(line_cnt);
+
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
+
+    while (std::getline(infile, line))
+    {
+        std::istringstream iss(line);
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        uint32_t seller;
+        while (getline(new_iss, token, ','))
+        {
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+            uint32_t token_as_num = (uint32_t)std::stoul(token);
+            seller = token_as_num;
+            sellers.insert(seller);
+        }
+
+        location_to_seller[line_cnt] = seller;
+        line_cnt++;
+    }
+    num_points = (size_t)line_cnt;
+    diskann::cout << " Search code: Identified " << sellers.size() << " distinct seller(s) across " << num_points <<" points." << std::endl;
+}
+
+
+
 template <typename T, typename LabelT = uint32_t>
 int search_memory_index(diskann::Metric &metric, const std::string &index_path, const std::string &result_path_prefix,
                         const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
@@ -32,6 +123,13 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
                         const std::vector<std::string> &query_filters, const float fail_if_recall_below, const uint32_t max_L_per_seller = 0)
 {
+    std::vector<uint32_t> location_to_sellers;
+    std::string seller_file = index_path +"_sellers.txt";
+    if (file_exists(seller_file)) {
+        std::cout<<"Here" << std::endl;
+        uint64_t num_pts_seller_file;
+        parse_seller_file(seller_file, num_pts_seller_file, location_to_sellers);
+    }
     using TagT = uint32_t;
     // Load the query file
     T *query = nullptr;
@@ -68,7 +166,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
     }
 
-    //query_num = 1;
+//    query_num = 1;
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
     auto config = diskann::IndexConfigBuilder()
@@ -159,7 +257,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         std::vector<T *> res = std::vector<T *>();
 
         uint32_t maxLperSeller = (max_L_per_seller > 0) ? max_L_per_seller : L;
-        maxLperSeller = (maxLperSeller == 0)? 1 : maxLperSeller;
+        //maxLperSeller = (maxLperSeller == 0)? 1 : maxLperSeller;
 
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);
@@ -203,17 +301,33 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
             else
             {
-                if (maxLperSeller != L)
+/*                if (maxLperSeller != L)
                 cmp_stats[i] = index
                                    ->diverse_search(query + i * query_aligned_dim, recall_at, L, maxLperSeller,
                                             query_result_ids[test_id].data() + i * recall_at)
-                                   .second; 
-               else
+                                   .second;   */
+//               else {
+                {
+                std::vector<uint32_t> results(L,0);
+                std::vector<float> dists(L,0);
                 cmp_stats[i] = index
-                                   ->search(query + i * query_aligned_dim, recall_at, L, 
-                                            query_result_ids[test_id].data() + i * recall_at)
+                                   ->search(query + i * query_aligned_dim, L, L, 
+                                            results.data(), dists.data())
                                    .second;
-
+                    bestCandidates final_results(recall_at, maxLperSeller, location_to_sellers);
+                    for (uint32_t rr = 0; rr < L; rr++) {
+                        final_results.insert(results[rr], dists[rr]);
+  //                      std::cout<<results[rr]<<",";
+                    }
+//                    std::cout<<"size: " << final_results.best_L_nodes.size() << std::endl;
+                    for (uint32_t ctr = 0; ctr < final_results.best_L_nodes.size(); ctr++) {
+                        //query_result_ids[test_id][i]
+                        query_result_ids[test_id][recall_at * i + ctr] = final_results.best_L_nodes._data[ctr].id;                        
+                    }
+//               }
+                    // call the diverse GT function  
+                    // will use true max per seller here
+            }
             }
             auto qe = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> diff = qe - qs;
