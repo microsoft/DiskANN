@@ -25,49 +25,6 @@
 
 namespace po = boost::program_options;
 
-struct bestCandidates {
-    diskann::NeighborPriorityQueue best_L_nodes;
-    tsl::robin_map<uint32_t, diskann::NeighborPriorityQueue> color_to_nodes;
-    uint32_t _Lsize = 0;
-    uint32_t _maxLperSeller = 0;
-    std::vector<uint32_t> &_location_to_seller;
-
-    bestCandidates(uint32_t Lsize, uint32_t maxLperSeller, std::vector<uint32_t> &location_to_seller) : _location_to_seller(location_to_seller) {
-        _Lsize = Lsize;
-        _maxLperSeller = maxLperSeller;
-        best_L_nodes = diskann::NeighborPriorityQueue(_Lsize);
-    }
-    void insert(uint32_t cur_id, float cur_dist) {
-            //std::cout<<cur_id << _location_to_seller[cur_id] << " : " << std::flush;
-            if (color_to_nodes.find(_location_to_seller[cur_id]) == color_to_nodes.end()) {
-                    color_to_nodes[_location_to_seller[cur_id]] = diskann::NeighborPriorityQueue(_maxLperSeller);
-            }
-                auto &cur_list = color_to_nodes[_location_to_seller[cur_id]];
-                if (cur_list.size() < _maxLperSeller && best_L_nodes.size() < _Lsize) {
-                    cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
-                    best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));
-                    
-                } else if (cur_list.size() == _maxLperSeller) {
-                    if (cur_dist < cur_list[_maxLperSeller-1].distance) {
-                     best_L_nodes.delete_id(cur_list[_maxLperSeller-1]);   
-                    cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
-                    best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));                    
-                    
-                    }
-                } else if (cur_list.size() < _maxLperSeller && best_L_nodes.size() == _Lsize) {
-                    if (cur_dist < best_L_nodes[_Lsize-1].distance) {
-/*                        if (color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].size() == 0) {
-                            std::cout<<"Trying to delete from empty Q. " << best_L_nodes[Lsize-1].id <<" of color " << _location_to_seller[best_L_nodes[Lsize-1].id] << std::endl;
-                        }*/
-                     color_to_nodes[_location_to_seller[best_L_nodes[_Lsize-1].id]].delete_id(best_L_nodes[_Lsize-1]);
-                     cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
-                     best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));                    
-                    
-                    }
-                }
-    }
-};
-
 
 void parse_seller_file(const std::string &label_file, size_t &num_points, std::vector<uint32_t> &location_to_seller)
 {
@@ -121,7 +78,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
                         const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
-                        const std::vector<std::string> &query_filters, const float fail_if_recall_below, const uint32_t max_L_per_seller = 0)
+                        const std::vector<std::string> &query_filters, const float fail_if_recall_below, const uint32_t max_L_per_seller = 0, const bool post_process = false)
 {
     std::vector<uint32_t> location_to_sellers;
     std::string seller_file = index_path +"_sellers.txt";
@@ -301,32 +258,26 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
             else
             {
-/*                if (maxLperSeller != L)
+                if (maxLperSeller != L && !post_process)
                 cmp_stats[i] = index
                                    ->diverse_search(query + i * query_aligned_dim, recall_at, L, maxLperSeller,
                                             query_result_ids[test_id].data() + i * recall_at)
-                                   .second;   */
-//               else {
-                {
+                                   .second;   
+               else {
+//                {
                 std::vector<uint32_t> results(L,0);
                 std::vector<float> dists(L,0);
                 cmp_stats[i] = index
                                    ->search(query + i * query_aligned_dim, L, L, 
                                             results.data(), dists.data())
                                    .second;
-                    bestCandidates final_results(recall_at, maxLperSeller, location_to_sellers);
+                    diskann::bestCandidates final_results(recall_at, maxLperSeller, location_to_sellers);
                     for (uint32_t rr = 0; rr < L; rr++) {
                         final_results.insert(results[rr], dists[rr]);
-  //                      std::cout<<results[rr]<<",";
                     }
-//                    std::cout<<"size: " << final_results.best_L_nodes.size() << std::endl;
                     for (uint32_t ctr = 0; ctr < final_results.best_L_nodes.size(); ctr++) {
-                        //query_result_ids[test_id][i]
                         query_result_ids[test_id][recall_at * i + ctr] = final_results.best_L_nodes._data[ctr].id;                        
                     }
-//               }
-                    // call the diverse GT function  
-                    // will use true max per seller here
             }
             }
             auto qe = std::chrono::high_resolution_clock::now();
@@ -406,7 +357,7 @@ int main(int argc, char **argv)
         query_filters_file;
     uint32_t num_threads, K, max_L_per_seller;
     std::vector<uint32_t> Lvec;
-    bool print_all_recalls, dynamic, tags, show_qps_per_thread;
+    bool print_all_recalls, dynamic, tags, show_qps_per_thread, post_process;
     float fail_if_recall_below = 0.0f;
 
     po::options_description desc{
@@ -451,6 +402,10 @@ int main(int argc, char **argv)
         optional_configs.add_options()("max_L_per_seller",
                                        po::value<uint32_t>(&max_L_per_seller)->default_value(0),
                                        "How many results per seller we want search results to contain");
+        optional_configs.add_options()("post_process",
+                                       po::value<bool>(&post_process)->default_value(false),
+                                       "Whether to do vanilla search + post-processing for diversity");
+
         optional_configs.add_options()(
             "dynamic", po::value<bool>(&dynamic)->default_value(false),
             "Whether the index is dynamic. Dynamic indices must have associated tags.  Default false.");
@@ -549,19 +504,19 @@ int main(int argc, char **argv)
             {
                 return search_memory_index<int8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller, post_process);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller, post_process);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float, uint16_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                            show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
+                                                            show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller, post_process);
             }
             else
             {
@@ -575,19 +530,19 @@ int main(int argc, char **argv)
             {
                 return search_memory_index<int8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                   show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
+                                                   show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller, post_process);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                     num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                    show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
+                                                    show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller, post_process);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                   num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                  show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller);
+                                                  show_qps_per_thread, query_filters, fail_if_recall_below, max_L_per_seller, post_process);
             }
             else
             {

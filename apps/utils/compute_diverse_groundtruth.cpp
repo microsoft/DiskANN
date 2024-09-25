@@ -105,7 +105,7 @@ void distsq_to_points(const size_t dim,
         delete[] ones_vec;
 }
 
-
+/*
 struct bestCandidates {
     diskann::NeighborPriorityQueue best_L_nodes;
     tsl::robin_map<uint32_t, diskann::NeighborPriorityQueue> color_to_nodes;
@@ -137,9 +137,6 @@ struct bestCandidates {
                     }
                 } else if (cur_list.size() < _maxLperSeller && best_L_nodes.size() == _Lsize) {
                     if (cur_dist < best_L_nodes[_Lsize-1].distance) {
-/*                        if (color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].size() == 0) {
-                            std::cout<<"Trying to delete from empty Q. " << best_L_nodes[Lsize-1].id <<" of color " << _location_to_seller[best_L_nodes[Lsize-1].id] << std::endl;
-                        }*/
                      color_to_nodes[_location_to_seller[best_L_nodes[_Lsize-1].id]].delete_id(best_L_nodes[_Lsize-1]);
                      cur_list.insert(diskann::Neighbor(cur_id, cur_dist));
                      best_L_nodes.insert(diskann::Neighbor(cur_id, cur_dist));                    
@@ -148,7 +145,7 @@ struct bestCandidates {
                 }
     }
 };
-
+*/
 
 void inner_prod_to_points(const size_t dim,
                           float *dist_matrix, // Col Major, cols are queries, rows are points
@@ -183,7 +180,7 @@ void exact_knn(const size_t dim, const size_t k,
                                                  // corresponding closes_points
                size_t npoints, size_t start_id, 
                float *points_in, // points in Col major
-               size_t nqueries, float *queries_in, uint32_t kPerSeller, std::vector<bestCandidates> &running_results, 
+               size_t nqueries, float *queries_in, uint32_t kPerSeller, std::vector<diskann::bestCandidates> &running_results, 
                diskann::Metric metric = diskann::Metric::L2) // queries in Col major
 {
     float *points_l2sq = new float[npoints];
@@ -264,7 +261,7 @@ void exact_knn(const size_t dim, const size_t k,
 #pragma omp parallel for schedule(dynamic, 16)
         for (long long q = q_b; q < q_e; q++)
         {
-            bestCandidates & cur_query_best_results = running_results[q];
+            diskann::bestCandidates & cur_query_best_results = running_results[q];
 //            for (size_t p = 0; p < k; p++)
 //                point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
             for (size_t p = 0; p < npoints; p++)
@@ -387,7 +384,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
     float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
-    std::vector<bestCandidates> running_results(nqueries, bestCandidates(k, kperseller, location_to_seller));
+    std::vector<diskann::bestCandidates> running_results(nqueries, diskann::bestCandidates(k, kperseller, location_to_seller));
     for (int p = 0; p < num_parts; p++)
     {
         size_t start_id = p * PARTSIZE;
