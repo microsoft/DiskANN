@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <mutex>
 #include <vector>
+#include <tsl/robin_map.h>
 #include "utils.h"
 
 namespace diskann
@@ -206,5 +207,52 @@ class NeighborPriorityQueue
     size_t _size, _capacity, _cur;
     std::vector<Neighbor> _data;
 };
+
+
+struct bestCandidates {
+    NeighborPriorityQueue best_L_nodes;
+    tsl::robin_map<uint32_t, NeighborPriorityQueue> color_to_nodes;
+    uint32_t _Lsize = 0;
+    uint32_t _maxLperSeller = 0;
+    std::vector<uint32_t> &_location_to_seller;
+
+    bestCandidates(uint32_t Lsize, uint32_t maxLperSeller, std::vector<uint32_t> &location_to_seller) : _location_to_seller(location_to_seller) {
+        _Lsize = Lsize;
+        _maxLperSeller = maxLperSeller;
+        best_L_nodes = NeighborPriorityQueue(_Lsize);
+    }
+    void insert(uint32_t cur_id, float cur_dist) {
+            //std::cout<<cur_id << _location_to_seller[cur_id] << " : " << std::flush;
+            if (color_to_nodes.find(_location_to_seller[cur_id]) == color_to_nodes.end()) {
+                    color_to_nodes[_location_to_seller[cur_id]] = NeighborPriorityQueue(_maxLperSeller);
+            }
+                auto &cur_list = color_to_nodes[_location_to_seller[cur_id]];
+                if (cur_list.size() < _maxLperSeller && best_L_nodes.size() < _Lsize) {
+                    cur_list.insert(Neighbor(cur_id, cur_dist));
+                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));
+                    
+                } else if (cur_list.size() == _maxLperSeller) {
+                    if (cur_dist < cur_list[_maxLperSeller-1].distance) {
+                     best_L_nodes.delete_id(cur_list[_maxLperSeller-1]);   
+                    cur_list.insert(Neighbor(cur_id, cur_dist));
+                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
+                    
+                    }
+                } else if (cur_list.size() < _maxLperSeller && best_L_nodes.size() == _Lsize) {
+                    if (cur_dist < best_L_nodes[_Lsize-1].distance) {
+/*                        if (color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].size() == 0) {
+                            std::cout<<"Trying to delete from empty Q. " << best_L_nodes[Lsize-1].id <<" of color " << _location_to_seller[best_L_nodes[Lsize-1].id] << std::endl;
+                        }*/
+                     color_to_nodes[_location_to_seller[best_L_nodes[_Lsize-1].id]].delete_id(best_L_nodes[_Lsize-1]);
+                     cur_list.insert(Neighbor(cur_id, cur_dist));
+                     best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
+                    
+                    }
+                }
+    }
+};
+
+
+
 
 } // namespace diskann
