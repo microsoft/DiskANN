@@ -14,8 +14,8 @@ namespace diskann
 //
 template <typename T>
 InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
-                                        size_t aligned_dim, size_t alignment_factor, bool init_pq_scratch)
-    : _L(0), _R(r), _maxc(maxc)
+                                        size_t aligned_dim, size_t alignment_factor, std::vector<uint32_t> &location_to_sellers, bool init_pq_scratch)
+    : _L(0), _R(r), _maxc(maxc), _best_diverse_nodes(location_to_sellers)
 {
     if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0)
     {
@@ -56,6 +56,8 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _expanded_nodes_set.clear();
     _expanded_nghrs_vec.clear();
     _occlude_list_output.clear();
+    _best_diverse_nodes.clear();
+    
 }
 
 template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l)

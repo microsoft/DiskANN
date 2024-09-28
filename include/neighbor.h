@@ -48,6 +48,10 @@ class NeighborPriorityQueue
     {
     }
 
+    void setup(uint32_t capacity) {
+        _data.resize(capacity+1);
+        _capacity = capacity;
+    }
     // Inserts the item ordered into the set up to the sets capacity.
     // The item will be dropped if it is the same id as an exiting
     // set item or it has a greated distance than the final
@@ -216,11 +220,26 @@ struct bestCandidates {
     uint32_t _maxLperSeller = 0;
     std::vector<uint32_t> &_location_to_seller;
 
+    bestCandidates(std::vector<uint32_t> &location_to_seller) : _location_to_seller(location_to_seller) {
+    }
+
     bestCandidates(uint32_t Lsize, uint32_t maxLperSeller, std::vector<uint32_t> &location_to_seller) : _location_to_seller(location_to_seller) {
         _Lsize = Lsize;
         _maxLperSeller = maxLperSeller;
         best_L_nodes = NeighborPriorityQueue(_Lsize);
     }
+
+    void clear() {
+        best_L_nodes.clear();
+        color_to_nodes.clear();
+    }
+
+    void setup(uint32_t Lsize, uint32_t maxLperSeller) {
+        _Lsize = Lsize;
+        _maxLperSeller = maxLperSeller;
+        best_L_nodes = NeighborPriorityQueue(_Lsize);
+    }
+
     void insert(uint32_t cur_id, float cur_dist) {
             //std::cout<<cur_id << _location_to_seller[cur_id] << " : " << std::flush;
             if (color_to_nodes.find(_location_to_seller[cur_id]) == color_to_nodes.end()) {
