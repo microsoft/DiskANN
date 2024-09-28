@@ -29,7 +29,7 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
   public:
     ~InMemQueryScratch();
     InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim, size_t aligned_dim,
-                      size_t alignment_factor, bool init_pq_scratch = false);
+                      size_t alignment_factor, std::vector<uint32_t> &location_to_sellers, bool init_pq_scratch = false);
     void resize_for_new_L(uint32_t new_search_l);
     void clear();
 
@@ -60,6 +60,10 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     inline NeighborPriorityQueue &best_l_nodes()
     {
         return _best_l_nodes;
+    }
+    inline bestCandidates &best_diverse_nodes()
+    {
+        return _best_diverse_nodes;
     }
     inline std::vector<float> &occlude_factor()
     {
@@ -107,6 +111,7 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     // _best_l_nodes is reserved for storing best L entries
     // Underlying storage is L+1 to support inserts
     NeighborPriorityQueue _best_l_nodes;
+    bestCandidates _best_diverse_nodes;
 
     // _occlude_factor.size() >= pool.size() in occlude_list function
     // _pool is clipped to maxc in occlude_list before affecting _occlude_factor

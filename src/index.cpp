@@ -192,7 +192,7 @@ void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint
     for (uint32_t i = 0; i < num_threads; i++)
     {
         auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _data_store->get_aligned_dim(),
-                                                _data_store->get_alignment_factor(), _pq_dist);
+                                                _data_store->get_alignment_factor(), _location_to_seller, _pq_dist);
         _query_scratch.push(scratch);
     }
 }
@@ -816,10 +816,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     else
         diverse_search = true;
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
-    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
-    best_L_nodes.reserve(Lsize);
+    NeighborPriorityQueue &best_L_nodes_ref = scratch->best_l_nodes();
+    bestCandidates &best_diverse_nodes_ref = scratch->best_diverse_nodes();
+    best_L_nodes_ref.reserve(Lsize);
+    best_diverse_nodes_ref.setup(Lsize, maxLperSeller);
 
-    tsl::robin_map<uint32_t, NeighborPriorityQueue> color_to_nodes;
+    NeighborPriorityQueue* best_L_nodes;
+    if(diverse_search) {
+        best_L_nodes = &(best_diverse_nodes_ref.best_L_nodes);
+    } else {
+        best_L_nodes = &(best_L_nodes_ref);
+    }
 
     tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
@@ -898,12 +905,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             distance = distances[0];
 
             Neighbor nn = Neighbor(id, distance);
-            best_L_nodes.insert(nn);
             if (diverse_search) {
-                auto &col = _location_to_seller[id];
-                if (color_to_nodes.find(col) == color_to_nodes.end())
-                    color_to_nodes[col] = NeighborPriorityQueue(maxLperSeller);
-                color_to_nodes[col].insert(nn);
+                best_diverse_nodes_ref.insert(id, distance);
+            } else {
+                best_L_nodes->insert(nn);
             }
         }
     }
@@ -911,9 +916,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
-    while (best_L_nodes.has_unexpanded_node())
+    while (best_L_nodes->has_unexpanded_node())
     {
-        auto nbr = best_L_nodes.closest_unexpanded();
+        auto nbr = best_L_nodes->closest_unexpanded();
         auto n = nbr.id;
 //        std::cout<<n<<" is going to be expanded" << std::endl;
 
@@ -1010,58 +1015,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         std::cout<<" == " <<best_L_nodes.size()<<std::endl; */
             int32_t run_flag = 0;
             if (diverse_search) {
-                auto cur_id = id_scratch[m];
-                auto cur_dist = dist_scratch[m];
-            //std::cout<<cur_id << _location_to_seller[cur_id] << " : " << std::flush;
-            if (color_to_nodes.find(_location_to_seller[cur_id]) == color_to_nodes.end()) {
-                    color_to_nodes[_location_to_seller[cur_id]] = NeighborPriorityQueue(maxLperSeller);
+                best_diverse_nodes_ref.insert(id_scratch[m], dist_scratch[m]);
+            } else {
+            best_L_nodes->insert(Neighbor(id_scratch[m], dist_scratch[m]));
             }
-                auto &cur_list = color_to_nodes[_location_to_seller[cur_id]];
-                if (cur_list.size() < maxLperSeller && best_L_nodes.size() < Lsize) {
-                    cur_list.insert(Neighbor(cur_id, cur_dist));
-                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));
-                    run_flag = 1;
-                } else if (cur_list.size() == maxLperSeller) {
-                    if (cur_dist < cur_list[maxLperSeller-1].distance) {
-                     best_L_nodes.delete_id(cur_list[maxLperSeller-1]);   
-                    cur_list.insert(Neighbor(cur_id, cur_dist));
-                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
-                    run_flag = 2;
-                    }
-                } else if (cur_list.size() < maxLperSeller && best_L_nodes.size() == Lsize) {
-                    if (cur_dist < best_L_nodes[Lsize-1].distance) {
-/*                        if (color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].size() == 0) {
-                            std::cout<<"Trying to delete from empty Q. " << best_L_nodes[Lsize-1].id <<" of color " << _location_to_seller[best_L_nodes[Lsize-1].id] << std::endl;
-                        }*/
-                     color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].delete_id(best_L_nodes[Lsize-1]);
-                     cur_list.insert(Neighbor(cur_id, cur_dist));
-                     best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
-                     run_flag = 3;
-                    }
-                }
-
-        uint32_t sum_local_lists = 0;
-        for (auto &x : color_to_nodes) {
-            if (x.second.size() > 0) {
-//                std::cout<<x.first <<" " << x.second.size()<<" ";
-                sum_local_lists += x.second.size();
-            }
-        }
-        if (sum_local_lists != best_L_nodes.size()) {
-        for (auto &x : color_to_nodes) {
-            if (x.second.size() > 0) {
-                std::cout<<x.first <<" " << x.second.size()<<" ";
-            }
-        }            
-        std::cout<<" " <<best_L_nodes.size()<<" vs " << sum_local_lists <<", run_flag = " << run_flag << std::endl; 
-        exit(-1);
-        }
-
-            }
-            else {
-            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
-            }
-        
         }
     }
     return std::make_pair(hops, cmps);
@@ -2298,24 +2255,29 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     auto retval = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, maxLperSeller);
 
-    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    NeighborPriorityQueue *best_L_nodes;
+    if (maxLperSeller == 0) {
+        best_L_nodes = &(scratch->best_l_nodes());
+    } else {
+        best_L_nodes = &(scratch->best_diverse_nodes().best_L_nodes);
+    }
 
     size_t pos = 0;
-    for (size_t i = 0; i < best_L_nodes.size(); ++i)
+    for (size_t i = 0; i < best_L_nodes->size(); ++i)
     {
-        if (best_L_nodes[i].id < _max_points)
+        if ((*best_L_nodes)[i].id < _max_points)
         {
             // safe because Index uses uint32_t ids internally
             // and IDType will be uint32_t or uint64_t
-            indices[pos] = (IdType)best_L_nodes[i].id;
+            indices[pos] = (IdType)(*best_L_nodes)[i].id;
             if (distances != nullptr)
             {
 #ifdef EXEC_ENV_OLS
                 // DLVS expects negative distances
                 distances[pos] = best_L_nodes[i].distance;
 #else
-                distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT ? -1 * best_L_nodes[i].distance
-                                                                                : best_L_nodes[i].distance;
+                distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT ? -1 * ((*best_L_nodes)[i].distance)
+                                                                                : (*best_L_nodes)[i].distance;
 #endif
             }
             pos++;
