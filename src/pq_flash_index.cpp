@@ -379,9 +379,10 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
         cur_level->insert(_medoids[miter]);
     }
 
-    if ((_filter_to_medoid_ids.size() > 0) && (cur_level->size() < num_nodes_to_cache))
+    auto filter_to_medoid_ids = _filter_store->get_label_to_medoids();
+    if ((filter_to_medoid_ids.size() > 0) && (cur_level->size() < num_nodes_to_cache))
     {
-        for (auto &x : _filter_to_medoid_ids)
+        for (auto &x : filter_to_medoid_ids)
         {
             for (auto &y : x.second)
             {
@@ -565,41 +566,7 @@ void PQFlashIndex<T, LabelT>::generate_random_labels(std::vector<LabelT> &labels
     }
 }
 
-template <typename T, typename LabelT>
-std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(std::basic_istream<char> &map_reader)
-{
-    std::unordered_map<std::string, LabelT> string_to_int_mp;
-    std::string line, token;
-    LabelT token_as_num;
-    std::string label_str;
-    while (std::getline(map_reader, line))
-    {
-        std::istringstream iss(line);
-        getline(iss, token, '\t');
-        label_str = token;
-        getline(iss, token, '\t');
-        token_as_num = (LabelT)std::stoul(token);
-        string_to_int_mp[label_str] = token_as_num;
-    }
-    return string_to_int_mp;
-}
 
-template <typename T, typename LabelT>
-LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_label)
-{
-    if (_label_map.find(filter_label) != _label_map.end())
-    {
-        return _label_map[filter_label];
-    }
-    if (_use_universal_label)
-    {
-        return _universal_filter_label;
-    }
-    std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-}
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::reset_stream_for_reading(std::basic_istream<char> &infile)
@@ -652,111 +619,6 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &fileCon
                   << std::endl;
 }
 
-template <typename T, typename LabelT>
-inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, LabelT label_id)
-{
-    uint32_t start_vec = _pts_to_label_offsets[point_id];
-    uint32_t num_lbls = _pts_to_label_counts[point_id];
-    bool ret_val = false;
-    for (uint32_t i = 0; i < num_lbls; i++)
-    {
-        if (_pts_to_labels[start_vec + i] == label_id)
-        {
-            ret_val = true;
-            break;
-        }
-    }
-    return ret_val;
-}
-
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile, size_t &num_points_labels)
-{
-    infile.seekg(0, std::ios::end);
-    size_t file_size = infile.tellg();
-
-    std::string buffer(file_size, ' ');
-
-    infile.seekg(0, std::ios::beg);
-    infile.read(&buffer[0], file_size);
-
-    std::string line;
-    uint32_t line_cnt = 0;
-
-    uint32_t num_pts_in_label_file;
-    uint32_t num_total_labels;
-    get_label_file_metadata(buffer, num_pts_in_label_file, num_total_labels);
-
-    _pts_to_label_offsets = new uint32_t[num_pts_in_label_file];
-    _pts_to_label_counts = new uint32_t[num_pts_in_label_file];
-    _pts_to_labels = new LabelT[num_total_labels];
-    uint32_t labels_seen_so_far = 0;
-
-    std::string label_str;
-    size_t cur_pos = 0;
-    size_t next_pos = 0;
-    while (cur_pos < file_size && cur_pos != std::string::npos)
-    {
-        next_pos = buffer.find('\n', cur_pos);
-        if (next_pos == std::string::npos)
-        {
-            break;
-        }
-
-        _pts_to_label_offsets[line_cnt] = labels_seen_so_far;
-        uint32_t &num_lbls_in_cur_pt = _pts_to_label_counts[line_cnt];
-        num_lbls_in_cur_pt = 0;
-
-        size_t lbl_pos = cur_pos;
-        size_t next_lbl_pos = 0;
-        while (lbl_pos < next_pos && lbl_pos != std::string::npos)
-        {
-            next_lbl_pos = buffer.find(',', lbl_pos);
-            if (next_lbl_pos == std::string::npos) // the last label in the whole file
-            {
-                next_lbl_pos = next_pos;
-            }
-
-            if (next_lbl_pos > next_pos) // the last label in one line, just read to the end
-            {
-                next_lbl_pos = next_pos;
-            }
-
-            label_str.assign(buffer.c_str() + lbl_pos, next_lbl_pos - lbl_pos);
-            if (label_str[label_str.length() - 1] == '\t') // '\t' won't exist in label file?
-            {
-                label_str.erase(label_str.length() - 1);
-            }
-
-            LabelT token_as_num = (LabelT)std::stoul(label_str);
-            _pts_to_labels[labels_seen_so_far++] = (LabelT)token_as_num;
-            num_lbls_in_cur_pt++;
-
-            // move to next label
-            lbl_pos = next_lbl_pos + 1;
-        }
-
-        // move to next line
-        cur_pos = next_pos + 1;
-
-        if (num_lbls_in_cur_pt == 0)
-        {
-            diskann::cout << "No label found for point " << line_cnt << std::endl;
-            exit(-1);
-        }
-
-        line_cnt++;
-    }
-
-    num_points_labels = line_cnt;
-    reset_stream_for_reading(infile);
-}
-
-template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_universal_label(const LabelT &label)
-{
-    _use_universal_label = true;
-    _universal_filter_label = label;
-}
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
@@ -796,12 +658,6 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string medoids_file = std::string(_disk_index_file) + "_medoids.bin";
     std::string centroids_file = std::string(_disk_index_file) + "_centroids.bin";
 
-    std::string labels_file = std ::string(_disk_index_file) + "_labels.txt";
-    std::string labels_to_medoids = std ::string(_disk_index_file) + "_labels_to_medoids.txt";
-    std::string dummy_map_file = std ::string(_disk_index_file) + "_dummy_map.txt";
-    std::string labels_map_file = std ::string(_disk_index_file) + "_labels_map.txt";
-    size_t num_pts_in_label_file = 0;
-
     size_t pq_file_dim, pq_file_num_centroids;
 #ifdef EXEC_ENV_OLS
     get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim, METADATA_SIZE);
@@ -829,147 +685,16 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 #else
     diskann::load_bin<uint8_t>(pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
 #endif
-
     this->_num_points = npts_u64;
     this->_n_chunks = nchunks_u64;
-#ifdef EXEC_ENV_OLS
-    if (files.fileExists(labels_file))
-    {
-        FileContent &content_labels = files.getContent(labels_file);
-        std::stringstream infile(std::string((const char *)content_labels._content, content_labels._size));
-#else
-    if (file_exists(labels_file))
-    {
-        std::ifstream infile(labels_file, std::ios::binary);
-        if (infile.fail())
-        {
-            throw diskann::ANNException(std::string("Failed to open file ") + labels_file, -1);
-        }
-#endif
-        parse_label_file(infile, num_pts_in_label_file);
-        assert(num_pts_in_label_file == this->_num_points);
 
-#ifndef EXEC_ENV_OLS
-        infile.close();
-#endif
-
-#ifdef EXEC_ENV_OLS
-        FileContent &content_labels_map = files.getContent(labels_map_file);
-        std::stringstream map_reader(std::string((const char *)content_labels_map._content, content_labels_map._size));
-#else
-        std::ifstream map_reader(labels_map_file);
-#endif
-        _label_map = load_label_map(map_reader);
-
-#ifndef EXEC_ENV_OLS
-        map_reader.close();
-#endif
-
-#ifdef EXEC_ENV_OLS
-        if (files.fileExists(labels_to_medoids))
-        {
-            FileContent &content_labels_to_meoids = files.getContent(labels_to_medoids);
-            std::stringstream medoid_stream(
-                std::string((const char *)content_labels_to_meoids._content, content_labels_to_meoids._size));
-#else
-        if (file_exists(labels_to_medoids))
-        {
-            std::ifstream medoid_stream(labels_to_medoids);
-            assert(medoid_stream.is_open());
-#endif
-            std::string line, token;
-
-            _filter_to_medoid_ids.clear();
-            try
-            {
-                while (std::getline(medoid_stream, line))
-                {
-                    std::istringstream iss(line);
-                    uint32_t cnt = 0;
-                    std::vector<uint32_t> medoids;
-                    LabelT label;
-                    while (std::getline(iss, token, ','))
-                    {
-                        if (cnt == 0)
-                            label = (LabelT)std::stoul(token);
-                        else
-                            medoids.push_back((uint32_t)stoul(token));
-                        cnt++;
-                    }
-                    _filter_to_medoid_ids[label].swap(medoids);
-                }
-            }
-            catch (std::system_error &e)
-            {
-                throw FileException(labels_to_medoids, e, __FUNCSIG__, __FILE__, __LINE__);
-            }
-        }
-        std::string univ_label_file = std ::string(_disk_index_file) + "_universal_label.txt";
-
-#ifdef EXEC_ENV_OLS
-        if (files.fileExists(univ_label_file))
-        {
-            FileContent &content_univ_label = files.getContent(univ_label_file);
-            std::stringstream universal_label_reader(
-                std::string((const char *)content_univ_label._content, content_univ_label._size));
-#else
-        if (file_exists(univ_label_file))
-        {
-            std::ifstream universal_label_reader(univ_label_file);
-            assert(universal_label_reader.is_open());
-#endif
-            std::string univ_label;
-            universal_label_reader >> univ_label;
-#ifndef EXEC_ENV_OLS
-            universal_label_reader.close();
-#endif
-            LabelT label_as_num = (LabelT)std::stoul(univ_label);
-            set_universal_label(label_as_num);
-        }
-
-#ifdef EXEC_ENV_OLS
-        if (files.fileExists(dummy_map_file))
-        {
-            FileContent &content_dummy_map = files.getContent(dummy_map_file);
-            std::stringstream dummy_map_stream(
-                std::string((const char *)content_dummy_map._content, content_dummy_map._size));
-#else
-        if (file_exists(dummy_map_file))
-        {
-            std::ifstream dummy_map_stream(dummy_map_file);
-            assert(dummy_map_stream.is_open());
-#endif
-            std::string line, token;
-
-            while (std::getline(dummy_map_stream, line))
-            {
-                std::istringstream iss(line);
-                uint32_t cnt = 0;
-                uint32_t dummy_id;
-                uint32_t real_id;
-                while (std::getline(iss, token, ','))
-                {
-                    if (cnt == 0)
-                        dummy_id = (uint32_t)stoul(token);
-                    else
-                        real_id = (uint32_t)stoul(token);
-                    cnt++;
-                }
-                _dummy_pts.insert(dummy_id);
-                _has_dummy_pts.insert(real_id);
-                _dummy_to_real_map[dummy_id] = real_id;
-
-                if (_real_to_dummy_map.find(real_id) == _real_to_dummy_map.end())
-                    _real_to_dummy_map[real_id] = std::vector<uint32_t>();
-
-                _real_to_dummy_map[real_id].emplace_back(dummy_id);
-            }
-#ifndef EXEC_ENV_OLS
-            dummy_map_stream.close();
-#endif
-            diskann::cout << "Loaded dummy map" << std::endl;
-        }
+    _filter_store = std::make_unique<InMemFilterStore<LabelT>>();
+    if (_filter_store->load(_disk_index_file) == false) {
+      diskann::cout << "Index does not have filter support." << std::endl;
+    } else {
+      diskann::cout << "Index has filter support. " << std::endl;
     }
+    
 
 #ifdef EXEC_ENV_OLS
     _pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
@@ -1381,7 +1106,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     {
         if (_filter_to_medoid_ids.find(filter_label) != _filter_to_medoid_ids.end())
         {
-            const auto &medoid_ids = _filter_to_medoid_ids[filter_label];
+            //const auto &medoid_ids = _filter_to_medoid_ids[filter_label];
+            const auto &medoid_ids = _filter_store->get_medoids_of_label(filter_label);
             for (uint64_t cur_m = 0; cur_m < medoid_ids.size(); cur_m++)
             {
                 // for filtered index, we dont store global centroid data as for unfiltered index, so we use PQ distance
@@ -1525,11 +1251,14 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 uint32_t id = node_nbrs[m];
                 if (visited.insert(id).second)
                 {
-                    if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
+                    //if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
+                    //unfiltered search, but filtered index!
+                    if (!use_filter && _filter_store->is_dummy_point(id))
                         continue;
 
-                    if (use_filter && !(point_has_label(id, filter_label)) &&
-                        (!_use_universal_label || !point_has_label(id, _universal_filter_label)))
+                    //if (use_filter && !(point_has_label(id, filter_label)) &&
+                    //    (!_use_universal_label || !point_has_label(id, _universal_filter_label)))
+                    if (use_filter && !_filter_store->point_has_label_or_universal_label(id, filter_label))
                         continue;
                     cmps++;
                     float dist = dist_scratch[m];
@@ -1588,11 +1317,13 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 uint32_t id = node_nbrs[m];
                 if (visited.insert(id).second)
                 {
-                    if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
+                    //if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
+                    if (!use_filter && _filter_store->is_dummy_point(id))
                         continue;
 
-                    if (use_filter && !(point_has_label(id, filter_label)) &&
-                        (!_use_universal_label || !point_has_label(id, _universal_filter_label)))
+                    //if (use_filter && !(point_has_label(id, filter_label)) &&
+                    //    (!_use_universal_label || !point_has_label(id, _universal_filter_label)))
+                    if (use_filter && _filter_store->point_has_label_or_universal_label(id, filter_label))
                         continue;
                     cmps++;
                     float dist = dist_scratch[m];

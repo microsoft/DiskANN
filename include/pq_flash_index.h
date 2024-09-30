@@ -16,6 +16,8 @@
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 
+#include "in_mem_filter_store.h"
+
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 
 namespace diskann
@@ -221,18 +223,10 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     bool _reorder_data_exists = false;
     uint64_t _reoreder_data_offset = 0;
 
-    // filter support
-    uint32_t *_pts_to_label_offsets = nullptr;
-    uint32_t *_pts_to_label_counts = nullptr;
-    LabelT *_pts_to_labels = nullptr;
-    std::unordered_map<LabelT, std::vector<uint32_t>> _filter_to_medoid_ids;
-    bool _use_universal_label = false;
-    LabelT _universal_filter_label;
-    tsl::robin_set<uint32_t> _dummy_pts;
-    tsl::robin_set<uint32_t> _has_dummy_pts;
-    tsl::robin_map<uint32_t, uint32_t> _dummy_to_real_map;
-    tsl::robin_map<uint32_t, std::vector<uint32_t>> _real_to_dummy_map;
-    std::unordered_map<std::string, LabelT> _label_map;
+    //Moved filter-specific data structures to in_mem_filter_store.
+    //TODO: Make this a unique pointer
+    InMemFilterStore<LabelT>* _filter_store;
+
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate
