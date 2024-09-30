@@ -44,12 +44,12 @@ class NeighborPriorityQueue
     {
     }
 
-    explicit NeighborPriorityQueue(size_t capacity) : _size(0), _capacity(capacity), _cur(0), _data(capacity + 1)
+    explicit NeighborPriorityQueue(size_t capacity) : _size(0), _capacity(capacity), _cur(0), _data(capacity + 1, Neighbor(std::numeric_limits<uint32_t>::max(), std::numeric_limits<float>::max()))
     {
     }
 
     void setup(uint32_t capacity) {
-        _data.resize(capacity+1);
+        _data.resize(capacity+1,Neighbor(std::numeric_limits<uint32_t>::max(), std::numeric_limits<float>::max()));
         _capacity = capacity;
     }
     // Inserts the item ordered into the set up to the sets capacity.

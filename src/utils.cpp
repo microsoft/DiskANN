@@ -126,14 +126,19 @@ void normalize_data_file(const std::string &inFileName, const std::string &outFi
     diskann::cout << "Wrote normalized points to file: " << outFileName << std::endl;
 }
 
+
 double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist, uint32_t dim_gs,
-                        uint32_t *our_results, uint32_t dim_or, uint32_t recall_at)
+                        uint32_t *our_results, uint32_t dim_or, uint32_t recall_at, float* algo_distances)
 {
+    bool use_distances_to_break_ties = false;
+    if (algo_distances != nullptr) {
+        use_distances_to_break_ties = true;
+    }
     double total_recall = 0;
     std::set<uint32_t> gt, res;
-
     for (size_t i = 0; i < num_queries; i++)
     {
+        if (!use_distances_to_break_ties) {
         gt.clear();
         res.clear();
         uint32_t *gt_vec = gold_std + dim_gs * i;
@@ -160,6 +165,14 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
             }
         }
         total_recall += cur_recall;
+        } else {  // only works if dim_or == dim_gs. Not for the k-recall@k' regime.
+            uint32_t cur_recall =0;
+            for (uint32_t rr = 0; rr < std::min(dim_or, dim_gs); rr++) {
+                if (algo_distances[i*dim_or + rr] <= gs_dist[i*dim_gs + (recall_at-1)])
+                    cur_recall++;
+            }
+            total_recall += cur_recall;
+        }
     }
     return total_recall / (num_queries) * (100.0 / recall_at);
 }

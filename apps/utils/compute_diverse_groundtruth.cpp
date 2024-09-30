@@ -397,6 +397,13 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
         exact_knn(dim, part_k, closest_points_part, dist_closest_points_part, npoints, start_id, base_data, nqueries, query_data, kperseller, running_results,
                   metric);
 
+
+        delete[] closest_points_part;
+        delete[] dist_closest_points_part;
+
+        diskann::aligned_free(base_data);
+    }
+
         for (size_t i = 0; i < nqueries; i++)
         {
             auto & cur_results = running_results[i];
@@ -413,11 +420,6 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
             }
         }
 
-        delete[] closest_points_part;
-        delete[] dist_closest_points_part;
-
-        diskann::aligned_free(base_data);
-    }
     return res;
 };
 
@@ -521,8 +523,14 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
 
             ++j;
         }
-        if (j < k)
+        if (j < k) {
             std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
+            while (j<k) {
+                dist_closest_points[i * k + j] = std::numeric_limits<float>::max();
+                closest_points[i * k + j] = std::numeric_limits<int32_t>::max();
+                j++;
+            }
+        }
     }
 
     save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, nqueries, k);
