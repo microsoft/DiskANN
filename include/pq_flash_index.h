@@ -83,7 +83,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                               const uint32_t io_limit, const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr);
 
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
 
     DISKANN_DLLEXPORT uint32_t range_search(const T *query1, const double range, const uint64_t min_l_search,
                                             const uint64_t max_l_search, std::vector<uint64_t> &indices,
@@ -114,18 +113,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(uint64_t nthreads, uint64_t visited_reserve = 4096);
 
-    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
-
   private:
-    DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, LabelT label_id);
-    std::unordered_map<std::string, LabelT> load_label_map(std::basic_istream<char> &infile);
-    DISKANN_DLLEXPORT void parse_label_file(std::basic_istream<char> &infile, size_t &num_pts_labels);
-    DISKANN_DLLEXPORT void get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
-                                                   uint32_t &num_total_labels);
-    DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
-                                                  const uint32_t nthreads);
-    void reset_stream_for_reading(std::basic_istream<char> &infile);
-
     // sector # on disk where node_id is present with in the graph part
     DISKANN_DLLEXPORT uint64_t get_node_sector(uint64_t node_id);
 
@@ -225,7 +213,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     //Moved filter-specific data structures to in_mem_filter_store.
     //TODO: Make this a unique pointer
-    InMemFilterStore<LabelT>* _filter_store;
+    bool                      _filter_index = false;
+    std::unique_ptr<InMemFilterStore<LabelT>> _filter_store;
 
 
 #ifdef EXEC_ENV_OLS
