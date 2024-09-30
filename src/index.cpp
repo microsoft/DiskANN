@@ -752,6 +752,15 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
         }
     }
 
+    if(_nd > 1000){
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, _nd-1);
+        for(uint32_t i=0;i<1000;i++){
+            init_ids.emplace_back(dis(gen));
+        }
+    }
+
     return init_ids;
 }
 
@@ -2003,11 +2012,23 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     }
 
     const std::vector<LabelT> unused_filter_label;
-    const std::vector<uint32_t> init_ids = get_init_ids();
+    const std::vector<uint32_t> init_ids_temp = get_init_ids();
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
     _data_store->preprocess_query(query, scratch);
+
+    std::vector<uint32_t> init_ids;
+    float min_dist = std::numeric_limits<float>::max();
+    for(auto id:init_ids_temp){
+
+        float dist = _data_store->get_distance(query,id);
+        if(dist < min_dist){
+            min_dist = dist;
+            init_ids.clear();
+            init_ids.push_back(id);
+        }
+    }
 
     auto retval = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
 

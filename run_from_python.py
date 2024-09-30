@@ -6,9 +6,9 @@ exe_path = r"C:\Users\ameyv\MSR\DiskANN\x64\Debug\build_memory_index.exe"
 #exe_path = r"C:\Users\ameyv\MSR\DiskANN\x64\Release\build_disk_index.exe"
 #exe_path = r"C:\Users\ameyv\MSR\DiskANN\x64\Release\gen_random_slice.exe"
 
-coomand_type = 1
+command_type = 1
 
-if coomand_type == 1:
+if command_type == 1:
     data_path = r"C:\Users\ameyv\MSR\sift_base.bin"
     index_path_prefix = r"C:\Users\ameyv\MSR\sift_memory_index_R64_L100"
     arguments = [
@@ -19,7 +19,7 @@ if coomand_type == 1:
         "-R", "64",
         "-L", "100"
     ]
-elif coomand_type == 2:
+elif command_type == 2:
     memory = 1
     data_path = r"C:\Users\ameyv\MSR\sift_base.bin"
     index_path_prefix = r"C:\Users\ameyv\MSR\sift_disk_index"
@@ -34,7 +34,7 @@ elif coomand_type == 2:
         "-T","1",
         "-M", str(memory)
     ]
-elif coomand_type == 3:
+elif command_type == 3:
     base_file_path = r"C:\Users\ameyv\MSR\sift_base.bin"
     arguments = ["float", 
                  base_file_path, 
