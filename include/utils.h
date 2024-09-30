@@ -673,7 +673,7 @@ inline void copy_file(std::string in_file, std::string out_file)
 }
 
 DISKANN_DLLEXPORT double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist, unsigned dim_gs,
-                                          unsigned *our_results, unsigned dim_or, unsigned recall_at);
+                                          unsigned *our_results, unsigned dim_or, unsigned recall_at, float* algo_distances = nullptr);
 
 DISKANN_DLLEXPORT double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist, unsigned dim_gs,
                                           unsigned *our_results, unsigned dim_or, unsigned recall_at,
