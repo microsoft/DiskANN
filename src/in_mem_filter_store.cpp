@@ -193,6 +193,8 @@ namespace diskann {
     get_label_file_metadata(label_file_content, num_pts_in_label_file,
                             num_total_labels);
 
+    _num_points = num_pts_in_label_file;
+
     _pts_to_label_offsets = new uint32_t[num_pts_in_label_file];
     _pts_to_label_counts = new uint32_t[num_pts_in_label_file];
     _pts_to_labels = new LabelT[num_total_labels];
