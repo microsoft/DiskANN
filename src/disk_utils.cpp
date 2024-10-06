@@ -1188,8 +1188,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string mem_univ_label_file = mem_index_path + "_universal_label.txt";
     std::string disk_univ_label_file = disk_index_path + "_universal_label.txt";
     std::string disk_labels_int_map_file = disk_index_path + "_labels_map.txt";
-    std::string dummy_remap_file = disk_index_path + "_dummy_remap.txt"; // remap will be used if we break-up points of
-                                                                         // high label-density to create copies
+    std::string dummy_remap_file = disk_index_path + "_dummy_map.txt"; // remap will be used if we break-up points of
+                                                                       // high label-density to create copies
 
     std::string sample_base_prefix = index_prefix_path + "_sample";
     // optional, used if disk index file must store pq data
@@ -1274,7 +1274,6 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         augmented_labels_file = index_prefix_path + "_augmented_labels.txt";
         if (filter_threshold != 0)
         {
-            dummy_remap_file = index_prefix_path + "_dummy_remap.txt";
             breakup_dense_points<T>(data_file_to_use, labels_file_to_use, filter_threshold, augmented_data_file,
                                     augmented_labels_file,
                                     dummy_remap_file); // RKNOTE: This has large memory footprint,
@@ -1365,6 +1364,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     if (created_temp_file_for_processed_data)
         std::remove(prepped_base.c_str());
     std::remove(mem_index_path.c_str());
+    std::remove((mem_index_path + ".data").c_str());
+    std::remove((mem_index_path + ".tags").c_str());
     if (use_disk_pq)
         std::remove(disk_pq_compressed_vectors_path.c_str());
 
