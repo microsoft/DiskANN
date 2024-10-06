@@ -1189,7 +1189,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string disk_univ_label_file = disk_index_path + "_universal_label.txt";
     std::string disk_labels_int_map_file = disk_index_path + "_labels_map.txt";
     std::string dummy_remap_file = disk_index_path + "_dummy_map.txt"; // remap will be used if we break-up points of
-                                                                         // high label-density to create copies
+                                                                       // high label-density to create copies
 
     std::string sample_base_prefix = index_prefix_path + "_sample";
     // optional, used if disk index file must store pq data
