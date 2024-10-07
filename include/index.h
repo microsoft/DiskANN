@@ -55,18 +55,37 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   public:
     // Constructor for Bulk operations and for creating the index object solely
     // for loading a prexisting index.
-    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store,
+#ifdef EXEC_ENV_OLS
+    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, MemoryMappedFiles &files,
+                            std::shared_ptr<AbstractDataStore<T>> data_store,
                             std::unique_ptr<AbstractGraphStore> graph_store,
                             std::shared_ptr<AbstractDataStore<T>> pq_data_store = nullptr);
 
+#else
+    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store,
+                            std::unique_ptr<AbstractGraphStore> graph_store,
+                            std::shared_ptr<AbstractDataStore<T>> pq_data_store = nullptr);
+#endif
     // Constructor for incremental index
+#ifdef EXEC_ENV_OLS
+    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
+                            const std::shared_ptr<IndexWriteParameters> index_parameters,
+                            const std::shared_ptr<IndexSearchParams> index_search_params, MemoryMappedFiles &files,
+                            const std::string &codebook_path = "", const size_t num_frozen_pts = 0,
+                            const bool dynamic_index = false, const bool enable_tags = false,
+                            const bool concurrent_consolidate = false, const bool pq_dist_build = false,
+                            const size_t num_pq_chunks = 0, const bool use_opq = false,
+                            const bool filtered_index = false);
+#else
     DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
                             const std::shared_ptr<IndexWriteParameters> index_parameters,
                             const std::shared_ptr<IndexSearchParams> index_search_params,
-                            const size_t num_frozen_pts = 0, const bool dynamic_index = false,
-                            const bool enable_tags = false, const bool concurrent_consolidate = false,
-                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false, const bool filtered_index = false);
+                            const std::string &codebook_path = "", const size_t num_frozen_pts = 0,
+                            const bool dynamic_index = false, const bool enable_tags = false,
+                            const bool concurrent_consolidate = false, const bool pq_dist_build = false,
+                            const size_t num_pq_chunks = 0, const bool use_opq = false,
+                            const bool filtered_index = false);
+#endif
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -185,6 +204,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // memory should be allocated for vec before calling this function
     DISKANN_DLLEXPORT int get_vector_by_tag(TagT &tag, T *vec);
+
+    // memory should be allocated for vec before calling this function
+    DISKANN_DLLEXPORT int get_pq_vector_by_tag(TagT &tag, T *vec);
 
     DISKANN_DLLEXPORT void print_status();
 
@@ -403,12 +425,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _pq_dist = false;
     bool _use_opq = false;
     size_t _num_pq_chunks = 0;
-    // REFACTOR
-    // uint8_t *_pq_data = nullptr;
-    std::shared_ptr<QuantizedDistance<T>> _pq_distance_fn = nullptr;
     std::shared_ptr<AbstractDataStore<T>> _pq_data_store = nullptr;
-    bool _pq_generated = false;
-    FixedChunkPQTable _pq_table;
 
     //
     // Data structures, locks and flags for dynamic indexing and tags
