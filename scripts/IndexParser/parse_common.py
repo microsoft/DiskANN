@@ -5,6 +5,23 @@ import struct
 SECTOR_LEN = 4096
 NUM_PQ_CENTROIDS = 256
 
+def get_data_type_code_and_size(data_type):
+    data_type_size = 0
+    data_type_code = ''
+    if data_type == "float":
+        data_type_size = 4
+        data_type_code = 'f'
+    elif data_type == "int8":
+        data_type_code = 'b'
+        data_type_size = 1
+    elif data_type == "uint8":
+        data_type_code = 'B'
+        data_type_size = 1
+    else:
+        raise Exception("Unsupported data type. Supported data types are float, int8 and uint8")
+    
+    return data_type_code, data_type_size
+
 class Node:
     def __init__(self, id, data_format_specifier, num_dims):
         self.id = id
