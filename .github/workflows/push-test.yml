@@ -41,7 +41,7 @@ jobs:
           echo "dependencies" > dependencies_${{ matrix.os }}.txt
           pipdeptree >> dependencies_${{ matrix.os }}.txt
       - name: Archive dispannpy dependencies artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: dependencies
           path: |
