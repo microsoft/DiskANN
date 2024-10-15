@@ -365,11 +365,6 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
     }
     diskann::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
 
-    // borrow thread data
-    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-    auto this_thread_data = manager.scratch_space();
-    IOContext &ctx = this_thread_data->ctx;
-
     std::unique_ptr<tsl::robin_set<uint32_t>> cur_level, prev_level;
     cur_level = std::make_unique<tsl::robin_set<uint32_t>>();
     prev_level = std::make_unique<tsl::robin_set<uint32_t>>();
