@@ -48,6 +48,7 @@ jobs:
           name: dependencies
           path: |
             dependencies_documentation.txt
+            overwrite: true
       - name: Archive documentation artifacts
         uses: actions/upload-artifact@v4
         with:
