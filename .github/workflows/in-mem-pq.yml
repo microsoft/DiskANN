@@ -50,7 +50,7 @@ jobs:
       - name: upload data and bin
         uses: actions/upload-artifact@v4
         with:
-          name: in-memory-pq
+          name: in-memory-pq-${{matrix.os}}
           path: |
             ./dist/**
             ./data/**

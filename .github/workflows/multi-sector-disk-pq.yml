@@ -54,7 +54,7 @@ jobs:
       - name: upload data and bin
         uses: actions/upload-artifact@v4
         with:
-          name: multi-sector-disk-pq
+          name: multi-sector-disk-pq-${{matrix.os}}
           path: |
             ./dist/**
             ./data/**
