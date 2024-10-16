@@ -47,6 +47,7 @@ test-command = "python -m unittest discover {project}/python/tests"
 
 [tool.cibuildwheel.linux]
 before-build = [
+    "rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux",
     "dnf makecache --refresh",
     "dnf upgrade -y almalinux-release",
     "dnf install -y epel-release",
