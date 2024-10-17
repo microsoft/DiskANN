@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "diskannpy"
-version = "0.7.0"
+version = "0.7.1"
 
 description = "DiskANN Python extension module"
 readme = "python/README.md"
