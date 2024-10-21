@@ -8,6 +8,7 @@
 #include "pq_scratch.h"
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
+#include "in_mem_filter_store.h"
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -54,6 +55,7 @@ namespace diskann {
     this->_dist_cmp.reset(diskann::get_distance_function<T>(metric_to_invoke));
     this->_dist_cmp_float.reset(
         diskann::get_distance_function<float>(metric_to_invoke));
+    this->_filter_store = std::make_unique<InMemFilterStore<LabelT>>();
   }
 
   template<typename T, typename LabelT>
@@ -1235,7 +1237,7 @@ namespace diskann {
             // if (use_filter && !(point_has_label(id, filter_label)) &&
             //    (!_use_universal_label || !point_has_label(id,
             //    _universal_filter_label)))
-            if (use_filter && _filter_store->point_has_label_or_universal_label(
+            if (use_filter && !_filter_store->point_has_label_or_universal_label(
                                   id, filter_label))
               continue;
             cmps++;
@@ -1392,6 +1394,12 @@ namespace diskann {
   template<typename T, typename LabelT>
   diskann::Metric PQFlashIndex<T, LabelT>::get_metric() {
     return this->metric;
+  }
+
+  template<typename T, typename LabelT>
+  LabelT PQFlashIndex<T, LabelT>::get_converted_label(
+      const std::string &filter_label) {
+    return _filter_store->get_converted_label(filter_label);
   }
 
 #ifdef EXEC_ENV_OLS

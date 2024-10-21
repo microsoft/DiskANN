@@ -91,6 +91,9 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT uint64_t get_data_dim();
 
+    DISKANN_DLLEXPORT LabelT
+    get_converted_label(const std::string &filter_label);
+
     std::shared_ptr<AlignedFileReader> &reader;
 
     DISKANN_DLLEXPORT diskann::Metric get_metric();
