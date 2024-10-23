@@ -26,6 +26,7 @@ class TestVectorsFromFile(unittest.TestCase):
                 use_memmap=True
             )
             self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
+            del actual # hopefully this releases the handle on the file, as windows is not happy with this
             actual = dap.vectors_from_file(
                 vecs_file,
                 dtype=np.float32,
