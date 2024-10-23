@@ -25,7 +25,7 @@ class TestVectorsFromFile(unittest.TestCase):
                 dtype=np.float32,
                 use_memmap=True
             )
-            self.assertTrue((expected == actual).all())
+            self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
             actual = dap.vectors_from_file(
                 vecs_file,
                 dtype=np.float32,
