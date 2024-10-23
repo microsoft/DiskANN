@@ -15,7 +15,7 @@ class TestVectorsFromFile(unittest.TestCase):
         expected = random_vectors(10_000, 100, dtype=np.float32)
         with vectors_as_temp_file(expected) as vecs_file:
             actual = dap.vectors_from_file(vecs_file, dtype=np.float32)
-            self.assertTrue(all(expected == actual))
+            self.assertTrue((expected == actual).all())
 
     def test_memmap(self):
         expected = random_vectors(10_000, 100, dtype=np.float32)
@@ -32,7 +32,7 @@ class TestVectorsFromFile(unittest.TestCase):
                 use_memap=True,
                 mode="r+"
             )
-            self.assertTrue(all(expected == actual))
+            self.assertTrue((expected == actual).all())
 
 
 if __name__ == '__main__':
