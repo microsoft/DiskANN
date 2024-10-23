@@ -29,7 +29,7 @@ class TestVectorsFromFile(unittest.TestCase):
             actual = dap.vectors_from_file(
                 vecs_file,
                 dtype=np.float32,
-                use_memap=True,
+                use_memmap=True,
                 mode="r+"
             )
             self.assertTrue((expected == actual).all())
