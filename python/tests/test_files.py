@@ -23,7 +23,7 @@ class TestVectorsFromFile(unittest.TestCase):
         expected = random_vectors(10_000, 100, dtype=np.float32)
         with vectors_as_temp_file(expected) as vecs_file:
             with tempfile.NamedTemporaryFile() as vecs_file_copy:
-                shutil.copyfile(vecs_file, vecs_file_copy)
+                shutil.copyfile(vecs_file, vecs_file_copy.name)
                 actual = dap.vectors_from_file(
                     vecs_file,
                     dtype=np.float32,
@@ -32,7 +32,7 @@ class TestVectorsFromFile(unittest.TestCase):
                 self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
                 # windows refuses to allow 2 active handles via memmap to touch the same file
                 # that's why we made a copy of the file itself and are using the copy here to test
-                # the read+append(inmem) 
+                # the read+append(inmem)
                 actual = dap.vectors_from_file(
                     vecs_file_copy,
                     dtype=np.float32,
