@@ -24,8 +24,8 @@ class TestVectorsFromFile(unittest.TestCase):
     def test_memmap(self):
         expected = random_vectors(10_000, 100, dtype=np.float32)
         with vectors_as_temp_file(expected) as vecs_file:
+            vecs_files_copy = Path(tempfile.mkstemp())
             try:
-                vecs_files_copy = Path(tempfile.mkstemp())
                 shutil.copyfile(vecs_file, str(vecs_file_copy))
                 actual = dap.vectors_from_file(
                     vecs_file,
