@@ -28,7 +28,7 @@ class TestVectorsFromFile(unittest.TestCase):
             vecs_file_copy = tempfile.NamedTemporaryFile(delete=False)
             atexit.register(Path(vecs_file_copy.name).unlink)
             shutil.copyfile(vecs_file, vecs_file_copy.name)
-            
+
             actual = dap.vectors_from_file(
                 vecs_file,
                 dtype=np.float32,

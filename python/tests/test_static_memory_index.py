@@ -306,6 +306,8 @@ class TestFilteredStaticMemoryIndex(unittest.TestCase):
             with_filter_but_label_all, _ = index.search(
                 query_vectors[0], k_neighbors=k*2, complexity=128, filter_label="all"
             )
+            # this has begun failing randomly. gopalrs - this *shouldn't* fail, but for some reason the filtered search
+            # will sometimes return fewer than the expected 10k results here. 
             intersection = np.intersect1d(without_filter, with_filter_but_label_all)
             intersect_count = intersection.shape[0]
             self.assertEqual(intersect_count, k*2)
