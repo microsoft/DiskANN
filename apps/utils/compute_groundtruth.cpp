@@ -342,7 +342,6 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
                                                                             std::vector<uint32_t> &location_to_tag)
 {
     float *base_data = nullptr;
-    //std::cout<<"AMEY: Inside processUnfilteredParts location_to_tag "<<location_to_tag.size()<<std::endl;
     int num_parts = get_num_parts<T>(base_file.c_str());
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
     for (int p = 0; p < num_parts; p++)
@@ -393,20 +392,13 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
 
     // load tags
     const bool tags_enabled = tags_file.empty() ? false : true;
-    //const bool base_file_exists = base_file.empty() ? false : true;
-    //std::cout<<"AMEY: base_file_exists "<<base_file_exists<<std::endl;
-    //std::cout<<"AMEY: tags_file "<<tags_file<<std::endl;
-    //std::cout<<"AMEY: tags_enabled "<<tags_enabled<<std::endl;
     std::vector<uint32_t> location_to_tag = diskann::loadTags(tags_file, base_file);
 
     int *closest_points = new int[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
 
-    //std::cout<<"AMEY: Inside aux_main location_to_tag "<<location_to_tag.size()<<std::endl;
-    //std::cout<<"AMEY: in aux_main before processUnfiltered "<<std::endl;
     std::vector<std::vector<std::pair<uint32_t, float>>> results =
         processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
-    //std::cout<<"AMEY: in aux_main after processUnfiltered "<<std::endl;
 
     for (size_t i = 0; i < nqueries; i++)
     {
@@ -437,14 +429,7 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
         if (j < k)
             std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
     }
-    std::cout<<"AMEY: tags_enabled "<<tags_enabled<<std::endl;
-    for(size_t i = 0; i < nqueries; i++){
-        std::cout<<"query "<<i<<std::endl;
-        for(size_t j = 0; j < k; j++){
-            std::cout<<"closest point id "<<closest_points[i*k + j]<<"closest point distance "<<dist_closest_points[i*k + j];
-        }
-        std::cout<<std::endl;
-    }
+
     save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, nqueries, k);
     delete[] closest_points;
     delete[] dist_closest_points;

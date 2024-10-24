@@ -145,7 +145,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     double best_recall = 0.0;
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
-    {
+    {   
+        std::cout<<"L: "<<test_id<<std::endl;
         uint32_t L = Lvec[test_id];
         if (L < recall_at)
         {
@@ -160,7 +161,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
-        for (int64_t i = 0; i < 10; i++)
+        for (int64_t i = 0; i < (int64_t)query_num; i++)
         {
             auto qs = std::chrono::high_resolution_clock::now();
             if (filtered_search && !tags)
