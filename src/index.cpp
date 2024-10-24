@@ -2541,7 +2541,7 @@ std::vector<std::pair<LabelT, uint32_t>> Index<T, TagT, LabelT>::sort_filter_cou
 }
 
 template <typename T, typename TagT, typename LabelT>
-std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap,
+std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap,
                                                                           const std::vector<LabelT> &filter_label)
 {
     intersection_bitmap = _labels_to_points_sample[filter_label[0]];
@@ -2551,12 +2551,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::sample_intersection(roarin
     }
     uint32_t val = std::numeric_limits<uint32_t>::max();
     auto x = intersection_bitmap.begin();
-    if (x != intersection_bitmap.end())
+    std::vector<uint32_t> results;
+    results.reserve(num_start_points);
+    while (x != intersection_bitmap.end() && results.size() < num_start_points)
     {
         val = _sample_map[*x];
+        results.emplace_back(val);
+        x++;
     }
     //    std::cout<<intersection_bitmap.cardinality() << " " << val << std::endl;
-    return std::make_pair((uint32_t)(intersection_bitmap.cardinality() * (1.0 / (_sample_prob))), val);
+    return std::make_pair((uint32_t)(intersection_bitmap.cardinality() * (1.0 / (_sample_prob))), results);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2666,17 +2670,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         case 2:
             num_graphs++;
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
-            if (!use_global_start) {
-            if (cand < std::numeric_limits<uint32_t>::max())
+
+            if (cand.size() > 0)
             {
-                init_ids.emplace_back(cand);
-            } else {
+                init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+//                init_ids.emplace_back(cand);
+            } /*else {
                 if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
                 { 
                     init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
                 } 
-            }
-             } else {
+            } */
+             if (use_global_start) {
                 init_ids.emplace_back(_start);
              }
 
@@ -2685,7 +2690,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             {
                 std::ofstream out("query_stats.txt", std::ios_base::app);
                 out << "estimated intersection size is " << inter_estim << std::endl;
-                out << "setting up init ids with id " << cand << std::endl;
+                //out << "setting up init ids with id " << cand << std::endl;
                 out.close();
             }
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
@@ -2737,17 +2742,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             /* if (_dynamic_index) */
             /*     tl.unlock(); */
 
-            if (!use_global_start) {
-            if (cand < std::numeric_limits<uint32_t>::max())
+            if (cand.size() > 0)
             {
-                init_ids.emplace_back(cand);
-            } else {
+                init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+//                init_ids.emplace_back(cand);
+            } /*else {
                 if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
                 { 
                     init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
                 } 
-            }
-             } else {
+            }*/
+             if (use_global_start) {
                 init_ids.emplace_back(_start);
              }
 
@@ -2760,7 +2765,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                     out << filt << "/" << _labels_to_points[filt].cardinality() << " ";
                 out << std::endl;
                 out << "estimated intersection size is " << estimated_match << std::endl;
-                out << "setting up init ids with id " << cand << std::endl;
+                //out << "setting up init ids with id " << cand << std::endl;
                 out << std::endl;
                 out.close();
             }
