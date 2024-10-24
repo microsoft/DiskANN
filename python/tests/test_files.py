@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT license.
 
+import atexit
 import unittest
 import shutil
 import tempfile
@@ -25,26 +26,25 @@ class TestVectorsFromFile(unittest.TestCase):
         expected = random_vectors(10_000, 100, dtype=np.float32)
         with vectors_as_temp_file(expected) as vecs_file:
             vecs_file_copy = tempfile.NamedTemporaryFile(delete=False)
-            try:
-                shutil.copyfile(vecs_file, vecs_file_copy.name)
-                actual = dap.vectors_from_file(
-                    vecs_file,
-                    dtype=np.float32,
-                    use_memmap=True
-                )
-                self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
-                # windows refuses to allow 2 active handles via memmap to touch the same file
-                # that's why we made a copy of the file itself and are using the copy here to test
-                # the read+append(inmem)
-                actual = dap.vectors_from_file(
-                    vecs_file_copy.name,
-                    dtype=np.float32,
-                    use_memmap=True,
-                    mode="r+"
-                )
-                self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
-            finally:
-                Path(vecs_file_copy.name).unlink()
+            atexit.register(Path(vecs_file_copy.name).unlink)
+            shutil.copyfile(vecs_file, vecs_file_copy.name)
+            
+            actual = dap.vectors_from_file(
+                vecs_file,
+                dtype=np.float32,
+                use_memmap=True
+            )
+            self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
+            # windows refuses to allow 2 active handles via memmap to touch the same file
+            # that's why we made a copy of the file itself and are using the copy here to test
+            # the read+append(inmem)
+            actual = dap.vectors_from_file(
+                vecs_file_copy.name,
+                dtype=np.float32,
+                use_memmap=True,
+                mode="r+"
+            )
+            self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
 
 
 if __name__ == '__main__':
