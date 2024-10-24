@@ -5,6 +5,8 @@ import unittest
 import shutil
 import tempfile
 
+from pathlib import Path
+
 import numpy as np
 
 from fixtures import random_vectors, vectors_as_temp_file
@@ -22,8 +24,9 @@ class TestVectorsFromFile(unittest.TestCase):
     def test_memmap(self):
         expected = random_vectors(10_000, 100, dtype=np.float32)
         with vectors_as_temp_file(expected) as vecs_file:
-            with tempfile.NamedTemporaryFile() as vecs_file_copy:
-                shutil.copyfile(vecs_file, vecs_file_copy.name)
+            try:
+                vecs_files_copy = Path(tempfile.mkstemp())
+                shutil.copyfile(vecs_file, str(vecs_file_copy))
                 actual = dap.vectors_from_file(
                     vecs_file,
                     dtype=np.float32,
@@ -34,12 +37,15 @@ class TestVectorsFromFile(unittest.TestCase):
                 # that's why we made a copy of the file itself and are using the copy here to test
                 # the read+append(inmem)
                 actual = dap.vectors_from_file(
-                    vecs_file_copy.name,
+                    str(vecs_file_copy),
                     dtype=np.float32,
                     use_memmap=True,
                     mode="r+"
                 )
                 self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
+            finally: 
+                if vecs_file_copy.exists():
+                    vecs_file_copy.unlink()
 
 
 if __name__ == '__main__':
