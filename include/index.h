@@ -49,6 +49,7 @@ inline int64_t curr_query = -1;
 inline uint32_t penalty_scale = 10;
 inline uint32_t num_sp = 2;
 inline bool use_global_start = false;
+inline uint32_t num_start_points = 1;
 
 namespace diskann
 {
@@ -277,7 +278,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     std::vector<std::pair<LabelT, uint32_t>> sort_filter_counts(const std::vector<LabelT> &filter_label);
 
-    std::pair<uint32_t, uint32_t> sample_intersection(roaring::Roaring &intersection_bitmap,
+    std::pair<uint32_t, std::vector<uint32_t>> sample_intersection(roaring::Roaring &intersection_bitmap,
                                                       const std::vector<LabelT> &filter_label);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
