@@ -42,7 +42,7 @@ class TestVectorsFromFile(unittest.TestCase):
                     mode="r+"
                 )
                 self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
-                Path(vecs_file_copy).unlink()
+                Path(vecs_file_copy.name).unlink()
 
 
 if __name__ == '__main__':
