@@ -24,7 +24,8 @@ class TestVectorsFromFile(unittest.TestCase):
     def test_memmap(self):
         expected = random_vectors(10_000, 100, dtype=np.float32)
         with vectors_as_temp_file(expected) as vecs_file:
-            with tempfile.NamedTemporaryFile(delete=False) as vecs_file_copy:
+            vecs_file_copy = tempfile.NamedTemporaryFile(delete=False)
+            try:
                 shutil.copyfile(vecs_file, vecs_file_copy.name)
                 actual = dap.vectors_from_file(
                     vecs_file,
@@ -42,6 +43,7 @@ class TestVectorsFromFile(unittest.TestCase):
                     mode="r+"
                 )
                 self.assertTrue((expected == actual).all(), f"{expected == actual}\n{expected}\n{actual}")
+            finally:
                 Path(vecs_file_copy.name).unlink()
 
 
