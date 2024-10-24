@@ -3,13 +3,12 @@
 
 #pragma once
 
-#include <cstdint>
-#include <cstddef>
-#include <any>
 #include "any_wrappers.h"
+#include <any>
+#include <cstddef>
+#include <cstdint>
 
-namespace diskann
-{
+namespace diskann {
 typedef uint32_t location_t;
 
 using DataType = std::any;

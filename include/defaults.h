@@ -4,10 +4,8 @@
 #pragma once
 #include <stdint.h>
 
-namespace diskann
-{
-namespace defaults
-{
+namespace diskann {
+namespace defaults {
 const float ALPHA = 1.2f;
 const uint32_t NUM_THREADS = 0;
 const uint32_t MAX_OCCLUSION_SIZE = 750;

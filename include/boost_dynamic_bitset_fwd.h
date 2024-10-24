@@ -3,9 +3,10 @@
 
 #pragma once
 
-namespace boost
-{
+namespace boost {
 #ifndef BOOST_DYNAMIC_BITSET_FWD_HPP
-template <typename Block = unsigned long, typename Allocator = std::allocator<Block>> class dynamic_bitset;
+template <typename Block = unsigned long,
+          typename Allocator = std::allocator<Block>>
+class dynamic_bitset;
 #endif
 } // namespace boost
