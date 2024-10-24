@@ -34,7 +34,7 @@ class TestVectorsFromFile(unittest.TestCase):
                 # that's why we made a copy of the file itself and are using the copy here to test
                 # the read+append(inmem)
                 actual = dap.vectors_from_file(
-                    vecs_file_copy,
+                    vecs_file_copy.name,
                     dtype=np.float32,
                     use_memmap=True,
                     mode="r+"
