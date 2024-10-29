@@ -1,0 +1,56 @@
+Reading (with alignment) bin file C:\Users\t-avarhade\source\repos\turing1M\sift_query.bin ...Metadata: #pts = 10000, #dims = 128, aligned_dim = 128... allocating aligned memory of 5120000 bytes... done. Copying data to mem_aligned buffer... done.
+Opened: C:\Users\t-avarhade\source\repos\turing1M\sift_gt.bin, size: 8000008, cache_size: 8000008
+Reading truthset file C:\Users\t-avarhade\source\repos\turing1M\sift_gt.bin ...
+Metadata: #pts = 10000, #dims = 100... 
+L2: Using AVX2 distance computation DistanceL2Float
+Resizing took: 0.0096112s
+From graph header, expected_file_size: 131388060, _max_observed_degree: 64, _start: 123742, file_frozen_pts: 0
+Loading vamana graph C:\Users\t-avarhade\source\repos\turing1M\sift_memory_index_r64_l100...done. Index has 1000000 nodes and 31847009 out-edges, _start is set to 123742
+Num frozen points:0 _nd: 1000000 _start: 123742 size(_location_to_tag): 0 size(_tag_to_location):0 Max points: 1000000
+Index loaded
+Using 1 threads to search
+  Ls         QPS     Avg dist cmps  Mean Latency (mus)   99.9 Latency   Recall@50
+=================================================================================
+  50     3451.36           1390.96              289.39        1253.90       92.29
+  60     3017.59           1585.41              330.96        1267.40       94.03
+  70     2061.32           1775.37              484.48        1682.00       95.26
+  80     2347.50           1959.36              425.61        1285.90       96.14
+  90     2213.86           2139.82              451.31        1208.20       96.83
+ 100     1957.51           2316.64              510.43        1559.30       97.34
+Done searching. Now saving results 
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_50_idx_uint32.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_50_dists_float.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_60_idx_uint32.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_60_dists_float.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_70_idx_uint32.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_70_dists_float.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_80_idx_uint32.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_80_dists_float.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_90_idx_uint32.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_90_dists_float.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_100_idx_uint32.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.
+Writing bin: C:\Users\t-avarhade\source\repos\DiskANN\tmp\res_100_dists_float.bin
+bin: #pts = 10000, #dims = 50, size = 2000008B
+Finished writing bin.

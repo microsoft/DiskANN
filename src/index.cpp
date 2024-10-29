@@ -1032,7 +1032,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     }
 
     auto &pool = scratch->pool();
-
+    //diskann::cout<<"Pool Size (search_point_and_prune) "<<pool.size()<<std::endl;
     for (uint32_t i = 0; i < pool.size(); i++)
     {
         if (pool[i].id == (uint32_t)location)
@@ -1047,7 +1047,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         throw diskann::ANNException("ERROR: non-empty pruned_list passed", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    prune_neighbors(location, pool, pruned_list, scratch);
+    prune_neighbors(location, pool, pruned_list, scratch, true);
 
     assert(!pruned_list.empty());
     assert(_graph_store->get_total_points() == _max_points + _num_frozen_pts);
@@ -1057,7 +1057,7 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha,
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
                                           InMemQueryScratch<T> *scratch,
-                                          const tsl::robin_set<uint32_t> *const delete_set_ptr)
+                                          const tsl::robin_set<uint32_t> *const delete_set_ptr, bool reduce_pool)
 {
     if (pool.size() == 0)
         return;
@@ -1067,6 +1067,13 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     assert(result.size() == 0);
     if (pool.size() > maxc)
         pool.resize(maxc);
+    if (reduce_pool){
+        //diskann::cout<<"Reducing pool size from "<<pool.size()<<" to "<<(size_t)(0.5*pool.size())<<std::endl;
+        float k = 0.5;
+        size_t new_pool_size = (size_t)(k*pool.size());
+        if (new_pool_size > 0)
+            pool.resize(new_pool_size);
+    }
     std::vector<float> &occlude_factor = scratch->occlude_factor();
     // occlude_list can be called with the same scratch more than once by
     // search_for_point_and_add_link through inter_insert.
@@ -1151,15 +1158,15 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool,
-                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch)
+                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch, bool reduce_pool)
 {
-    prune_neighbors(location, pool, _indexingRange, _indexingMaxC, _indexingAlpha, pruned_list, scratch);
+    prune_neighbors(location, pool, _indexingRange, _indexingMaxC, _indexingAlpha, pruned_list, scratch, reduce_pool);
 }
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, const uint32_t range,
                                              const uint32_t max_candidate_size, const float alpha,
-                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch)
+                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch, bool reduce_pool)
 {
     if (pool.size() == 0)
     {
@@ -1181,8 +1188,12 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     pruned_list.clear();
     pruned_list.reserve(range);
 
-    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch);
+    //diskann::cout<<"Pool Size (prune_neighbors before occlude) "<<pool.size()<<std::endl;
+
+    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch, nullptr, reduce_pool);
     assert(pruned_list.size() <= range);
+
+    //diskann::cout<<"Pool Size (prune_neighbors after occlude) "<<pool.size()<<std::endl;
 
     if (_saturate_graph && alpha > 1)
     {
@@ -1252,7 +1263,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
                 }
             }
             std::vector<uint32_t> new_out_neighbors;
-            prune_neighbors(des, dummy_pool, new_out_neighbors, scratch);
+            prune_neighbors(des, dummy_pool, new_out_neighbors, scratch, false);
             {
                 LockGuard guard(_locks[des]);
 
@@ -1359,7 +1370,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                     dummy_visited.insert(cur_nbr);
                 }
             }
-            prune_neighbors(node, dummy_pool, new_out_neighbors, scratch);
+            prune_neighbors(node, dummy_pool, new_out_neighbors, scratch, false);
 
             _graph_store->clear_neighbours((location_t)node);
             _graph_store->set_neighbours((location_t)node, new_out_neighbors);
@@ -1405,7 +1416,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
                     }
                 }
 
-                prune_neighbors((uint32_t)node, dummy_pool, range, maxc, alpha, new_out_neighbors, scratch);
+                prune_neighbors((uint32_t)node, dummy_pool, range, maxc, alpha, new_out_neighbors, scratch, false);
                 _graph_store->clear_neighbours((location_t)node);
                 _graph_store->set_neighbours((location_t)node, new_out_neighbors);
             }
@@ -2355,7 +2366,7 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
             std::sort(expanded_nghrs_vec.begin(), expanded_nghrs_vec.end());
             std::vector<uint32_t> &occlude_list_output = scratch->occlude_list_output();
             occlude_list((uint32_t)loc, expanded_nghrs_vec, alpha, range, maxc, occlude_list_output, scratch,
-                         &old_delete_set);
+                         &old_delete_set, false);
             std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
             _graph_store->set_neighbours((location_t)loc, occlude_list_output);
         }
