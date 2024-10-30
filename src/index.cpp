@@ -25,6 +25,8 @@
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
+//uint32_t reduce_prune = 0;
+
 namespace diskann
 {
 // Initialize an index with metric m, load the data of type T with filename
@@ -1067,13 +1069,7 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     assert(result.size() == 0);
     if (pool.size() > maxc)
         pool.resize(maxc);
-    if (reduce_pool){
-        //diskann::cout<<"Reducing pool size from "<<pool.size()<<" to "<<(size_t)(0.5*pool.size())<<std::endl;
-        float k = 0.5;
-        size_t new_pool_size = (size_t)(k*pool.size());
-        if (new_pool_size > 0)
-            pool.resize(new_pool_size);
-    }
+        
     std::vector<float> &occlude_factor = scratch->occlude_factor();
     // occlude_list can be called with the same scratch more than once by
     // search_for_point_and_add_link through inter_insert.
@@ -1081,7 +1077,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
-    float cur_alpha = 1;
+    // Change the cur_alpha to alpha
+    float cur_alpha = alpha;
     while (cur_alpha <= alpha && result.size() < degree)
     {
         // used for MIPS, where we store a value of eps in cur_alpha to
@@ -1330,8 +1327,14 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
         {
             LockGuard guard(_locks[node]);
+            std::vector<uint32_t> reduced_pruned_list = pruned_list;
 
-            _graph_store->set_neighbours(node, pruned_list);
+            bool reduce_prune = true;
+            if (reduce_prune){
+                //std::cout<<"reduce prune"<<reduce_prune<<std::endl;
+                reduced_pruned_list.resize((uint32_t)_indexingRange/2);
+            }
+            _graph_store->set_neighbours(node, reduced_pruned_list);
             assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
         }
 
