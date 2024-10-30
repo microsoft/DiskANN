@@ -25,7 +25,7 @@
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
-//uint32_t reduce_prune = 0;
+// bool reduce_prune = false;
 
 namespace diskann
 {
@@ -1329,9 +1329,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             LockGuard guard(_locks[node]);
             std::vector<uint32_t> reduced_pruned_list = pruned_list;
 
-            bool reduce_prune = true;
+            bool reduce_prune = false;
             if (reduce_prune){
-                //std::cout<<"reduce prune"<<reduce_prune<<std::endl;
                 reduced_pruned_list.resize((uint32_t)_indexingRange/2);
             }
             _graph_store->set_neighbours(node, reduced_pruned_list);
