@@ -70,6 +70,7 @@ int main(int argc, char **argv)
                                        program_options_utils::FILTERED_LBUILD);
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);
+        optional_configs.add_options()("reduce_pool", po::bool_switch(&reduce_pool)->default_value(false),"Reduce Prune");
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);

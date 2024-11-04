@@ -4,7 +4,7 @@
 #include <omp.h>
 
 #include <type_traits>
-
+#include <atomic>
 #include "boost/dynamic_bitset.hpp"
 #include "index_factory.h"
 #include "memory_mapper.h"
@@ -24,6 +24,7 @@
 #include "index.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
+std::atomic<unsigned long long> count_prune(0);
 
 namespace diskann
 {
@@ -1062,13 +1063,14 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     if (pool.size() == 0)
         return;
 
+    count_prune++;
     // Truncate pool at maxc and initialize scratch spaces
     assert(std::is_sorted(pool.begin(), pool.end()));
     assert(result.size() == 0);
     if (pool.size() > maxc)
         pool.resize(maxc);
     if (reduce_pool){
-        //diskann::cout<<"Reducing pool size from "<<pool.size()<<" to "<<(size_t)(0.5*pool.size())<<std::endl;
+        diskann::cout<<"Reducing pool size from "<<pool.size()<<" to "<<(size_t)(0.5*pool.size())<<std::endl;
         float k = 0.5;
         size_t new_pool_size = (size_t)(k*pool.size());
         if (new_pool_size > 0)
@@ -1567,6 +1569,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
     }
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
+    diskann::cout << "Robust Prune Calls" << count_prune << std::endl;
 
     _has_built = true;
 }

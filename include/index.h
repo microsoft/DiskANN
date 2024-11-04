@@ -29,6 +29,7 @@
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
 
+extern bool reduce_pool;
 namespace diskann
 {
 
