@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include "ann_exception.h"
 #include "common_includes.h"
 #include "logger.h"
