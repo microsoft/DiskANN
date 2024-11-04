@@ -26,33 +26,6 @@ public:
 
   DISKANN_DLLEXPORT virtual bool has_filter_support() const;
 
-  /// <summary>
-  /// Returns the filters for a data point. Only valid for base points
-  /// </summary>
-  /// <param name="point">base point id</param>
-  /// <returns>list of filters of the base point</returns>
-  DISKANN_DLLEXPORT virtual const std::vector<LabelT> &
-  get_filters_for_point(location_t point) const override;
-
-  /// <summary>
-  /// Adds filters for a point.
-  /// </summary>
-  /// <param name="point"></param>
-  /// <param name="filters"></param>
-  DISKANN_DLLEXPORT virtual void
-  add_filters_for_point(location_t point,
-                        const std::vector<LabelT> &filters) override;
-
-  /// <summary>
-  /// Returns a score between [0,1] indicating how many points in the dataset
-  /// matched the predicate
-  /// </summary>
-  /// <param name="pred">Predicate to match</param>
-  /// <returns>Score between [0,1] indicate %age of points matching
-  /// pred</returns>
-  DISKANN_DLLEXPORT virtual float
-  get_predicate_selectivity(const AbstractPredicate &pred) const override;
-
   DISKANN_DLLEXPORT virtual const std::unordered_map<LabelT,
                                                      std::vector<location_t>> &
   get_label_to_medoids() const;

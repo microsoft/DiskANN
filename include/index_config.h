@@ -1,6 +1,8 @@
 #pragma once
 
+#include "ann_exception.h"
 #include "common_includes.h"
+#include "logger.h"
 #include "parameters.h"
 
 namespace diskann {

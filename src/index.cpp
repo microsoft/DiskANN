@@ -1,10 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <omp.h>
-
-#include <type_traits>
-
+#include "ann_exception.h"
 #include "boost/dynamic_bitset.hpp"
 #include "index_factory.h"
 #include "memory_mapper.h"
@@ -12,7 +9,10 @@
 #include "timer.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
+#include "utils.h"
 #include "windows_customizations.h"
+#include <omp.h>
+#include <type_traits>
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) &&          \
     defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"

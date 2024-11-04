@@ -1,7 +1,5 @@
 #include "in_mem_filter_store.h"
 #include "ann_exception.h"
-#include "multi_filter/abstract_predicate.h"
-#include "multi_filter/simple_boolean_predicate.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 #include "utils.h"
@@ -32,23 +30,6 @@ template <typename LabelT> InMemFilterStore<LabelT>::~InMemFilterStore() {
     delete[] _pts_to_labels;
     _pts_to_labels = nullptr;
   }
-}
-template <typename LabelT>
-const std::vector<LabelT> &
-InMemFilterStore<LabelT>::get_filters_for_point(location_t point) const {
-  throw ANNException("Not implemented!", -1);
-}
-
-template <typename LabelT>
-void InMemFilterStore<LabelT>::add_filters_for_point(
-    location_t point, const std::vector<LabelT> &filters) {
-  throw ANNException("Not implemented!", -1);
-}
-
-template <typename LabelT>
-float InMemFilterStore<LabelT>::get_predicate_selectivity(
-    const AbstractPredicate &pred) const {
-  return 0.0f;
 }
 
 template <typename LabelT>
