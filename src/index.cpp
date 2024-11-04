@@ -4,7 +4,7 @@
 #include <omp.h>
 
 #include <type_traits>
-
+#include <atomic>
 #include "boost/dynamic_bitset.hpp"
 #include "index_factory.h"
 #include "memory_mapper.h"
@@ -25,7 +25,8 @@
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
-// bool reduce_prune = false;
+bool reduce_prune = false;
+std::atomic<unsigned long long> count_prune = 0;
 
 namespace diskann
 {
@@ -1060,7 +1061,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
                                           InMemQueryScratch<T> *scratch,
                                           const tsl::robin_set<uint32_t> *const delete_set_ptr, bool reduce_pool)
-{
+{   
+    count_prune++;
     if (pool.size() == 0)
         return;
 
@@ -1331,6 +1333,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
             bool reduce_prune = false;
             if (reduce_prune){
+                diskann::cout << "Reducing pruned list for node " << std::endl;
                 reduced_pruned_list.resize((uint32_t)_indexingRange/2);
             }
             _graph_store->set_neighbours(node, reduced_pruned_list);
@@ -1569,7 +1572,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
     }
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
-
+     diskann::cout << "Robust Prune Calls" << count_prune << std::endl;
     _has_built = true;
 }
 template <typename T, typename TagT, typename LabelT>

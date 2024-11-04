@@ -70,7 +70,7 @@ int main(int argc, char **argv)
                                        program_options_utils::FILTERED_LBUILD);
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);
-        //optional_configs.add_options()("reduce_prune", po::bool_switch(&reduce_prune)->default_value(false),"reduce_prune");
+        optional_configs.add_options()("reduce_prune", po::bool_switch(&reduce_prune)->default_value(false),"Reduce Prune");
         
         //std::cout<<"reduce_prune: "<<reduce_prune<<std::endl;
 
