@@ -1329,13 +1329,14 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
         {
             LockGuard guard(_locks[node]);
+            
             std::vector<uint32_t> reduced_pruned_list = pruned_list;
-
-            bool reduce_prune = false;
+            bool reduce_prune = true;
             if (reduce_prune){
-                diskann::cout << "Reducing pruned list for node " << std::endl;
+                //diskann::cout << "Reducing pruned list for node " << std::endl;
                 reduced_pruned_list.resize((uint32_t)_indexingRange/2);
             }
+            
             _graph_store->set_neighbours(node, reduced_pruned_list);
             assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
         }
