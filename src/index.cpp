@@ -1050,7 +1050,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         throw diskann::ANNException("ERROR: non-empty pruned_list passed", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    prune_neighbors(location, pool, pruned_list, scratch, true);
+    prune_neighbors(location, pool, pruned_list, scratch);
 
     assert(!pruned_list.empty());
     assert(_graph_store->get_total_points() == _max_points + _num_frozen_pts);
@@ -1060,7 +1060,7 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha,
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
                                           InMemQueryScratch<T> *scratch,
-                                          const tsl::robin_set<uint32_t> *const delete_set_ptr, bool reduce_pool)
+                                          const tsl::robin_set<uint32_t> *const delete_set_ptr)
 {   
     count_prune++;
     if (pool.size() == 0)
@@ -1157,15 +1157,15 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool,
-                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch, bool reduce_pool)
+                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch)
 {
-    prune_neighbors(location, pool, _indexingRange, _indexingMaxC, _indexingAlpha, pruned_list, scratch, reduce_pool);
+    prune_neighbors(location, pool, _indexingRange, _indexingMaxC, _indexingAlpha, pruned_list, scratch);
 }
 
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, const uint32_t range,
                                              const uint32_t max_candidate_size, const float alpha,
-                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch, bool reduce_pool)
+                                             std::vector<uint32_t> &pruned_list, InMemQueryScratch<T> *scratch)
 {
     if (pool.size() == 0)
     {
@@ -1189,7 +1189,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
 
     //diskann::cout<<"Pool Size (prune_neighbors before occlude) "<<pool.size()<<std::endl;
 
-    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch, nullptr, reduce_pool);
+    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch, nullptr);
     assert(pruned_list.size() <= range);
 
     //diskann::cout<<"Pool Size (prune_neighbors after occlude) "<<pool.size()<<std::endl;
@@ -1262,7 +1262,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
                 }
             }
             std::vector<uint32_t> new_out_neighbors;
-            prune_neighbors(des, dummy_pool, new_out_neighbors, scratch, false);
+            prune_neighbors(des, dummy_pool, new_out_neighbors, scratch);
             {
                 LockGuard guard(_locks[des]);
 
@@ -1336,7 +1336,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                 //diskann::cout << "Reducing pruned list for node " << std::endl;
                 reduced_pruned_list.resize((uint32_t)_indexingRange/2);
             }
-            
+
             _graph_store->set_neighbours(node, reduced_pruned_list);
             assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
         }
@@ -1376,7 +1376,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                     dummy_visited.insert(cur_nbr);
                 }
             }
-            prune_neighbors(node, dummy_pool, new_out_neighbors, scratch, false);
+            prune_neighbors(node, dummy_pool, new_out_neighbors, scratch);
 
             _graph_store->clear_neighbours((location_t)node);
             _graph_store->set_neighbours((location_t)node, new_out_neighbors);
@@ -1422,7 +1422,7 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
                     }
                 }
 
-                prune_neighbors((uint32_t)node, dummy_pool, range, maxc, alpha, new_out_neighbors, scratch, false);
+                prune_neighbors((uint32_t)node, dummy_pool, range, maxc, alpha, new_out_neighbors, scratch);
                 _graph_store->clear_neighbours((location_t)node);
                 _graph_store->set_neighbours((location_t)node, new_out_neighbors);
             }
@@ -1573,7 +1573,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
     }
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
-     diskann::cout << "Robust Prune Calls" << count_prune << std::endl;
+     diskann::cout << "Robust Prune Calls: " << count_prune << std::endl;
     _has_built = true;
 }
 template <typename T, typename TagT, typename LabelT>
@@ -2372,7 +2372,7 @@ inline void Index<T, TagT, LabelT>::process_delete(const tsl::robin_set<uint32_t
             std::sort(expanded_nghrs_vec.begin(), expanded_nghrs_vec.end());
             std::vector<uint32_t> &occlude_list_output = scratch->occlude_list_output();
             occlude_list((uint32_t)loc, expanded_nghrs_vec, alpha, range, maxc, occlude_list_output, scratch,
-                         &old_delete_set, false);
+                         &old_delete_set);
             std::unique_lock<non_recursive_mutex> adj_list_lock(_locks[loc]);
             _graph_store->set_neighbours((location_t)loc, occlude_list_output);
         }
