@@ -407,7 +407,9 @@ Starting index build with 40469609 points...
 99.0867% of index build completed.
 99.3338% of index build completed.
 99.5809% of index build completed.
-99.828% of index build completed.Starting final cleanup..done. Link time: 3150.88s
-Index built with degree: max:64  avg:47.8599  min:2  count(deg<2):0
-Robust Prune Calls: 86509064
-Indexing time: 3160.12
+99.828% of index build completed.Starting final cleanup..done. Link time: 3135.97s
+Index built with degree: max:64  avg:47.8617  min:2  count(deg<2):0
+Robust Prune Calls: 86513080
+Indexing time: 3144.99
+Not saving tags as they are not enabled.
+Time taken for save: 19.5253s.

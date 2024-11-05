@@ -1189,7 +1189,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
 
     //diskann::cout<<"Pool Size (prune_neighbors before occlude) "<<pool.size()<<std::endl;
 
-    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch, nullptr);
+    occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch);
     assert(pruned_list.size() <= range);
 
     //diskann::cout<<"Pool Size (prune_neighbors after occlude) "<<pool.size()<<std::endl;
