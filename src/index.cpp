@@ -25,7 +25,7 @@
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
-bool reduce_prune = false;
+//bool reduce_prune = false;
 std::atomic<unsigned long long> count_prune = 0;
 
 namespace diskann

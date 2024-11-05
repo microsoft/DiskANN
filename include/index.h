@@ -29,7 +29,7 @@
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
 
-extern bool reduce_prune;
+//extern bool reduce_prune;
 namespace diskann
 {
 
