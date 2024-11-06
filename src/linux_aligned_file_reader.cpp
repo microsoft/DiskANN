@@ -146,7 +146,6 @@ void LinuxAlignedFileReader::register_thread()
     int ret = io_setup(MAX_EVENTS, &ctx);
     if (ret != 0)
     {
-        lk.unlock();
         if (ret == -EAGAIN)
         {
             std::cerr << "io_setup() failed with EAGAIN: Consider increasing /proc/sys/fs/aio-max-nr" << std::endl;
@@ -160,7 +159,6 @@ void LinuxAlignedFileReader::register_thread()
     {
         diskann::cout << "allocating ctx: " << ctx << " to thread-id:" << my_id << std::endl;
         ctx_map[my_id] = ctx;
-        lk.unlock();
     }
 }
 
