@@ -1336,7 +1336,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                 //diskann::cout << "Reducing pruned list for node " << std::endl;
                 uint32_t KK = 3;
                 uint32_t RR = (uint32_t)(_indexingRange/KK*(1+KK*(node_ctr/(visit_order.size()))));
-                RR = std::min(RR, reduced_pruned_list.size());
+                RR = std::min(RR, (uint32_t)reduced_pruned_list.size());
                 reduced_pruned_list.resize(RR);
             }
 
