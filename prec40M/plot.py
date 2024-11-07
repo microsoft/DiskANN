@@ -34,27 +34,36 @@ data = {
     }
 }
 
-colors = ['b', 'g', 'r', 'c']
+colors = ['b', 'g', 'r', 'c', 'm']
 labels = list(data.keys())
 
-# Plot Recall vs Avg dist cmps
+# Annotate L values in the plots
+for label in labels:
+    for i, L in enumerate(data[label]["Ls"]):
+        plt.annotate(f'L={L}', (data[label]["Avg dist cmps"][i], data[label]["Recall@50"][i]), textcoords="offset points", xytext=(0,10), ha='center')
+
+# Save Recall vs Avg dist cmps plot
 plt.figure(figsize=(12, 6))
 for i, label in enumerate(labels):
     plt.plot(data[label]["Avg dist cmps"], data[label]["Recall@50"], color=colors[i], marker='o', label=label)
+    for j, L in enumerate(data[label]["Ls"]):
+        plt.annotate(f'L={L}', (data[label]["Avg dist cmps"][j], data[label]["Recall@50"][j]), textcoords="offset points", xytext=(0,10), ha='center')
 plt.xlabel('Avg dist cmps')
 plt.ylabel('Recall@50')
 plt.title('Recall vs Avg dist cmps')
 plt.legend()
 plt.grid(True)
-plt.show()
+plt.savefig('recall_vs_avg_dist_cmps.png')
 
-# Plot Recall vs Mean Latency
+# Save Recall vs Mean Latency plot
 plt.figure(figsize=(12, 6))
 for i, label in enumerate(labels):
     plt.plot(data[label]["Mean Latency (mus)"], data[label]["Recall@50"], color=colors[i], marker='o', label=label)
+    for j, L in enumerate(data[label]["Ls"]):
+        plt.annotate(f'L={L}', (data[label]["Mean Latency (mus)"][j], data[label]["Recall@50"][j]), textcoords="offset points", xytext=(0,10), ha='center')
 plt.xlabel('Mean Latency (mus)')
 plt.ylabel('Recall@50')
 plt.title('Recall vs Mean Latency')
 plt.legend()
 plt.grid(True)
-plt.show()
+plt.savefig('recall_vs_mean_latency.png')
