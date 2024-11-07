@@ -1269,7 +1269,7 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
 }
 
 template <typename T>
-bool comp(const std::pair<T, uint32_t> &a, const std::pair<T, uint32_t> &b)
+bool comp(const std::pair<float, uint32_t> &a, const std::pair<float, uint32_t> &b)
 {
     if (a.first < b.first){
         return true;
@@ -1304,7 +1304,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         float cur_distance = _data_store->get_distance(i, _start);
         distances_to_mediod.emplace_back(std::make_pair(cur_distance, i));
     }
-    std::sort(distances_to_mediod.begin(), distances_to_mediod.end(), comp);
+    std::sort(distances_to_mediod.begin(), distances_to_mediod.end(), comp<float>);
 
     for (uint32_t i = 0; i < (uint32_t)_nd; i++)
         visit_order.emplace_back(distances_to_mediod[i].second);
@@ -1321,8 +1321,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
         auto node = visit_order[node_ctr];
-        if (node_ctr%100000 == 0){
-            diskann::cout << (int)(node_ctr/100000) << " Distance to mediod: \n" << distances_to_mediod[node_ctr].first<< std::endl;
+        if (node_ctr%100000 == 0 && node_ctr > 0){
+            diskann::cout <<" Distance to mediod: " << (float)(distances_to_mediod[node_ctr].first) << std::endl;
         }
 
         // Find and add appropriate graph edges
