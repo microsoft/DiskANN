@@ -1321,6 +1321,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
         auto node = visit_order[node_ctr];
+        if (node_ctr%100000 == 0){
+            diskann::cout << (int)(node_ctr/100000) << " Distance to mediod: \n" << distances_to_mediod[node_ctr].first<< std::endl;
+        }
 
         // Find and add appropriate graph edges
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
