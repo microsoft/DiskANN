@@ -1268,6 +1268,18 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
     inter_insert(n, pruned_list, _indexingRange, scratch);
 }
 
+template <typename T>
+bool comp(const std::pair<T, uint32_t> &a, const std::pair<T, uint32_t> &b)
+{
+    if (a.first < b.first){
+        return true;
+    }
+    else if (a.first == b.first){
+        return a.second < b.second;
+    }
+    return false;
+}
+
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::link()
 {
     uint32_t num_threads = _indexingThreads;
@@ -1279,22 +1291,29 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     std::vector<diskann::Neighbor> pool, tmp;
     tsl::robin_set<uint32_t> visited;
     visit_order.reserve(_nd + _num_frozen_pts);
-    for (uint32_t i = 0; i < (uint32_t)_nd; i++)
-    {
-        visit_order.emplace_back(i);
-    }
-
-    // If there are any frozen points, add them all.
-    for (uint32_t frozen = (uint32_t)_max_points; frozen < _max_points + _num_frozen_pts; frozen++)
-    {
-        visit_order.emplace_back(frozen);
-    }
 
     // if there are frozen points, the first such one is set to be the _start
     if (_num_frozen_pts > 0)
         _start = (uint32_t)_max_points;
     else
         _start = calculate_entry_point();
+    
+    std::vector<std::pair<T, uint32_t>> distances_to_mediod;
+    for (uint32_t i = 0; i < (uint32_t)_nd; i++)
+    {
+        float cur_distance = _data_store->get_distance(i, _start);
+        distances_to_mediod.emplace_back(std::make_pair(cur_distance, i));
+    }
+    std::sort(distances_to_mediod.begin(), distances_to_mediod.end(), comp);
+
+    for (uint32_t i = 0; i < (uint32_t)_nd; i++)
+        visit_order.emplace_back(distances_to_mediod[i].second);
+
+    // If there are any frozen points, add them all.
+    for (uint32_t frozen = (uint32_t)_max_points; frozen < _max_points + _num_frozen_pts; frozen++)
+    {
+        visit_order.emplace_back(frozen);
+    }
 
     diskann::Timer link_timer;
 
