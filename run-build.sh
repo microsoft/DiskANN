@@ -1,2 +1,2 @@
 cd build
-./apps/build_memory_index --data_path /nvmessd1/fbv4/prec40M.bin --data_type int8 --dist_fn l2 --index_path_prefix /nvmessd1/fbv4/avarhade/prec40M_KK_1.5_reduce_prune_memory_index_r64_l100 -R 64 -L 100 -T 48 > /home/rakri/avarhade/DiskANN/prec40M/KK1.5/KK_1.5_reduce_prune_r64_l100.txt
+./apps/build_memory_index --data_path /nvmessd1/fbv4/prec40M.bin --data_type int8 --dist_fn l2 --index_path_prefix /nvmessd1/fbv4/avarhade/prec40M_reduce_prune_memory_index_r64_l100 -R 64 -L 100 -T 48 > /home/rakri/avarhade/DiskANN/prec40M/reduce_prune_r64_l100.txt

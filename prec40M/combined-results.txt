@@ -10,8 +10,26 @@ RobustPrune Calls   75.3M
 Avg Deg             38.23
 Count(Deg<2)        1.4M
 
-ReducePrune
-Time                3135
-RobustPrune Calls   86.5M
-Avg Deg             47.86
-Count(Deg<2)        0
+ReducePrune (Replace R by R/2)
+Time                3128
+RobustPrune Calls   84.5M
+Avg Deg             39.61
+Count(Deg<2)        1.01M
+
+ReducePrune (KK=1.5)
+Time                3300
+RobustPrune Calls   91.4M
+Avg Deg             42.32
+Count(Deg<2)        1.01M
+
+ReducePrune (KK=3)
+Time                2971
+RobustPrune Calls   77.4M
+Avg Deg             35.71
+Count(Deg<2)        1.01M
+
+ReducePrune (KK=4)
+Time                2878
+RobustPrune Calls   74.1M
+Avg Deg             33.63
+Count(Deg<2)        1M

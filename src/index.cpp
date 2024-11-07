@@ -1334,10 +1334,10 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             bool reduce_prune = true;
             if (reduce_prune){
                 //diskann::cout << "Reducing pruned list for node " << std::endl;
-                float KK = 1.5;
-                uint32_t RR = (uint32_t)(_indexingRange/KK*(1+KK*(node_ctr/(visit_order.size()))));
-                RR = std::min(RR, (uint32_t)reduced_pruned_list.size());
-                reduced_pruned_list.resize(RR);
+                //float KK = 1.5;
+                //uint32_t RR = (uint32_t)(_indexingRange/KK*(1+KK*(node_ctr/(visit_order.size()))));
+                uint32_t reduced_pruned_list_size = std::min((uint32_t)_indexingRange/2, (uint32_t)reduced_pruned_list.size());
+                reduced_pruned_list.resize(reduced_pruned_list_size);
             }
 
             _graph_store->set_neighbours(node, reduced_pruned_list);
