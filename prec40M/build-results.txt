@@ -1,0 +1,17 @@
+Baseline
+Time                3495
+RobustPrune Calls   108M
+Avg Deg             44.95
+Count(Deg<2)        1M
+
+ReducePool
+Time                2900
+RobustPrune Calls   75.3M
+Avg Deg             38.23
+Count(Deg<2)        1.4M
+
+ReducePrune
+Time                3135
+RobustPrune Calls   86.5M
+Avg Deg             47.86
+Count(Deg<2)        0
