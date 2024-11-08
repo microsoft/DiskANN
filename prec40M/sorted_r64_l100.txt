@@ -2,412 +2,9 @@ Starting index build with R: 64  Lbuild: 100  alpha: 1.2  #threads: 48
 Using AVX2 distance computation DistanceL2Int8.
 Using only first 40469609 from file.. 
 Starting index build with 40469609 points... 
-0% of index build completed. Distance to mediod: -128
-0.247099% of index build completed. Distance to mediod: -127
-0.494198% of index build completed. Distance to mediod: -127
-0.741297% of index build completed. Distance to mediod: -126
-0.988396% of index build completed. Distance to mediod: -125
-1.2355% of index build completed. Distance to mediod: -125
-1.48259% of index build completed. Distance to mediod: -124
-1.72969% of index build completed. Distance to mediod: -123
-1.97679% of index build completed. Distance to mediod: -123
-2.22389% of index build completed. Distance to mediod: -122
-2.47099% of index build completed. Distance to mediod: -122
-2.71809% of index build completed. Distance to mediod: -121
-2.96519% of index build completed. Distance to mediod: -120
-3.21229% of index build completed. Distance to mediod: -120
-3.45939% of index build completed. Distance to mediod: -119
-3.70649% of index build completed. Distance to mediod: -118
-3.95358% of index build completed. Distance to mediod: -118
-4.20068% of index build completed. Distance to mediod: -117
-4.44778% of index build completed. Distance to mediod: -116
-4.69488% of index build completed. Distance to mediod: -116
-4.94198% of index build completed. Distance to mediod: -115
-5.18908% of index build completed. Distance to mediod: -115
-5.43618% of index build completed. Distance to mediod: -114
-5.68328% of index build completed. Distance to mediod: -113
-5.93038% of index build completed. Distance to mediod: -113
-6.17748% of index build completed. Distance to mediod: -112
-6.42457% of index build completed. Distance to mediod: -111
-6.67167% of index build completed. Distance to mediod: -111
-6.91877% of index build completed. Distance to mediod: -110
-7.16587% of index build completed. Distance to mediod: -109
-7.41297% of index build completed. Distance to mediod: -109
-7.66007% of index build completed. Distance to mediod: -108
-7.90717% of index build completed. Distance to mediod: -108
-8.15427% of index build completed. Distance to mediod: -107
-8.40137% of index build completed. Distance to mediod: -106
-8.64847% of index build completed. Distance to mediod: -106
-8.89556% of index build completed. Distance to mediod: -105
-9.14266% of index build completed. Distance to mediod: -104
-9.38976% of index build completed. Distance to mediod: -104
-9.63686% of index build completed. Distance to mediod: -103
-9.88396% of index build completed. Distance to mediod: -103
-10.1311% of index build completed. Distance to mediod: -102
-10.3782% of index build completed. Distance to mediod: -101
-10.6253% of index build completed. Distance to mediod: -101
-10.8724% of index build completed. Distance to mediod: -100
-11.1195% of index build completed. Distance to mediod: -99
-11.3666% of index build completed. Distance to mediod: -99
-11.6137% of index build completed. Distance to mediod: -98
-11.8608% of index build completed. Distance to mediod: -97
-12.1079% of index build completed. Distance to mediod: -97
-12.355% of index build completed. Distance to mediod: -96
-12.602% of index build completed. Distance to mediod: -96
-12.8491% of index build completed. Distance to mediod: -95
-13.0962% of index build completed. Distance to mediod: -94
-13.3433% of index build completed. Distance to mediod: -94
-13.5904% of index build completed. Distance to mediod: -93
-13.8375% of index build completed. Distance to mediod: -92
-14.0846% of index build completed. Distance to mediod: -92
-14.3317% of index build completed. Distance to mediod: -91
-14.5788% of index build completed. Distance to mediod: -90
-14.8259% of index build completed. Distance to mediod: -90
-15.073% of index build completed. Distance to mediod: -89
-15.3201% of index build completed. Distance to mediod: -89
-15.5672% of index build completed. Distance to mediod: -88
-15.8143% of index build completed. Distance to mediod: -87
-16.0614% of index build completed. Distance to mediod: -87
-16.3085% of index build completed. Distance to mediod: -86
-16.5556% of index build completed. Distance to mediod: -85
-16.8027% of index build completed. Distance to mediod: -85
-17.0498% of index build completed. Distance to mediod: -84
-17.2969% of index build completed. Distance to mediod: -84
-17.544% of index build completed. Distance to mediod: -83
-17.7911% of index build completed. Distance to mediod: -82
-18.0382% of index build completed. Distance to mediod: -82
-18.2853% of index build completed. Distance to mediod: -81
-18.5324% of index build completed. Distance to mediod: -80
-18.7795% of index build completed. Distance to mediod: -80
-19.0266% of index build completed. Distance to mediod: -79
-19.2737% of index build completed. Distance to mediod: -79
-19.5208% of index build completed. Distance to mediod: -78
-19.7679% of index build completed. Distance to mediod: -77
-20.015% of index build completed. Distance to mediod: -77
-20.2621% of index build completed. Distance to mediod: -76
-20.5092% of index build completed. Distance to mediod: -75
-20.7563% of index build completed. Distance to mediod: -75
-21.0034% of index build completed. Distance to mediod: -74
-21.2505% of index build completed. Distance to mediod: -74
-21.4976% of index build completed. Distance to mediod: -73
-21.7447% of index build completed. Distance to mediod: -72
-21.9918% of index build completed. Distance to mediod: -72
-22.2389% of index build completed. Distance to mediod: -71
-22.486% of index build completed. Distance to mediod: -70
-22.7331% of index build completed. Distance to mediod: -70
-22.9802% of index build completed. Distance to mediod: -69
-23.2273% of index build completed. Distance to mediod: -68
-23.4744% of index build completed. Distance to mediod: -68
-23.7215% of index build completed. Distance to mediod: -67
-23.9686% of index build completed. Distance to mediod: -67
-24.2157% of index build completed. Distance to mediod: -66
-24.4628% of index build completed. Distance to mediod: -65
-24.7099% of index build completed. Distance to mediod: -65
-24.957% of index build completed. Distance to mediod: -64
-25.2041% of index build completed. Distance to mediod: -63
-25.4512% of index build completed. Distance to mediod: -63
-25.6983% of index build completed. Distance to mediod: -62
-25.9454% of index build completed. Distance to mediod: -62
-26.1925% of index build completed. Distance to mediod: -61
-26.4396% of index build completed. Distance to mediod: -60
-26.6867% of index build completed. Distance to mediod: -60
-26.9338% of index build completed. Distance to mediod: -59
-27.1809% of index build completed. Distance to mediod: -58
-27.428% of index build completed. Distance to mediod: -58
-27.6751% of index build completed. Distance to mediod: -57
-27.9222% of index build completed. Distance to mediod: -56
-28.1693% of index build completed. Distance to mediod: -56
-28.4164% of index build completed. Distance to mediod: -55
-28.6635% of index build completed. Distance to mediod: -55
-28.9106% of index build completed. Distance to mediod: -54
-29.1577% of index build completed. Distance to mediod: -53
-29.4048% of index build completed. Distance to mediod: -53
-29.6519% of index build completed. Distance to mediod: -52
-29.899% of index build completed. Distance to mediod: -51
-30.1461% of index build completed. Distance to mediod: -51
-30.3932% of index build completed. Distance to mediod: -50
-30.6403% of index build completed. Distance to mediod: -49
-30.8874% of index build completed. Distance to mediod: -49
-31.1345% of index build completed. Distance to mediod: -48
-31.3816% of index build completed. Distance to mediod: -48
-31.6287% of index build completed. Distance to mediod: -47
-31.8758% of index build completed. Distance to mediod: -46
-32.1229% of index build completed. Distance to mediod: -46
-32.37% of index build completed. Distance to mediod: -45
-32.6171% of index build completed. Distance to mediod: -44
-32.8642% of index build completed. Distance to mediod: -44
-33.1113% of index build completed. Distance to mediod: -43
-33.3584% of index build completed. Distance to mediod: -42
-33.6055% of index build completed. Distance to mediod: -42
-33.8526% of index build completed. Distance to mediod: -41
-34.0997% of index build completed. Distance to mediod: -41
-34.3468% of index build completed. Distance to mediod: -40
-34.5939% of index build completed. Distance to mediod: -39
-34.841% of index build completed. Distance to mediod: -39
-35.0881% of index build completed. Distance to mediod: -38
-35.3352% of index build completed. Distance to mediod: -37
-35.5823% of index build completed. Distance to mediod: -37
-35.8294% of index build completed. Distance to mediod: -36
-36.0765% of index build completed. Distance to mediod: -35
-36.3236% of index build completed. Distance to mediod: -35
-36.5707% of index build completed. Distance to mediod: -34
-36.8178% of index build completed. Distance to mediod: -34
-37.0649% of index build completed. Distance to mediod: -33
-37.3119% of index build completed. Distance to mediod: -33
-37.559% of index build completed. Distance to mediod: -32
-37.8061% of index build completed. Distance to mediod: -31
-38.0532% of index build completed. Distance to mediod: -31
-38.3003% of index build completed. Distance to mediod: -30
-38.5474% of index build completed. Distance to mediod: -29
-38.7945% of index build completed. Distance to mediod: -29
-39.0416% of index build completed. Distance to mediod: -28
-39.2887% of index build completed. Distance to mediod: -28
-39.5358% of index build completed. Distance to mediod: -27
-39.7829% of index build completed. Distance to mediod: -26
-40.03% of index build completed. Distance to mediod: -26
-40.2771% of index build completed. Distance to mediod: -25
-40.5242% of index build completed. Distance to mediod: -24
-40.7713% of index build completed. Distance to mediod: -24
-41.0184% of index build completed. Distance to mediod: -23
-41.2655% of index build completed. Distance to mediod: -22
-41.5126% of index build completed. Distance to mediod: -22
-41.7597% of index build completed. Distance to mediod: -21
-42.0068% of index build completed. Distance to mediod: -21
-42.2539% of index build completed. Distance to mediod: -20
-42.501% of index build completed. Distance to mediod: -19
-42.7481% of index build completed. Distance to mediod: -19
-42.9952% of index build completed. Distance to mediod: -18
-43.2423% of index build completed. Distance to mediod: -17
-43.4894% of index build completed. Distance to mediod: -17
-43.7365% of index build completed. Distance to mediod: -16
-43.9836% of index build completed. Distance to mediod: -15
-44.2307% of index build completed. Distance to mediod: -15
-44.4778% of index build completed. Distance to mediod: -14
-44.7249% of index build completed. Distance to mediod: -14
-44.972% of index build completed. Distance to mediod: -13
-45.2191% of index build completed. Distance to mediod: -12
-45.4662% of index build completed. Distance to mediod: -12
-45.7133% of index build completed. Distance to mediod: -11
-45.9604% of index build completed. Distance to mediod: -10
-46.2075% of index build completed. Distance to mediod: -10
-46.4546% of index build completed. Distance to mediod: -9
-46.7017% of index build completed. Distance to mediod: -8
-46.9488% of index build completed. Distance to mediod: -8
-47.1959% of index build completed. Distance to mediod: -7
-47.443% of index build completed. Distance to mediod: -7
-47.6901% of index build completed. Distance to mediod: -6
-47.9372% of index build completed. Distance to mediod: -5
-48.1843% of index build completed. Distance to mediod: -5
-48.4314% of index build completed. Distance to mediod: -4
-48.6785% of index build completed. Distance to mediod: -3
-48.9256% of index build completed. Distance to mediod: -3
-49.1727% of index build completed. Distance to mediod: -2
-49.4198% of index build completed. Distance to mediod: -1
-49.6669% of index build completed. Distance to mediod: -1
-49.914% of index build completed. Distance to mediod: 0
-50.1611% of index build completed. Distance to mediod: 0
-50.4082% of index build completed. Distance to mediod: 1
-50.6553% of index build completed. Distance to mediod: 2
-50.9024% of index build completed. Distance to mediod: 2
-51.1495% of index build completed. Distance to mediod: 3
-51.3966% of index build completed. Distance to mediod: 4
-51.6437% of index build completed. Distance to mediod: 4
-51.8908% of index build completed. Distance to mediod: 5
-52.1379% of index build completed. Distance to mediod: 5
-52.385% of index build completed. Distance to mediod: 6
-52.6321% of index build completed. Distance to mediod: 7
-52.8792% of index build completed. Distance to mediod: 7
-53.1263% of index build completed. Distance to mediod: 8
-53.3734% of index build completed. Distance to mediod: 9
-53.6205% of index build completed. Distance to mediod: 9
-53.8676% of index build completed. Distance to mediod: 10
-54.1147% of index build completed. Distance to mediod: 10
-54.3618% of index build completed. Distance to mediod: 11
-54.6089% of index build completed. Distance to mediod: 12
-54.856% of index build completed. Distance to mediod: 12
-55.1031% of index build completed. Distance to mediod: 13
-55.3502% of index build completed. Distance to mediod: 14
-55.5973% of index build completed. Distance to mediod: 14
-55.8444% of index build completed. Distance to mediod: 15
-56.0915% of index build completed. Distance to mediod: 16
-56.3386% of index build completed. Distance to mediod: 16
-56.5857% of index build completed. Distance to mediod: 17
-56.8328% of index build completed. Distance to mediod: 17
-57.0799% of index build completed. Distance to mediod: 18
-57.327% of index build completed. Distance to mediod: 19
-57.5741% of index build completed. Distance to mediod: 19
-57.8212% of index build completed. Distance to mediod: 20
-58.0683% of index build completed. Distance to mediod: 21
-58.3154% of index build completed. Distance to mediod: 21
-58.5625% of index build completed. Distance to mediod: 22
-58.8096% of index build completed. Distance to mediod: 23
-59.0567% of index build completed. Distance to mediod: 23
-59.3038% of index build completed. Distance to mediod: 24
-59.5509% of index build completed. Distance to mediod: 24
-59.798% of index build completed. Distance to mediod: 25
-60.0451% of index build completed. Distance to mediod: 26
-60.2922% of index build completed. Distance to mediod: 26
-60.5393% of index build completed. Distance to mediod: 27
-60.7864% of index build completed. Distance to mediod: 28
-61.0335% of index build completed. Distance to mediod: 28
-61.2806% of index build completed. Distance to mediod: 29
-61.5277% of index build completed. Distance to mediod: 30
-61.7748% of index build completed. Distance to mediod: 30
-62.0218% of index build completed. Distance to mediod: 31
-62.2689% of index build completed. Distance to mediod: 31
-62.516% of index build completed. Distance to mediod: 32
-62.7631% of index build completed. Distance to mediod: 33
-63.0102% of index build completed. Distance to mediod: 33
-63.2573% of index build completed. Distance to mediod: 34
-63.5044% of index build completed. Distance to mediod: 35
-63.7515% of index build completed. Distance to mediod: 35
-63.9986% of index build completed. Distance to mediod: 36
-64.2457% of index build completed. Distance to mediod: 36
-64.4928% of index build completed. Distance to mediod: 37
-64.7399% of index build completed. Distance to mediod: 38
-64.987% of index build completed. Distance to mediod: 38
-65.2341% of index build completed. Distance to mediod: 39
-65.4812% of index build completed. Distance to mediod: 40
-65.7283% of index build completed. Distance to mediod: 40
-65.9754% of index build completed. Distance to mediod: 41
-66.2225% of index build completed. Distance to mediod: 42
-66.4696% of index build completed. Distance to mediod: 42
-66.7167% of index build completed. Distance to mediod: 43
-66.9638% of index build completed. Distance to mediod: 43
-67.2109% of index build completed. Distance to mediod: 44
-67.458% of index build completed. Distance to mediod: 45
-67.7051% of index build completed. Distance to mediod: 45
-67.9522% of index build completed. Distance to mediod: 46
-68.1993% of index build completed. Distance to mediod: 47
-68.4464% of index build completed. Distance to mediod: 47
-68.6935% of index build completed. Distance to mediod: 48
-68.9406% of index build completed. Distance to mediod: 49
-69.1877% of index build completed. Distance to mediod: 49
-69.4348% of index build completed. Distance to mediod: 50
-69.6819% of index build completed. Distance to mediod: 50
-69.929% of index build completed. Distance to mediod: 51
-70.1761% of index build completed. Distance to mediod: 52
-70.4232% of index build completed. Distance to mediod: 52
-70.6703% of index build completed. Distance to mediod: 53
-70.9174% of index build completed. Distance to mediod: 54
-71.1645% of index build completed. Distance to mediod: 54
-71.4116% of index build completed. Distance to mediod: 55
-71.6587% of index build completed. Distance to mediod: 56
-71.9058% of index build completed. Distance to mediod: 56
-72.1529% of index build completed. Distance to mediod: 57
-72.4% of index build completed. Distance to mediod: 57
-72.6471% of index build completed. Distance to mediod: 58
-72.8942% of index build completed. Distance to mediod: 59
-73.1413% of index build completed. Distance to mediod: 59
-73.3884% of index build completed. Distance to mediod: 60
-73.6355% of index build completed. Distance to mediod: 61
-73.8826% of index build completed. Distance to mediod: 61
-74.1297% of index build completed. Distance to mediod: 62
-74.3768% of index build completed. Distance to mediod: 62
-74.6239% of index build completed. Distance to mediod: 63
-74.871% of index build completed. Distance to mediod: 64
-75.1181% of index build completed. Distance to mediod: 64
-75.3652% of index build completed. Distance to mediod: 65
-75.6123% of index build completed. Distance to mediod: 66
-75.8594% of index build completed. Distance to mediod: 66
-76.1065% of index build completed. Distance to mediod: 67
-76.3536% of index build completed. Distance to mediod: 68
-76.6007% of index build completed. Distance to mediod: 68
-76.8478% of index build completed. Distance to mediod: 69
-77.0949% of index build completed. Distance to mediod: 69
-77.342% of index build completed. Distance to mediod: 70
-77.5891% of index build completed. Distance to mediod: 71
-77.8362% of index build completed. Distance to mediod: 71
-78.0833% of index build completed. Distance to mediod: 72
-78.3304% of index build completed. Distance to mediod: 73
-78.5775% of index build completed. Distance to mediod: 73
-78.8246% of index build completed. Distance to mediod: 74
-79.0717% of index build completed. Distance to mediod: 75
-79.3188% of index build completed. Distance to mediod: 75
-79.5659% of index build completed. Distance to mediod: 76
-79.813% of index build completed. Distance to mediod: 76
-80.0601% of index build completed. Distance to mediod: 77
-80.3072% of index build completed. Distance to mediod: 78
-80.5543% of index build completed. Distance to mediod: 78
-80.8014% of index build completed. Distance to mediod: 79
-81.0485% of index build completed. Distance to mediod: 80
-81.2956% of index build completed. Distance to mediod: 80
-81.5427% of index build completed. Distance to mediod: 81
-81.7898% of index build completed. Distance to mediod: 81
-82.0369% of index build completed. Distance to mediod: 82
-82.284% of index build completed. Distance to mediod: 83
-82.5311% of index build completed. Distance to mediod: 83
-82.7782% of index build completed. Distance to mediod: 84
-83.0253% of index build completed. Distance to mediod: 85
-83.2724% of index build completed. Distance to mediod: 85
-83.5195% of index build completed. Distance to mediod: 86
-83.7666% of index build completed. Distance to mediod: 87
-84.0137% of index build completed. Distance to mediod: 87
-84.2608% of index build completed. Distance to mediod: 88
-84.5079% of index build completed. Distance to mediod: 88
-84.755% of index build completed. Distance to mediod: 89
-85.0021% of index build completed. Distance to mediod: 90
-85.2492% of index build completed. Distance to mediod: 90
-85.4963% of index build completed. Distance to mediod: 91
-85.7434% of index build completed. Distance to mediod: 92
-85.9905% of index build completed. Distance to mediod: 92
-86.2376% of index build completed. Distance to mediod: 93
-86.4847% of index build completed. Distance to mediod: 94
-86.7317% of index build completed. Distance to mediod: 94
-86.9788% of index build completed. Distance to mediod: 95
-87.2259% of index build completed. Distance to mediod: 95
-87.473% of index build completed. Distance to mediod: 96
-87.7201% of index build completed. Distance to mediod: 97
-87.9672% of index build completed. Distance to mediod: 97
-88.2143% of index build completed. Distance to mediod: 98
-88.4614% of index build completed. Distance to mediod: 99
-88.7085% of index build completed. Distance to mediod: 99
-88.9556% of index build completed. Distance to mediod: 100
-89.2027% of index build completed. Distance to mediod: 100
-89.4498% of index build completed. Distance to mediod: 101
-89.6969% of index build completed. Distance to mediod: 102
-89.944% of index build completed. Distance to mediod: 102
-90.1911% of index build completed. Distance to mediod: 103
-90.4382% of index build completed. Distance to mediod: 104
-90.6853% of index build completed. Distance to mediod: 104
-90.9324% of index build completed. Distance to mediod: 105
-91.1795% of index build completed. Distance to mediod: 106
-91.4266% of index build completed. Distance to mediod: 106
-91.6737% of index build completed. Distance to mediod: 107
-91.9208% of index build completed. Distance to mediod: 107
-92.1679% of index build completed. Distance to mediod: 108
-92.415% of index build completed. Distance to mediod: 109
-92.6621% of index build completed. Distance to mediod: 109
-92.9092% of index build completed. Distance to mediod: 110
-93.1563% of index build completed. Distance to mediod: 111
-93.4034% of index build completed. Distance to mediod: 111
-93.6505% of index build completed. Distance to mediod: 112
-93.8976% of index build completed. Distance to mediod: 112
-94.1447% of index build completed. Distance to mediod: 113
-94.3918% of index build completed. Distance to mediod: 114
-94.6389% of index build completed. Distance to mediod: 114
-94.886% of index build completed. Distance to mediod: 115
-95.1331% of index build completed. Distance to mediod: 116
-95.3802% of index build completed. Distance to mediod: 116
-95.6273% of index build completed. Distance to mediod: 117
-95.8744% of index build completed. Distance to mediod: 118
-96.1215% of index build completed. Distance to mediod: 118
-96.3686% of index build completed. Distance to mediod: 119
-96.6157% of index build completed. Distance to mediod: 119
-96.8628% of index build completed. Distance to mediod: 120
-97.1099% of index build completed. Distance to mediod: 121
-97.357% of index build completed. Distance to mediod: 121
-97.6041% of index build completed. Distance to mediod: 122
-97.8512% of index build completed. Distance to mediod: 123
-98.0983% of index build completed. Distance to mediod: 123
-98.3454% of index build completed. Distance to mediod: 124
-98.5925% of index build completed. Distance to mediod: 125
-98.8396% of index build completed. Distance to mediod: 125
-99.0867% of index build completed. Distance to mediod: 126
-99.3338% of index build completed. Distance to mediod: 126
-99.5809% of index build completed. Distance to mediod: 127
-99.828% of index build completed.Starting final cleanup..done. Link time: 3629.97s
-Index built with degree: max:64  avg:45.7558  min:1  count(deg<2):1018463
-Indexing time: 3648.44
+0% of index build completed. Distance to mediod: -1280.247099% of index build completed. Distance to mediod: -1280.494198% of index build completed. Distance to mediod: -1270.741297% of index build completed. Distance to mediod: -1270.988396% of index build completed. Distance to mediod: -1261.2355% of index build completed. Distance to mediod: -1251.48259% of index build completed. Distance to mediod: -1251.72969% of index build completed. Distance to mediod: -1241.97679% of index build completed. Distance to mediod: -1232.22389% of index build completed. Distance to mediod: -1232.47099% of index build completed. Distance to mediod: -1222.71809% of index build completed. Distance to mediod: -1222.96519% of index build completed. Distance to mediod: -1213.21229% of index build completed. Distance to mediod: -1203.45939% of index build completed. Distance to mediod: -1203.70649% of index build completed. Distance to mediod: -1193.95358% of index build completed. Distance to mediod: -1184.20068% of index build completed. Distance to mediod: -1184.44778% of index build completed. Distance to mediod: -1174.69488% of index build completed. Distance to mediod: -1164.94198% of index build completed. Distance to mediod: -1165.18908% of index build completed. Distance to mediod: -1155.43618% of index build completed. Distance to mediod: -1155.68328% of index build completed. Distance to mediod: -1145.93038% of index build completed. Distance to mediod: -1136.17748% of index build completed. Distance to mediod: -1136.42457% of index build completed. Distance to mediod: -1126.67167% of index build completed. Distance to mediod: -1116.91877% of index build completed. Distance to mediod: -1117.16587% of index build completed. Distance to mediod: -1107.41297% of index build completed. Distance to mediod: -1097.66007% of index build completed. Distance to mediod: -1097.90717% of index build completed. Distance to mediod: -1088.15427% of index build completed. Distance to mediod: -1088.40137% of index build completed. Distance to mediod: -1078.64847% of index build completed. Distance to mediod: -1068.89556% of index build completed. Distance to mediod: -1069.14266% of index build completed. Distance to mediod: -1059.38976% of index build completed. Distance to mediod: -1049.63686% of index build completed. Distance to mediod: -1049.88396% of index build completed. Distance to mediod: -10310.1311% of index build completed. Distance to mediod: -10310.3782% of index build completed. Distance to mediod: -10210.6253% of index build completed. Distance to mediod: -10110.8724% of index build completed. Distance to mediod: -10111.1195% of index build completed. Distance to mediod: -10011.3666% of index build completed. Distance to mediod: -9911.6137% of index build completed. Distance to mediod: -9911.8608% of index build completed. Distance to mediod: -9812.1079% of index build completed. Distance to mediod: -9712.355% of index build completed. Distance to mediod: -9712.602% of index build completed. Distance to mediod: -9612.8491% of index build completed. Distance to mediod: -9613.0962% of index build completed. Distance to mediod: -9513.3433% of index build completed. Distance to mediod: -9413.5904% of index build completed. Distance to mediod: -9413.8375% of index build completed. Distance to mediod: -9314.0846% of index build completed. Distance to mediod: -9214.3317% of index build completed. Distance to mediod: -9214.5788% of index build completed. Distance to mediod: -9114.8259% of index build completed. Distance to mediod: -9015.073% of index build completed. Distance to mediod: -9015.3201% of index build completed. Distance to mediod: -8915.5672% of index build completed. Distance to mediod: -8915.8143% of index build completed. Distance to mediod: -8816.0614% of index build completed. Distance to mediod: -8716.3085% of index build completed. Distance to mediod: -8716.5556% of index build completed. Distance to mediod: -8616.8027% of index build completed. Distance to mediod: -8517.0498% of index build completed. Distance to mediod: -8517.2969% of index build completed. Distance to mediod: -8417.544% of index build completed. Distance to mediod: -8417.7911% of index build completed. Distance to mediod: -8318.0382% of index build completed. Distance to mediod: -8218.2853% of index build completed. Distance to mediod: -8218.5324% of index build completed. Distance to mediod: -8118.7795% of index build completed. Distance to mediod: -8019.0266% of index build completed. Distance to mediod: -8019.2737% of index build completed. Distance to mediod: -7919.5208% of index build completed. Distance to mediod: -7919.7679% of index build completed. Distance to mediod: -7820.015% of index build completed. Distance to mediod: -7720.2621% of index build completed. Distance to mediod: -7720.5092% of index build completed. Distance to mediod: -7620.7563% of index build completed. Distance to mediod: -7521.0034% of index build completed. Distance to mediod: -7521.2505% of index build completed. Distance to mediod: -7421.4976% of index build completed. Distance to mediod: -7421.7447% of index build completed. Distance to mediod: -7321.9918% of index build completed. Distance to mediod: -7222.2389% of index build completed. Distance to mediod: -7222.486% of index build completed. Distance to mediod: -7122.7331% of index build completed. Distance to mediod: -7022.9802% of index build completed. Distance to mediod: -7023.2273% of index build completed. Distance to mediod: -6923.4744% of index build completed. Distance to mediod: -6823.7215% of index build completed. Distance to mediod: -6823.9686% of index build completed. Distance to mediod: -6724.2157% of index build completed. Distance to mediod: -6724.4628% of index build completed. Distance to mediod: -6624.7099% of index build completed. Distance to mediod: -6524.957% of index build completed. Distance to mediod: -6525.2041% of index build completed. Distance to mediod: -6425.4512% of index build completed. Distance to mediod: -6325.6983% of index build completed. Distance to mediod: -6325.9454% of index build completed. Distance to mediod: -6226.1925% of index build completed. Distance to mediod: -6226.4396% of index build completed. Distance to mediod: -6126.6867% of index build completed. Distance to mediod: -6026.9338% of index build completed. Distance to mediod: -6027.1809% of index build completed. Distance to mediod: -5927.428% of index build completed. Distance to mediod: -5827.6751% of index build completed. Distance to mediod: -5827.9222% of index build completed. Distance to mediod: -5728.1693% of index build completed. Distance to mediod: -5628.4164% of index build completed. Distance to mediod: -5628.6635% of index build completed. Distance to mediod: -5528.9106% of index build completed. Distance to mediod: -5529.1577% of index build completed. Distance to mediod: -5429.4048% of index build completed. Distance to mediod: -5329.6519% of index build completed. Distance to mediod: -5329.899% of index build completed. Distance to mediod: -5230.1461% of index build completed. Distance to mediod: -5130.3932% of index build completed. Distance to mediod: -5130.6403% of index build completed. Distance to mediod: -5030.8874% of index build completed. Distance to mediod: -4931.1345% of index build completed. Distance to mediod: -4931.3816% of index build completed. Distance to mediod: -4831.6287% of index build completed. Distance to mediod: -4831.8758% of index build completed. Distance to mediod: -4732.1229% of index build completed. Distance to mediod: -4632.37% of index build completed. Distance to mediod: -4632.6171% of index build completed. Distance to mediod: -4532.8642% of index build completed. Distance to mediod: -4433.1113% of index build completed. Distance to mediod: -4433.3584% of index build completed. Distance to mediod: -4333.6055% of index build completed. Distance to mediod: -4233.8526% of index build completed. Distance to mediod: -4234.0997% of index build completed. Distance to mediod: -4134.3468% of index build completed. Distance to mediod: -4134.5939% of index build completed. Distance to mediod: -4034.841% of index build completed. Distance to mediod: -3935.0881% of index build completed. Distance to mediod: -3935.3352% of index build completed. Distance to mediod: -3835.5823% of index build completed. Distance to mediod: -3735.8294% of index build completed. Distance to mediod: -3736.0765% of index build completed. Distance to mediod: -3636.3236% of index build completed. Distance to mediod: -3536.5707% of index build completed. Distance to mediod: -3536.8178% of index build completed. Distance to mediod: -3437.0649% of index build completed. Distance to mediod: -3437.3119% of index build completed. Distance to mediod: -3337.559% of index build completed. Distance to mediod: -3337.8061% of index build completed. Distance to mediod: -3238.0532% of index build completed. Distance to mediod: -3138.3003% of index build completed. Distance to mediod: -3138.5474% of index build completed. Distance to mediod: -3038.7945% of index build completed. Distance to mediod: -2939.0416% of index build completed. Distance to mediod: -2939.2887% of index build completed. Distance to mediod: -2839.5358% of index build completed. Distance to mediod: -2839.7829% of index build completed. Distance to mediod: -2740.03% of index build completed. Distance to mediod: -2640.2771% of index build completed. Distance to mediod: -2640.5242% of index build completed. Distance to mediod: -2540.7713% of index build completed. Distance to mediod: -2441.0184% of index build completed. Distance to mediod: -2441.2655% of index build completed. Distance to mediod: -2341.5126% of index build completed. Distance to mediod: -2241.7597% of index build completed. Distance to mediod: -2242.0068% of index build completed. Distance to mediod: -2142.2539% of index build completed. Distance to mediod: -2142.501% of index build completed. Distance to mediod: -2042.7481% of index build completed. Distance to mediod: -1942.9952% of index build completed. Distance to mediod: -1943.2423% of index build completed. Distance to mediod: -1843.4894% of index build completed. Distance to mediod: -1743.7365% of index build completed. Distance to mediod: -1743.9836% of index build completed. Distance to mediod: -1644.2307% of index build completed. Distance to mediod: -1544.4778% of index build completed. Distance to mediod: -1544.7249% of index build completed. Distance to mediod: -1444.972% of index build completed. Distance to mediod: -1445.2191% of index build completed. Distance to mediod: -1345.4662% of index build completed. Distance to mediod: -1245.7133% of index build completed. Distance to mediod: -1245.9604% of index build completed. Distance to mediod: -1146.2075% of index build completed. Distance to mediod: -1046.4546% of index build completed. Distance to mediod: -1046.7017% of index build completed. Distance to mediod: -946.9488% of index build completed. Distance to mediod: -847.1959% of index build completed. Distance to mediod: -847.443% of index build completed. Distance to mediod: -747.6901% of index build completed. Distance to mediod: -747.9372% of index build completed. Distance to mediod: -648.1843% of index build completed. Distance to mediod: -548.4314% of index build completed. Distance to mediod: -548.6785% of index build completed. Distance to mediod: -448.9256% of index build completed. Distance to mediod: -349.1727% of index build completed. Distance to mediod: -349.4198% of index build completed. Distance to mediod: -249.6669% of index build completed. Distance to mediod: -149.914% of index build completed. Distance to mediod: -150.1611% of index build completed. Distance to mediod: 050.4082% of index build completed. Distance to mediod: 050.6553% of index build completed. Distance to mediod: 150.9024% of index build completed. Distance to mediod: 251.1495% of index build completed. Distance to mediod: 251.3966% of index build completed. Distance to mediod: 351.6437% of index build completed. Distance to mediod: 451.8908% of index build completed. Distance to mediod: 452.1379% of index build completed. Distance to mediod: 552.385% of index build completed. Distance to mediod: 552.6321% of index build completed. Distance to mediod: 652.8792% of index build completed. Distance to mediod: 753.1263% of index build completed. Distance to mediod: 753.3734% of index build completed. Distance to mediod: 853.6205% of index build completed. Distance to mediod: 953.8676% of index build completed. Distance to mediod: 954.1147% of index build completed. Distance to mediod: 1054.3618% of index build completed. Distance to mediod: 1054.6089% of index build completed. Distance to mediod: 1154.856% of index build completed. Distance to mediod: 1255.1031% of index build completed. Distance to mediod: 1255.3502% of index build completed. Distance to mediod: 1355.5973% of index build completed. Distance to mediod: 1455.8444% of index build completed. Distance to mediod: 1456.0915% of index build completed. Distance to mediod: 1556.3386% of index build completed. Distance to mediod: 1656.5857% of index build completed. Distance to mediod: 1656.8328% of index build completed. Distance to mediod: 1757.0799% of index build completed. Distance to mediod: 1757.327% of index build completed. Distance to mediod: 1857.5741% of index build completed. Distance to mediod: 1957.8212% of index build completed. Distance to mediod: 1958.0683% of index build completed. Distance to mediod: 2058.3154% of index build completed. Distance to mediod: 2158.5625% of index build completed. Distance to mediod: 2158.8096% of index build completed. Distance to mediod: 2259.0567% of index build completed. Distance to mediod: 2359.3038% of index build completed. Distance to mediod: 2359.5509% of index build completed. Distance to mediod: 2459.798% of index build completed. Distance to mediod: 2460.0451% of index build completed. Distance to mediod: 2560.2922% of index build completed. Distance to mediod: 2660.5393% of index build completed. Distance to mediod: 2660.7864% of index build completed. Distance to mediod: 2761.0335% of index build completed. Distance to mediod: 2861.2806% of index build completed. Distance to mediod: 2861.5277% of index build completed. Distance to mediod: 2961.7748% of index build completed. Distance to mediod: 3062.0218% of index build completed. Distance to mediod: 3062.2689% of index build completed. Distance to mediod: 3162.516% of index build completed. Distance to mediod: 3162.7631% of index build completed. Distance to mediod: 3263.0102% of index build completed. Distance to mediod: 3363.2573% of index build completed. Distance to mediod: 3363.5044% of index build completed. Distance to mediod: 3463.7515% of index build completed. Distance to mediod: 3563.9986% of index build completed. Distance to mediod: 3564.2457% of index build completed. Distance to mediod: 3664.4928% of index build completed. Distance to mediod: 3664.7399% of index build completed. Distance to mediod: 3764.987% of index build completed. Distance to mediod: 3865.2341% of index build completed. Distance to mediod: 3865.4812% of index build completed. Distance to mediod: 3965.7283% of index build completed. Distance to mediod: 4065.9754% of index build completed. Distance to mediod: 4066.2225% of index build completed. Distance to mediod: 4166.4696% of index build completed. Distance to mediod: 4266.7167% of index build completed. Distance to mediod: 4266.9638% of index build completed. Distance to mediod: 4367.2109% of index build completed. Distance to mediod: 4367.458% of index build completed. Distance to mediod: 4467.7051% of index build completed. Distance to mediod: 4567.9522% of index build completed. Distance to mediod: 4568.1993% of index build completed. Distance to mediod: 4668.4464% of index build completed. Distance to mediod: 4768.6935% of index build completed. Distance to mediod: 4768.9406% of index build completed. Distance to mediod: 4869.1877% of index build completed. Distance to mediod: 4969.4348% of index build completed. Distance to mediod: 4969.6819% of index build completed. Distance to mediod: 5069.929% of index build completed. Distance to mediod: 5070.1761% of index build completed. Distance to mediod: 5170.4232% of index build completed. Distance to mediod: 5270.6703% of index build completed. Distance to mediod: 5270.9174% of index build completed. Distance to mediod: 5371.1645% of index build completed. Distance to mediod: 5471.4116% of index build completed. Distance to mediod: 5471.6587% of index build completed. Distance to mediod: 5571.9058% of index build completed. Distance to mediod: 5672.1529% of index build completed. Distance to mediod: 5672.4% of index build completed. Distance to mediod: 5772.6471% of index build completed. Distance to mediod: 5772.8942% of index build completed. Distance to mediod: 5873.1413% of index build completed. Distance to mediod: 5973.3884% of index build completed. Distance to mediod: 5973.6355% of index build completed. Distance to mediod: 6073.8826% of index build completed. Distance to mediod: 6174.1297% of index build completed. Distance to mediod: 6174.3768% of index build completed. Distance to mediod: 6274.6239% of index build completed. Distance to mediod: 6274.871% of index build completed. Distance to mediod: 6375.1181% of index build completed. Distance to mediod: 6475.3652% of index build completed. Distance to mediod: 6475.6123% of index build completed. Distance to mediod: 6575.8594% of index build completed. Distance to mediod: 6676.1065% of index build completed. Distance to mediod: 6676.3536% of index build completed. Distance to mediod: 6776.6007% of index build completed. Distance to mediod: 6876.8478% of index build completed. Distance to mediod: 6877.0949% of index build completed. Distance to mediod: 6977.342% of index build completed. Distance to mediod: 6977.5891% of index build completed. Distance to mediod: 7077.8362% of index build completed. Distance to mediod: 7178.0833% of index build completed. Distance to mediod: 7178.3304% of index build completed. Distance to mediod: 7278.5775% of index build completed. Distance to mediod: 7378.8246% of index build completed. Distance to mediod: 7379.0717% of index build completed. Distance to mediod: 7479.3188% of index build completed. Distance to mediod: 7579.5659% of index build completed. Distance to mediod: 7579.813% of index build completed. Distance to mediod: 7680.0601% of index build completed. Distance to mediod: 7680.3072% of index build completed. Distance to mediod: 7780.5543% of index build completed. Distance to mediod: 7880.8014% of index build completed. Distance to mediod: 7881.0485% of index build completed. Distance to mediod: 7981.2956% of index build completed. Distance to mediod: 8081.5427% of index build completed. Distance to mediod: 8081.7898% of index build completed. Distance to mediod: 8182.0369% of index build completed. Distance to mediod: 8182.284% of index build completed. Distance to mediod: 8282.5311% of index build completed. Distance to mediod: 8382.7782% of index build completed. Distance to mediod: 8383.0253% of index build completed. Distance to mediod: 8483.2724% of index build completed. Distance to mediod: 8583.5195% of index build completed. Distance to mediod: 8583.7666% of index build completed. Distance to mediod: 8684.0137% of index build completed. Distance to mediod: 8784.2608% of index build completed. Distance to mediod: 8784.5079% of index build completed. Distance to mediod: 8884.755% of index build completed. Distance to mediod: 8885.0021% of index build completed. Distance to mediod: 8985.2492% of index build completed. Distance to mediod: 9085.4963% of index build completed. Distance to mediod: 9085.7434% of index build completed. Distance to mediod: 9185.9905% of index build completed. Distance to mediod: 9286.2376% of index build completed. Distance to mediod: 9286.4847% of index build completed. Distance to mediod: 9386.7317% of index build completed. Distance to mediod: 9486.9788% of index build completed. Distance to mediod: 9487.2259% of index build completed. Distance to mediod: 9587.473% of index build completed. Distance to mediod: 9587.7201% of index build completed. Distance to mediod: 9687.9672% of index build completed. Distance to mediod: 9788.2143% of index build completed. Distance to mediod: 9788.4614% of index build completed. Distance to mediod: 9888.7085% of index build completed. Distance to mediod: 9988.9556% of index build completed. Distance to mediod: 9989.2027% of index build completed. Distance to mediod: 10089.4498% of index build completed. Distance to mediod: 10089.6969% of index build completed. Distance to mediod: 10189.944% of index build completed. Distance to mediod: 10290.1911% of index build completed. Distance to mediod: 10290.4382% of index build completed. Distance to mediod: 10390.6853% of index build completed. Distance to mediod: 10490.9324% of index build completed. Distance to mediod: 10491.1795% of index build completed. Distance to mediod: 10591.4266% of index build completed. Distance to mediod: 10691.6737% of index build completed. Distance to mediod: 10691.9208% of index build completed. Distance to mediod: 10792.1679% of index build completed. Distance to mediod: 10792.415% of index build completed. Distance to mediod: 10892.6621% of index build completed. Distance to mediod: 10992.9092% of index build completed. Distance to mediod: 10993.1563% of index build completed. Distance to mediod: 11093.4034% of index build completed. Distance to mediod: 11193.6505% of index build completed. Distance to mediod: 11193.8976% of index build completed. Distance to mediod: 11294.1447% of index build completed. Distance to mediod: 11294.3918% of index build completed. Distance to mediod: 11394.6389% of index build completed. Distance to mediod: 11494.886% of index build completed. Distance to mediod: 11495.1331% of index build completed. Distance to mediod: 11595.3802% of index build completed. Distance to mediod: 11695.6273% of index build completed. Distance to mediod: 11695.8744% of index build completed. Distance to mediod: 11796.1215% of index build completed. Distance to mediod: 11896.3686% of index build completed. Distance to mediod: 11896.6157% of index build completed. Distance to mediod: 11996.8628% of index build completed. Distance to mediod: 11997.1099% of index build completed. Distance to mediod: 12097.357% of index build completed. Distance to mediod: 12197.6041% of index build completed. Distance to mediod: 12197.8512% of index build completed. Distance to mediod: 12298.0983% of index build completed. Distance to mediod: 12398.3454% of index build completed. Distance to mediod: 12398.5925% of index build completed. Distance to mediod: 12498.8396% of index build completed. Distance to mediod: 12599.0867% of index build completed. Distance to mediod: 12599.3338% of index build completed. Distance to mediod: 12699.5809% of index build completed. Distance to mediod: 12699.828% of index build completed. Distance to mediod: 127Starting final cleanup..done. Link time: 3825.28s
+Index built with degree: max:64  avg:44.8831  min:1  count(deg<2):1012594
+Robust Prune Calls: 108442436
+Indexing time: 3850.67
 Not saving tags as they are not enabled.
-Time taken for save: 19.4831s.
+Time taken for save: 28.4491s.

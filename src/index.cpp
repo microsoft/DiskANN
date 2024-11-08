@@ -4,7 +4,7 @@
 #include <omp.h>
 
 #include <type_traits>
-
+#include <atomic>
 #include "boost/dynamic_bitset.hpp"
 #include "index_factory.h"
 #include "memory_mapper.h"
@@ -24,6 +24,9 @@
 #include "index.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
+
+//bool reduce_prune = false;
+std::atomic<unsigned long long> count_prune = 0;
 
 namespace diskann
 {
@@ -1058,7 +1061,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
                                           InMemQueryScratch<T> *scratch,
                                           const tsl::robin_set<uint32_t> *const delete_set_ptr)
-{
+{   
+    count_prune++;
     if (pool.size() == 0)
         return;
 
@@ -1074,7 +1078,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
-    float cur_alpha = 1;
+    // Change the cur_alpha to alpha
+    float cur_alpha = alpha;
     while (cur_alpha <= alpha && result.size() < degree)
     {
         // used for MIPS, where we store a value of eps in cur_alpha to
@@ -1321,9 +1326,6 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
         auto node = visit_order[node_ctr];
-        if (node_ctr%100000 == 0 && node_ctr > 0){
-            diskann::cout <<" Distance to mediod: " << (float)(distances_to_mediod[node_ctr].first) << std::endl;
-        }
 
         // Find and add appropriate graph edges
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
@@ -1350,8 +1352,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
         if (node_ctr % 100000 == 0)
         {
-            diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed."
-                          << std::flush;
+            diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed. Distance to mediod: " << (float)(distances_to_mediod[node_ctr].first) << std::flush;
         }
     }
 
@@ -1578,7 +1579,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
     }
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
-
+    diskann::cout << "Robust Prune Calls: " << count_prune << std::endl;
     _has_built = true;
 }
 template <typename T, typename TagT, typename LabelT>
