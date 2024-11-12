@@ -880,10 +880,27 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
+    float prev_distance_to_query = 0.0;
     while (best_L_nodes.has_unexpanded_node())
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
+
+        hops++;
+        if(search_invocation){
+            std::vector<uint32_t> id_scratch_temp = {n};
+            std::vector<float> dist_scratch_temp = {0.0};
+            compute_dists(id_scratch_temp, dist_scratch_temp);
+            float change_in_distance = std::abs(dist_scratch_temp[0] - prev_distance_to_query);
+            if (best_L_nodes.size() == Lsize  && (float)(change_in_distance/(dist_scratch_temp[0] + 1e-6)) < 0.01){
+                break;
+            }
+            prev_distance_to_query = dist_scratch_temp[0];
+            //diskann::cout<<"Iteration/Hop: #"<<hops+1<<std::endl;
+            //diskann::cout<<"Current L size: "<<best_L_nodes.size()<<std::endl;
+            //diskann::cout<<"Node expanded(ID) : "<<nbr.id<<" Distance(ID,Query): "<<dist_scratch_temp[0]<<std::endl;     
+        }
+        
 
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
@@ -972,6 +989,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
     }
+    // if (search_invocation){
+    //     diskann::cout<<"Total Iterations/Hops: "<<hops<<std::endl;
+    //     diskann::cout<<"Total comparisons: "<<cmps<<std::endl;
+    //     diskann::cout<<"L size: "<<best_L_nodes.size()<<std::endl;
+    //     diskann::cout<<"Expanded Nodes List"<<scratch->expanded_nodes_vec().size()<<std::endl;
+    //     for(auto neighbor : scratch->expanded_nodes_vec()){
+    //         diskann::cout<<neighbor.id<<std::endl;
+    //     }       
+    // }
     return std::make_pair(hops, cmps);
 }
 
