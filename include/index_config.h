@@ -3,11 +3,11 @@
 
 #pragma once
 
-#include <memory>
 #include "ann_exception.h"
 #include "common_includes.h"
 #include "logger.h"
 #include "parameters.h"
+#include <memory>
 
 namespace diskann {
 enum class DataStoreStrategy { MEMORY };

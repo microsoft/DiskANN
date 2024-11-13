@@ -3,16 +3,15 @@
 
 #pragma once
 
-#include <vector>
-#include <sstream>
-#include <memory>
-#include "logger.h"
-#include "ann_exception.h"
 #include "abstract_filter_store.h"
+#include "ann_exception.h"
+#include "logger.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 #include "windows_customizations.h"
-
+#include <memory>
+#include <sstream>
+#include <vector>
 
 namespace diskann {
 template <typename LabelT>
