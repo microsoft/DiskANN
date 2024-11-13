@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #pragma once
+#include <cassert>
 #include <cstring>
 #include <fstream>
 #include <iostream>
