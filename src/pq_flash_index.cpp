@@ -21,1388 +21,1437 @@
 #define READ_UNSIGNED(stream, val) stream.read((char *)&val, sizeof(unsigned))
 
 // sector # beyond the end of graph where data for id is present for reordering
-#define VECTOR_SECTOR_NO(id)                                                   \
-  (((uint64_t)(id)) / _nvecs_per_sector + _reorder_data_start_sector)
+#define VECTOR_SECTOR_NO(id) (((uint64_t)(id)) / _nvecs_per_sector + _reorder_data_start_sector)
 
 // sector # beyond the end of graph where data for id is present for reordering
-#define VECTOR_SECTOR_OFFSET(id)                                               \
-  ((((uint64_t)(id)) % _nvecs_per_sector) * _data_dim * sizeof(float))
+#define VECTOR_SECTOR_OFFSET(id) ((((uint64_t)(id)) % _nvecs_per_sector) * _data_dim * sizeof(float))
 
-namespace diskann {
+namespace diskann
+{
 
 template <typename T, typename LabelT>
-PQFlashIndex<T, LabelT>::PQFlashIndex(
-    std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
-    : reader(fileReader), metric(m), _thread_data(nullptr) {
-  diskann::Metric metric_to_invoke = m;
-  if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT) {
-    if (std::is_floating_point<T>::value) {
-      diskann::cout << "Since data is floating point, we assume that it has "
-                       "been appropriately pre-processed "
-                       "(normalization for cosine, and convert-to-l2 by "
-                       "adding extra dimension for MIPS). So we "
-                       "shall invoke an l2 distance function."
-                    << std::endl;
-      metric_to_invoke = diskann::Metric::L2;
-    } else {
-      diskann::cerr << "WARNING: Cannot normalize integral data types."
-                    << " This may result in erroneous results or poor recall."
-                    << " Consider using L2 distance with integral data types."
-                    << std::endl;
+PQFlashIndex<T, LabelT>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
+    : reader(fileReader), metric(m), _thread_data(nullptr)
+{
+    diskann::Metric metric_to_invoke = m;
+    if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT)
+    {
+        if (std::is_floating_point<T>::value)
+        {
+            diskann::cout << "Since data is floating point, we assume that it has "
+                             "been appropriately pre-processed "
+                             "(normalization for cosine, and convert-to-l2 by "
+                             "adding extra dimension for MIPS). So we "
+                             "shall invoke an l2 distance function."
+                          << std::endl;
+            metric_to_invoke = diskann::Metric::L2;
+        }
+        else
+        {
+            diskann::cerr << "WARNING: Cannot normalize integral data types."
+                          << " This may result in erroneous results or poor recall."
+                          << " Consider using L2 distance with integral data types." << std::endl;
+        }
     }
-  }
 
-  this->_dist_cmp.reset(diskann::get_distance_function<T>(metric_to_invoke));
-  this->_dist_cmp_float.reset(
-      diskann::get_distance_function<float>(metric_to_invoke));
-  this->_filter_store = std::make_unique<InMemFilterStore<LabelT>>();
+    this->_dist_cmp.reset(diskann::get_distance_function<T>(metric_to_invoke));
+    this->_dist_cmp_float.reset(diskann::get_distance_function<float>(metric_to_invoke));
+    this->_filter_store = std::make_unique<InMemFilterStore<LabelT>>();
 }
 
-template <typename T, typename LabelT>
-PQFlashIndex<T, LabelT>::~PQFlashIndex() {
+template <typename T, typename LabelT> PQFlashIndex<T, LabelT>::~PQFlashIndex()
+{
 #ifndef EXEC_ENV_OLS
-  if (data != nullptr) {
-    delete[] data;
-  }
+    if (data != nullptr)
+    {
+        delete[] data;
+    }
 #endif
 
-  if (_centroid_data != nullptr)
-    aligned_free(_centroid_data);
-  // delete backing bufs for nhood and coord cache
-  if (_nhood_cache_buf != nullptr) {
-    delete[] _nhood_cache_buf;
-    diskann::aligned_free(_coord_cache_buf);
-  }
+    if (_centroid_data != nullptr)
+        aligned_free(_centroid_data);
+    // delete backing bufs for nhood and coord cache
+    if (_nhood_cache_buf != nullptr)
+    {
+        delete[] _nhood_cache_buf;
+        diskann::aligned_free(_coord_cache_buf);
+    }
 
-  if (_medoids != nullptr) {
-    delete[] _medoids;
-    _medoids = nullptr;
-  }
+    if (_medoids != nullptr)
+    {
+        delete[] _medoids;
+        _medoids = nullptr;
+    }
 
-  if (_load_flag) {
-    diskann::cout << "Clearing scratch" << std::endl;
-    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-    manager.destroy();
-    this->reader->deregister_all_threads();
-    reader->close();
-  }
+    if (_load_flag)
+    {
+        diskann::cout << "Clearing scratch" << std::endl;
+        ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+        manager.destroy();
+        this->reader->deregister_all_threads();
+        reader->close();
+    }
+}
+
+template <typename T, typename LabelT> inline uint64_t PQFlashIndex<T, LabelT>::get_node_sector(uint64_t node_id)
+{
+    return 1 + (_nnodes_per_sector > 0 ? node_id / _nnodes_per_sector
+                                       : node_id * DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN));
 }
 
 template <typename T, typename LabelT>
-inline uint64_t PQFlashIndex<T, LabelT>::get_node_sector(uint64_t node_id) {
-  return 1 +
-         (_nnodes_per_sector > 0
-              ? node_id / _nnodes_per_sector
-              : node_id * DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN));
+inline char *PQFlashIndex<T, LabelT>::offset_to_node(char *sector_buf, uint64_t node_id)
+{
+    return sector_buf + (_nnodes_per_sector == 0 ? 0 : (node_id % _nnodes_per_sector) * _max_node_len);
+}
+
+template <typename T, typename LabelT> inline uint32_t *PQFlashIndex<T, LabelT>::offset_to_node_nhood(char *node_buf)
+{
+    return (unsigned *)(node_buf + _disk_bytes_per_point);
+}
+
+template <typename T, typename LabelT> inline T *PQFlashIndex<T, LabelT>::offset_to_node_coords(char *node_buf)
+{
+    return (T *)(node_buf);
 }
 
 template <typename T, typename LabelT>
-inline char *PQFlashIndex<T, LabelT>::offset_to_node(char *sector_buf,
-                                                     uint64_t node_id) {
-  return sector_buf + (_nnodes_per_sector == 0
-                           ? 0
-                           : (node_id % _nnodes_per_sector) * _max_node_len);
-}
-
-template <typename T, typename LabelT>
-inline uint32_t *PQFlashIndex<T, LabelT>::offset_to_node_nhood(char *node_buf) {
-  return (unsigned *)(node_buf + _disk_bytes_per_point);
-}
-
-template <typename T, typename LabelT>
-inline T *PQFlashIndex<T, LabelT>::offset_to_node_coords(char *node_buf) {
-  return (T *)(node_buf);
-}
-
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads,
-                                                uint64_t visited_reserve) {
-  diskann::cout << "Setting up thread-specific contexts for nthreads: "
-                << nthreads << std::endl;
+void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve)
+{
+    diskann::cout << "Setting up thread-specific contexts for nthreads: " << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
 #pragma omp parallel for num_threads((int)nthreads)
-  for (int64_t thread = 0; thread < (int64_t)nthreads; thread++) {
-#pragma omp critical
+    for (int64_t thread = 0; thread < (int64_t)nthreads; thread++)
     {
-      SSDThreadData<T> *data =
-          new SSDThreadData<T>(this->_aligned_dim, visited_reserve);
-      this->reader->register_thread();
-      data->ctx = this->reader->get_ctx();
-      this->_thread_data.push(data);
+#pragma omp critical
+        {
+            SSDThreadData<T> *data = new SSDThreadData<T>(this->_aligned_dim, visited_reserve);
+            this->reader->register_thread();
+            data->ctx = this->reader->get_ctx();
+            this->_thread_data.push(data);
+        }
     }
-  }
-  _load_flag = true;
+    _load_flag = true;
 }
 
 template <typename T, typename LabelT>
-std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(
-    const std::vector<uint32_t> &node_ids, std::vector<T *> &coord_buffers,
-    std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers) {
-  std::vector<AlignedRead> read_reqs;
-  std::vector<bool> retval(node_ids.size(), true);
+std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t> &node_ids,
+                                                      std::vector<T *> &coord_buffers,
+                                                      std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers)
+{
+    std::vector<AlignedRead> read_reqs;
+    std::vector<bool> retval(node_ids.size(), true);
 
-  char *buf = nullptr;
-  auto num_sectors = _nnodes_per_sector > 0
-                         ? 1
-                         : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
-  alloc_aligned((void **)&buf,
-                node_ids.size() * num_sectors * defaults::SECTOR_LEN,
-                defaults::SECTOR_LEN);
+    char *buf = nullptr;
+    auto num_sectors = _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
+    alloc_aligned((void **)&buf, node_ids.size() * num_sectors * defaults::SECTOR_LEN, defaults::SECTOR_LEN);
 
-  // create read requests
-  for (size_t i = 0; i < node_ids.size(); ++i) {
-    auto node_id = node_ids[i];
+    // create read requests
+    for (size_t i = 0; i < node_ids.size(); ++i)
+    {
+        auto node_id = node_ids[i];
 
-    AlignedRead read;
-    read.len = num_sectors * defaults::SECTOR_LEN;
-    read.buf = buf + i * num_sectors * defaults::SECTOR_LEN;
-    read.offset = get_node_sector(node_id) * defaults::SECTOR_LEN;
-    read_reqs.push_back(read);
-  }
-
-  // borrow thread data and issue reads
-  ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-  auto this_thread_data = manager.scratch_space();
-  IOContext &ctx = this_thread_data->ctx;
-  reader->read(read_reqs, ctx);
-
-  // copy reads into buffers
-  for (uint32_t i = 0; i < read_reqs.size(); i++) {
-#if defined(_WINDOWS) &&                                                       \
-    defined(USE_BING_INFRA) // this block is to handle failed reads in
-                            // production settings
-    if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS) {
-      retval[i] = false;
-      continue;
+        AlignedRead read;
+        read.len = num_sectors * defaults::SECTOR_LEN;
+        read.buf = buf + i * num_sectors * defaults::SECTOR_LEN;
+        read.offset = get_node_sector(node_id) * defaults::SECTOR_LEN;
+        read_reqs.push_back(read);
     }
+
+    // borrow thread data and issue reads
+    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    auto this_thread_data = manager.scratch_space();
+    IOContext &ctx = this_thread_data->ctx;
+    reader->read(read_reqs, ctx);
+
+    // copy reads into buffers
+    for (uint32_t i = 0; i < read_reqs.size(); i++)
+    {
+#if defined(_WINDOWS) && defined(USE_BING_INFRA) // this block is to handle failed reads in
+                                                 // production settings
+        if ((*ctx.m_pRequestsStatus)[i] != IOContext::READ_SUCCESS)
+        {
+            retval[i] = false;
+            continue;
+        }
 #endif
 
-    char *node_buf = offset_to_node((char *)read_reqs[i].buf, node_ids[i]);
+        char *node_buf = offset_to_node((char *)read_reqs[i].buf, node_ids[i]);
 
-    if (coord_buffers[i] != nullptr) {
-      T *node_coords = offset_to_node_coords(node_buf);
-      memcpy(coord_buffers[i], node_coords, _disk_bytes_per_point);
+        if (coord_buffers[i] != nullptr)
+        {
+            T *node_coords = offset_to_node_coords(node_buf);
+            memcpy(coord_buffers[i], node_coords, _disk_bytes_per_point);
+        }
+
+        if (nbr_buffers[i].second != nullptr)
+        {
+            uint32_t *node_nhood = offset_to_node_nhood(node_buf);
+            auto num_nbrs = *node_nhood;
+            nbr_buffers[i].first = num_nbrs;
+            memcpy(nbr_buffers[i].second, node_nhood + 1, num_nbrs * sizeof(uint32_t));
+        }
     }
 
-    if (nbr_buffers[i].second != nullptr) {
-      uint32_t *node_nhood = offset_to_node_nhood(node_buf);
-      auto num_nbrs = *node_nhood;
-      nbr_buffers[i].first = num_nbrs;
-      memcpy(nbr_buffers[i].second, node_nhood + 1,
-             num_nbrs * sizeof(uint32_t));
-    }
-  }
+    aligned_free(buf);
 
-  aligned_free(buf);
-
-  return retval;
+    return retval;
 }
 
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::load_cache_list(
-    std::vector<uint32_t> &node_list) {
-  diskann::cout << "Loading the cache list into memory.." << std::flush;
-  size_t num_cached_nodes = node_list.size();
+template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_list(std::vector<uint32_t> &node_list)
+{
+    diskann::cout << "Loading the cache list into memory.." << std::flush;
+    size_t num_cached_nodes = node_list.size();
 
-  // Allocate space for neighborhood cache
-  _nhood_cache_buf = new uint32_t[num_cached_nodes * (_max_degree + 1)];
-  memset(_nhood_cache_buf, 0, num_cached_nodes * (_max_degree + 1));
+    // Allocate space for neighborhood cache
+    _nhood_cache_buf = new uint32_t[num_cached_nodes * (_max_degree + 1)];
+    memset(_nhood_cache_buf, 0, num_cached_nodes * (_max_degree + 1));
 
-  // Allocate space for coordinate cache
-  size_t coord_cache_buf_len = num_cached_nodes * _aligned_dim;
-  diskann::alloc_aligned((void **)&_coord_cache_buf,
-                         coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
-  memset(_coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
+    // Allocate space for coordinate cache
+    size_t coord_cache_buf_len = num_cached_nodes * _aligned_dim;
+    diskann::alloc_aligned((void **)&_coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
+    memset(_coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
-  size_t BLOCK_SIZE = 8;
-  size_t num_blocks = DIV_ROUND_UP(num_cached_nodes, BLOCK_SIZE);
-  for (size_t block = 0; block < num_blocks; block++) {
-    size_t start_idx = block * BLOCK_SIZE;
-    size_t end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
+    size_t BLOCK_SIZE = 8;
+    size_t num_blocks = DIV_ROUND_UP(num_cached_nodes, BLOCK_SIZE);
+    for (size_t block = 0; block < num_blocks; block++)
+    {
+        size_t start_idx = block * BLOCK_SIZE;
+        size_t end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
 
-    // Copy offset into buffers to read into
-    std::vector<uint32_t> nodes_to_read;
-    std::vector<T *> coord_buffers;
-    std::vector<std::pair<uint32_t, uint32_t *>> nbr_buffers;
-    for (size_t node_idx = start_idx; node_idx < end_idx; node_idx++) {
-      nodes_to_read.push_back(node_list[node_idx]);
-      coord_buffers.push_back(_coord_cache_buf + node_idx * _aligned_dim);
-      nbr_buffers.emplace_back(0,
-                               _nhood_cache_buf + node_idx * (_max_degree + 1));
+        // Copy offset into buffers to read into
+        std::vector<uint32_t> nodes_to_read;
+        std::vector<T *> coord_buffers;
+        std::vector<std::pair<uint32_t, uint32_t *>> nbr_buffers;
+        for (size_t node_idx = start_idx; node_idx < end_idx; node_idx++)
+        {
+            nodes_to_read.push_back(node_list[node_idx]);
+            coord_buffers.push_back(_coord_cache_buf + node_idx * _aligned_dim);
+            nbr_buffers.emplace_back(0, _nhood_cache_buf + node_idx * (_max_degree + 1));
+        }
+
+        // issue the reads
+        auto read_status = read_nodes(nodes_to_read, coord_buffers, nbr_buffers);
+
+        // check for success and insert into the cache.
+        for (size_t i = 0; i < read_status.size(); i++)
+        {
+            if (read_status[i] == true)
+            {
+                _coord_cache.insert(std::make_pair(nodes_to_read[i], coord_buffers[i]));
+                _nhood_cache.insert(std::make_pair(nodes_to_read[i], nbr_buffers[i]));
+            }
+        }
     }
-
-    // issue the reads
-    auto read_status = read_nodes(nodes_to_read, coord_buffers, nbr_buffers);
-
-    // check for success and insert into the cache.
-    for (size_t i = 0; i < read_status.size(); i++) {
-      if (read_status[i] == true) {
-        _coord_cache.insert(std::make_pair(nodes_to_read[i], coord_buffers[i]));
-        _nhood_cache.insert(std::make_pair(nodes_to_read[i], nbr_buffers[i]));
-      }
-    }
-  }
-  diskann::cout << "..done." << std::endl;
+    diskann::cout << "..done." << std::endl;
 }
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(
-    MemoryMappedFiles &files, std::string sample_bin, uint64_t l_search,
-    uint64_t beamwidth, uint64_t num_nodes_to_cache, uint32_t nthreads,
-    std::vector<uint32_t> &node_list) {
+void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(MemoryMappedFiles &files, std::string sample_bin,
+                                                                      uint64_t l_search, uint64_t beamwidth,
+                                                                      uint64_t num_nodes_to_cache, uint32_t nthreads,
+                                                                      std::vector<uint32_t> &node_list)
+{
 #else
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(
-    std::string sample_bin, uint64_t l_search, uint64_t beamwidth,
-    uint64_t num_nodes_to_cache, uint32_t nthreads,
-    std::vector<uint32_t> &node_list) {
+void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::string sample_bin, uint64_t l_search,
+                                                                      uint64_t beamwidth, uint64_t num_nodes_to_cache,
+                                                                      uint32_t nthreads,
+                                                                      std::vector<uint32_t> &node_list)
+{
 #endif
-  if (num_nodes_to_cache >= this->_num_points) {
-    // for small num_points and big num_nodes_to_cache, use below way to get
-    // the node_list quickly
-    node_list.resize(this->_num_points);
-    for (uint32_t i = 0; i < this->_num_points; ++i) {
-      node_list[i] = i;
+    if (num_nodes_to_cache >= this->_num_points)
+    {
+        // for small num_points and big num_nodes_to_cache, use below way to get
+        // the node_list quickly
+        node_list.resize(this->_num_points);
+        for (uint32_t i = 0; i < this->_num_points; ++i)
+        {
+            node_list[i] = i;
+        }
+        return;
     }
-    return;
-  }
 
-  this->_count_visited_nodes = true;
-  this->_node_visit_counter.clear();
-  this->_node_visit_counter.resize(this->_num_points);
-  for (uint32_t i = 0; i < _node_visit_counter.size(); i++) {
-    this->_node_visit_counter[i].first = i;
-    this->_node_visit_counter[i].second = 0;
-  }
+    this->_count_visited_nodes = true;
+    this->_node_visit_counter.clear();
+    this->_node_visit_counter.resize(this->_num_points);
+    for (uint32_t i = 0; i < _node_visit_counter.size(); i++)
+    {
+        this->_node_visit_counter[i].first = i;
+        this->_node_visit_counter[i].second = 0;
+    }
 
-  uint64_t sample_num, sample_dim, sample_aligned_dim;
-  T *samples;
+    uint64_t sample_num, sample_dim, sample_aligned_dim;
+    T *samples;
 
 #ifdef EXEC_ENV_OLS
-  if (files.fileExists(sample_bin)) {
-    diskann::load_aligned_bin<T>(files, sample_bin, samples, sample_num,
-                                 sample_dim, sample_aligned_dim);
-  }
+    if (files.fileExists(sample_bin))
+    {
+        diskann::load_aligned_bin<T>(files, sample_bin, samples, sample_num, sample_dim, sample_aligned_dim);
+    }
 #else
-  if (file_exists(sample_bin)) {
-    diskann::load_aligned_bin<T>(sample_bin, samples, sample_num, sample_dim,
-                                 sample_aligned_dim);
-  }
+    if (file_exists(sample_bin))
+    {
+        diskann::load_aligned_bin<T>(sample_bin, samples, sample_num, sample_dim, sample_aligned_dim);
+    }
 #endif
-  else {
-    diskann::cerr << "Sample bin file not found. Not generating cache."
-                  << std::endl;
-    return;
-  }
+    else
+    {
+        diskann::cerr << "Sample bin file not found. Not generating cache." << std::endl;
+        return;
+    }
 
-  std::vector<uint64_t> tmp_result_ids_64(sample_num, 0);
-  std::vector<float> tmp_result_dists(sample_num, 0);
+    std::vector<uint64_t> tmp_result_ids_64(sample_num, 0);
+    std::vector<float> tmp_result_dists(sample_num, 0);
 
-  bool filtered_search = false;
-  std::vector<LabelT> random_query_filters(sample_num);
-  if (this->_filter_index) {
-    filtered_search = true;
-    _filter_store->generate_random_labels(random_query_filters,
-                                          (uint32_t)sample_num, nthreads);
-  }
+    bool filtered_search = false;
+    std::vector<LabelT> random_query_filters(sample_num);
+    if (this->_filter_index)
+    {
+        filtered_search = true;
+        _filter_store->generate_random_labels(random_query_filters, (uint32_t)sample_num, nthreads);
+    }
 
 #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
-  for (int64_t i = 0; i < (int64_t)sample_num; i++) {
-    auto &label_for_search = random_query_filters[i];
-    // run a search on the sample query with a random label (sampled from base
-    // label distribution), and it will concurrently update the
-    // node_visit_counter to track most visited nodes. The last false is to
-    // not use the "use_reorder_data" option which enables a final reranking
-    // if the disk index itself contains only PQ data.
-    cached_beam_search(samples + (i * sample_aligned_dim), 1, l_search,
-                       tmp_result_ids_64.data() + i,
-                       tmp_result_dists.data() + i, beamwidth, filtered_search,
-                       label_for_search, false);
-  }
+    for (int64_t i = 0; i < (int64_t)sample_num; i++)
+    {
+        auto &label_for_search = random_query_filters[i];
+        // run a search on the sample query with a random label (sampled from base
+        // label distribution), and it will concurrently update the
+        // node_visit_counter to track most visited nodes. The last false is to
+        // not use the "use_reorder_data" option which enables a final reranking
+        // if the disk index itself contains only PQ data.
+        cached_beam_search(samples + (i * sample_aligned_dim), 1, l_search, tmp_result_ids_64.data() + i,
+                           tmp_result_dists.data() + i, beamwidth, filtered_search, label_for_search, false);
+    }
 
-  std::sort(this->_node_visit_counter.begin(), _node_visit_counter.end(),
-            [](std::pair<uint32_t, uint32_t> &left,
-               std::pair<uint32_t, uint32_t> &right) {
-              return left.second > right.second;
-            });
-  node_list.clear();
-  node_list.shrink_to_fit();
-  num_nodes_to_cache =
-      std::min(num_nodes_to_cache, this->_node_visit_counter.size());
-  node_list.reserve(num_nodes_to_cache);
-  for (uint64_t i = 0; i < num_nodes_to_cache; i++) {
-    node_list.push_back(this->_node_visit_counter[i].first);
-  }
-  this->_count_visited_nodes = false;
+    std::sort(this->_node_visit_counter.begin(), _node_visit_counter.end(),
+              [](std::pair<uint32_t, uint32_t> &left, std::pair<uint32_t, uint32_t> &right) {
+                  return left.second > right.second;
+              });
+    node_list.clear();
+    node_list.shrink_to_fit();
+    num_nodes_to_cache = std::min(num_nodes_to_cache, this->_node_visit_counter.size());
+    node_list.reserve(num_nodes_to_cache);
+    for (uint64_t i = 0; i < num_nodes_to_cache; i++)
+    {
+        node_list.push_back(this->_node_visit_counter[i].first);
+    }
+    this->_count_visited_nodes = false;
 
-  diskann::aligned_free(samples);
+    diskann::aligned_free(samples);
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache,
-                                               std::vector<uint32_t> &node_list,
-                                               const bool shuffle) {
-  std::random_device rng;
-  std::mt19937 urng(rng());
+void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std::vector<uint32_t> &node_list,
+                                               const bool shuffle)
+{
+    std::random_device rng;
+    std::mt19937 urng(rng());
 
-  tsl::robin_set<uint32_t> node_set;
+    tsl::robin_set<uint32_t> node_set;
 
-  // Do not cache more than 10% of the nodes in the index
-  uint64_t tenp_nodes = (uint64_t)(std::round(this->_num_points * 0.1));
-  if (num_nodes_to_cache > tenp_nodes) {
-    diskann::cout << "Reducing nodes to cache from: " << num_nodes_to_cache
-                  << " to: " << tenp_nodes
-                  << "(10 percent of total nodes:" << this->_num_points << ")"
-                  << std::endl;
-    num_nodes_to_cache = tenp_nodes == 0 ? 1 : tenp_nodes;
-  }
-  diskann::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
-
-  std::unique_ptr<tsl::robin_set<uint32_t>> cur_level, prev_level;
-  cur_level = std::make_unique<tsl::robin_set<uint32_t>>();
-  prev_level = std::make_unique<tsl::robin_set<uint32_t>>();
-
-  for (uint64_t miter = 0;
-       miter < _num_medoids && cur_level->size() < num_nodes_to_cache;
-       miter++) {
-    cur_level->insert(_medoids[miter]);
-  }
-
-  auto filter_to_medoid_ids = _filter_store->get_label_to_medoids();
-  if ((filter_to_medoid_ids.size() > 0) &&
-      (cur_level->size() < num_nodes_to_cache)) {
-    for (auto &x : filter_to_medoid_ids) {
-      for (auto &y : x.second) {
-        cur_level->insert(y);
-        if (cur_level->size() == num_nodes_to_cache)
-          break;
-      }
-      if (cur_level->size() == num_nodes_to_cache)
-        break;
+    // Do not cache more than 10% of the nodes in the index
+    uint64_t tenp_nodes = (uint64_t)(std::round(this->_num_points * 0.1));
+    if (num_nodes_to_cache > tenp_nodes)
+    {
+        diskann::cout << "Reducing nodes to cache from: " << num_nodes_to_cache << " to: " << tenp_nodes
+                      << "(10 percent of total nodes:" << this->_num_points << ")" << std::endl;
+        num_nodes_to_cache = tenp_nodes == 0 ? 1 : tenp_nodes;
     }
-  }
+    diskann::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
 
-  uint64_t lvl = 1;
-  uint64_t prev_node_set_size = 0;
-  while ((node_set.size() + cur_level->size() < num_nodes_to_cache) &&
-         cur_level->size() != 0) {
-    // swap prev_level and cur_level
-    std::swap(prev_level, cur_level);
-    // clear cur_level
-    cur_level->clear();
+    std::unique_ptr<tsl::robin_set<uint32_t>> cur_level, prev_level;
+    cur_level = std::make_unique<tsl::robin_set<uint32_t>>();
+    prev_level = std::make_unique<tsl::robin_set<uint32_t>>();
 
-    std::vector<uint32_t> nodes_to_expand;
-
-    for (const uint32_t &id : *prev_level) {
-      if (node_set.find(id) != node_set.end()) {
-        continue;
-      }
-      node_set.insert(id);
-      nodes_to_expand.push_back(id);
+    for (uint64_t miter = 0; miter < _num_medoids && cur_level->size() < num_nodes_to_cache; miter++)
+    {
+        cur_level->insert(_medoids[miter]);
     }
 
-    if (shuffle)
-      std::shuffle(nodes_to_expand.begin(), nodes_to_expand.end(), urng);
-    else
-      std::sort(nodes_to_expand.begin(), nodes_to_expand.end());
+    auto filter_to_medoid_ids = _filter_store->get_label_to_medoids();
+    if ((filter_to_medoid_ids.size() > 0) && (cur_level->size() < num_nodes_to_cache))
+    {
+        for (auto &x : filter_to_medoid_ids)
+        {
+            for (auto &y : x.second)
+            {
+                cur_level->insert(y);
+                if (cur_level->size() == num_nodes_to_cache)
+                    break;
+            }
+            if (cur_level->size() == num_nodes_to_cache)
+                break;
+        }
+    }
+
+    uint64_t lvl = 1;
+    uint64_t prev_node_set_size = 0;
+    while ((node_set.size() + cur_level->size() < num_nodes_to_cache) && cur_level->size() != 0)
+    {
+        // swap prev_level and cur_level
+        std::swap(prev_level, cur_level);
+        // clear cur_level
+        cur_level->clear();
+
+        std::vector<uint32_t> nodes_to_expand;
+
+        for (const uint32_t &id : *prev_level)
+        {
+            if (node_set.find(id) != node_set.end())
+            {
+                continue;
+            }
+            node_set.insert(id);
+            nodes_to_expand.push_back(id);
+        }
+
+        if (shuffle)
+            std::shuffle(nodes_to_expand.begin(), nodes_to_expand.end(), urng);
+        else
+            std::sort(nodes_to_expand.begin(), nodes_to_expand.end());
+
+        diskann::cout << "Level: " << lvl << std::flush;
+        bool finish_flag = false;
+
+        uint64_t BLOCK_SIZE = 1024;
+        uint64_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
+        for (size_t block = 0; block < nblocks && !finish_flag; block++)
+        {
+            diskann::cout << "." << std::flush;
+            size_t start = block * BLOCK_SIZE;
+            size_t end = (std::min)((block + 1) * BLOCK_SIZE, nodes_to_expand.size());
+
+            std::vector<uint32_t> nodes_to_read;
+            std::vector<T *> coord_buffers(end - start, nullptr);
+            std::vector<std::pair<uint32_t, uint32_t *>> nbr_buffers;
+
+            for (size_t cur_pt = start; cur_pt < end; cur_pt++)
+            {
+                nodes_to_read.push_back(nodes_to_expand[cur_pt]);
+                nbr_buffers.emplace_back(0, new uint32_t[_max_degree + 1]);
+            }
+
+            // issue read requests
+            auto read_status = read_nodes(nodes_to_read, coord_buffers, nbr_buffers);
+
+            // process each nhood buf
+            for (uint32_t i = 0; i < read_status.size(); i++)
+            {
+                if (read_status[i] == false)
+                {
+                    continue;
+                }
+                else
+                {
+                    uint32_t nnbrs = nbr_buffers[i].first;
+                    uint32_t *nbrs = nbr_buffers[i].second;
+
+                    // explore next level
+                    for (uint32_t j = 0; j < nnbrs && !finish_flag; j++)
+                    {
+                        if (node_set.find(nbrs[j]) == node_set.end())
+                        {
+                            cur_level->insert(nbrs[j]);
+                        }
+                        if (cur_level->size() + node_set.size() >= num_nodes_to_cache)
+                        {
+                            finish_flag = true;
+                        }
+                    }
+                }
+                delete[] nbr_buffers[i].second;
+            }
+        }
+
+        diskann::cout << ". #nodes: " << node_set.size() - prev_node_set_size
+                      << ", #nodes thus far: " << node_set.size() << std::endl;
+        prev_node_set_size = node_set.size();
+        lvl++;
+    }
+
+    assert(node_set.size() + cur_level->size() == num_nodes_to_cache || cur_level->size() == 0);
+
+    node_list.clear();
+    node_list.reserve(node_set.size() + cur_level->size());
+    for (auto node : node_set)
+        node_list.push_back(node);
+    for (auto node : *cur_level)
+        node_list.push_back(node);
 
     diskann::cout << "Level: " << lvl << std::flush;
-    bool finish_flag = false;
+    diskann::cout << ". #nodes: " << node_list.size() - prev_node_set_size << ", #nodes thus far: " << node_list.size()
+                  << std::endl;
+    diskann::cout << "done" << std::endl;
+}
 
-    uint64_t BLOCK_SIZE = 1024;
-    uint64_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
-    for (size_t block = 0; block < nblocks && !finish_flag; block++) {
-      diskann::cout << "." << std::flush;
-      size_t start = block * BLOCK_SIZE;
-      size_t end = (std::min)((block + 1) * BLOCK_SIZE, nodes_to_expand.size());
+template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids_data_as_centroids()
+{
+    if (_centroid_data != nullptr)
+        aligned_free(_centroid_data);
+    alloc_aligned(((void **)&_centroid_data), _num_medoids * _aligned_dim * sizeof(float), 32);
+    std::memset(_centroid_data, 0, _num_medoids * _aligned_dim * sizeof(float));
 
-      std::vector<uint32_t> nodes_to_read;
-      std::vector<T *> coord_buffers(end - start, nullptr);
-      std::vector<std::pair<uint32_t, uint32_t *>> nbr_buffers;
+    diskann::cout << "Loading centroid data from medoids vector data of " << _num_medoids << " medoid(s)" << std::endl;
 
-      for (size_t cur_pt = start; cur_pt < end; cur_pt++) {
-        nodes_to_read.push_back(nodes_to_expand[cur_pt]);
-        nbr_buffers.emplace_back(0, new uint32_t[_max_degree + 1]);
-      }
+    std::vector<uint32_t> nodes_to_read;
+    std::vector<T *> medoid_bufs;
+    std::vector<std::pair<uint32_t, uint32_t *>> nbr_bufs;
 
-      // issue read requests
-      auto read_status = read_nodes(nodes_to_read, coord_buffers, nbr_buffers);
+    for (uint64_t cur_m = 0; cur_m < _num_medoids; cur_m++)
+    {
+        nodes_to_read.push_back(_medoids[cur_m]);
+        medoid_bufs.push_back(new T[_data_dim]);
+        nbr_bufs.emplace_back(0, nullptr);
+    }
 
-      // process each nhood buf
-      for (uint32_t i = 0; i < read_status.size(); i++) {
-        if (read_status[i] == false) {
-          continue;
-        } else {
-          uint32_t nnbrs = nbr_buffers[i].first;
-          uint32_t *nbrs = nbr_buffers[i].second;
+    auto read_status = read_nodes(nodes_to_read, medoid_bufs, nbr_bufs);
 
-          // explore next level
-          for (uint32_t j = 0; j < nnbrs && !finish_flag; j++) {
-            if (node_set.find(nbrs[j]) == node_set.end()) {
-              cur_level->insert(nbrs[j]);
+    for (uint64_t cur_m = 0; cur_m < _num_medoids; cur_m++)
+    {
+        if (read_status[cur_m] == true)
+        {
+            if (!_use_disk_index_pq)
+            {
+                for (uint32_t i = 0; i < _data_dim; i++)
+                    _centroid_data[cur_m * _aligned_dim + i] = medoid_bufs[cur_m][i];
             }
-            if (cur_level->size() + node_set.size() >= num_nodes_to_cache) {
-              finish_flag = true;
+            else
+            {
+                _disk_pq_table.inflate_vector((uint8_t *)medoid_bufs[cur_m], (_centroid_data + cur_m * _aligned_dim));
             }
-          }
         }
-        delete[] nbr_buffers[i].second;
-      }
+        else
+        {
+            throw ANNException("Unable to read a medoid", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+        delete[] medoid_bufs[cur_m];
+    }
+}
+
+#ifdef EXEC_ENV_OLS
+template <typename T, typename LabelT>
+int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix)
+{
+#else
+template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix)
+{
+#endif
+    std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
+    std::string pq_compressed_vectors = std::string(index_prefix) + "_pq_compressed.bin";
+    std::string _disk_index_file = std::string(index_prefix) + "_disk.index";
+#ifdef EXEC_ENV_OLS
+    return load_from_separate_paths(files, num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
+                                    pq_compressed_vectors.c_str());
+#else
+    return load_from_separate_paths(num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
+                                    pq_compressed_vectors.c_str());
+#endif
+}
+
+#ifdef EXEC_ENV_OLS
+template <typename T, typename LabelT>
+int PQFlashIndex<T, LabelT>::load_from_separate_paths(diskann::MemoryMappedFiles &files, uint32_t num_threads,
+                                                      const char *index_filepath, const char *pivots_filepath,
+                                                      const char *compressed_filepath)
+{
+#else
+template <typename T, typename LabelT>
+int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
+                                                      const char *pivots_filepath, const char *compressed_filepath)
+{
+#endif
+    std::string pq_table_bin = pivots_filepath;
+    std::string pq_compressed_vectors = compressed_filepath;
+    std::string _disk_index_file = index_filepath;
+    std::string medoids_file = std::string(_disk_index_file) + "_medoids.bin";
+    std::string centroids_file = std::string(_disk_index_file) + "_centroids.bin";
+
+    size_t pq_file_dim, pq_file_num_centroids;
+#ifdef EXEC_ENV_OLS
+    get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim, METADATA_SIZE);
+#else
+    get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim, METADATA_SIZE);
+#endif
+
+    this->_disk_index_file = _disk_index_file;
+
+    if (pq_file_num_centroids != 256)
+    {
+        diskann::cout << "Error. Number of PQ centroids is not 256. Exiting." << std::endl;
+        return -1;
     }
 
-    diskann::cout << ". #nodes: " << node_set.size() - prev_node_set_size
-                  << ", #nodes thus far: " << node_set.size() << std::endl;
-    prev_node_set_size = node_set.size();
-    lvl++;
-  }
+    this->_data_dim = pq_file_dim;
+    // will change later if we use PQ on disk or if we are using
+    // inner product without PQ
+    this->_disk_bytes_per_point = this->_data_dim * sizeof(T);
+    this->_aligned_dim = ROUND_UP(pq_file_dim, 8);
 
-  assert(node_set.size() + cur_level->size() == num_nodes_to_cache ||
-         cur_level->size() == 0);
+    size_t npts_u64, nchunks_u64;
+#ifdef EXEC_ENV_OLS
+    diskann::load_bin<uint8_t>(files, pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+#else
+    diskann::load_bin<uint8_t>(pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
+#endif
+    this->_num_points = npts_u64;
+    this->_n_chunks = nchunks_u64;
 
-  node_list.clear();
-  node_list.reserve(node_set.size() + cur_level->size());
-  for (auto node : node_set)
-    node_list.push_back(node);
-  for (auto node : *cur_level)
-    node_list.push_back(node);
-
-  diskann::cout << "Level: " << lvl << std::flush;
-  diskann::cout << ". #nodes: " << node_list.size() - prev_node_set_size
-                << ", #nodes thus far: " << node_list.size() << std::endl;
-  diskann::cout << "done" << std::endl;
-}
-
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::use_medoids_data_as_centroids() {
-  if (_centroid_data != nullptr)
-    aligned_free(_centroid_data);
-  alloc_aligned(((void **)&_centroid_data),
-                _num_medoids * _aligned_dim * sizeof(float), 32);
-  std::memset(_centroid_data, 0, _num_medoids * _aligned_dim * sizeof(float));
-
-  diskann::cout << "Loading centroid data from medoids vector data of "
-                << _num_medoids << " medoid(s)" << std::endl;
-
-  std::vector<uint32_t> nodes_to_read;
-  std::vector<T *> medoid_bufs;
-  std::vector<std::pair<uint32_t, uint32_t *>> nbr_bufs;
-
-  for (uint64_t cur_m = 0; cur_m < _num_medoids; cur_m++) {
-    nodes_to_read.push_back(_medoids[cur_m]);
-    medoid_bufs.push_back(new T[_data_dim]);
-    nbr_bufs.emplace_back(0, nullptr);
-  }
-
-  auto read_status = read_nodes(nodes_to_read, medoid_bufs, nbr_bufs);
-
-  for (uint64_t cur_m = 0; cur_m < _num_medoids; cur_m++) {
-    if (read_status[cur_m] == true) {
-      if (!_use_disk_index_pq) {
-        for (uint32_t i = 0; i < _data_dim; i++)
-          _centroid_data[cur_m * _aligned_dim + i] = medoid_bufs[cur_m][i];
-      } else {
-        _disk_pq_table.inflate_vector((uint8_t *)medoid_bufs[cur_m],
-                                      (_centroid_data + cur_m * _aligned_dim));
-      }
-    } else {
-      throw ANNException("Unable to read a medoid", -1, __FUNCSIG__, __FILE__,
-                         __LINE__);
+    _filter_store = std::make_unique<InMemFilterStore<LabelT>>();
+    try
+    {
+        _filter_index = _filter_store->load(_disk_index_file);
+        if (_filter_index)
+        {
+            diskann::cout << "Index has filter support. " << std::endl;
+        }
+        else
+        {
+            diskann::cout << "Index does not have filter support." << std::endl;
+        }
     }
-    delete[] medoid_bufs[cur_m];
-  }
-}
+    catch (diskann::ANNException &ex)
+    {
+        // If filter_store=>load() returns false, it means filters are not
+        // enabled. If it throws, it means there was an error in processing a
+        // filter index.
+        diskann::cerr << "Filter index load failed because: " << ex.what() << std::endl;
+        return false;
+    }
 
 #ifdef EXEC_ENV_OLS
-template <typename T, typename LabelT>
-int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files,
-                                  uint32_t num_threads,
-                                  const char *index_prefix) {
+    _pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
 #else
-template <typename T, typename LabelT>
-int PQFlashIndex<T, LabelT>::load(uint32_t num_threads,
-                                  const char *index_prefix) {
-#endif
-  std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
-  std::string pq_compressed_vectors =
-      std::string(index_prefix) + "_pq_compressed.bin";
-  std::string _disk_index_file = std::string(index_prefix) + "_disk.index";
-#ifdef EXEC_ENV_OLS
-  return load_from_separate_paths(files, num_threads, _disk_index_file.c_str(),
-                                  pq_table_bin.c_str(),
-                                  pq_compressed_vectors.c_str());
-#else
-  return load_from_separate_paths(num_threads, _disk_index_file.c_str(),
-                                  pq_table_bin.c_str(),
-                                  pq_compressed_vectors.c_str());
-#endif
-}
-
-#ifdef EXEC_ENV_OLS
-template <typename T, typename LabelT>
-int PQFlashIndex<T, LabelT>::load_from_separate_paths(
-    diskann::MemoryMappedFiles &files, uint32_t num_threads,
-    const char *index_filepath, const char *pivots_filepath,
-    const char *compressed_filepath) {
-#else
-template <typename T, typename LabelT>
-int PQFlashIndex<T, LabelT>::load_from_separate_paths(
-    uint32_t num_threads, const char *index_filepath,
-    const char *pivots_filepath, const char *compressed_filepath) {
-#endif
-  std::string pq_table_bin = pivots_filepath;
-  std::string pq_compressed_vectors = compressed_filepath;
-  std::string _disk_index_file = index_filepath;
-  std::string medoids_file = std::string(_disk_index_file) + "_medoids.bin";
-  std::string centroids_file = std::string(_disk_index_file) + "_centroids.bin";
-
-  size_t pq_file_dim, pq_file_num_centroids;
-#ifdef EXEC_ENV_OLS
-  get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim,
-                   METADATA_SIZE);
-#else
-  get_bin_metadata(pq_table_bin, pq_file_num_centroids, pq_file_dim,
-                   METADATA_SIZE);
+    _pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
 #endif
 
-  this->_disk_index_file = _disk_index_file;
-
-  if (pq_file_num_centroids != 256) {
-    diskann::cout << "Error. Number of PQ centroids is not 256. Exiting."
+    diskann::cout << "Loaded PQ centroids and in-memory compressed vectors. #points: " << _num_points
+                  << " #dim: " << _data_dim << " #aligned_dim: " << _aligned_dim << " #chunks: " << _n_chunks
                   << std::endl;
-    return -1;
-  }
 
-  this->_data_dim = pq_file_dim;
-  // will change later if we use PQ on disk or if we are using
-  // inner product without PQ
-  this->_disk_bytes_per_point = this->_data_dim * sizeof(T);
-  this->_aligned_dim = ROUND_UP(pq_file_dim, 8);
-
-  size_t npts_u64, nchunks_u64;
-#ifdef EXEC_ENV_OLS
-  diskann::load_bin<uint8_t>(files, pq_compressed_vectors, this->data, npts_u64,
-                             nchunks_u64);
-#else
-  diskann::load_bin<uint8_t>(pq_compressed_vectors, this->data, npts_u64,
-                             nchunks_u64);
-#endif
-  this->_num_points = npts_u64;
-  this->_n_chunks = nchunks_u64;
-
-  _filter_store = std::make_unique<InMemFilterStore<LabelT>>();
-  try {
-    _filter_index = _filter_store->load(_disk_index_file);
-    if (_filter_index) {
-      diskann::cout << "Index has filter support. " << std::endl;
-    } else {
-      diskann::cout << "Index does not have filter support." << std::endl;
+    if (_n_chunks > MAX_PQ_CHUNKS)
+    {
+        std::stringstream stream;
+        stream << "Error loading index. Ensure that max PQ bytes for in-memory "
+                  "PQ data does not exceed "
+               << MAX_PQ_CHUNKS << std::endl;
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-  } catch (diskann::ANNException &ex) {
-    // If filter_store=>load() returns false, it means filters are not
-    // enabled. If it throws, it means there was an error in processing a
-    // filter index.
-    diskann::cerr << "Filter index load failed because: " << ex.what()
-                  << std::endl;
-    return false;
-  }
 
+    std::string disk_pq_pivots_path = this->_disk_index_file + "_pq_pivots.bin";
 #ifdef EXEC_ENV_OLS
-  _pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
+    if (files.fileExists(disk_pq_pivots_path))
+    {
+        _use_disk_index_pq = true;
+        // giving 0 chunks to make the _pq_table infer from the
+        // chunk_offsets file the correct value
+        _disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0);
 #else
-  _pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
+    if (file_exists(disk_pq_pivots_path))
+    {
+        _use_disk_index_pq = true;
+        // giving 0 chunks to make the _pq_table infer from the
+        // chunk_offsets file the correct value
+        _disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0);
 #endif
-
-  diskann::cout
-      << "Loaded PQ centroids and in-memory compressed vectors. #points: "
-      << _num_points << " #dim: " << _data_dim
-      << " #aligned_dim: " << _aligned_dim << " #chunks: " << _n_chunks
-      << std::endl;
-
-  if (_n_chunks > MAX_PQ_CHUNKS) {
-    std::stringstream stream;
-    stream << "Error loading index. Ensure that max PQ bytes for in-memory "
-              "PQ data does not exceed "
-           << MAX_PQ_CHUNKS << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                __LINE__);
-  }
-
-  std::string disk_pq_pivots_path = this->_disk_index_file + "_pq_pivots.bin";
-#ifdef EXEC_ENV_OLS
-  if (files.fileExists(disk_pq_pivots_path)) {
-    _use_disk_index_pq = true;
-    // giving 0 chunks to make the _pq_table infer from the
-    // chunk_offsets file the correct value
-    _disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0);
-#else
-  if (file_exists(disk_pq_pivots_path)) {
-    _use_disk_index_pq = true;
-    // giving 0 chunks to make the _pq_table infer from the
-    // chunk_offsets file the correct value
-    _disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0);
-#endif
-    _disk_pq_n_chunks = _disk_pq_table.get_num_chunks();
-    _disk_bytes_per_point =
-        _disk_pq_n_chunks *
-        sizeof(uint8_t); // revising disk_bytes_per_point since DISK PQ is used.
-    diskann::cout << "Disk index uses PQ data compressed down to "
-                  << _disk_pq_n_chunks << " bytes per point." << std::endl;
-  }
+        _disk_pq_n_chunks = _disk_pq_table.get_num_chunks();
+        _disk_bytes_per_point =
+            _disk_pq_n_chunks * sizeof(uint8_t); // revising disk_bytes_per_point since DISK PQ is used.
+        diskann::cout << "Disk index uses PQ data compressed down to " << _disk_pq_n_chunks << " bytes per point."
+                      << std::endl;
+    }
 
 // read index metadata
 #ifdef EXEC_ENV_OLS
-  // This is a bit tricky. We have to read the header from the
-  // disk_index_file. But  this is now exclusively a preserve of the
-  // DiskPriorityIO class. So, we need to estimate how many
-  // bytes are needed to store the header and read in that many using our
-  // 'standard' aligned file reader approach.
-  reader->open(_disk_index_file);
-  this->setup_thread_data(num_threads);
-  this->_max_nthreads = num_threads;
+    // This is a bit tricky. We have to read the header from the
+    // disk_index_file. But  this is now exclusively a preserve of the
+    // DiskPriorityIO class. So, we need to estimate how many
+    // bytes are needed to store the header and read in that many using our
+    // 'standard' aligned file reader approach.
+    reader->open(_disk_index_file);
+    this->setup_thread_data(num_threads);
+    this->_max_nthreads = num_threads;
 
-  char *bytes = getHeaderBytes();
-  ContentBuf buf(bytes, HEADER_SIZE);
-  std::basic_istream<char> index_metadata(&buf);
+    char *bytes = getHeaderBytes();
+    ContentBuf buf(bytes, HEADER_SIZE);
+    std::basic_istream<char> index_metadata(&buf);
 #else
-  std::ifstream index_metadata(_disk_index_file, std::ios::binary);
+    std::ifstream index_metadata(_disk_index_file, std::ios::binary);
 #endif
 
-  uint32_t nr, nc; // metadata itself is stored as bin format (nr is number
-                   // of metadata, nc should be 1)
-  READ_U32(index_metadata, nr);
-  READ_U32(index_metadata, nc);
+    uint32_t nr, nc; // metadata itself is stored as bin format (nr is number
+                     // of metadata, nc should be 1)
+    READ_U32(index_metadata, nr);
+    READ_U32(index_metadata, nc);
 
-  uint64_t disk_nnodes;
-  uint64_t disk_ndims; // can be disk PQ dim if disk_PQ is set to true
-  READ_U64(index_metadata, disk_nnodes);
-  READ_U64(index_metadata, disk_ndims);
+    uint64_t disk_nnodes;
+    uint64_t disk_ndims; // can be disk PQ dim if disk_PQ is set to true
+    READ_U64(index_metadata, disk_nnodes);
+    READ_U64(index_metadata, disk_ndims);
 
-  if (disk_nnodes != _num_points) {
-    diskann::cout << "Mismatch in #points for compressed data file and disk "
-                     "index file: "
-                  << disk_nnodes << " vs " << _num_points << std::endl;
-    return -1;
-  }
-
-  size_t medoid_id_on_file;
-  READ_U64(index_metadata, medoid_id_on_file);
-  READ_U64(index_metadata, _max_node_len);
-  READ_U64(index_metadata, _nnodes_per_sector);
-  _max_degree =
-      ((_max_node_len - _disk_bytes_per_point) / sizeof(uint32_t)) - 1;
-
-  if (_max_degree > defaults::MAX_GRAPH_DEGREE) {
-    std::stringstream stream;
-    stream << "Error loading index. Ensure that max graph degree (R) does "
-              "not exceed "
-           << defaults::MAX_GRAPH_DEGREE << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                __LINE__);
-  }
-
-  // setting up concept of frozen points in disk index for streaming-DiskANN
-  READ_U64(index_metadata, this->_num_frozen_points);
-  uint64_t file_frozen_id;
-  READ_U64(index_metadata, file_frozen_id);
-  if (this->_num_frozen_points == 1)
-    this->_frozen_location = file_frozen_id;
-  if (this->_num_frozen_points == 1) {
-    diskann::cout << " Detected frozen point in index at location "
-                  << this->_frozen_location
-                  << ". Will not output it at search time." << std::endl;
-  }
-
-  READ_U64(index_metadata, this->_reorder_data_exists);
-  if (this->_reorder_data_exists) {
-    if (this->_use_disk_index_pq == false) {
-      throw ANNException("Reordering is designed for used with disk PQ "
-                         "compression option",
-                         -1, __FUNCSIG__, __FILE__, __LINE__);
+    if (disk_nnodes != _num_points)
+    {
+        diskann::cout << "Mismatch in #points for compressed data file and disk "
+                         "index file: "
+                      << disk_nnodes << " vs " << _num_points << std::endl;
+        return -1;
     }
-    READ_U64(index_metadata, this->_reorder_data_start_sector);
-    READ_U64(index_metadata, this->_ndims_reorder_vecs);
-    READ_U64(index_metadata, this->_nvecs_per_sector);
-  }
 
-  diskann::cout << "Disk-Index File Meta-data: ";
-  diskann::cout << "# nodes per sector: " << _nnodes_per_sector;
-  diskann::cout << ", max node len (bytes): " << _max_node_len;
-  diskann::cout << ", max node degree: " << _max_degree << std::endl;
+    size_t medoid_id_on_file;
+    READ_U64(index_metadata, medoid_id_on_file);
+    READ_U64(index_metadata, _max_node_len);
+    READ_U64(index_metadata, _nnodes_per_sector);
+    _max_degree = ((_max_node_len - _disk_bytes_per_point) / sizeof(uint32_t)) - 1;
+
+    if (_max_degree > defaults::MAX_GRAPH_DEGREE)
+    {
+        std::stringstream stream;
+        stream << "Error loading index. Ensure that max graph degree (R) does "
+                  "not exceed "
+               << defaults::MAX_GRAPH_DEGREE << std::endl;
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    // setting up concept of frozen points in disk index for streaming-DiskANN
+    READ_U64(index_metadata, this->_num_frozen_points);
+    uint64_t file_frozen_id;
+    READ_U64(index_metadata, file_frozen_id);
+    if (this->_num_frozen_points == 1)
+        this->_frozen_location = file_frozen_id;
+    if (this->_num_frozen_points == 1)
+    {
+        diskann::cout << " Detected frozen point in index at location " << this->_frozen_location
+                      << ". Will not output it at search time." << std::endl;
+    }
+
+    READ_U64(index_metadata, this->_reorder_data_exists);
+    if (this->_reorder_data_exists)
+    {
+        if (this->_use_disk_index_pq == false)
+        {
+            throw ANNException("Reordering is designed for used with disk PQ "
+                               "compression option",
+                               -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+        READ_U64(index_metadata, this->_reorder_data_start_sector);
+        READ_U64(index_metadata, this->_ndims_reorder_vecs);
+        READ_U64(index_metadata, this->_nvecs_per_sector);
+    }
+
+    diskann::cout << "Disk-Index File Meta-data: ";
+    diskann::cout << "# nodes per sector: " << _nnodes_per_sector;
+    diskann::cout << ", max node len (bytes): " << _max_node_len;
+    diskann::cout << ", max node degree: " << _max_degree << std::endl;
 
 #ifdef EXEC_ENV_OLS
-  delete[] bytes;
+    delete[] bytes;
 #else
-  index_metadata.close();
+    index_metadata.close();
 #endif
 
 #ifndef EXEC_ENV_OLS
-  // open AlignedFileReader handle to index_file
-  std::string index_fname(_disk_index_file);
-  reader->open(index_fname);
-  this->setup_thread_data(num_threads);
-  this->_max_nthreads = num_threads;
+    // open AlignedFileReader handle to index_file
+    std::string index_fname(_disk_index_file);
+    reader->open(index_fname);
+    this->setup_thread_data(num_threads);
+    this->_max_nthreads = num_threads;
 
 #endif
 
 #ifdef EXEC_ENV_OLS
-  if (files.fileExists(medoids_file)) {
-    size_t tmp_dim;
-    diskann::load_bin<uint32_t>(files, norm_file, medoids_file, _medoids,
-                                _num_medoids, tmp_dim);
-#else
-  if (file_exists(medoids_file)) {
-    size_t tmp_dim;
-    diskann::load_bin<uint32_t>(medoids_file, _medoids, _num_medoids, tmp_dim);
-#endif
-
-    if (tmp_dim != 1) {
-      std::stringstream stream;
-      stream << "Error loading medoids file. Expected bin format of m times "
-                "1 vector of uint32_t."
-             << std::endl;
-      throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                  __LINE__);
-    }
-#ifdef EXEC_ENV_OLS
-    if (!files.fileExists(centroids_file)) {
-#else
-    if (!file_exists(centroids_file)) {
-#endif
-      diskann::cout
-          << "Centroid data file not found. Using corresponding vectors "
-             "for the medoids "
-          << std::endl;
-      use_medoids_data_as_centroids();
-    } else {
-      size_t num_centroids, aligned_tmp_dim;
-#ifdef EXEC_ENV_OLS
-      diskann::load_aligned_bin<float>(files, centroids_file, _centroid_data,
-                                       num_centroids, tmp_dim, aligned_tmp_dim);
-#else
-      diskann::load_aligned_bin<float>(centroids_file, _centroid_data,
-                                       num_centroids, tmp_dim, aligned_tmp_dim);
-#endif
-      if (aligned_tmp_dim != _aligned_dim || num_centroids != _num_medoids) {
-        std::stringstream stream;
-        stream << "Error loading centroids data file. Expected bin format "
-                  "of "
-                  "m times data_dim vector of float, where m is number of "
-                  "medoids "
-                  "in medoids file.";
-        diskann::cerr << stream.str() << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__,
-                                    __LINE__);
-      }
-    }
-  } else {
-    _num_medoids = 1;
-    _medoids = new uint32_t[1];
-    _medoids[0] = (uint32_t)(medoid_id_on_file);
-    use_medoids_data_as_centroids();
-  }
-
-  std::string norm_file = std::string(_disk_index_file) + "_max_base_norm.bin";
-
-#ifdef EXEC_ENV_OLS
-  if (files.fileExists(norm_file) && metric == diskann::Metric::INNER_PRODUCT) {
-    uint64_t dumr, dumc;
-    float *norm_val;
-    diskann::load_bin<float>(files, norm_val, dumr, dumc);
-#else
-  if (file_exists(norm_file) && metric == diskann::Metric::INNER_PRODUCT) {
-    uint64_t dumr, dumc;
-    float *norm_val;
-    diskann::load_bin<float>(norm_file, norm_val, dumr, dumc);
-#endif
-    this->_max_base_norm = norm_val[0];
-    diskann::cout << "Setting re-scaling factor of base vectors to "
-                  << this->_max_base_norm << std::endl;
-    delete[] norm_val;
-  }
-  diskann::cout << "done.." << std::endl;
-  return 0;
-}
-
-#ifdef USE_BING_INFRA
-bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader,
-                             IOContext &ctx, size_t size, int &completedIndex) {
-  if ((*ctx.m_pRequests)[0].m_callback) {
-    bool waitsRemaining = false;
-    long completeCount = ctx.m_completeCount;
-    do {
-      for (int i = 0; i < size; i++) {
-        auto ithStatus = (*ctx.m_pRequestsStatus)[i];
-        if (ithStatus == IOContext::Status::READ_SUCCESS) {
-          completedIndex = i;
-          return true;
-        } else if (ithStatus == IOContext::Status::READ_WAIT) {
-          waitsRemaining = true;
-        }
-      }
-
-      // if we didn't find one in READ_SUCCESS, wait for one to complete.
-      if (waitsRemaining) {
-        WaitOnAddress(&ctx.m_completeCount, &completeCount,
-                      sizeof(completeCount), 100);
-        // this assumes the knowledge of the reader behavior (implicit
-        // contract). need better factoring?
-      }
-    } while (waitsRemaining);
-
-    completedIndex = -1;
-    return false;
-  } else {
-    reader->wait(ctx, completedIndex);
-    return completedIndex != -1;
-  }
-}
-#endif
-
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::cached_beam_search(
-    const T *query1, const uint64_t k_search, const uint64_t l_search,
-    uint64_t *indices, float *distances, const uint64_t beam_width,
-    const bool use_reorder_data, QueryStats *stats) {
-  cached_beam_search(query1, k_search, l_search, indices, distances, beam_width,
-                     std::numeric_limits<uint32_t>::max(), use_reorder_data,
-                     stats);
-}
-
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::cached_beam_search(
-    const T *query1, const uint64_t k_search, const uint64_t l_search,
-    uint64_t *indices, float *distances, const uint64_t beam_width,
-    const bool use_filter, const LabelT &filter_label,
-    const bool use_reorder_data, QueryStats *stats) {
-  cached_beam_search(query1, k_search, l_search, indices, distances, beam_width,
-                     use_filter, filter_label,
-                     std::numeric_limits<uint32_t>::max(), use_reorder_data,
-                     stats);
-}
-
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::cached_beam_search(
-    const T *query1, const uint64_t k_search, const uint64_t l_search,
-    uint64_t *indices, float *distances, const uint64_t beam_width,
-    const uint32_t io_limit, const bool use_reorder_data, QueryStats *stats) {
-  LabelT dummy_filter = 0;
-  cached_beam_search(query1, k_search, l_search, indices, distances, beam_width,
-                     false, dummy_filter, io_limit, use_reorder_data, stats);
-}
-
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::cached_beam_search(
-    const T *query1, const uint64_t k_search, const uint64_t l_search,
-    uint64_t *indices, float *distances, const uint64_t beam_width,
-    const bool use_filter, const LabelT &filter_label, const uint32_t io_limit,
-    const bool use_reorder_data, QueryStats *stats) {
-  uint64_t num_sector_per_nodes =
-      DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
-  if (beam_width > num_sector_per_nodes * defaults::MAX_N_SECTOR_READS)
-    throw ANNException(
-        "Beamwidth can not be higher than defaults::MAX_N_SECTOR_READS", -1,
-        __FUNCSIG__, __FILE__, __LINE__);
-
-  ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
-  auto data = manager.scratch_space();
-  IOContext &ctx = data->ctx;
-  auto query_scratch = &(data->scratch);
-  auto pq_query_scratch = query_scratch->pq_scratch();
-
-  // reset query scratch
-  query_scratch->reset();
-
-  // copy query to thread specific aligned and allocated memory (for distance
-  // calculations we need aligned data)
-  float query_norm = 0;
-  T *aligned_query_T = query_scratch->aligned_query_T();
-  float *query_float = pq_query_scratch->aligned_query_float;
-  float *query_rotated = pq_query_scratch->rotated_query;
-
-  // normalization step. for cosine, we simply normalize the query
-  // for mips, we normalize the first d-1 dims, and add a 0 for last dim,
-  // since an extra coordinate was used to convert MIPS to L2 search
-  if (metric == diskann::Metric::INNER_PRODUCT ||
-      metric == diskann::Metric::COSINE) {
-    uint64_t inherent_dim = (metric == diskann::Metric::COSINE)
-                                ? this->_data_dim
-                                : (uint64_t)(this->_data_dim - 1);
-    for (size_t i = 0; i < inherent_dim; i++) {
-      aligned_query_T[i] = query1[i];
-      query_norm += query1[i] * query1[i];
-    }
-    if (metric == diskann::Metric::INNER_PRODUCT)
-      aligned_query_T[this->_data_dim - 1] = 0;
-
-    query_norm = std::sqrt(query_norm);
-
-    for (size_t i = 0; i < inherent_dim; i++) {
-      aligned_query_T[i] = (T)(aligned_query_T[i] / query_norm);
-    }
-    pq_query_scratch->initialize(this->_data_dim, aligned_query_T);
-  } else {
-    for (size_t i = 0; i < this->_data_dim; i++) {
-      aligned_query_T[i] = query1[i];
-    }
-    pq_query_scratch->initialize(this->_data_dim, aligned_query_T);
-  }
-
-  // pointers to buffers for data
-  T *data_buf = query_scratch->coord_scratch;
-  _mm_prefetch((char *)data_buf, _MM_HINT_T1);
-
-  // sector scratch
-  char *sector_scratch = query_scratch->sector_scratch;
-  uint64_t &sector_scratch_idx = query_scratch->sector_idx;
-  const uint64_t num_sectors_per_node =
-      _nnodes_per_sector > 0
-          ? 1
-          : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
-
-  // query <-> PQ chunk centers distances
-  _pq_table.preprocess_query(query_rotated); // center the query and rotate
-                                             // if we have a rotation matrix
-  float *pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
-  _pq_table.populate_chunk_distances(query_rotated, pq_dists);
-
-  // query <-> neighbor list
-  float *dist_scratch = pq_query_scratch->aligned_dist_scratch;
-  uint8_t *pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
-
-  // lambda to batch compute query<-> node distances in PQ space
-  auto compute_dists = [this, pq_coord_scratch, pq_dists](const uint32_t *ids,
-                                                          const uint64_t n_ids,
-                                                          float *dists_out) {
-    diskann::aggregate_coords(ids, n_ids, this->data, this->_n_chunks,
-                              pq_coord_scratch);
-    diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->_n_chunks, pq_dists,
-                            dists_out);
-  };
-  Timer query_timer, io_timer, cpu_timer;
-
-  tsl::robin_set<uint64_t> &visited = query_scratch->visited;
-  NeighborPriorityQueue &retset = query_scratch->retset;
-  retset.reserve(l_search);
-  std::vector<Neighbor> &full_retset = query_scratch->full_retset;
-
-  uint32_t best_medoid = 0;
-  float best_dist = (std::numeric_limits<float>::max)();
-  if (!use_filter) {
-    for (uint64_t cur_m = 0; cur_m < _num_medoids; cur_m++) {
-      float cur_expanded_dist = _dist_cmp_float->compare(
-          query_float, _centroid_data + _aligned_dim * cur_m,
-          (uint32_t)_aligned_dim);
-      if (cur_expanded_dist < best_dist) {
-        best_medoid = _medoids[cur_m];
-        best_dist = cur_expanded_dist;
-      }
-    }
-  } else {
-    const auto &medoid_ids = _filter_store->get_medoids_of_label(filter_label);
-    if (medoid_ids.size() > 0)
-    // if (_filter_to_medoid_ids.find(filter_label) !=
-    // _filter_to_medoid_ids.end())
+    if (files.fileExists(medoids_file))
     {
-      // const auto &medoid_ids = _filter_to_medoid_ids[filter_label];
-
-      for (uint64_t cur_m = 0; cur_m < medoid_ids.size(); cur_m++) {
-        // for filtered index, we dont store global centroid data as for
-        // unfiltered index, so we use PQ distance as approximation to decide
-        // closest medoid matching the query filter.
-        compute_dists(&medoid_ids[cur_m], 1, dist_scratch);
-        float cur_expanded_dist = dist_scratch[0];
-        if (cur_expanded_dist < best_dist) {
-          best_medoid = medoid_ids[cur_m];
-          best_dist = cur_expanded_dist;
-        }
-      }
-    } else {
-      throw ANNException("Cannot find medoid for specified filter.", -1,
-                         __FUNCSIG__, __FILE__, __LINE__);
-    }
-  }
-
-  compute_dists(&best_medoid, 1, dist_scratch);
-  retset.insert(Neighbor(best_medoid, dist_scratch[0]));
-  visited.insert(best_medoid);
-
-  uint32_t cmps = 0;
-  uint32_t hops = 0;
-  uint32_t num_ios = 0;
-
-  // cleared every iteration
-  std::vector<uint32_t> frontier;
-  frontier.reserve(2 * beam_width);
-  std::vector<std::pair<uint32_t, char *>> frontier_nhoods;
-  frontier_nhoods.reserve(2 * beam_width);
-  std::vector<AlignedRead> frontier_read_reqs;
-  frontier_read_reqs.reserve(2 * beam_width);
-  std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t *>>>
-      cached_nhoods;
-  cached_nhoods.reserve(2 * beam_width);
-
-  while (retset.has_unexpanded_node() && num_ios < io_limit) {
-    // clear iteration state
-    frontier.clear();
-    frontier_nhoods.clear();
-    frontier_read_reqs.clear();
-    cached_nhoods.clear();
-    sector_scratch_idx = 0;
-    // find new beam
-    uint32_t num_seen = 0;
-    while (retset.has_unexpanded_node() && frontier.size() < beam_width &&
-           num_seen < beam_width) {
-      auto nbr = retset.closest_unexpanded();
-      num_seen++;
-      auto iter = _nhood_cache.find(nbr.id);
-      if (iter != _nhood_cache.end()) {
-        cached_nhoods.push_back(std::make_pair(nbr.id, iter->second));
-        if (stats != nullptr) {
-          stats->n_cache_hits++;
-        }
-      } else {
-        frontier.push_back(nbr.id);
-      }
-      if (this->_count_visited_nodes) {
-        reinterpret_cast<std::atomic<uint32_t> &>(
-            this->_node_visit_counter[nbr.id].second)
-            .fetch_add(1);
-      }
-    }
-
-    // read nhoods of frontier ids
-    if (!frontier.empty()) {
-      if (stats != nullptr)
-        stats->n_hops++;
-      for (uint64_t i = 0; i < frontier.size(); i++) {
-        auto id = frontier[i];
-        std::pair<uint32_t, char *> fnhood;
-        fnhood.first = id;
-        fnhood.second = sector_scratch + num_sectors_per_node *
-                                             sector_scratch_idx *
-                                             defaults::SECTOR_LEN;
-        sector_scratch_idx++;
-        frontier_nhoods.push_back(fnhood);
-        frontier_read_reqs.emplace_back(
-            get_node_sector((size_t)id) * defaults::SECTOR_LEN,
-            num_sectors_per_node * defaults::SECTOR_LEN, fnhood.second);
-        if (stats != nullptr) {
-          stats->n_4k++;
-          stats->n_ios++;
-        }
-        num_ios++;
-      }
-      io_timer.reset();
-#ifdef USE_BING_INFRA
-      reader->read(frontier_read_reqs, ctx,
-                   true); // asynhronous reader for Bing.
+        size_t tmp_dim;
+        diskann::load_bin<uint32_t>(files, norm_file, medoids_file, _medoids, _num_medoids, tmp_dim);
 #else
-      reader->read(frontier_read_reqs, ctx); // synchronous IO linux
+    if (file_exists(medoids_file))
+    {
+        size_t tmp_dim;
+        diskann::load_bin<uint32_t>(medoids_file, _medoids, _num_medoids, tmp_dim);
 #endif
-      if (stats != nullptr) {
-        stats->io_us += (float)io_timer.elapsed();
-      }
-    }
 
-    // process cached nhoods
-    for (auto &cached_nhood : cached_nhoods) {
-      auto global_cache_iter = _coord_cache.find(cached_nhood.first);
-      T *node_fp_coords_copy = global_cache_iter->second;
-      float cur_expanded_dist;
-      if (!_use_disk_index_pq) {
-        cur_expanded_dist = _dist_cmp->compare(
-            aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
-      } else {
-        if (metric == diskann::Metric::INNER_PRODUCT)
-          cur_expanded_dist = _disk_pq_table.inner_product(
-              query_float, (uint8_t *)node_fp_coords_copy);
+        if (tmp_dim != 1)
+        {
+            std::stringstream stream;
+            stream << "Error loading medoids file. Expected bin format of m times "
+                      "1 vector of uint32_t."
+                   << std::endl;
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+#ifdef EXEC_ENV_OLS
+        if (!files.fileExists(centroids_file))
+        {
+#else
+        if (!file_exists(centroids_file))
+        {
+#endif
+            diskann::cout << "Centroid data file not found. Using corresponding vectors "
+                             "for the medoids "
+                          << std::endl;
+            use_medoids_data_as_centroids();
+        }
         else
-          cur_expanded_dist =
-              _disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
-                  query_float, (uint8_t *)node_fp_coords_copy);
-      }
-      full_retset.push_back(
-          Neighbor((uint32_t)cached_nhood.first, cur_expanded_dist));
-
-      uint64_t nnbrs = cached_nhood.second.first;
-      uint32_t *node_nbrs = cached_nhood.second.second;
-
-      // compute node_nbrs <-> query dists in PQ space
-      cpu_timer.reset();
-      compute_dists(node_nbrs, nnbrs, dist_scratch);
-      if (stats != nullptr) {
-        stats->n_cmps += (uint32_t)nnbrs;
-        stats->cpu_us += (float)cpu_timer.elapsed();
-      }
-
-      // process prefetched nhood
-      for (uint64_t m = 0; m < nnbrs; ++m) {
-        uint32_t id = node_nbrs[m];
-        if (visited.insert(id).second) {
-          // if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
-          // unfiltered search, but filtered index!
-          if (!use_filter && _filter_store->is_dummy_point(id))
-            continue;
-
-          // if (use_filter && !(point_has_label(id, filter_label)) &&
-          //    (!_use_universal_label || !point_has_label(id,
-          //    _universal_filter_label)))
-          if (use_filter && !_filter_store->point_has_label_or_universal_label(
-                                id, filter_label))
-            continue;
-          cmps++;
-          float dist = dist_scratch[m];
-          Neighbor nn(id, dist);
-          retset.insert(nn);
-        }
-      }
-    }
-#ifdef USE_BING_INFRA
-    // process each frontier nhood - compute distances to unvisited nodes
-    int completedIndex = -1;
-    long requestCount = static_cast<long>(frontier_read_reqs.size());
-    // If we issued read requests and if a read is complete or there are
-    // reads in wait state, then enter the while loop.
-    while (requestCount > 0 &&
-           getNextCompletedRequest(reader, ctx, requestCount, completedIndex)) {
-      assert(completedIndex >= 0);
-      auto &frontier_nhood = frontier_nhoods[completedIndex];
-      (*ctx.m_pRequestsStatus)[completedIndex] = IOContext::PROCESS_COMPLETE;
+        {
+            size_t num_centroids, aligned_tmp_dim;
+#ifdef EXEC_ENV_OLS
+            diskann::load_aligned_bin<float>(files, centroids_file, _centroid_data, num_centroids, tmp_dim,
+                                             aligned_tmp_dim);
 #else
-    for (auto &frontier_nhood : frontier_nhoods) {
+            diskann::load_aligned_bin<float>(centroids_file, _centroid_data, num_centroids, tmp_dim, aligned_tmp_dim);
 #endif
-      char *node_disk_buf =
-          offset_to_node(frontier_nhood.second, frontier_nhood.first);
-      uint32_t *node_buf = offset_to_node_nhood(node_disk_buf);
-      uint64_t nnbrs = (uint64_t)(*node_buf);
-      T *node_fp_coords = offset_to_node_coords(node_disk_buf);
-      memcpy(data_buf, node_fp_coords, _disk_bytes_per_point);
-      float cur_expanded_dist;
-      if (!_use_disk_index_pq) {
-        cur_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf,
-                                               (uint32_t)_aligned_dim);
-      } else {
+            if (aligned_tmp_dim != _aligned_dim || num_centroids != _num_medoids)
+            {
+                std::stringstream stream;
+                stream << "Error loading centroids data file. Expected bin format "
+                          "of "
+                          "m times data_dim vector of float, where m is number of "
+                          "medoids "
+                          "in medoids file.";
+                diskann::cerr << stream.str() << std::endl;
+                throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+        }
+    }
+    else
+    {
+        _num_medoids = 1;
+        _medoids = new uint32_t[1];
+        _medoids[0] = (uint32_t)(medoid_id_on_file);
+        use_medoids_data_as_centroids();
+    }
+
+    std::string norm_file = std::string(_disk_index_file) + "_max_base_norm.bin";
+
+#ifdef EXEC_ENV_OLS
+    if (files.fileExists(norm_file) && metric == diskann::Metric::INNER_PRODUCT)
+    {
+        uint64_t dumr, dumc;
+        float *norm_val;
+        diskann::load_bin<float>(files, norm_val, dumr, dumc);
+#else
+    if (file_exists(norm_file) && metric == diskann::Metric::INNER_PRODUCT)
+    {
+        uint64_t dumr, dumc;
+        float *norm_val;
+        diskann::load_bin<float>(norm_file, norm_val, dumr, dumc);
+#endif
+        this->_max_base_norm = norm_val[0];
+        diskann::cout << "Setting re-scaling factor of base vectors to " << this->_max_base_norm << std::endl;
+        delete[] norm_val;
+    }
+    diskann::cout << "done.." << std::endl;
+    return 0;
+}
+
+#ifdef USE_BING_INFRA
+bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader, IOContext &ctx, size_t size,
+                             int &completedIndex)
+{
+    if ((*ctx.m_pRequests)[0].m_callback)
+    {
+        bool waitsRemaining = false;
+        long completeCount = ctx.m_completeCount;
+        do
+        {
+            for (int i = 0; i < size; i++)
+            {
+                auto ithStatus = (*ctx.m_pRequestsStatus)[i];
+                if (ithStatus == IOContext::Status::READ_SUCCESS)
+                {
+                    completedIndex = i;
+                    return true;
+                }
+                else if (ithStatus == IOContext::Status::READ_WAIT)
+                {
+                    waitsRemaining = true;
+                }
+            }
+
+            // if we didn't find one in READ_SUCCESS, wait for one to complete.
+            if (waitsRemaining)
+            {
+                WaitOnAddress(&ctx.m_completeCount, &completeCount, sizeof(completeCount), 100);
+                // this assumes the knowledge of the reader behavior (implicit
+                // contract). need better factoring?
+            }
+        } while (waitsRemaining);
+
+        completedIndex = -1;
+        return false;
+    }
+    else
+    {
+        reader->wait(ctx, completedIndex);
+        return completedIndex != -1;
+    }
+}
+#endif
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 const bool use_reorder_data, QueryStats *stats)
+{
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, std::numeric_limits<uint32_t>::max(),
+                       use_reorder_data, stats);
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 const bool use_filter, const LabelT &filter_label,
+                                                 const bool use_reorder_data, QueryStats *stats)
+{
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
+                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 const uint32_t io_limit, const bool use_reorder_data,
+                                                 QueryStats *stats)
+{
+    LabelT dummy_filter = 0;
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
+                       use_reorder_data, stats);
+}
+
+template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
+                                                 uint64_t *indices, float *distances, const uint64_t beam_width,
+                                                 const bool use_filter, const LabelT &filter_label,
+                                                 const uint32_t io_limit, const bool use_reorder_data,
+                                                 QueryStats *stats)
+{
+    uint64_t num_sector_per_nodes = DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
+    if (beam_width > num_sector_per_nodes * defaults::MAX_N_SECTOR_READS)
+        throw ANNException("Beamwidth can not be higher than defaults::MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__,
+                           __LINE__);
+
+    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    auto data = manager.scratch_space();
+    IOContext &ctx = data->ctx;
+    auto query_scratch = &(data->scratch);
+    auto pq_query_scratch = query_scratch->pq_scratch();
+
+    // reset query scratch
+    query_scratch->reset();
+
+    // copy query to thread specific aligned and allocated memory (for distance
+    // calculations we need aligned data)
+    float query_norm = 0;
+    T *aligned_query_T = query_scratch->aligned_query_T();
+    float *query_float = pq_query_scratch->aligned_query_float;
+    float *query_rotated = pq_query_scratch->rotated_query;
+
+    // normalization step. for cosine, we simply normalize the query
+    // for mips, we normalize the first d-1 dims, and add a 0 for last dim,
+    // since an extra coordinate was used to convert MIPS to L2 search
+    if (metric == diskann::Metric::INNER_PRODUCT || metric == diskann::Metric::COSINE)
+    {
+        uint64_t inherent_dim = (metric == diskann::Metric::COSINE) ? this->_data_dim : (uint64_t)(this->_data_dim - 1);
+        for (size_t i = 0; i < inherent_dim; i++)
+        {
+            aligned_query_T[i] = query1[i];
+            query_norm += query1[i] * query1[i];
+        }
         if (metric == diskann::Metric::INNER_PRODUCT)
-          cur_expanded_dist =
-              _disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
-        else
-          cur_expanded_dist =
-              _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
-      }
-      full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
-      uint32_t *node_nbrs = (node_buf + 1);
-      // compute node_nbrs <-> query dist in PQ space
-      cpu_timer.reset();
-      compute_dists(node_nbrs, nnbrs, dist_scratch);
-      if (stats != nullptr) {
-        stats->n_cmps += (uint32_t)nnbrs;
-        stats->cpu_us += (float)cpu_timer.elapsed();
-      }
+            aligned_query_T[this->_data_dim - 1] = 0;
 
-      cpu_timer.reset();
-      // process prefetch-ed nhood
-      for (uint64_t m = 0; m < nnbrs; ++m) {
-        uint32_t id = node_nbrs[m];
-        if (visited.insert(id).second) {
-          // if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
-          if (!use_filter && _filter_store->is_dummy_point(id))
-            continue;
+        query_norm = std::sqrt(query_norm);
 
-          // if (use_filter && !(point_has_label(id, filter_label)) &&
-          //    (!_use_universal_label || !point_has_label(id,
-          //    _universal_filter_label)))
-          if (use_filter && !_filter_store->point_has_label_or_universal_label(
-                                id, filter_label))
-            continue;
-          cmps++;
-          float dist = dist_scratch[m];
-          if (stats != nullptr) {
-            stats->n_cmps++;
-          }
-
-          Neighbor nn(id, dist);
-          retset.insert(nn);
+        for (size_t i = 0; i < inherent_dim; i++)
+        {
+            aligned_query_T[i] = (T)(aligned_query_T[i] / query_norm);
         }
-      }
-
-      if (stats != nullptr) {
-        stats->cpu_us += (float)cpu_timer.elapsed();
-      }
+        pq_query_scratch->initialize(this->_data_dim, aligned_query_T);
+    }
+    else
+    {
+        for (size_t i = 0; i < this->_data_dim; i++)
+        {
+            aligned_query_T[i] = query1[i];
+        }
+        pq_query_scratch->initialize(this->_data_dim, aligned_query_T);
     }
 
-    hops++;
-  }
+    // pointers to buffers for data
+    T *data_buf = query_scratch->coord_scratch;
+    _mm_prefetch((char *)data_buf, _MM_HINT_T1);
 
-  // re-sort by distance
-  std::sort(full_retset.begin(), full_retset.end());
+    // sector scratch
+    char *sector_scratch = query_scratch->sector_scratch;
+    uint64_t &sector_scratch_idx = query_scratch->sector_idx;
+    const uint64_t num_sectors_per_node =
+        _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
 
-  if (use_reorder_data) {
-    if (!(this->_reorder_data_exists)) {
-      throw ANNException("Requested use of reordering data which does "
-                         "not exist in index "
-                         "file",
-                         -1, __FUNCSIG__, __FILE__, __LINE__);
+    // query <-> PQ chunk centers distances
+    _pq_table.preprocess_query(query_rotated); // center the query and rotate
+                                               // if we have a rotation matrix
+    float *pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
+    _pq_table.populate_chunk_distances(query_rotated, pq_dists);
+
+    // query <-> neighbor list
+    float *dist_scratch = pq_query_scratch->aligned_dist_scratch;
+    uint8_t *pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+
+    // lambda to batch compute query<-> node distances in PQ space
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](const uint32_t *ids, const uint64_t n_ids,
+                                                            float *dists_out) {
+        diskann::aggregate_coords(ids, n_ids, this->data, this->_n_chunks, pq_coord_scratch);
+        diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->_n_chunks, pq_dists, dists_out);
+    };
+    Timer query_timer, io_timer, cpu_timer;
+
+    tsl::robin_set<uint64_t> &visited = query_scratch->visited;
+    NeighborPriorityQueue &retset = query_scratch->retset;
+    retset.reserve(l_search);
+    std::vector<Neighbor> &full_retset = query_scratch->full_retset;
+
+    uint32_t best_medoid = 0;
+    float best_dist = (std::numeric_limits<float>::max)();
+    if (!use_filter)
+    {
+        for (uint64_t cur_m = 0; cur_m < _num_medoids; cur_m++)
+        {
+            float cur_expanded_dist =
+                _dist_cmp_float->compare(query_float, _centroid_data + _aligned_dim * cur_m, (uint32_t)_aligned_dim);
+            if (cur_expanded_dist < best_dist)
+            {
+                best_medoid = _medoids[cur_m];
+                best_dist = cur_expanded_dist;
+            }
+        }
+    }
+    else
+    {
+        const auto &medoid_ids = _filter_store->get_medoids_of_label(filter_label);
+        if (medoid_ids.size() > 0)
+        // if (_filter_to_medoid_ids.find(filter_label) !=
+        // _filter_to_medoid_ids.end())
+        {
+            // const auto &medoid_ids = _filter_to_medoid_ids[filter_label];
+
+            for (uint64_t cur_m = 0; cur_m < medoid_ids.size(); cur_m++)
+            {
+                // for filtered index, we dont store global centroid data as for
+                // unfiltered index, so we use PQ distance as approximation to decide
+                // closest medoid matching the query filter.
+                compute_dists(&medoid_ids[cur_m], 1, dist_scratch);
+                float cur_expanded_dist = dist_scratch[0];
+                if (cur_expanded_dist < best_dist)
+                {
+                    best_medoid = medoid_ids[cur_m];
+                    best_dist = cur_expanded_dist;
+                }
+            }
+        }
+        else
+        {
+            throw ANNException("Cannot find medoid for specified filter.", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
     }
 
-    std::vector<AlignedRead> vec_read_reqs;
+    compute_dists(&best_medoid, 1, dist_scratch);
+    retset.insert(Neighbor(best_medoid, dist_scratch[0]));
+    visited.insert(best_medoid);
 
-    if (full_retset.size() > k_search * FULL_PRECISION_REORDER_MULTIPLIER)
-      full_retset.erase(full_retset.begin() +
-                            k_search * FULL_PRECISION_REORDER_MULTIPLIER,
-                        full_retset.end());
+    uint32_t cmps = 0;
+    uint32_t hops = 0;
+    uint32_t num_ios = 0;
 
-    for (size_t i = 0; i < full_retset.size(); ++i) {
-      // MULTISECTORFIX
-      vec_read_reqs.emplace_back(
-          VECTOR_SECTOR_NO(((size_t)full_retset[i].id)) * defaults::SECTOR_LEN,
-          defaults::SECTOR_LEN, sector_scratch + i * defaults::SECTOR_LEN);
+    // cleared every iteration
+    std::vector<uint32_t> frontier;
+    frontier.reserve(2 * beam_width);
+    std::vector<std::pair<uint32_t, char *>> frontier_nhoods;
+    frontier_nhoods.reserve(2 * beam_width);
+    std::vector<AlignedRead> frontier_read_reqs;
+    frontier_read_reqs.reserve(2 * beam_width);
+    std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t *>>> cached_nhoods;
+    cached_nhoods.reserve(2 * beam_width);
 
-      if (stats != nullptr) {
-        stats->n_4k++;
-        stats->n_ios++;
-      }
-    }
+    while (retset.has_unexpanded_node() && num_ios < io_limit)
+    {
+        // clear iteration state
+        frontier.clear();
+        frontier_nhoods.clear();
+        frontier_read_reqs.clear();
+        cached_nhoods.clear();
+        sector_scratch_idx = 0;
+        // find new beam
+        uint32_t num_seen = 0;
+        while (retset.has_unexpanded_node() && frontier.size() < beam_width && num_seen < beam_width)
+        {
+            auto nbr = retset.closest_unexpanded();
+            num_seen++;
+            auto iter = _nhood_cache.find(nbr.id);
+            if (iter != _nhood_cache.end())
+            {
+                cached_nhoods.push_back(std::make_pair(nbr.id, iter->second));
+                if (stats != nullptr)
+                {
+                    stats->n_cache_hits++;
+                }
+            }
+            else
+            {
+                frontier.push_back(nbr.id);
+            }
+            if (this->_count_visited_nodes)
+            {
+                reinterpret_cast<std::atomic<uint32_t> &>(this->_node_visit_counter[nbr.id].second).fetch_add(1);
+            }
+        }
 
-    io_timer.reset();
+        // read nhoods of frontier ids
+        if (!frontier.empty())
+        {
+            if (stats != nullptr)
+                stats->n_hops++;
+            for (uint64_t i = 0; i < frontier.size(); i++)
+            {
+                auto id = frontier[i];
+                std::pair<uint32_t, char *> fnhood;
+                fnhood.first = id;
+                fnhood.second = sector_scratch + num_sectors_per_node * sector_scratch_idx * defaults::SECTOR_LEN;
+                sector_scratch_idx++;
+                frontier_nhoods.push_back(fnhood);
+                frontier_read_reqs.emplace_back(get_node_sector((size_t)id) * defaults::SECTOR_LEN,
+                                                num_sectors_per_node * defaults::SECTOR_LEN, fnhood.second);
+                if (stats != nullptr)
+                {
+                    stats->n_4k++;
+                    stats->n_ios++;
+                }
+                num_ios++;
+            }
+            io_timer.reset();
 #ifdef USE_BING_INFRA
-    reader->read(vec_read_reqs, ctx, true); // async reader windows.
+            reader->read(frontier_read_reqs, ctx,
+                         true); // asynhronous reader for Bing.
 #else
-    reader->read(vec_read_reqs, ctx); // synchronous IO linux
+            reader->read(frontier_read_reqs, ctx); // synchronous IO linux
 #endif
-    if (stats != nullptr) {
-      stats->io_us += io_timer.elapsed();
+            if (stats != nullptr)
+            {
+                stats->io_us += (float)io_timer.elapsed();
+            }
+        }
+
+        // process cached nhoods
+        for (auto &cached_nhood : cached_nhoods)
+        {
+            auto global_cache_iter = _coord_cache.find(cached_nhood.first);
+            T *node_fp_coords_copy = global_cache_iter->second;
+            float cur_expanded_dist;
+            if (!_use_disk_index_pq)
+            {
+                cur_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
+            }
+            else
+            {
+                if (metric == diskann::Metric::INNER_PRODUCT)
+                    cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
+                else
+                    cur_expanded_dist = _disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
+                        query_float, (uint8_t *)node_fp_coords_copy);
+            }
+            full_retset.push_back(Neighbor((uint32_t)cached_nhood.first, cur_expanded_dist));
+
+            uint64_t nnbrs = cached_nhood.second.first;
+            uint32_t *node_nbrs = cached_nhood.second.second;
+
+            // compute node_nbrs <-> query dists in PQ space
+            cpu_timer.reset();
+            compute_dists(node_nbrs, nnbrs, dist_scratch);
+            if (stats != nullptr)
+            {
+                stats->n_cmps += (uint32_t)nnbrs;
+                stats->cpu_us += (float)cpu_timer.elapsed();
+            }
+
+            // process prefetched nhood
+            for (uint64_t m = 0; m < nnbrs; ++m)
+            {
+                uint32_t id = node_nbrs[m];
+                if (visited.insert(id).second)
+                {
+                    // if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
+                    // unfiltered search, but filtered index!
+                    if (!use_filter && _filter_store->is_dummy_point(id))
+                        continue;
+
+                    // if (use_filter && !(point_has_label(id, filter_label)) &&
+                    //    (!_use_universal_label || !point_has_label(id,
+                    //    _universal_filter_label)))
+                    if (use_filter && !_filter_store->point_has_label_or_universal_label(id, filter_label))
+                        continue;
+                    cmps++;
+                    float dist = dist_scratch[m];
+                    Neighbor nn(id, dist);
+                    retset.insert(nn);
+                }
+            }
+        }
+#ifdef USE_BING_INFRA
+        // process each frontier nhood - compute distances to unvisited nodes
+        int completedIndex = -1;
+        long requestCount = static_cast<long>(frontier_read_reqs.size());
+        // If we issued read requests and if a read is complete or there are
+        // reads in wait state, then enter the while loop.
+        while (requestCount > 0 && getNextCompletedRequest(reader, ctx, requestCount, completedIndex))
+        {
+            assert(completedIndex >= 0);
+            auto &frontier_nhood = frontier_nhoods[completedIndex];
+            (*ctx.m_pRequestsStatus)[completedIndex] = IOContext::PROCESS_COMPLETE;
+#else
+        for (auto &frontier_nhood : frontier_nhoods)
+        {
+#endif
+            char *node_disk_buf = offset_to_node(frontier_nhood.second, frontier_nhood.first);
+            uint32_t *node_buf = offset_to_node_nhood(node_disk_buf);
+            uint64_t nnbrs = (uint64_t)(*node_buf);
+            T *node_fp_coords = offset_to_node_coords(node_disk_buf);
+            memcpy(data_buf, node_fp_coords, _disk_bytes_per_point);
+            float cur_expanded_dist;
+            if (!_use_disk_index_pq)
+            {
+                cur_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
+            }
+            else
+            {
+                if (metric == diskann::Metric::INNER_PRODUCT)
+                    cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
+                else
+                    cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
+            }
+            full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
+            uint32_t *node_nbrs = (node_buf + 1);
+            // compute node_nbrs <-> query dist in PQ space
+            cpu_timer.reset();
+            compute_dists(node_nbrs, nnbrs, dist_scratch);
+            if (stats != nullptr)
+            {
+                stats->n_cmps += (uint32_t)nnbrs;
+                stats->cpu_us += (float)cpu_timer.elapsed();
+            }
+
+            cpu_timer.reset();
+            // process prefetch-ed nhood
+            for (uint64_t m = 0; m < nnbrs; ++m)
+            {
+                uint32_t id = node_nbrs[m];
+                if (visited.insert(id).second)
+                {
+                    // if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
+                    if (!use_filter && _filter_store->is_dummy_point(id))
+                        continue;
+
+                    // if (use_filter && !(point_has_label(id, filter_label)) &&
+                    //    (!_use_universal_label || !point_has_label(id,
+                    //    _universal_filter_label)))
+                    if (use_filter && !_filter_store->point_has_label_or_universal_label(id, filter_label))
+                        continue;
+                    cmps++;
+                    float dist = dist_scratch[m];
+                    if (stats != nullptr)
+                    {
+                        stats->n_cmps++;
+                    }
+
+                    Neighbor nn(id, dist);
+                    retset.insert(nn);
+                }
+            }
+
+            if (stats != nullptr)
+            {
+                stats->cpu_us += (float)cpu_timer.elapsed();
+            }
+        }
+
+        hops++;
     }
 
-    for (size_t i = 0; i < full_retset.size(); ++i) {
-      auto id = full_retset[i].id;
-      // MULTISECTORFIX
-      auto location = (sector_scratch + i * defaults::SECTOR_LEN) +
-                      VECTOR_SECTOR_OFFSET(id);
-      full_retset[i].distance = _dist_cmp->compare(
-          aligned_query_T, (T *)location, (uint32_t)this->_data_dim);
-    }
-
+    // re-sort by distance
     std::sort(full_retset.begin(), full_retset.end());
-  }
 
-  // copy k_search values
-  for (uint64_t i = 0; i < k_search; i++) {
-    indices[i] = full_retset[i].id;
-    auto key = (uint32_t)indices[i];
-    if (_filter_store->is_dummy_point(key)) {
-      indices[i] = _filter_store->get_real_point_for_dummy(key);
+    if (use_reorder_data)
+    {
+        if (!(this->_reorder_data_exists))
+        {
+            throw ANNException("Requested use of reordering data which does "
+                               "not exist in index "
+                               "file",
+                               -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        std::vector<AlignedRead> vec_read_reqs;
+
+        if (full_retset.size() > k_search * FULL_PRECISION_REORDER_MULTIPLIER)
+            full_retset.erase(full_retset.begin() + k_search * FULL_PRECISION_REORDER_MULTIPLIER, full_retset.end());
+
+        for (size_t i = 0; i < full_retset.size(); ++i)
+        {
+            // MULTISECTORFIX
+            vec_read_reqs.emplace_back(VECTOR_SECTOR_NO(((size_t)full_retset[i].id)) * defaults::SECTOR_LEN,
+                                       defaults::SECTOR_LEN, sector_scratch + i * defaults::SECTOR_LEN);
+
+            if (stats != nullptr)
+            {
+                stats->n_4k++;
+                stats->n_ios++;
+            }
+        }
+
+        io_timer.reset();
+#ifdef USE_BING_INFRA
+        reader->read(vec_read_reqs, ctx, true); // async reader windows.
+#else
+        reader->read(vec_read_reqs, ctx); // synchronous IO linux
+#endif
+        if (stats != nullptr)
+        {
+            stats->io_us += io_timer.elapsed();
+        }
+
+        for (size_t i = 0; i < full_retset.size(); ++i)
+        {
+            auto id = full_retset[i].id;
+            // MULTISECTORFIX
+            auto location = (sector_scratch + i * defaults::SECTOR_LEN) + VECTOR_SECTOR_OFFSET(id);
+            full_retset[i].distance = _dist_cmp->compare(aligned_query_T, (T *)location, (uint32_t)this->_data_dim);
+        }
+
+        std::sort(full_retset.begin(), full_retset.end());
     }
 
-    if (distances != nullptr) {
-      distances[i] = full_retset[i].distance;
-      if (metric == diskann::Metric::INNER_PRODUCT) {
-        // flip the sign to convert min to max
-        distances[i] = (-distances[i]);
-        // rescale to revert back to original norms (cancelling the
-        // effect of base and query pre-processing)
-        if (_max_base_norm != 0)
-          distances[i] *= (_max_base_norm * query_norm);
-      }
+    // copy k_search values
+    for (uint64_t i = 0; i < k_search; i++)
+    {
+        indices[i] = full_retset[i].id;
+        auto key = (uint32_t)indices[i];
+        if (_filter_store->is_dummy_point(key))
+        {
+            indices[i] = _filter_store->get_real_point_for_dummy(key);
+        }
+
+        if (distances != nullptr)
+        {
+            distances[i] = full_retset[i].distance;
+            if (metric == diskann::Metric::INNER_PRODUCT)
+            {
+                // flip the sign to convert min to max
+                distances[i] = (-distances[i]);
+                // rescale to revert back to original norms (cancelling the
+                // effect of base and query pre-processing)
+                if (_max_base_norm != 0)
+                    distances[i] *= (_max_base_norm * query_norm);
+            }
+        }
     }
-  }
 
 #ifdef USE_BING_INFRA
-  ctx.m_completeCount = 0;
+    ctx.m_completeCount = 0;
 #endif
 
-  if (stats != nullptr) {
-    stats->total_us = (float)query_timer.elapsed();
-  }
+    if (stats != nullptr)
+    {
+        stats->total_us = (float)query_timer.elapsed();
+    }
 }
 
 // range search returns results of all neighbors within distance of range.
 // indices and distances need to be pre-allocated of size l_search and the
 // return value is the number of matching hits.
 template <typename T, typename LabelT>
-uint32_t PQFlashIndex<T, LabelT>::range_search(
-    const T *query1, const double range, const uint64_t min_l_search,
-    const uint64_t max_l_search, std::vector<uint64_t> &indices,
-    std::vector<float> &distances, const uint64_t min_beam_width,
-    QueryStats *stats) {
-  uint32_t res_count = 0;
+uint32_t PQFlashIndex<T, LabelT>::range_search(const T *query1, const double range, const uint64_t min_l_search,
+                                               const uint64_t max_l_search, std::vector<uint64_t> &indices,
+                                               std::vector<float> &distances, const uint64_t min_beam_width,
+                                               QueryStats *stats)
+{
+    uint32_t res_count = 0;
 
-  bool stop_flag = false;
+    bool stop_flag = false;
 
-  uint32_t l_search =
-      (uint32_t)min_l_search; // starting size of the candidate list
-  while (!stop_flag) {
-    indices.resize(l_search);
-    distances.resize(l_search);
-    uint64_t cur_bw =
-        min_beam_width > (l_search / 5) ? min_beam_width : l_search / 5;
-    cur_bw = (cur_bw > 100) ? 100 : cur_bw;
-    for (auto &x : distances)
-      x = std::numeric_limits<float>::max();
-    this->cached_beam_search(query1, l_search, l_search, indices.data(),
-                             distances.data(), cur_bw, false, stats);
-    for (uint32_t i = 0; i < l_search; i++) {
-      if (distances[i] > (float)range) {
-        res_count = i;
-        break;
-      } else if (i == l_search - 1)
-        res_count = l_search;
+    uint32_t l_search = (uint32_t)min_l_search; // starting size of the candidate list
+    while (!stop_flag)
+    {
+        indices.resize(l_search);
+        distances.resize(l_search);
+        uint64_t cur_bw = min_beam_width > (l_search / 5) ? min_beam_width : l_search / 5;
+        cur_bw = (cur_bw > 100) ? 100 : cur_bw;
+        for (auto &x : distances)
+            x = std::numeric_limits<float>::max();
+        this->cached_beam_search(query1, l_search, l_search, indices.data(), distances.data(), cur_bw, false, stats);
+        for (uint32_t i = 0; i < l_search; i++)
+        {
+            if (distances[i] > (float)range)
+            {
+                res_count = i;
+                break;
+            }
+            else if (i == l_search - 1)
+                res_count = l_search;
+        }
+        if (res_count < (uint32_t)(l_search / 2.0))
+            stop_flag = true;
+        l_search = l_search * 2;
+        if (l_search > max_l_search)
+            stop_flag = true;
     }
-    if (res_count < (uint32_t)(l_search / 2.0))
-      stop_flag = true;
-    l_search = l_search * 2;
-    if (l_search > max_l_search)
-      stop_flag = true;
-  }
-  indices.resize(res_count);
-  distances.resize(res_count);
-  return res_count;
+    indices.resize(res_count);
+    distances.resize(res_count);
+    return res_count;
+}
+
+template <typename T, typename LabelT> uint64_t PQFlashIndex<T, LabelT>::get_data_dim()
+{
+    return _data_dim;
+}
+
+template <typename T, typename LabelT> diskann::Metric PQFlashIndex<T, LabelT>::get_metric()
+{
+    return this->metric;
 }
 
 template <typename T, typename LabelT>
-uint64_t PQFlashIndex<T, LabelT>::get_data_dim() {
-  return _data_dim;
-}
-
-template <typename T, typename LabelT>
-diskann::Metric PQFlashIndex<T, LabelT>::get_metric() {
-  return this->metric;
-}
-
-template <typename T, typename LabelT>
-LabelT
-PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_label) {
-  return _filter_store->get_converted_label(filter_label);
+LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_label)
+{
+    return _filter_store->get_converted_label(filter_label);
 }
 
 #ifdef EXEC_ENV_OLS
-template <typename T, typename LabelT>
-char *PQFlashIndex<T, LabelT>::getHeaderBytes() {
-  IOContext &ctx = reader->get_ctx();
-  AlignedRead readReq;
-  readReq.buf = new char[PQFlashIndex<T, LabelT>::HEADER_SIZE];
-  readReq.len = PQFlashIndex<T, LabelT>::HEADER_SIZE;
-  readReq.offset = 0;
+template <typename T, typename LabelT> char *PQFlashIndex<T, LabelT>::getHeaderBytes()
+{
+    IOContext &ctx = reader->get_ctx();
+    AlignedRead readReq;
+    readReq.buf = new char[PQFlashIndex<T, LabelT>::HEADER_SIZE];
+    readReq.len = PQFlashIndex<T, LabelT>::HEADER_SIZE;
+    readReq.offset = 0;
 
-  std::vector<AlignedRead> readReqs;
-  readReqs.push_back(readReq);
+    std::vector<AlignedRead> readReqs;
+    readReqs.push_back(readReq);
 
-  reader->read(readReqs, ctx, false);
+    reader->read(readReqs, ctx, false);
 
-  return (char *)readReq.buf;
+    return (char *)readReq.buf;
 }
 #endif
 
 template <typename T, typename LabelT>
-std::vector<std::uint8_t>
-PQFlashIndex<T, LabelT>::get_pq_vector(std::uint64_t vid) {
-  std::uint8_t *pqVec = &this->data[vid * this->_n_chunks];
-  return std::vector<std::uint8_t>(pqVec, pqVec + this->_n_chunks);
+std::vector<std::uint8_t> PQFlashIndex<T, LabelT>::get_pq_vector(std::uint64_t vid)
+{
+    std::uint8_t *pqVec = &this->data[vid * this->_n_chunks];
+    return std::vector<std::uint8_t>(pqVec, pqVec + this->_n_chunks);
 }
 
-template <typename T, typename LabelT>
-std::uint64_t PQFlashIndex<T, LabelT>::get_num_points() {
-  return _num_points;
+template <typename T, typename LabelT> std::uint64_t PQFlashIndex<T, LabelT>::get_num_points()
+{
+    return _num_points;
 }
 
 // instantiations

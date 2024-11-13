@@ -12,7 +12,8 @@
 #endif // !ENABLE_CUSTOM_LOGGER
 #endif // EXEC_ENV_OLS
 
-namespace diskann {
+namespace diskann
+{
 #ifdef ENABLE_CUSTOM_LOGGER
 DISKANN_DLLEXPORT extern std::basic_ostream<char> cout;
 DISKANN_DLLEXPORT extern std::basic_ostream<char> cerr;
@@ -21,10 +22,14 @@ using std::cerr;
 using std::cout;
 #endif
 
-enum class DISKANN_DLLEXPORT LogLevel { LL_Info = 0, LL_Error, LL_Count };
+enum class DISKANN_DLLEXPORT LogLevel
+{
+    LL_Info = 0,
+    LL_Error,
+    LL_Count
+};
 
 #ifdef ENABLE_CUSTOM_LOGGER
-DISKANN_DLLEXPORT void
-SetCustomLogger(std::function<void(LogLevel, const char *)> logger);
+DISKANN_DLLEXPORT void SetCustomLogger(std::function<void(LogLevel, const char *)> logger);
 #endif
 } // namespace diskann
