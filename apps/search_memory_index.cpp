@@ -79,6 +79,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
     std::cout << filter_penalty_threshold << " is value of filter_penalty_threshold at driver file" << std::endl;
+    std::cout << penalty_scale << " is value of beta at driver file" << std::endl;
     auto search_params =
         diskann::IndexSearchParams(*(std::max_element(Lvec.begin(), Lvec.end())), num_threads, filter_penalty_threshold,
                                    bruteforce_threshold, clustering_threshold);
@@ -502,7 +503,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("num_local_start",
                                        po::value<uint32_t>(&num_local)->default_value(0),
                                        "How many local start points to use");
-
+        optional_configs.add_options()("beta",
+                                       po::value<float>(&penalty_scale)->default_value(1),
+                                       "Value of scaling parameter beta in float");
 
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);

@@ -1081,7 +1081,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
                 if ((res) > _filter_penalty_threshold)
                     continue;
-                penalty = res * penalty_scale;
+                penalty = (res == 0)? penalty_scale : 1;
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1116,7 +1116,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             uint32_t ids[] = {id};
             float distances[] = {std::numeric_limits<float>::max()};
             _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
-            distance = distances[0] + penalty;
+            distance = distances[0]*penalty;
 
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
@@ -1259,7 +1259,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             id_iter++;
                             continue;
                         }
-                        penalty = res * penalty_scale;
+                        penalty = (res == 0) ? penalty_scale : 1;
 
                         if (print_qstats)
                         {
@@ -1305,7 +1305,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m] + dist_pens[m]));
+            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]*dist_pens[m]));
         }
     }
     return std::make_pair(hops, cmps);
