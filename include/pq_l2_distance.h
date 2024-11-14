@@ -1,4 +1,5 @@
 #pragma once
+
 #include "quantized_distance.h"
 
 namespace diskann
@@ -23,20 +24,17 @@ template <typename data_t> class PQL2Distance : public QuantizedDistance<data_t>
 
     virtual bool is_opq() const override;
 
-    virtual std::string get_quantized_vectors_filename(const std::string &prefix) const override;
-    virtual std::string get_pivot_data_filename(const std::string &prefix) const override;
-    virtual std::string get_rotation_matrix_suffix(const std::string &pq_pivots_filename) const override;
-
 #ifdef EXEC_ENV_OLS
-    virtual void load_pivot_data(MemoryMappedFiles &files, const std::string &pq_table_file,
-                                 size_t num_chunks) override;
+    virtual void load_pivot_data(MemoryMappedFiles &files, const std::string &pq_table_file) override;
 #else
-    virtual void load_pivot_data(const std::string &pq_table_file, size_t num_chunks) override;
+    virtual void load_pivot_data(const std::string &pq_table_file) override;
 #endif
 
     // Number of chunks in the PQ table. Depends on the compression level used.
     // Has to be < ndim
     virtual uint32_t get_num_chunks() const override;
+
+    virtual const FixedChunkPQTable &get_pq_table() const override;
 
     // Preprocess the query by computing chunk distances from the query vector to
     // various centroids. Since we don't want this class to do scratch management,
@@ -71,17 +69,8 @@ template <typename data_t> class PQL2Distance : public QuantizedDistance<data_t>
   protected:
     // assumes pre-processed query
     virtual void prepopulate_chunkwise_distances(const float *query_vec, float *dist_vec);
-
-    // assumes no rotation is involved
-    // virtual void inflate_vector(uint8_t *base_vec, float *out_vec);
-
-    float *_tables = nullptr; // pq_tables = float array of size [256 * ndims]
-    uint64_t _ndims = 0;      // ndims = true dimension of vectors
+    FixedChunkPQTable _pq_table;
     uint64_t _num_chunks = 0;
     bool _is_opq = false;
-    uint32_t *_chunk_offsets = nullptr;
-    float *_centroid = nullptr;
-    float *_tables_tr = nullptr; // same as pq_tables, but col-major
-    float *_rotmat_tr = nullptr;
 };
 } // namespace diskann

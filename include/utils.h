@@ -834,7 +834,7 @@ void convert_types(const InType *srcmat, OutType *destmat, size_t npts, size_t d
     {
         for (uint64_t j = 0; j < dim; j++)
         {
-            destmat[i * dim + j] = (OutType)srcmat[i * dim + j];
+            destmat[i * dim + j] = static_cast<OutType>(srcmat[i * dim + j]);
         }
     }
 }
