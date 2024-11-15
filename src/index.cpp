@@ -1073,7 +1073,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                                         __LINE__);
         }
 
-        float penalty = 0;
+        float penalty = 1;
         if (use_filter)
         {
             if (search_invocation)
@@ -1246,7 +1246,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     inserted_into_pool_rs.insert(id);
                 }
 
-                float penalty = 0;
+                float penalty = 1;
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
@@ -1339,14 +1339,14 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
         _data_store->get_vector(location, scratch->aligned_query());
         // get all combinations of common filters
-        for (auto const &lbl1 : _location_to_labels[location])
+/*        for (auto const &lbl1 : _location_to_labels[location])
         {
             for (auto const &lbl2 : _location_to_labels[location])
             {
                 if (lbl1 == lbl2)
                     continue;
             }
-        }
+        }*/
         iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
                                _location_to_labels[location], false);
 
