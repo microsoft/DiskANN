@@ -707,7 +707,11 @@ void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char>& infile,
     uint32_t num_pts_in_label_file;
     uint32_t num_total_labels;
     get_label_file_metadata(buffer, num_pts_in_label_file, num_total_labels);
-
+    this->_table_stats.label_total_count = num_total_labels;
+    this->_table_stats.label_mem_usage = num_pts_in_label_file * sizeof(uint32_t)
+        + num_pts_in_label_file * sizeof(uint32_t)
+        + num_total_labels * sizeof(LabelT);
+    
     _pts_to_label_offsets = new uint32_t[num_pts_in_label_file];
     _pts_to_label_counts = new uint32_t[num_pts_in_label_file];
     _pts_to_labels = new LabelT[num_total_labels];
@@ -863,6 +867,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     this->_num_points = npts_u64;
     this->_n_chunks = nchunks_u64;
+    
+    this->_table_stats.node_count = npts_u64;
+    this->_table_stats.node_mem_usage = npts_u64 * nchunks_u64;
+
 #ifdef EXEC_ENV_OLS
     if (files.fileExists(labels_file))
     {
@@ -891,6 +899,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         std::ifstream map_reader(labels_map_file);
 #endif
         _label_map = load_label_map(map_reader);
+        this->_table_stats.label_count = _label_map.size();
 
 #ifndef EXEC_ENV_OLS
         map_reader.close();
@@ -1222,6 +1231,12 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         diskann::cout << "Setting re-scaling factor of base vectors to " << this->_max_base_norm << std::endl;
         delete[] norm_val;
     }
+
+    _table_stats.tag_memory_usage = _table_stats.node_mem_usage
+        + _table_stats.graph_mem_usage
+        + _table_stats.label_mem_usage
+        + _table_stats.tag_memory_usage;
+
     diskann::cout << "done.." << std::endl;
     return 0;
 }
@@ -1783,6 +1798,11 @@ uint32_t PQFlashIndex<T, LabelT>::range_search(const T *query1, const double ran
 template <typename T, typename LabelT> uint64_t PQFlashIndex<T, LabelT>::get_data_dim()
 {
     return _data_dim;
+}
+
+template <typename T, typename LabelT> TableStats PQFlashIndex<T, LabelT>::get_table_stats()
+{
+    return _table_stats;
 }
 
 template <typename T, typename LabelT> diskann::Metric PQFlashIndex<T, LabelT>::get_metric()

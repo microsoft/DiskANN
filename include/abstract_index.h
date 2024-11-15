@@ -5,6 +5,7 @@
 #include "types.h"
 #include "index_config.h"
 #include "index_build_params.h"
+#include "percentile_stats.h"
 #include <any>
 
 namespace diskann
@@ -108,6 +109,7 @@ class AbstractIndex
 
     virtual bool is_label_valid(const std::string &raw_label) const = 0;
     virtual bool is_set_universal_label() const = 0;
+    virtual TableStats get_table_stats() const = 0;
 
   private:
     virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;

@@ -18,6 +18,8 @@ InMemDataStore<data_t>::InMemDataStore(const location_t num_points, const size_t
     _aligned_dim = ROUND_UP(dim, _distance_fn->get_required_alignment());
     alloc_aligned(((void **)&_data), this->_capacity * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
     std::memset(_data, 0, this->_capacity * _aligned_dim * sizeof(data_t));
+
+    _data_size = this->_capacity * _aligned_dim * sizeof(data_t);
 }
 
 template <typename data_t> InMemDataStore<data_t>::~InMemDataStore()
@@ -31,6 +33,11 @@ template <typename data_t> InMemDataStore<data_t>::~InMemDataStore()
 template <typename data_t> size_t InMemDataStore<data_t>::get_aligned_dim() const
 {
     return _aligned_dim;
+}
+
+template <typename data_t> size_t InMemDataStore<data_t>::get_data_size() const
+{
+    return _data_size;
 }
 
 template <typename data_t> size_t InMemDataStore<data_t>::get_alignment_factor() const
@@ -251,6 +258,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::expand(const locat
 #else
     realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
 #endif
+    this->_data_size = new_size * _aligned_dim * sizeof(data_t);
     this->_capacity = new_size;
     return this->_capacity;
 }
@@ -277,6 +285,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::shrink(const locat
 #else
     realloc_aligned((void **)&_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
 #endif
+    this->_data_size = new_size * _aligned_dim * sizeof(data_t);
     this->_capacity = new_size;
     return this->_capacity;
 }

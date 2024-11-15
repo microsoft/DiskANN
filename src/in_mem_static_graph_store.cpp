@@ -182,6 +182,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphStore::load_impl(const st
         }
     }
 
+    _graph_size = cc * sizeof(uint32_t);
     diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to " << start
         << std::endl;
     return std::make_tuple(nodes_read, start, file_frozen_pts);
@@ -195,6 +196,11 @@ size_t InMemStaticGraphStore::get_max_range_of_graph()
 uint32_t InMemStaticGraphStore::get_max_observed_degree()
 {
     return _max_observed_degree;
+}
+
+size_t InMemStaticGraphStore::get_graph_size()
+{
+    return _graph_size;
 }
 
 } // namespace diskann
