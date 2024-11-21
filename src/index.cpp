@@ -4,7 +4,8 @@
 #include <omp.h>
 
 #include <type_traits>
-
+#include <deque>
+#include <queue>
 #include "boost/dynamic_bitset.hpp"
 #include "index_factory.h"
 #include "memory_mapper.h"
@@ -790,7 +791,7 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
-    InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
+    InMemQueryScratch<T> *scratch, const uint32_t Lsize, const size_t K, const std::vector<uint32_t> &init_ids, bool use_filter,
     const std::vector<LabelT> &filter_labels, bool search_invocation)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
@@ -880,25 +881,41 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
+    std::queue<int> last_K_insertions;
+    int x = 5;
+    int y = 0;
     float prev_distance_to_query = 0.0;
+
     while (best_L_nodes.has_unexpanded_node())
-    {
+    {   
+        hops++;
+
+        // Check if the sum of elements of the deque is less than y, if yes then exit the loop
+        int sum_last_K_insertions = 0;
+        std::queue<int> temp_queue = last_K_insertions;
+        while (!temp_queue.empty()) {
+            sum_last_K_insertions += temp_queue.front();
+            temp_queue.pop();
+        }
+        if (sum_last_K_insertions <= y && hops >= x) {
+            break;
+        }
+
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
 
-        hops++;
         if(search_invocation){
-            std::vector<uint32_t> id_scratch_temp = {n};
-            std::vector<float> dist_scratch_temp = {0.0};
-            compute_dists(id_scratch_temp, dist_scratch_temp);
-            float change_in_distance = std::abs(dist_scratch_temp[0] - prev_distance_to_query);
-            if (best_L_nodes.size() == Lsize  && (float)(change_in_distance/(dist_scratch_temp[0] + 1e-6)) < 0.01){
-                break;
-            }
-            prev_distance_to_query = dist_scratch_temp[0];
-            //diskann::cout<<"Iteration/Hop: #"<<hops+1<<std::endl;
-            //diskann::cout<<"Current L size: "<<best_L_nodes.size()<<std::endl;
-            //diskann::cout<<"Node expanded(ID) : "<<nbr.id<<" Distance(ID,Query): "<<dist_scratch_temp[0]<<std::endl;     
+        //     std::vector<uint32_t> id_scratch_temp = {n};
+        //     std::vector<float> dist_scratch_temp = {0.0};
+        //     compute_dists(id_scratch_temp, dist_scratch_temp);
+        //     float change_in_distance = std::abs(dist_scratch_temp[0] - prev_distance_to_query);
+        //     if (best_L_nodes.size() == Lsize  && (float)(change_in_distance/(dist_scratch_temp[0] + 1e-6)) < 0.01){
+        //         break;
+        //     }
+        //     prev_distance_to_query = dist_scratch_temp[0];
+               diskann::cout<<"Iteration/Hop: #"<<hops+1<<std::endl;
+               
+        //     diskann::cout<<"Node expanded(ID) : "<<nbr.id<<" Distance(ID,Query): "<<dist_scratch_temp[0]<<std::endl;     
         }
         
 
@@ -984,9 +1001,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         cmps += (uint32_t)id_scratch.size();
 
         // Insert <id, dist> pairs into the pool of candidates
+        int insertions_this_iter = 0;
         for (size_t m = 0; m < id_scratch.size(); ++m)
-        {
-            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+        {   
+            insertions_this_iter += best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+        }
+        last_K_insertions.push(insertions_this_iter);
+        if (last_K_insertions.size() > x) {
+            last_K_insertions.pop();
         }
     }
     // if (search_invocation){
@@ -1013,7 +1035,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     if (!use_filter)
     {
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        iterate_to_fixed_point(scratch, Lindex, Lindex, init_ids, false, unused_filter_label, false);
     }
     else
     {
@@ -1028,7 +1050,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
             tl.unlock();
 
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
+        iterate_to_fixed_point(scratch, filteredLindex, Lindex, filter_specific_start_nodes, true,
                                _location_to_labels[location], false);
 
         // combine candidate pools obtained with filter and unfiltered criteria.
@@ -1042,7 +1064,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         scratch->clear();
 
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        iterate_to_fixed_point(scratch, Lindex, Lindex, init_ids, false, unused_filter_label, false);
 
         for (auto unfiltered_neighbour : scratch->pool())
         {
@@ -2009,7 +2031,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     _data_store->preprocess_query(query, scratch);
 
-    auto retval = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
+    auto retval = iterate_to_fixed_point(scratch, L, K, init_ids, false, unused_filter_label, true);
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
@@ -2113,7 +2135,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     filter_vec.emplace_back(filter_label);
 
     _data_store->preprocess_query(query, scratch);
-    auto retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+    auto retval = iterate_to_fixed_point(scratch, L, K, init_ids, true, filter_vec, true);
 
     auto best_L_nodes = scratch->best_l_nodes();
 
@@ -2197,14 +2219,14 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     if (!use_filters)
     {
         const std::vector<LabelT> unused_filter_label;
-        iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
+        iterate_to_fixed_point(scratch, L, K, init_ids, false, unused_filter_label, true);
     }
     else
     {
         std::vector<LabelT> filter_vec;
         auto converted_label = this->get_converted_label(filter_label);
         filter_vec.push_back(converted_label);
-        iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+        iterate_to_fixed_point(scratch, L, K, init_ids, true, filter_vec, true);
     }
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
