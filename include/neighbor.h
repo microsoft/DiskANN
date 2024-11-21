@@ -52,12 +52,11 @@ class NeighborPriorityQueue
     // set item or it has a greated distance than the final
     // item in the set. The set cursor that is used to pop() the
     // next item will be set to the lowest index of an uncheck item
-    int insert(const Neighbor &nbr, const size_t K)
+    void insert(const Neighbor &nbr)
     {   
-        int return_val = 0;
         if (_size == _capacity && _data[_size - 1] < nbr)
         {
-            return 0;
+            return;
         }
 
         size_t lo = 0, hi = _size;
@@ -71,7 +70,7 @@ class NeighborPriorityQueue
             }
             else if (_data[mid].id == nbr.id)
             {
-                return 0;
+                return;
             }
             else
             {
@@ -84,9 +83,6 @@ class NeighborPriorityQueue
             std::memmove(&_data[lo + 1], &_data[lo], (_size - lo) * sizeof(Neighbor));
         }
         _data[lo] = {nbr.id, nbr.distance};
-        if(lo < K){
-            return_val = 1;
-        }
         if (_size < _capacity)
         {
             _size++;
@@ -95,7 +91,6 @@ class NeighborPriorityQueue
         {
             _cur = lo;
         }
-        return return_val;
     }
 
     int check_in_top_k(const Neighbor &nbr, size_t K)

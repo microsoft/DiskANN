@@ -882,7 +882,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t cmps = 0;
 
     std::queue<int> last_K_insertions;
-    int x = 5;
+    int x = 10;
     int y = 0;
     float prev_distance_to_query = 0.0;
 
@@ -913,7 +913,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         //         break;
         //     }
         //     prev_distance_to_query = dist_scratch_temp[0];
-               diskann::cout<<"Iteration/Hop: #"<<hops+1<<std::endl;
+        //     diskann::cout<<"Iteration/Hop: #"<<hops+1<<std::endl;
                
         //     diskann::cout<<"Node expanded(ID) : "<<nbr.id<<" Distance(ID,Query): "<<dist_scratch_temp[0]<<std::endl;     
         }
@@ -1004,7 +1004,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         int insertions_this_iter = 0;
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {   
-            insertions_this_iter += best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+            insertions_this_iter += best_L_nodes.check_in_top_k(Neighbor(id_scratch[m], dist_scratch[m]), K);
+            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
         last_K_insertions.push(insertions_this_iter);
         if (last_K_insertions.size() > x) {
