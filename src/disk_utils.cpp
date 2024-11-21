@@ -19,6 +19,8 @@
 #include "pq_flash_index.h"
 #include "timer.h"
 #include "tsl/robin_set.h"
+#include "utils.h"
+#include "filter_utils.h"
 
 namespace diskann {
 
@@ -1114,6 +1116,8 @@ void create_disk_layout(const std::string base_file,
                 << std::endl;
 }
 
+
+
 template <typename T, typename LabelT>
 int build_disk_index(const char *dataFilePath, const char *indexFilePath,
                      const char *indexBuildParameters,
@@ -1121,7 +1125,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath,
                      const std::string &codebook_prefix, bool use_filters,
                      const std::string &label_file,
                      const std::string &universal_label,
-                     const uint32_t filter_threshold, const uint32_t Lf) {
+                     const uint32_t filter_threshold, const uint32_t Lf, 
+                    const uint32_t filter_bf_threshold) {
   std::stringstream parser;
   parser << std::string(indexBuildParameters);
   std::string cur_param;
@@ -1129,7 +1134,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath,
   while (parser >> cur_param) {
     param_list.push_back(cur_param);
   }
-  if (param_list.size() < 5 || param_list.size() > 9) {
+  if (param_list.size() < 5 || param_list.size() > 10) {
     diskann::cout
         << "Correct usage of parameters is R (max degree)\n"
            "L (indexing list size, better if >= R)\n"
@@ -1210,6 +1215,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath,
       disk_index_path +
       "_dummy_map.txt"; // remap will be used if we break-up points of
                         // high label-density to create copies
+  std::string bf_data_file = disk_index_path + "_brute_force.txt";
+  std::string bf_excluded_label_file = disk_index_path + "_non_brute_force.txt";
 
   std::string sample_base_prefix = index_prefix_path + "_sample";
   // optional, used if disk index file must store pq data
@@ -1223,6 +1230,16 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath,
       "_prepped_base.bin"; // temp file for storing pre-processed base file for
                            // cosine/ mips metrics
   bool created_temp_file_for_processed_data = false;
+
+
+  //Brute force check.
+  if (use_filters && filter_bf_threshold > 0) {
+    assert(label_file != "");
+    diskann::separate_brute_forceable_points<T>(data_file_to_use, label_file,
+                          filter_bf_threshold, bf_excluded_label_file, bf_data_file);
+    labels_file_original = bf_excluded_label_file;
+    created_temp_file_for_processed_data = true;
+  }
 
   // output a new base file which contains extra dimension with sqrt(1 -
   // ||x||^2/M^2) for every x, M is max norm of all points. Extra space on
@@ -1484,38 +1501,44 @@ template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint32_t>(
     const char *indexBuildParameters, diskann::Metric compareMetric,
     bool use_opq, const std::string &codebook_prefix, bool use_filters,
     const std::string &label_file, const std::string &universal_label,
-    const uint32_t filter_threshold, const uint32_t Lf);
+    const uint32_t filter_threshold, const uint32_t Lf, 
+    const uint32_t filter_bf_threshold);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint32_t>(
     const char *dataFilePath, const char *indexFilePath,
     const char *indexBuildParameters, diskann::Metric compareMetric,
     bool use_opq, const std::string &codebook_prefix, bool use_filters,
     const std::string &label_file, const std::string &universal_label,
-    const uint32_t filter_threshold, const uint32_t Lf);
+    const uint32_t filter_threshold, const uint32_t Lf,
+  const uint32_t filter_bf_threshold);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint32_t>(
     const char *dataFilePath, const char *indexFilePath,
     const char *indexBuildParameters, diskann::Metric compareMetric,
     bool use_opq, const std::string &codebook_prefix, bool use_filters,
     const std::string &label_file, const std::string &universal_label,
-    const uint32_t filter_threshold, const uint32_t Lf);
+    const uint32_t filter_threshold, const uint32_t Lf,
+    const uint32_t filter_bf_threshold);
 // LabelT = uint16
 template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint16_t>(
     const char *dataFilePath, const char *indexFilePath,
     const char *indexBuildParameters, diskann::Metric compareMetric,
     bool use_opq, const std::string &codebook_prefix, bool use_filters,
     const std::string &label_file, const std::string &universal_label,
-    const uint32_t filter_threshold, const uint32_t Lf);
+    const uint32_t filter_threshold, const uint32_t Lf,
+    const uint32_t filter_bf_threshold);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint16_t>(
     const char *dataFilePath, const char *indexFilePath,
     const char *indexBuildParameters, diskann::Metric compareMetric,
     bool use_opq, const std::string &codebook_prefix, bool use_filters,
     const std::string &label_file, const std::string &universal_label,
-    const uint32_t filter_threshold, const uint32_t Lf);
+    const uint32_t filter_threshold, const uint32_t Lf,
+    const uint32_t filter_bf_threshold);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(
     const char *dataFilePath, const char *indexFilePath,
     const char *indexBuildParameters, diskann::Metric compareMetric,
     bool use_opq, const std::string &codebook_prefix, bool use_filters,
     const std::string &label_file, const std::string &universal_label,
-    const uint32_t filter_threshold, const uint32_t Lf);
+    const uint32_t filter_threshold, const uint32_t Lf,
+    const uint32_t filter_bf_threshold);
 
 template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L,

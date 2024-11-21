@@ -22,6 +22,7 @@
 #include <xmmintrin.h>
 #endif
 
+#include "filter_utils.h"
 #include "index.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
@@ -98,7 +99,7 @@ Index<T, TagT, LabelT>::Index(
     _indexingRange = index_config.index_write_params->max_degree;
     _indexingMaxC = index_config.index_write_params->max_occlusion_size;
     _indexingAlpha = index_config.index_write_params->alpha;
-    _filterIndexingQueueSize =
+    _filter_indexing_queue_size =
         index_config.index_write_params->filter_list_size;
     _indexingThreads = index_config.index_write_params->num_threads;
     _saturate_graph = index_config.index_write_params->saturate_graph;
@@ -1246,7 +1247,7 @@ void Index<T, TagT, LabelT>::link() {
     std::vector<uint32_t> pruned_list;
     if (_filtered_index) {
       search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch,
-                                 true, _filterIndexingQueueSize);
+                                 true, _filter_indexing_queue_size);
     } else {
       search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
                                  scratch);
@@ -1752,6 +1753,10 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file,
   line_cnt = 0;
 
   while (std::getline(infile, line)) {
+    if (line.find(NO_LABEL_FOR_POINT) != std::string::npos) {
+      line_cnt++;
+      continue;
+    }
     std::istringstream iss(line);
     std::vector<LabelT> lbls(0);
     getline(iss, token, '\t');
@@ -2833,7 +2838,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag,
     // when filtered the best_candidates will share the same label (
     // label_present > distance)
     search_for_point_and_prune(location, _indexingQueueSize, pruned_list,
-                               scratch, true, _filterIndexingQueueSize);
+                               scratch, true, _filter_indexing_queue_size);
   } else {
     search_for_point_and_prune(location, _indexingQueueSize, pruned_list,
                                scratch);

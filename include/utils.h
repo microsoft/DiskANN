@@ -160,6 +160,33 @@ inline int delete_file(const std::string &fileName) {
   }
 }
 
+inline std::string trim(const std::string& str) {
+  // Find the first non-whitespace character
+  size_t start = 0;
+  while (start < str.size() && std::isspace(str[start])) {
+    ++start;
+  }
+
+  // Find the last non-whitespace character
+  size_t end = str.size();
+  while (end > start && std::isspace(str[end - 1])) {
+    --end;
+  }
+
+  // Return the substring from start to end
+  return str.substr(start, end - start);
+}
+
+//VERY INEFFICIENT SPLIT_FUNCTION. USE IT AT YOUR OWN RISK.
+inline void split_string(const std::string& str, const char sep, std::vector<std::string>& split_strings) {
+  std::string token;
+  std::istringstream iss(str);
+  while (getline(iss, token, sep)) {
+    token = trim(token);
+    split_strings.push_back(token);
+  }
+}
+
 // generates formatted_label and _labels_map file.
 inline void convert_labels_string_to_int(const std::string &inFileName,
                                          const std::string &outFileName,

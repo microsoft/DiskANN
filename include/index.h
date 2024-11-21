@@ -438,7 +438,7 @@ private:
 
   bool _use_universal_label = false;
   LabelT _universal_label = 0;
-  uint32_t _filterIndexingQueueSize;
+  uint32_t _filter_indexing_queue_size;
   std::unordered_map<std::string, LabelT> _label_map;
 
   // Indexing parameters

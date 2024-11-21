@@ -51,7 +51,14 @@ typedef std::tuple<std::vector<label_set>,
 typedef std::tuple<std::vector<std::vector<uint32_t>>, uint64_t>
     load_label_index_return_values;
 
+
 namespace diskann {
+
+  //CONSTANTS
+  DISKANN_DLLEXPORT extern const char* NO_LABEL_FOR_POINT;
+  DISKANN_DLLEXPORT extern const char FILTERS_LABEL_DELIMITER;
+
+
 template <typename T>
 DISKANN_DLLEXPORT void
 generate_label_indices(path input_data_path, path final_index_path_prefix,
@@ -75,6 +82,13 @@ generate_label_specific_vector_files_compat(
     path input_data_path,
     tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
     std::vector<label_set> point_ids_to_labels, label_set all_labels);
+
+template<typename T>
+DISKANN_DLLEXPORT void separate_brute_forceable_points(
+  const std::string& base_file, const std::string& label_file,
+  const location_t filter_bf_threshold,
+  const std::string& new_lbl_file,
+  const std::string& bf_data_file);
 
 /*
  * For each label, generates a file containing all vectors that have said label.
