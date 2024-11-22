@@ -7,20 +7,20 @@
 #include <sstream>
 #include <string>
 
-#include <omp.h>
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
+#include <omp.h>
 
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
 
-#include "utils.h"
-#include "math_utils.h"
 #include "index.h"
-#include "parameters.h"
+#include "math_utils.h"
 #include "memory_mapper.h"
+#include "parameters.h"
 #include "partition.h"
+#include "utils.h"
 #ifdef _WINDOWS
 #include <xmmintrin.h>
 #endif

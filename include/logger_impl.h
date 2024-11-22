@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include <sstream>
 #include <mutex>
+#include <sstream>
 
 #include "ann_exception.h"
 #include "logger.h"

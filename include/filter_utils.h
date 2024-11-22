@@ -3,19 +3,19 @@
 
 #pragma once
 #include <algorithm>
-#include <fcntl.h>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <random>
 #include <set>
-#include <tuple>
 #include <string>
 #include <tsl/robin_map.h>
 #include <tsl/robin_set.h>
+#include <tuple>
 #ifdef __APPLE__
 #else
 #include <malloc.h>

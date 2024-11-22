@@ -2,8 +2,8 @@
 // Licensed under the MIT license.
 
 #include "math_utils.h"
-#include "pq.h"
 #include "partition.h"
+#include "pq.h"
 
 #define KMEANS_ITERS_FOR_PQ 15
 

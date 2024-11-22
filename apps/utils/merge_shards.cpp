@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "disk_utils.h"
 #include "cached_io.h"
+#include "disk_utils.h"
 #include "utils.h"
 
 int main(int argc, char **argv)

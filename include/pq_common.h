@@ -1,7 +1,7 @@
 #pragma once
 
-#include <string>
 #include <sstream>
+#include <string>
 
 #define NUM_PQ_BITS 8
 #define NUM_PQ_CENTROIDS (1 << NUM_PQ_BITS)

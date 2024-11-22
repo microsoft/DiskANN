@@ -10,11 +10,13 @@
 #include "parameters.h"
 #include "percentile_stats.h"
 #include "pq.h"
-#include "utils.h"
-#include "windows_customizations.h"
 #include "scratch.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
+#include "utils.h"
+#include "windows_customizations.h"
+
+#include "in_mem_filter_store.h"
 
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 
@@ -95,16 +97,20 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT uint64_t get_data_dim();
 
+    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
+
     std::shared_ptr<AlignedFileReader> &reader;
 
     DISKANN_DLLEXPORT diskann::Metric get_metric();
 
     //
     // node_ids: input list of node_ids to be read
-    // coord_buffers: pointers to pre-allocated buffers that coords need to copied to. If null, dont copy.
-    // nbr_buffers: pre-allocated buffers to copy neighbors into
+    // coord_buffers: pointers to pre-allocated buffers that coords need to copied
+    // to. If null, dont copy. nbr_buffers: pre-allocated buffers to copy
+    // neighbors into
     //
-    // returns a vector of bool one for each node_id: true if read is success, else false
+    // returns a vector of bool one for each node_id: true if read is success,
+    // else false
     //
     DISKANN_DLLEXPORT std::vector<bool> read_nodes(const std::vector<uint32_t> &node_ids,
                                                    std::vector<T *> &coord_buffers,
@@ -117,18 +123,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
     DISKANN_DLLEXPORT void setup_thread_data(uint64_t nthreads, uint64_t visited_reserve = 4096);
 
-    DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
-
   private:
-    DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, LabelT label_id);
-    std::unordered_map<std::string, LabelT> load_label_map(std::basic_istream<char> &infile);
-    DISKANN_DLLEXPORT void parse_label_file(std::basic_istream<char> &infile, size_t &num_pts_labels);
-    DISKANN_DLLEXPORT void get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
-                                                   uint32_t &num_total_labels);
-    DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
-                                                  const uint32_t nthreads);
-    void reset_stream_for_reading(std::basic_istream<char> &infile);
-
     // sector # on disk where node_id is present with in the graph part
     DISKANN_DLLEXPORT uint64_t get_node_sector(uint64_t node_id);
 
@@ -148,8 +143,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // offset in sector: [(i % nnodes_per_sector) * max_node_len]
     //
     // index info for multi-sector nodes
-    // nhood of node `i` is in sector: [i * DIV_ROUND_UP(_max_node_len, SECTOR_LEN)]
-    // offset in sector: [0]
+    // nhood of node `i` is in sector: [i * DIV_ROUND_UP(_max_node_len,
+    // SECTOR_LEN)] offset in sector: [0]
     //
     // Common info
     // coords start at ofsset
@@ -228,18 +223,10 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     bool _reorder_data_exists = false;
     uint64_t _reoreder_data_offset = 0;
 
-    // filter support
-    uint32_t *_pts_to_label_offsets = nullptr;
-    uint32_t *_pts_to_label_counts = nullptr;
-    LabelT *_pts_to_labels = nullptr;
-    std::unordered_map<LabelT, std::vector<uint32_t>> _filter_to_medoid_ids;
-    bool _use_universal_label = false;
-    LabelT _universal_filter_label;
-    tsl::robin_set<uint32_t> _dummy_pts;
-    tsl::robin_set<uint32_t> _has_dummy_pts;
-    tsl::robin_map<uint32_t, uint32_t> _dummy_to_real_map;
-    tsl::robin_map<uint32_t, std::vector<uint32_t>> _real_to_dummy_map;
-    std::unordered_map<std::string, LabelT> _label_map;
+    // Moved filter-specific data structures to in_mem_filter_store.
+    // TODO: Make this a unique pointer
+    bool _filter_index = false;
+    std::unique_ptr<InMemFilterStore<LabelT>> _filter_store;
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate

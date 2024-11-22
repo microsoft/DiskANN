@@ -1,25 +1,25 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <string>
-#include <iostream>
-#include <fstream>
 #include <cassert>
+#include <fstream>
+#include <iostream>
+#include <string>
 
-#include <vector>
 #include <algorithm>
+#include <boost/program_options.hpp>
 #include <cassert>
 #include <cstddef>
-#include <random>
-#include <limits>
 #include <cstring>
-#include <queue>
-#include <omp.h>
+#include <limits>
 #include <mkl.h>
-#include <boost/program_options.hpp>
-#include <unordered_map>
+#include <omp.h>
+#include <queue>
+#include <random>
 #include <tsl/robin_map.h>
 #include <tsl/robin_set.h>
+#include <unordered_map>
+#include <vector>
 
 #ifdef _WINDOWS
 #include <malloc.h>

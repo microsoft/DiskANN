@@ -3,9 +3,9 @@
 
 #pragma once
 
+#include "types.h"
 #include <string>
 #include <vector>
-#include "types.h"
 #include "neighbor_list.h"
 
 namespace diskann

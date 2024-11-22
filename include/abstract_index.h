@@ -1,10 +1,10 @@
 #pragma once
 #include "distance.h"
-#include "parameters.h"
-#include "utils.h"
-#include "types.h"
-#include "index_config.h"
 #include "index_build_params.h"
+#include "index_config.h"
+#include "parameters.h"
+#include "types.h"
+#include "utils.h"
 #include <any>
 
 namespace diskann
@@ -32,8 +32,9 @@ struct consolidation_report
     }
 };
 
-/* A templated independent class for intercation with Index. Uses Type Erasure to add virtual implemetation of methods
-that can take any type(using std::any) and Provides a clean API that can be inherited by different type of Index.
+/* A templated independent class for intercation with Index. Uses Type Erasure
+to add virtual implemetation of methods that can take any type(using std::any)
+and Provides a clean API that can be inherited by different type of Index.
 */
 class AbstractIndex
 {

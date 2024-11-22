@@ -1,19 +1,18 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <omp.h>
-#include <array>
-
-#include <type_traits>
-
+#include "ann_exception.h"
 #include "boost/dynamic_bitset.hpp"
 #include "index_factory.h"
 #include "memory_mapper.h"
+#include "tag_uint128.h"
 #include "timer.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
+#include "utils.h"
 #include "windows_customizations.h"
-#include "tag_uint128.h"
+#include <omp.h>
+#include <type_traits>
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
@@ -334,7 +333,8 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                 }
                 label_writer.close();
 
-                // write compacted raw_labels if data hence _location_to_labels was also compacted
+                // write compacted raw_labels if data hence _location_to_labels was also
+                // compacted
                 if (compact_before_save && _dynamic_index)
                 {
                     _label_map = load_label_map(std::string(filename) + "_labels_map.txt");
@@ -735,8 +735,8 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 
 template <typename T, typename TagT, typename LabelT> uint32_t Index<T, TagT, LabelT>::calculate_entry_point()
 {
-    // REFACTOR TODO: This function does not support multi-threaded calculation of medoid.
-    // Must revisit if perf is a concern.
+    // REFACTOR TODO: This function does not support multi-threaded calculation of
+    // medoid. Must revisit if perf is a concern.
     return _data_store->calculate_medoid();
 }
 
@@ -1725,13 +1725,15 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    // REFACTOR PQ TODO: We can remove this if and add a check in the InMemDataStore
-    // to not populate_data if it has been called once.
+    // REFACTOR PQ TODO: We can remove this if and add a check in the
+    // InMemDataStore to not populate_data if it has been called once.
     if (_pq_dist)
     {
 #ifdef EXEC_ENV_OLS
         std::stringstream ss;
-        ss << "PQ Build is not supported in DLVS environment (i.e. if EXEC_ENV_OLS is defined)" << std::endl;
+        ss << "PQ Build is not supported in DLVS environment (i.e. if EXEC_ENV_OLS "
+              "is defined)"
+           << std::endl;
         diskann::cerr << ss.str() << std::endl;
         throw ANNException(ss.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 #else
@@ -2076,8 +2078,8 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
     size_t num_points_labels = 0;
 
     parse_label_file(label_file,
-                     num_points_labels); // determines medoid for each label and identifies
-                                         // the points to label mapping
+                     num_points_labels); // determines medoid for each label and
+                                         // identifies the points to label mapping
 
     convert_pts_label_to_bitmask(_location_to_labels, _bitmask_buf, _labels.size());
 
@@ -3122,10 +3124,10 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
             {
                 if (_frozen_pts_used >= _num_frozen_pts)
                 {
-                    throw ANNException(
-                        "Error: For dynamic filtered index, the number of frozen points should be atleast equal "
-                        "to number of unique labels.",
-                        -1);
+                    throw ANNException("Error: For dynamic filtered index, the number of "
+                                       "frozen points should be atleast equal "
+                                       "to number of unique labels.",
+                                       -1);
                 }
 
                 auto fz_location = (int)(_max_points) + _frozen_pts_used; // as first _fz_point
@@ -3181,7 +3183,8 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     // Insert tag and mapping to location
     if (_enable_tags)
     {
-        // if tags are enabled and tag is already inserted. so we can't reuse that tag.
+        // if tags are enabled and tag is already inserted. so we can't reuse that
+        // tag.
         if (_tag_to_location.find(tag) != _tag_to_location.end())
         {
             release_location(location);
@@ -3201,14 +3204,16 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     std::vector<uint32_t> pruned_list; // it is the set best candidates to connect to this point
     if (_filtered_index)
     {
-        // when filtered the best_candidates will share the same label ( label_present > distance)
+        // when filtered the best_candidates will share the same label (
+        // label_present > distance)
         search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
     }
     else
     {
         search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch);
     }
-    assert(pruned_list.size() > 0); // should find atleast one neighbour (i.e frozen point acting as medoid)
+    assert(pruned_list.size() > 0); // should find atleast one neighbour (i.e
+                                    // frozen point acting as medoid)
 
     {
         std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock, std::defer_lock);

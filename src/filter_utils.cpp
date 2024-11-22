@@ -8,11 +8,11 @@
 #include <string>
 #include <tuple>
 
-#include <omp.h>
 #include "filter_utils.h"
 #include "index.h"
 #include "parameters.h"
 #include "utils.h"
+#include <omp.h>
 
 namespace diskann
 {
@@ -266,7 +266,8 @@ parse_label_file_return_values parse_label_file(path label_data_path, std::strin
  * as either uint16_t or uint32_t
  *
  * Returns two objects via std::tuple:
- * 1. a vector of vectors of labels, where the outer vector is indexed by point id
+ * 1. a vector of vectors of labels, where the outer vector is indexed by point
+ * id
  * 2. a set of all labels
  */
 template <typename LabelT>

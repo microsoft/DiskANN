@@ -5,9 +5,9 @@
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
-#include "pq.h"
-#include "partition.h"
 #include "math_utils.h"
+#include "partition.h"
+#include "pq.h"
 #include "tsl/robin_map.h"
 
 // block size for reading/processing large files and matrices in blocks
@@ -354,8 +354,9 @@ void pq_dist_lookup(const uint8_t *pq_ids, const size_t n_pts, const size_t pq_n
 //   make_zero_mean is false by default.
 // These assumptions allow to make the function much simpler and avoid storing
 // array of chunk_offsets and centroids.
-// The compiler pragma for multi-threading support is removed from this implementation
-// for the purpose of integration into systems that strictly control resource allocation.
+// The compiler pragma for multi-threading support is removed from this
+// implementation for the purpose of integration into systems that strictly
+// control resource allocation.
 int generate_pq_pivots_simplified(const float *train_data, size_t num_train, size_t dim, size_t num_pq_chunks,
                                   std::vector<float> &pivot_data_vector)
 {
@@ -771,18 +772,19 @@ int generate_opq_pivots(const float *passed_train_data, size_t num_train, uint32
     return 0;
 }
 
-// generate_pq_data_from_pivots_simplified is a simplified version of generate_pq_data_from_pivots.
-// Input is provided in the in-memory buffers data and pivot_data.
-// Output is stored in the in-memory buffer pq.
-// Simplification is based on the following assumptions:
+// generate_pq_data_from_pivots_simplified is a simplified version of
+// generate_pq_data_from_pivots. Input is provided in the in-memory buffers data
+// and pivot_data. Output is stored in the in-memory buffer pq. Simplification
+// is based on the following assumptions:
 //   supporting only float data type
 //   dim % num_pq_chunks == 0, which results in a fixed chunk_size
 //   num_centers == 256 by default
 //   make_zero_mean is false by default.
 // These assumptions allow to make the function much simpler and avoid using
 // array of chunk_offsets and centroids.
-// The compiler pragma for multi-threading support is removed from this implementation
-// for the purpose of integration into systems that strictly control resource allocation.
+// The compiler pragma for multi-threading support is removed from this
+// implementation for the purpose of integration into systems that strictly
+// control resource allocation.
 int generate_pq_data_from_pivots_simplified(const float *data, const size_t num, const float *pivot_data,
                                             const size_t pivots_num, const size_t dim, const size_t num_pq_chunks,
                                             std::vector<uint8_t> &pq)

@@ -7,14 +7,14 @@
 #include "gperftools/malloc_extension.h"
 #endif
 
-#include "logger.h"
-#include "disk_utils.h"
 #include "cached_io.h"
+#include "disk_utils.h"
 #include "index.h"
+#include "logger.h"
 #include "mkl.h"
 #include "omp.h"
-#include "percentile_stats.h"
 #include "partition.h"
+#include "percentile_stats.h"
 #include "pq_flash_index.h"
 #include "timer.h"
 #include "tsl/robin_set.h"
@@ -1133,7 +1133,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         (compareMetric == diskann::Metric::INNER_PRODUCT || compareMetric == diskann::Metric::COSINE))
     {
         std::stringstream stream;
-        stream << "Disk-index build currently only supports floating point data for Max "
+        stream << "Disk-index build currently only supports floating point data "
+                  "for Max "
                   "Inner Product Search/ cosine similarity. "
                << std::endl;
         throw diskann::ANNException(stream.str(), -1);
@@ -1196,9 +1197,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string disk_pq_pivots_path = index_prefix_path + "_disk.index_pq_pivots.bin";
     // optional, used if disk index must store pq data
     std::string disk_pq_compressed_vectors_path = index_prefix_path + "_disk.index_pq_compressed.bin";
-    std::string prepped_base =
-        index_prefix_path +
-        "_prepped_base.bin"; // temp file for storing pre-processed base file for cosine/ mips metrics
+    std::string prepped_base = index_prefix_path + "_prepped_base.bin"; // temp file for storing pre-processed base file
+                                                                        // for cosine/ mips metrics
     bool created_temp_file_for_processed_data = false;
 
     // output a new base file which contains extra dimension with sqrt(1 -
@@ -1210,7 +1210,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         std::cout << "Using Inner Product search, so need to pre-process base "
                      "data into temp file. Please ensure there is additional "
                      "(n*(d+1)*4) bytes for storing pre-processed base vectors, "
-                     "apart from the interim indices created by DiskANN and the final index."
+                     "apart from the interim indices created by DiskANN and the "
+                     "final index."
                   << std::endl;
         data_file_to_use = prepped_base;
         float max_norm_of_base = diskann::prepare_base_for_inner_products<T>(base_file, prepped_base);
@@ -1222,9 +1223,11 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     else if (compareMetric == diskann::Metric::COSINE)
     {
         Timer timer;
-        std::cout << "Normalizing data for cosine to temporary file, please ensure there is additional "
+        std::cout << "Normalizing data for cosine to temporary file, please ensure "
+                     "there is additional "
                      "(n*d*4) bytes for storing normalized base vectors, "
-                     "apart from the interim indices created by DiskANN and the final index."
+                     "apart from the interim indices created by DiskANN and the "
+                     "final index."
                   << std::endl;
         data_file_to_use = prepped_base;
         diskann::normalize_data_file(base_file, prepped_base);
@@ -1321,7 +1324,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
     MallocExtension::instance()->ReleaseFreeMemory();
 #endif
-    // Whether it is cosine or inner product, we still L2 metric due to the pre-processing.
+    // Whether it is cosine or inner product, we still L2 metric due to the
+    // pre-processing.
     timer.reset();
     diskann::build_merged_vamana_index<T, LabelT>(data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
                                                   indexing_ram_budget, mem_index_path, medoids_path, centroids_path,

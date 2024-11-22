@@ -20,14 +20,14 @@ typedef HANDLE FileHandle;
 typedef int FileHandle;
 #endif
 
+#include "ann_exception.h"
+#include "cached_io.h"
 #include "distance.h"
 #include "logger.h"
-#include "cached_io.h"
-#include "ann_exception.h"
-#include "windows_customizations.h"
+#include "tag_uint128.h"
 #include "tsl/robin_set.h"
 #include "types.h"
-#include "tag_uint128.h"
+#include "windows_customizations.h"
 #include <any>
 
 #ifdef EXEC_ENV_OLS
@@ -1199,8 +1199,8 @@ template <> inline const char* diskann_type_to_name<diskann::tag_uint128>()
 }
 
 #ifdef _WINDOWS
-#include <intrin.h>
 #include <Psapi.h>
+#include <intrin.h>
 
 extern bool AvxSupportedCPU;
 extern bool Avx2SupportedCPU;
