@@ -66,6 +66,8 @@ bool InMemFilterStore<LabelT>::load(const std::string &disk_index_file) {
   std::string dummy_map_file = disk_index_file + "_dummy_map.txt";
   std::string labels_map_file = disk_index_file + "_labels_map.txt";
   std::string univ_label_file = disk_index_file + "_universal_label.txt";
+  std::string brute_force_data_file = disk_index_path + "_brute_force.txt";
+  std::string bf_excluded_label_file = disk_index_path + "_non_brute_force_labels.txt";
 
   size_t num_pts_in_label_file = 0;
 
@@ -114,6 +116,9 @@ void InMemFilterStore<LabelT>::load_label_file(
   std::string line;
   uint32_t line_cnt = 0;
 
+  //TODO: This code is very inefficient because it reads the label file twice -
+  //once for computing stats and then for loading the labels. Must merge the 
+  //two reads.
   uint32_t num_pts_in_label_file;
   uint32_t num_total_labels;
   get_label_file_metadata(label_file_content, num_pts_in_label_file,

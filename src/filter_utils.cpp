@@ -325,10 +325,7 @@ parse_formatted_label_file(std::string label_file) {
 
 //TODO: This is a test implementation of adding brute force logic while 
 //building a filtered index. Must be cleaned up later. 
-
-typedef std::map<std::string, std::unordered_set<location_t>> inverted_index_t;
-
-void get_inv_index(const std::string& label_file, inverted_index_t& inv_index) {
+void get_inv_index(const std::string& label_file, const location_t filter_bf_threshold, inverted_index_t& inv_index) {
   std::ifstream label_in(label_file);
   if (!label_in.is_open()) {
     std::stringstream ss;
@@ -352,6 +349,16 @@ void get_inv_index(const std::string& label_file, inverted_index_t& inv_index) {
     line_labels.clear();
     line_num++;
   }
+
+  diskann::cout << "Built inverted index for filters. Label count: " << inv_index.size();
+  auto num_bf_labels = 0;
+  for (auto& label_and_points : inv_index) {
+    if (label_and_points.second.size() < filter_bf_threshold) {
+      num_bf_labels++;
+    }
+  }
+  diskann::cout << " number of sparse labels: " << num_bf_labels << std::endl;
+
 }
 
 void get_labels_of_point(const inverted_index_t& inv_index, location_t point, std::vector<std::string>& labels, location_t sparse_threshold) {
@@ -378,12 +385,14 @@ void write_new_label_file(const inverted_index_t& inv_index, location_t nrows, c
 
   std::vector<std::string> labels_of_point;
   labels_of_point.reserve(200); //just assuming, won't affect anything.
+  location_t num_graph_points = 0;
+
   for (location_t i = 0; i < (location_t)nrows; i++) {
     get_labels_of_point(inv_index, i, labels_of_point, sparse_threshold);
     if (labels_of_point.size() == 0) {
       label_out << NO_LABEL_FOR_POINT << std::endl;
-    }
-    else {
+    } else {
+      num_graph_points++;
       for (int i = 0; i < labels_of_point.size() - 1; i++) {
         label_out << labels_of_point[i] << ",";
       }
@@ -391,6 +400,7 @@ void write_new_label_file(const inverted_index_t& inv_index, location_t nrows, c
     }
     labels_of_point.clear();
   }
+  diskann::cout << "New label file: " << new_label_file << ", num graph points: " << num_graph_points << std::endl;
   label_out.close();
 }
 
@@ -420,6 +430,7 @@ void write_brute_force_data(const inverted_index_t& inv_index, const std::string
       }
     }
   }
+  diskann::cout << "Brute force file: " << bf_data_file << std::endl;
   bf_out.close();
 }
 
@@ -430,12 +441,14 @@ void separate_brute_forceable_points(
   const std::string& new_lbl_file,
   const std::string& bf_data_file) {
 
+  diskann::cout << "Excluding brute forceable points from the dataset for building the diskann graph" << std::endl;
+
   std::ifstream data_in(base_file, std::ios::binary);
   uint64_t nrows, ncols;
   get_bin_metadata_impl(data_in, nrows, ncols);
 
   inverted_index_t inv_index;
-  get_inv_index(label_file, inv_index);
+  get_inv_index(label_file, filter_bf_threshold, inv_index);
 
   write_new_label_file(inv_index, (location_t)nrows, new_lbl_file, filter_bf_threshold);
   write_brute_force_data(inv_index, bf_data_file, filter_bf_threshold);

@@ -57,6 +57,7 @@ namespace diskann {
   //CONSTANTS
   DISKANN_DLLEXPORT extern const char* NO_LABEL_FOR_POINT;
   DISKANN_DLLEXPORT extern const char FILTERS_LABEL_DELIMITER;
+  typedef std::map<std::string, std::unordered_set<location_t>> inverted_index_t;
 
 
 template <typename T>
