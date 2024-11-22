@@ -121,8 +121,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
   private:
     DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, LabelT label_id);
-    std::unordered_map<std::string, LabelT> load_label_map(std::basic_istream<char>& infile);
-    DISKANN_DLLEXPORT void parse_label_file(std::basic_istream<char>& infile, size_t &num_pts_labels);
+    std::unordered_map<std::string, LabelT> load_label_map(std::basic_istream<char> &infile);
+    DISKANN_DLLEXPORT void parse_label_file(std::basic_istream<char> &infile, size_t &num_pts_labels);
     DISKANN_DLLEXPORT void get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
                                                    uint32_t &num_total_labels);
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
@@ -140,8 +140,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     // returns region of `node_buf` containing [COORD(T)]
     DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
-
-    size_t search_string_range(const std::string& str, char ch, size_t start, size_t end);
 
     // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
