@@ -8,7 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace diskann {
+namespace diskann
+{
 typedef uint32_t location_t;
 
 using DataType = std::any;

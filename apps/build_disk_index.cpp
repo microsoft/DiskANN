@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <omp.h>
 #include <boost/program_options.hpp>
+#include <omp.h>
 
-#include "utils.h"
 #include "disk_utils.h"
-#include "math_utils.h"
 #include "index.h"
+#include "math_utils.h"
 #include "partition.h"
 #include "program_options_utils.hpp"
+#include "utils.h"
 
 namespace po = boost::program_options;
 

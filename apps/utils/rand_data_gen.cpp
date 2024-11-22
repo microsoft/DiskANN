@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <iostream>
-#include <cstdlib>
-#include <random>
-#include <cmath>
 #include <boost/program_options.hpp>
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <random>
 
 #include "utils.h"
 
@@ -128,7 +128,8 @@ int main(int argc, char **argv)
         desc.add_options()("norm", po::value<float>(&norm)->default_value(-1.0f),
                            "Norm of the vectors (if not specified, vectors are not normalized)");
         desc.add_options()("rand_scaling", po::value<float>(&rand_scaling)->default_value(1.0f),
-                           "Each vector will be scaled (if not explicitly normalized) by a factor randomly chosen from "
+                           "Each vector will be scaled (if not explicitly normalized) by a factor "
+                           "randomly chosen from "
                            "[1, rand_scale]. Only applicable for floating point data");
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -158,13 +159,17 @@ int main(int argc, char **argv)
 
     if (rand_scaling < 1.0)
     {
-        std::cout << "We will only scale the vector norms randomly in [1, value], so value must be >= 1." << std::endl;
+        std::cout << "We will only scale the vector norms randomly in [1, value], "
+                     "so value must be >= 1."
+                  << std::endl;
         return -1;
     }
 
     if ((rand_scaling > 1.0) && (normalization == true))
     {
-        std::cout << "Data cannot be normalized and randomly scaled at same time. Use one or the other." << std::endl;
+        std::cout << "Data cannot be normalized and randomly scaled at same time. "
+                     "Use one or the other."
+                  << std::endl;
         return -1;
     }
 

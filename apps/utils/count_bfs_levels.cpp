@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <algorithm>
+#include <boost/program_options.hpp>
 #include <cstring>
 #include <iomanip>
-#include <algorithm>
 #include <numeric>
 #include <omp.h>
 #include <set>
 #include <string.h>
-#include <boost/program_options.hpp>
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -17,9 +17,9 @@
 #include <unistd.h>
 #endif
 
-#include "utils.h"
 #include "index.h"
 #include "memory_mapper.h"
+#include "utils.h"
 
 namespace po = boost::program_options;
 
