@@ -97,8 +97,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT uint64_t get_data_dim();
 
-    DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
-
     std::shared_ptr<AlignedFileReader> &reader;
 
     DISKANN_DLLEXPORT diskann::Metric get_metric();
@@ -135,8 +133,6 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     // returns region of `node_buf` containing [COORD(T)]
     DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
-
-    size_t search_string_range(const std::string& str, char ch, size_t start, size_t end);
 
     // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]

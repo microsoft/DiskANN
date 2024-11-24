@@ -35,6 +35,8 @@ template <typename LabelT> class InMemFilterStore : public AbstractFilterStore<L
 
     DISKANN_DLLEXPORT virtual bool has_filter_support() const;
 
+    bool is_label_valid(const std::string& filter_label) const;
+
     DISKANN_DLLEXPORT virtual const std::unordered_map<LabelT, std::vector<location_t>> &get_label_to_medoids() const;
 
     DISKANN_DLLEXPORT virtual const std::vector<location_t> &get_medoids_of_label(const LabelT label);
@@ -102,6 +104,13 @@ template <typename LabelT> class InMemFilterStore : public AbstractFilterStore<L
     // that they exist and could not be opened.
     DISKANN_DLLEXPORT bool load(const std::string &disk_index_file);
 
+    bool load(
+        const std::string& labels_filepath, 
+        const std::string& labels_to_medoids_filepath,
+        const std::string& labels_map_filepath,
+        const std::string& unv_label_filepath,
+        const std::string& dummy_map_filepath);
+
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
                                                   const uint32_t nthreads);
 
@@ -121,6 +130,8 @@ template <typename LabelT> class InMemFilterStore : public AbstractFilterStore<L
 
     void reset_stream_for_reading(std::basic_istream<char> &infile);
     // Load functions for search END
+
+    size_t search_string_range(const std::string_view& str, char ch, size_t start, size_t end);
 
     location_t _num_points = 0;
     location_t *_pts_to_label_offsets = nullptr;

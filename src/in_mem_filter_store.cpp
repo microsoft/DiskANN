@@ -73,33 +73,41 @@ template <typename LabelT> bool InMemFilterStore<LabelT>::load(const std::string
     std::string labels_map_file = disk_index_file + "_labels_map.txt";
     std::string univ_label_file = disk_index_file + "_universal_label.txt";
 
-    size_t num_pts_in_label_file = 0;
+    return load(labels_file, labels_to_medoids, labels_map_file, univ_label_file, dummy_map_file);
+}
 
+template <typename LabelT> bool InMemFilterStore<LabelT>::load(
+    const std::string& labels_filepath,
+    const std::string& labels_to_medoids_filepath,
+    const std::string& labels_map_filepath,
+    const std::string& unv_label_filepath,
+    const std::string& dummy_map_filepath)
+{
     // TODO: Check for encoding issues here. We are opening files as binary and
     // reading them as bytes, not sure if that can cause an issue with UTF
     // encodings.
     bool has_filters = true;
-    if (false == load_file_and_parse(labels_file, &InMemFilterStore<LabelT>::load_label_file))
+    if (false == load_file_and_parse(labels_filepath, &InMemFilterStore<LabelT>::load_label_file))
     {
         diskann::cout << "Index does not have filter data. " << std::endl;
         return false;
     }
-    if (false == parse_stream(labels_map_file, &InMemFilterStore<LabelT>::load_label_map))
+    if (false == parse_stream(labels_map_filepath, &InMemFilterStore<LabelT>::load_label_map))
     {
-        diskann::cerr << "Failed to find file: " << labels_map_file << " while labels_file exists." << std::endl;
+        diskann::cerr << "Failed to find file: " << labels_map_filepath << " while labels_file exists." << std::endl;
         return false;
     }
 
-    if (false == parse_stream(labels_to_medoids, &InMemFilterStore<LabelT>::load_labels_to_medoids))
+    if (false == parse_stream(labels_to_medoids_filepath, &InMemFilterStore<LabelT>::load_labels_to_medoids))
     {
-        diskann::cerr << "Failed to find file: " << labels_to_medoids << " while labels file exists." << std::endl;
+        diskann::cerr << "Failed to find file: " << labels_to_medoids_filepath << " while labels file exists." << std::endl;
         return false;
     }
     // missing universal label file is NOT an error.
-    load_file_and_parse(univ_label_file, &InMemFilterStore::parse_universal_label);
+    load_file_and_parse(unv_label_filepath, &InMemFilterStore::parse_universal_label);
 
     // missing dummy map file is also NOT an error.
-    parse_stream(dummy_map_file, &InMemFilterStore<LabelT>::load_dummy_map);
+    parse_stream(dummy_map_filepath, &InMemFilterStore<LabelT>::load_dummy_map);
     _is_valid = true;
     return _is_valid;
 }
@@ -107,6 +115,16 @@ template <typename LabelT> bool InMemFilterStore<LabelT>::load(const std::string
 template <typename LabelT> bool InMemFilterStore<LabelT>::has_filter_support() const
 {
     return _is_valid;
+}
+
+template <typename LabelT>  bool InMemFilterStore<LabelT>::is_label_valid(const std::string& filter_label) const
+{
+    if (_label_map.find(filter_label) != _label_map.end())
+    {
+        return true;
+    }
+
+    return false;
 }
 
 // TODO: Improve this to not load the entire file in memory
@@ -147,7 +165,7 @@ template <typename LabelT> void InMemFilterStore<LabelT>::load_label_file(const 
         size_t next_lbl_pos = 0;
         while (lbl_pos < next_pos && lbl_pos != std::string_view::npos)
         {
-            next_lbl_pos = label_file_content.find(',', lbl_pos);
+            next_lbl_pos = search_string_range(label_file_content, ',', lbl_pos, next_pos);
             if (next_lbl_pos == std::string_view::npos) // the last label in the whole file
             {
                 next_lbl_pos = next_pos;
@@ -323,7 +341,7 @@ void InMemFilterStore<LabelT>::get_label_file_metadata(const std::string_view &f
         size_t next_lbl_pos = 0;
         while (lbl_pos < next_pos && lbl_pos != std::string::npos)
         {
-            next_lbl_pos = fileContent.find(',', lbl_pos);
+            next_lbl_pos = search_string_range(fileContent, ',', lbl_pos, next_pos);
             if (next_lbl_pos == std::string::npos) // the last label
             {
                 next_lbl_pos = next_pos;
@@ -386,6 +404,21 @@ bool InMemFilterStore<LabelT>::load_file_and_parse(const std::string &filename,
     }
 }
 
+template <typename LabelT>
+size_t InMemFilterStore<LabelT>::search_string_range(const std::string_view& str, char ch, size_t start, size_t end)
+{
+    for (; start != end; start++)
+    {
+        if (str[start] == ch)
+        {
+            return start;
+        }
+    }
+
+    return std::string::npos;
+
+}
+
 std::unique_ptr<char[]> get_file_content(const std::string &filename, uint64_t &file_size)
 {
     std::ifstream infile(filename, std::ios::binary);
@@ -402,6 +435,7 @@ std::unique_ptr<char[]> get_file_content(const std::string &filename, uint64_t &
 
     return std::unique_ptr<char[]>(buffer);
 }
+
 // Load functions for SEARCH END
 template class InMemFilterStore<uint16_t>;
 template class InMemFilterStore<uint32_t>;

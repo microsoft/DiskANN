@@ -532,6 +532,11 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
     }
 }
 
+template <typename T, typename LabelT> bool PQFlashIndex<T, LabelT>::is_label_valid(const std::string& filter_label)
+{
+    return _filter_store->is_label_valid(filter_label);
+}
+
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix)
@@ -613,7 +618,13 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     _filter_store = std::make_unique<InMemFilterStore<LabelT>>();
     try
     {
-        _filter_index = _filter_store->load(_disk_index_file);
+        _filter_index = _filter_store->load(
+            labels_filepath,
+            labels_to_medoids_filepath,
+            labels_map_filepath,
+            unv_label_filepath,
+            "");
+
         if (_filter_index)
         {
             diskann::cout << "Index has filter support. " << std::endl;
