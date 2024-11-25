@@ -598,7 +598,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-            std::string index_seller_file = std::string(filename) + "_sellers.txt";
+        std::string index_seller_file = std::string(filename) + "_sellers.txt";
         if(file_exists(index_seller_file)) {
         uint64_t nrows_seller_file;
         parse_seller_file(index_seller_file, nrows_seller_file);
