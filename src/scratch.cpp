@@ -93,9 +93,10 @@ template <typename T> void SSDQueryScratch<T>::reset()
     visited.clear();
     retset.clear();
     full_retset.clear();
+    best_diverse_nodes.clear();
 }
 
-template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve)
+template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, std::vector<uint32_t> &location_to_sellers) : best_diverse_nodes(location_to_sellers)
 {
     size_t coord_alloc_size = ROUND_UP(sizeof(T) * aligned_dim, 256);
 
@@ -123,7 +124,7 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
 }
 
 template <typename T>
-SSDThreadData<T>::SSDThreadData(size_t aligned_dim, size_t visited_reserve) : scratch(aligned_dim, visited_reserve)
+SSDThreadData<T>::SSDThreadData(size_t aligned_dim, size_t visited_reserve, std::vector<uint32_t> &location_to_sellers) : scratch(aligned_dim, visited_reserve, location_to_sellers)
 {
 }
 
