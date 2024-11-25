@@ -65,7 +65,8 @@ template <typename T> size_t Distance<T>::get_required_alignment() const
 // Cosine distance functions.
 //
 
-float DistanceCosineInt8::compare(const int8_t *a, const int8_t *b, uint32_t length, float threshold) const
+float DistanceCosineInt8::compare(const int8_t *__restrict a, const int8_t *__restrict b, uint32_t length,
+                                  float threshold) const
 {
 #ifdef _WINDOWS
     return diskann::CosineSimilarity2<int8_t>(a, b, length);
@@ -82,7 +83,8 @@ float DistanceCosineInt8::compare(const int8_t *a, const int8_t *b, uint32_t len
 #endif
 }
 
-float DistanceCosineFloat::compare(const float *a, const float *b, uint32_t length, float threshold) const
+float DistanceCosineFloat::compare(const float *__restrict a, const float *__restrict b, uint32_t length,
+                                   float threshold) const
 {
 #ifdef _WINDOWS
     return diskann::CosineSimilarity2<float>(a, b, length);
@@ -99,7 +101,7 @@ float DistanceCosineFloat::compare(const float *a, const float *b, uint32_t leng
 #endif
 }
 
-float SlowDistanceCosineUInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t length,
+float SlowDistanceCosineUInt8::compare(const uint8_t *__restrict a, const uint8_t *__restrict b, uint32_t length,
                                        float threshold) const
 {
     int magA = 0, magB = 0, scalarProduct = 0;
@@ -117,7 +119,7 @@ float SlowDistanceCosineUInt8::compare(const uint8_t *a, const uint8_t *b, uint3
 // L2 distance functions.
 //
 
-float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size, float threshold) const
+float DistanceL2Int8::compare(const int8_t *__restrict a, const int8_t *__restrict b, uint32_t size, float threshold) const
 {
 #ifdef _WINDOWS
 #ifdef USE_AVX2
@@ -131,7 +133,7 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size, f
         pY += 32;
         size -= 32;
         if (_mm256_reduce_add_ps(r) > threshold) {
-            diskann::cout << "Breaking because sum exceeded threshold: " << threshold << std::endl;
+            //diskann::cout << "Breaking because sum exceeded threshold: " << threshold << std::endl;
             return FLT_MAX;
         }
     }
@@ -144,7 +146,7 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size, f
         size -= 4;
 
         if (_mm256_reduce_add_ps(r) > threshold) {
-            diskann::cout << "Breaking because sum exceeded threshold: " << threshold << std::endl;
+            //diskann::cout << "Breaking because sum exceeded threshold: " << threshold << std::endl;
             return FLT_MAX;
         }
 
@@ -171,7 +173,8 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size, f
 #endif
 }
 
-float DistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t size, float threshold) const
+float DistanceL2UInt8::compare(const uint8_t *__restrict a, const uint8_t *__restrict b, uint32_t size,
+                               float threshold) const
 {
     uint32_t result = 0;
 #ifndef _WINDOWS
@@ -185,12 +188,12 @@ float DistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t size
 }
 
 #ifndef _WINDOWS
-float DistanceL2Float::compare(const float *a, const float *b, uint32_t size, float threshold) const
+float DistanceL2Float::compare(const float *__restrict a, const float *__restrict b, uint32_t size, float threshold) const
 {
     a = (const float *)__builtin_assume_aligned(a, 32);
     b = (const float *)__builtin_assume_aligned(b, 32);
 #else
-float DistanceL2Float::compare(const float *a, const float *b, uint32_t size, float threshold) const
+float DistanceL2Float::compare(const float *__restrict a, const float *__restrict b, uint32_t size, float threshold) const
 {
 #endif
 
@@ -216,9 +219,13 @@ float DistanceL2Float::compare(const float *a, const float *b, uint32_t size, fl
 
         sum = _mm256_fmadd_ps(tmp_vec, tmp_vec, sum);
 
-        if (_mm256_reduce_add_ps(sum) > threshold) {
-            //diskann::cout << "Breaking because sum exceeded threshold: " << threshold << std::endl;
-            return FLT_MAX;
+        if (j == (niters/2) || j == (3* niters/4) || j == (7* niters/8) )
+        {
+            if (_mm256_reduce_add_ps(sum) > threshold)
+            {
+                //diskann::cout << "Breaking because sum exceeded threshold: " << threshold << std::endl;
+                return FLT_MAX;
+            }
         }
     }
 
@@ -237,7 +244,7 @@ float DistanceL2Float::compare(const float *a, const float *b, uint32_t size, fl
 }
 
 template <typename T>
-float SlowDistanceL2<T>::compare(const T *a, const T *b, uint32_t length, float threshold) const
+float SlowDistanceL2<T>::compare(const T *__restrict a, const T *__restrict b, uint32_t length, float threshold) const
 {
     float result = 0.0f;
     for (uint32_t i = 0; i < length; i++)
@@ -248,7 +255,8 @@ float SlowDistanceL2<T>::compare(const T *a, const T *b, uint32_t length, float 
 }
 
 #ifdef _WINDOWS
-float AVXDistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t length, float threshold) const
+float AVXDistanceL2Int8::compare(const int8_t *__restrict a, const int8_t *__restrict b, uint32_t length,
+                                 float threshold) const
 {
     __m128 r = _mm_setzero_ps();
     __m128i r1;
@@ -286,7 +294,8 @@ float AVXDistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t leng
     return res;
 }
 
-float AVXDistanceL2Float::compare(const float *a, const float *b, uint32_t length, float threshold) const
+float AVXDistanceL2Float::compare(const float *__restrict a, const float *__restrict b, uint32_t length,
+                                  float threshold) const
 {
     __m128 diff, v1, v2;
     __m128 sum = _mm_set1_ps(0);
@@ -305,11 +314,11 @@ float AVXDistanceL2Float::compare(const float *a, const float *b, uint32_t lengt
     return sum.m128_f32[0] + sum.m128_f32[1] + sum.m128_f32[2] + sum.m128_f32[3];
 }
 #else
-float AVXDistanceL2Int8::compare(const int8_t *, const int8_t *, uint32_t, float threshold) const
+float AVXDistanceL2Int8::compare(const int8_t *restrict, const int8_t *restrict, uint32_t, float threshold) const
 {
     return 0;
 }
-float AVXDistanceL2Float::compare(const float *, const float *, uint32_t, float threshold) const
+float AVXDistanceL2Float::compare(const float *restrict, const float *restrict, uint32_t, float threshold) const
 {
     return 0;
 }
@@ -429,7 +438,8 @@ template <typename T> float DistanceInnerProduct<T>::inner_product(const T *a, c
 }
 
 template <typename T>
-float DistanceFastL2<T>::compare(const T *a, const T *b, float norm, uint32_t size, float threshold) const
+float DistanceFastL2<T>::compare(const T *__restrict a, const T *__restrict b, float norm, uint32_t size,
+                                 float threshold) const
 {
     float result = -2 * DistanceInnerProduct<T>::inner_product(a, b, size);
     result += norm;
@@ -537,7 +547,7 @@ template <typename T> float DistanceFastL2<T>::norm(const T *a, uint32_t size) c
     return result;
 }
 
-float AVXDistanceInnerProductFloat::compare(const float *a, const float *b, uint32_t size,
+float AVXDistanceInnerProductFloat::compare(const float *__restrict a, const float *__restrict b, uint32_t size,
                                             float threshold) const
 {
     float result = 0.0f;
