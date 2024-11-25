@@ -218,12 +218,12 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     diskann::alloc_aligned((void **)&_coord_cache_buf, coord_cache_buf_len * sizeof(T), 8 * sizeof(T));
     memset(_coord_cache_buf, 0, coord_cache_buf_len * sizeof(T));
 
-    size_t BLOCK_SIZE = 8;
-    size_t num_blocks = DIV_ROUND_UP(num_cached_nodes, BLOCK_SIZE);
+    size_t NODE_BLOCK_SIZE = 8;
+    size_t num_blocks = DIV_ROUND_UP(num_cached_nodes, NODE_BLOCK_SIZE);
     for (size_t block = 0; block < num_blocks; block++)
     {
-        size_t start_idx = block * BLOCK_SIZE;
-        size_t end_idx = (std::min)(num_cached_nodes, (block + 1) * BLOCK_SIZE);
+        size_t start_idx = block * NODE_BLOCK_SIZE;
+        size_t end_idx = (std::min)(num_cached_nodes, (block + 1) * NODE_BLOCK_SIZE);
 
         // Copy offset into buffers to read into
         std::vector<uint32_t> nodes_to_read;
@@ -418,13 +418,13 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
         diskann::cout << "Level: " << lvl << std::flush;
         bool finish_flag = false;
 
-        uint64_t BLOCK_SIZE = 1024;
-        uint64_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
+        uint64_t NODE_BLOCK_SIZE = 1024;
+        uint64_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), NODE_BLOCK_SIZE);
         for (size_t block = 0; block < nblocks && !finish_flag; block++)
         {
             diskann::cout << "." << std::flush;
-            size_t start = block * BLOCK_SIZE;
-            size_t end = (std::min)((block + 1) * BLOCK_SIZE, nodes_to_expand.size());
+            size_t start = block * NODE_BLOCK_SIZE;
+            size_t end = (std::min)((block + 1) * NODE_BLOCK_SIZE, nodes_to_expand.size());
 
             std::vector<uint32_t> nodes_to_read;
             std::vector<T *> coord_buffers(end - start, nullptr);
