@@ -201,6 +201,7 @@ float DistanceL2Float::compare(const float *__restrict a, const float *__restric
 #ifdef USE_AVX2
     // assume size is divisible by 8
     uint16_t niters = (uint16_t)(size / 8);
+    uint32_t half = niters / 2, three_fourths = (niters * 3) / 4, seven_eights = (niters * 7) / 8;
     __m256 sum = _mm256_setzero_ps();
     for (uint16_t j = 0; j < niters; j++)
     {
@@ -219,7 +220,7 @@ float DistanceL2Float::compare(const float *__restrict a, const float *__restric
 
         sum = _mm256_fmadd_ps(tmp_vec, tmp_vec, sum);
 
-        if (j == (niters/2) || j == (3* niters/4) || j == (7* niters/8) )
+        if (j == half || j == three_fourths || j == seven_eights )
         {
             if (_mm256_reduce_add_ps(sum) > threshold)
             {
