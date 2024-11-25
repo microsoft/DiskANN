@@ -890,7 +890,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     {   
         hops++;
 
-        // Check if the sum of elements of the deque is less than y, if yes then exit the loop
+        // Check if the sum of elements of the queue is less than y, if yes then exit the loop
         int sum_last_K_insertions = 0;
         std::queue<int> temp_queue = last_K_insertions;
         while (!temp_queue.empty()) {

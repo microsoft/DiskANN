@@ -117,10 +117,10 @@ class NeighborPriorityQueue
                 lo = mid + 1;
             }
         }
-        if(lo < K){
-            return 1;
-        }
-        return 0;
+        // if(lo < K){
+        //     return 1;
+        // }
+        return 1;
     }
 
     Neighbor closest_unexpanded()
