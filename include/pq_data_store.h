@@ -62,7 +62,7 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     // NOTE: Caller must invoke "PQDistance->preprocess_query" ONCE before calling
     // this function.
     virtual void get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
-                              std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const override;
+                              std::vector<float> &distances, AbstractScratch<data_t> *scratch_space, float threshold = FLT_MAX) const override;
 
     // We are returning the distance function that is used for full precision
     // vectors here, not the PQ distance function. This is because the callers

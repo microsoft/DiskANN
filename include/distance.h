@@ -1,6 +1,8 @@
 #pragma once
 #include "windows_customizations.h"
 #include <cstring>
+#include <climits>
+#include <cfloat>
 
 namespace diskann
 {
@@ -20,7 +22,7 @@ template <typename T> class Distance
     }
 
     // distance comparison function
-    DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b, uint32_t length) const = 0;
+    DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b, uint32_t length, float threshold = FLT_MAX) const = 0;
 
     // Needed only for COSINE-BYTE and INNER_PRODUCT-BYTE
     DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b, const float normA, const float normB,
@@ -77,7 +79,8 @@ class DistanceCosineInt8 : public Distance<int8_t>
     DistanceCosineInt8() : Distance<int8_t>(diskann::Metric::COSINE)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b, uint32_t length) const;
+    DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b, uint32_t length,
+                                            float threshold = FLT_MAX) const;
 };
 
 class DistanceL2Int8 : public Distance<int8_t>
@@ -86,7 +89,9 @@ class DistanceL2Int8 : public Distance<int8_t>
     DistanceL2Int8() : Distance<int8_t>(diskann::Metric::L2)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b, uint32_t size) const;
+    DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b, uint32_t size,
+                                            float threshold = FLT_MAX) const;
+
 };
 
 // AVX implementations. Borrowed from HNSW code.
@@ -96,7 +101,8 @@ class AVXDistanceL2Int8 : public Distance<int8_t>
     AVXDistanceL2Int8() : Distance<int8_t>(diskann::Metric::L2)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b, uint32_t length) const;
+    DISKANN_DLLEXPORT virtual float compare(const int8_t *a, const int8_t *b, uint32_t length,
+                                            float threshold = FLT_MAX) const;
 };
 
 class DistanceCosineFloat : public Distance<float>
@@ -105,7 +111,8 @@ class DistanceCosineFloat : public Distance<float>
     DistanceCosineFloat() : Distance<float>(diskann::Metric::COSINE)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t length) const;
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t length,
+                                            float threshold = FLT_MAX) const;
 };
 
 class DistanceL2Float : public Distance<float>
@@ -116,9 +123,11 @@ class DistanceL2Float : public Distance<float>
     }
 
 #ifdef _WINDOWS
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t size) const;
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t size,
+                                            float threshold = FLT_MAX) const;
 #else
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t size) const __attribute__((hot));
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t size,
+                                            float threshold = FLT_MAX) const __attribute__((hot));
 #endif
 };
 
@@ -128,7 +137,8 @@ class AVXDistanceL2Float : public Distance<float>
     AVXDistanceL2Float() : Distance<float>(diskann::Metric::L2)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t length) const;
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t length,
+                                            float threshold = FLT_MAX) const;
 };
 
 template <typename T> class SlowDistanceL2 : public Distance<T>
@@ -137,7 +147,7 @@ template <typename T> class SlowDistanceL2 : public Distance<T>
     SlowDistanceL2() : Distance<T>(diskann::Metric::L2)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b, uint32_t length) const;
+    DISKANN_DLLEXPORT virtual float compare(const T *a, const T *b, uint32_t length, float threshold = FLT_MAX) const;
 };
 
 class SlowDistanceCosineUInt8 : public Distance<uint8_t>
@@ -146,7 +156,8 @@ class SlowDistanceCosineUInt8 : public Distance<uint8_t>
     SlowDistanceCosineUInt8() : Distance<uint8_t>(diskann::Metric::COSINE)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b, uint32_t length) const;
+    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b, uint32_t length,
+                                            float threshold = FLT_MAX) const;
 };
 
 class DistanceL2UInt8 : public Distance<uint8_t>
@@ -155,7 +166,8 @@ class DistanceL2UInt8 : public Distance<uint8_t>
     DistanceL2UInt8() : Distance<uint8_t>(diskann::Metric::L2)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b, uint32_t size) const;
+    DISKANN_DLLEXPORT virtual float compare(const uint8_t *a, const uint8_t *b, uint32_t size,
+                                            float threshold = FLT_MAX) const;
 };
 
 template <typename T> class DistanceInnerProduct : public Distance<T>
@@ -170,7 +182,7 @@ template <typename T> class DistanceInnerProduct : public Distance<T>
     }
     inline float inner_product(const T *a, const T *b, unsigned size) const;
 
-    inline float compare(const T *a, const T *b, unsigned size) const
+    inline float compare(const T *a, const T *b, unsigned size, float threshold = FLT_MAX) const
     {
         float result = inner_product(a, b, size);
         //      if (result < 0)
@@ -189,7 +201,7 @@ template <typename T> class DistanceFastL2 : public DistanceInnerProduct<T>
     {
     }
     float norm(const T *a, unsigned size) const;
-    float compare(const T *a, const T *b, float norm, unsigned size) const;
+    float compare(const T *a, const T *b, float norm, unsigned size, float threshold = FLT_MAX) const;
 };
 
 class AVXDistanceInnerProductFloat : public Distance<float>
@@ -198,7 +210,7 @@ class AVXDistanceInnerProductFloat : public Distance<float>
     AVXDistanceInnerProductFloat() : Distance<float>(diskann::Metric::INNER_PRODUCT)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t length) const;
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t length, float threshold = FLT_MAX) const;
 };
 
 class AVXNormalizedCosineDistanceFloat : public Distance<float>
@@ -213,7 +225,8 @@ class AVXNormalizedCosineDistanceFloat : public Distance<float>
     AVXNormalizedCosineDistanceFloat() : Distance<float>(diskann::Metric::COSINE)
     {
     }
-    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t length) const
+    DISKANN_DLLEXPORT virtual float compare(const float *a, const float *b, uint32_t length,
+                                            float threshold = FLT_MAX) const
     {
         // Inner product returns negative values to indicate distance.
         // This will ensure that cosine is between -1 and 1.

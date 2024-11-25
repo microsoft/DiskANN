@@ -91,7 +91,8 @@ template <typename data_t> class AbstractDataStore
                               float *distances, AbstractScratch<data_t> *scratch_space = nullptr) const = 0;
     // Specific overload for index.cpp.
     virtual void get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
-                              std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const = 0;
+                              std::vector<float> &distances, AbstractScratch<data_t> *scratch_space,
+                              float threshold = FLT_MAX) const = 0;
     virtual float get_distance(const location_t loc1, const location_t loc2) const = 0;
 
     // stats of the data stored in store

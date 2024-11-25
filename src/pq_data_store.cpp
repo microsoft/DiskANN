@@ -187,7 +187,7 @@ void PQDataStore<data_t>::get_distance(const data_t *preprocessed_query, const l
 
 template <typename data_t>
 void PQDataStore<data_t>::get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
-                                       std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const
+                                       std::vector<float> &distances, AbstractScratch<data_t> *scratch_space, float threshold) const
 {
     if (scratch_space == nullptr)
     {

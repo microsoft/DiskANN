@@ -104,6 +104,11 @@ class NeighborPriorityQueue
         return _data[pre];
     }
 
+    Neighbor farthest_distance() const
+    {
+        return _data[_size - 1];
+    }
+
     bool has_unexpanded_node() const
     {
         return _cur < _size;

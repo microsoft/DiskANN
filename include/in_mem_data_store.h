@@ -54,7 +54,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
                               const uint32_t location_count, float *distances,
                               AbstractScratch<data_t> *scratch) const override;
     virtual void get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
-                              std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const override;
+                              std::vector<float> &distances, AbstractScratch<data_t> *scratch_space, float threshold = FLT_MAX) const override;
 
     virtual location_t calculate_medoid() const override;
 

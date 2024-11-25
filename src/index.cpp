@@ -835,8 +835,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     };
 
     // Lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, scratch, pq_dists](const std::vector<uint32_t> &ids, std::vector<float> &dists_out) {
-        _pq_data_store->get_distance(scratch->aligned_query(), ids, dists_out, scratch);
+    auto compute_dists = [this, scratch, pq_dists](const std::vector<uint32_t> &ids, std::vector<float> &dists_out, float threshold) {
+        _pq_data_store->get_distance(scratch->aligned_query(), ids, dists_out, scratch, threshold);
     };
 
     // Initialize the candidate pool with starting points
@@ -963,7 +963,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
 
         assert(dist_scratch.capacity() >= id_scratch.size());
-        compute_dists(id_scratch, dist_scratch);
+        compute_dists(id_scratch, dist_scratch, best_L_nodes.farthest_distance().distance);
         cmps += (uint32_t)id_scratch.size();
 
         // Insert <id, dist> pairs into the pool of candidates
