@@ -139,18 +139,16 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
               .with_data_type(diskann_type_to_name<T>())
               .build(),
           IndexFactory::construct_datastore<T>(DataStoreStrategy::MEMORY,
-                                               (max_points == 0 ? (size_t)1 : max_points) +
-                                                   (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                                               (max_points == 0 ? (size_t)1 : max_points),
                                                dim, m),
           IndexFactory::construct_graphstore(GraphStoreStrategy::MEMORY,
-                                             (max_points == 0 ? (size_t)1 : max_points) +
-                                                 (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                                             (max_points == 0 ? (size_t)1 : max_points),
                                              (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
                                                       defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
     if (_pq_dist)
     {
-        _pq_data_store = IndexFactory::construct_pq_datastore<T>(DataStoreStrategy::MEMORY, max_points + num_frozen_pts,
+        _pq_data_store = IndexFactory::construct_pq_datastore<T>(DataStoreStrategy::MEMORY, max_points,
                                                                  dim, m, num_pq_chunks, use_opq);
     }
     else
