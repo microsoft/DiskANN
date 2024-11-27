@@ -190,7 +190,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l);
 #else
     // Reads the number of frozen points from graph's metadata file section.
-    DISKANN_DLLEXPORT static size_t get_graph_num_frozen_points(const std::string &graph_file);
+//    DISKANN_DLLEXPORT static size_t get_graph_num_frozen_points(const std::string &graph_file);
 
     DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads, uint32_t search_l);
 #endif
@@ -291,7 +291,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // repositions frozen points to the end of _data - if they have been moved
     // during deletion
-    DISKANN_DLLEXPORT void reposition_frozen_point_to_end();
+//    DISKANN_DLLEXPORT void reposition_frozen_point_to_end();
     DISKANN_DLLEXPORT void reposition_points(uint32_t old_location_start, uint32_t new_location_start,
                                              uint32_t num_locations);
 
@@ -358,7 +358,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // generates 1 frozen point that will never be deleted from the graph
     // This is not visible to the user
-    void generate_frozen_point();
+//    void generate_frozen_point();
 
     // determines navigating node of the graph by calculating medoid of datafopt
     uint32_t calculate_entry_point();
@@ -423,7 +423,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // graph, mode = _consolidated_order in case of lazy deletion and
     // _compacted_order in case of eager deletion
     DISKANN_DLLEXPORT void compact_data();
-    DISKANN_DLLEXPORT void compact_frozen_point();
+//    DISKANN_DLLEXPORT void compact_frozen_point();
 
     // Remove deleted nodes from adjacency list of node loc
     // Replace removed neighbors with second order neighbors.
@@ -476,8 +476,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // externally and won't be returned by search. At least 1 frozen point is
     // needed for a dynamic index. The frozen points have consecutive locations.
     // See also _start below.
-    size_t _num_frozen_pts = 0;
-    size_t _frozen_pts_used = 0;
+//    size_t _num_frozen_pts = 0;
+//    size_t _frozen_pts_used = 0;
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;
