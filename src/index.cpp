@@ -1914,7 +1914,14 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     {
         line_cnt++;
     }
-    _location_to_labels.resize(line_cnt, std::vector<LabelT>());
+    if (_dynamic_index)
+    {
+        _location_to_labels.resize(_max_points, std::vector<LabelT>());
+    }
+    else
+    {
+        _location_to_labels.resize(line_cnt, std::vector<LabelT>());
+    }
 
     infile.clear();
     infile.seekg(0, std::ios::beg);
@@ -1994,7 +2001,14 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
     }
 
     _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels);
-    _bitmask_buf._buf.resize(line_cnt * _bitmask_buf._bitmask_size, 0);
+    if (_dynamic_index)
+    {
+        _bitmask_buf._buf.resize(_max_points * _bitmask_buf._bitmask_size, 0);
+    }
+    else
+    {
+        _bitmask_buf._buf.resize(line_cnt * _bitmask_buf._bitmask_size, 0);
+    }
     
     infile.clear();
     infile.seekg(0, std::ios::beg);
@@ -2621,13 +2635,13 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
             throw ANNException(err, -1, __FUNCSIG__, __FILE__, __LINE__);
         }
 
-        if (_location_to_tag.size() + _delete_set->size() != _nd)
-        {
-            diskann::cerr << "Error: _location_to_tag.size (" << _location_to_tag.size() << ")  + _delete_set->size ("
-                          << _delete_set->size() << ") != _nd(" << _nd << ") ";
-            return consolidation_report(diskann::consolidation_report::status_code::INCONSISTENT_COUNT_ERROR, 0, 0, 0,
-                                        0, 0, 0, 0);
-        }
+        //if (_location_to_tag.size() + _delete_set->size() != _nd)
+        //{
+        //    diskann::cerr << "Error: _location_to_tag.size (" << _location_to_tag.size() << ")  + _delete_set->size ("
+        //                  << _delete_set->size() << ") != _nd(" << _nd << ") ";
+        //    return consolidation_report(diskann::consolidation_report::status_code::INCONSISTENT_COUNT_ERROR, 0, 0, 0,
+        //                                0, 0, 0, 0);
+        //}
 
         if (_location_to_tag.size() != _tag_to_location.size())
         {
@@ -2677,13 +2691,6 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
             process_delete(*old_delete_set, loc, range, maxc, alpha, scratch);
             num_calls_to_process_delete += 1;
         }
-    }
-    for (int64_t loc = _max_points; loc < (int64_t)(_max_points); loc++)
-    {
-        ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
-        auto scratch = manager.scratch_space();
-        process_delete(*old_delete_set, loc, range, maxc, alpha, scratch);
-        num_calls_to_process_delete += 1;
     }
 
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
@@ -2915,6 +2922,24 @@ size_t Index<T, TagT, LabelT>::release_locations(const tsl::robin_set<uint32_t> 
 }
 
 template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::is_frozen_point(uint32_t location) const
+{
+    if (_filtered_index)
+    {
+        for (const auto kv : _label_to_start_id)
+        {
+            if (kv.second == location)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    return _start == location;
+}
+
+template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::reposition_points(uint32_t old_location_start, uint32_t new_location_start,
                                                uint32_t num_locations)
 {
@@ -3099,19 +3124,13 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                                     -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
-    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
-
-    auto location = reserve_location();
     if (_filtered_index)
     {
         if (labels.empty())
         {
-            release_location(location);
             std::cerr << "Error: Can't insert point with tag " + get_tag_string(tag) +
-                             " . there are no labels for the point."
-                      << std::endl;
+                " . there are no labels for the point."
+                << std::endl;
             return -1;
         }
 
@@ -3123,9 +3142,13 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                 return -1;
             }
         }
-
-        _location_to_labels[location] = labels;
     }
+
+    std::shared_lock<std::shared_timed_mutex> shared_ul(_update_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+
+    auto location = reserve_location();
 
     if (location == -1)
     {
@@ -3166,6 +3189,18 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 #endif
     } // cant insert as active pts >= max_pts
     dl.unlock();
+
+    if (_filtered_index)
+    {
+    //    _location_to_labels[location] = labels; 
+        auto bitsets = _bitmask_buf.get_bitmask(location);
+        memset(bitsets, 0, _bitmask_buf._bitmask_size);
+        simple_bitmask bm(bitsets, _bitmask_buf._bitmask_size);
+        for (LabelT label : labels)
+        {
+            bm.set(label);
+        }
+    }
 
     // Insert tag and mapping to location
     if (_enable_tags)
@@ -3271,7 +3306,11 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     assert(_tag_to_location[tag] < _max_points);
 
     const auto location = _tag_to_location[tag];
-    _delete_set->insert(location);
+    if (!is_frozen_point(location))
+    {
+        _delete_set->insert(location);
+    }
+    
     _location_to_tag.erase(location);
     _tag_to_location.erase(tag);
     return 0;
@@ -3298,7 +3337,10 @@ void Index<T, TagT, LabelT>::lazy_delete(const std::vector<TagT> &tags, std::vec
         else
         {
             const auto location = _tag_to_location[tag];
-            _delete_set->insert(location);
+            if (!is_frozen_point(location))
+            {
+                _delete_set->insert(location);
+            }
             _location_to_tag.erase(location);
             _tag_to_location.erase(tag);
         }

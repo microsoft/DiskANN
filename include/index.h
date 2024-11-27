@@ -413,6 +413,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t release_location(int location);
     size_t release_locations(const tsl::robin_set<uint32_t> &locations);
 
+    bool is_frozen_point(uint32_t location) const;
+
     // Resize the index when no slots are left for insertion.
     // Acquire exclusive _update_lock and _tag_lock before calling.
     void resize(size_t new_max_points);
