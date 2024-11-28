@@ -16,7 +16,7 @@ make -j
 
 Starting an index hosting service
 ---------------------------------
-Follow the instructions for [building an in-memory DiskANN index](/workflows/in_memory_index.md) or [building an SSD DiskANN index](/workflows/SSD_index.md).  Then start a service bound at the appropriate IP:port. For querying from the local machine, you may want to use `http://127.0.0.1:port`. For serving queries origniating from remote machines, you may want to use `http://0.0.0.0:port`.
+Follow the instructions for [building an in-memory DiskANN index](/workflows/in_memory_index.md) or [building an SSD DiskANN index](/workflows/SSD_index.md).  Then start a service bound at the appropriate IP:port. For querying from the local machine, you may want to use `http://127.0.0.1:port`. For serving queries originating from remote machines, you may want to use `http://0.0.0.0:port`.
 
 ```bash
 # To start serving an in-memory index
