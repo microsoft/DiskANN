@@ -3,10 +3,10 @@
 
 #pragma once
 
+#include "utils.h"
 #include <cstddef>
 #include <mutex>
 #include <vector>
-#include "utils.h"
 
 namespace diskann
 {

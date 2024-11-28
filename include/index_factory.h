@@ -1,8 +1,8 @@
 #pragma once
 
-#include "index.h"
 #include "abstract_graph_store.h"
 #include "in_mem_graph_store.h"
+#include "index.h"
 #include "pq_data_store.h"
 
 namespace diskann
@@ -20,9 +20,9 @@ class IndexFactory
     DISKANN_DLLEXPORT static std::shared_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy,
                                                                                        size_t num_points,
                                                                                        size_t dimension, Metric m);
-    // For now PQDataStore incorporates within itself all variants of quantization that we support. In the
-    // future it may be necessary to introduce an AbstractPQDataStore class to spearate various quantization
-    // flavours.
+    // For now PQDataStore incorporates within itself all variants of quantization
+    // that we support. In the future it may be necessary to introduce an
+    // AbstractPQDataStore class to spearate various quantization flavours.
     template <typename T>
     DISKANN_DLLEXPORT static std::shared_ptr<PQDataStore<T>> construct_pq_datastore(DataStoreStrategy strategy,
                                                                                     size_t num_points, size_t dimension,

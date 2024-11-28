@@ -4,21 +4,21 @@
 #include "common_includes.h"
 #include <boost/program_options.hpp>
 
-#include "index.h"
 #include "disk_utils.h"
+#include "index.h"
 #include "math_utils.h"
 #include "memory_mapper.h"
 #include "partition.h"
-#include "pq_flash_index.h"
-#include "timer.h"
 #include "percentile_stats.h"
+#include "pq_flash_index.h"
 #include "program_options_utils.hpp"
+#include "timer.h"
 
 #ifndef _WINDOWS
+#include "linux_aligned_file_reader.h"
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include "linux_aligned_file_reader.h"
 #else
 #ifdef USE_BING_INFRA
 #include "bing_aligned_file_reader.h"
@@ -123,8 +123,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     diskann::cout << "Caching " << num_nodes_to_cache << " nodes around medoid(s)" << std::endl;
     _pFlashIndex->cache_bfs_levels(num_nodes_to_cache, node_list);
     // if (num_nodes_to_cache > 0)
-    //     _pFlashIndex->generate_cache_list_from_sample_queries(warmup_query_file, 15, 6, num_nodes_to_cache,
-    //     num_threads, node_list);
+    //     _pFlashIndex->generate_cache_list_from_sample_queries(warmup_query_file,
+    //     15, 6, num_nodes_to_cache, num_threads, node_list);
     _pFlashIndex->load_cache_list(node_list);
     node_list.clear();
     node_list.shrink_to_fit();

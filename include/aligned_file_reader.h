@@ -5,8 +5,8 @@
 
 #define MAX_IO_DEPTH 128
 
-#include <vector>
 #include <atomic>
+#include <vector>
 
 #ifndef _WINDOWS
 #include <fcntl.h>
@@ -63,12 +63,12 @@ struct IOContext
 
 #endif
 
-#include <malloc.h>
-#include <cstdio>
-#include <mutex>
-#include <thread>
 #include "tsl/robin_map.h"
 #include "utils.h"
+#include <cstdio>
+#include <malloc.h>
+#include <mutex>
+#include <thread>
 
 // NOTE :: all 3 fields must be 512-aligned
 struct AlignedRead

@@ -206,6 +206,31 @@ endif()
 
 add_definitions(-DMKL_ILP64)
 
+
+# Roaring Bitmap
+#if ( NOT EXISTS "${PROJECT_SOURCE_DIR}/CRoaring/LICENSE")
+#    message(FATAL_ERROR "The RoaringBitmap submodule was not found. "
+#                    " Please run 'git submodule init' followed by 'git submodule update'")
+#endif()
+#add_subdirectory(CRoaring)
+#include_directories(CRoaring/include/roaring)
+
+#set (CROARING_LIBRARY "${PROJECT_SOURCEDIR}/CRoaring/build/src/Release/roaring.lib")
+#add_custom_target(build_croaring DEPENDS CROARING_LIBRARY)
+#if (MSVC)
+#    add_custom_command(OUTPUT ${CROARING_LIBRARY}
+#                        COMMAND ${CMAKE_VS_MSBUILD_COMMAND} build/RoaringBitmap.sln /m /nologo
+#                        /t:roaring /p:Configuration="Release"
+#                        /property:Platform="x64"
+#                        /p:PlatformToolset=v${MSVC_TOOLSET_VERSION}
+#                        /p:WindowsTargetPlatformVersion=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}
+#                        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/CRoaring)
+#endif()
+#add_library(croaring_lib STATIC IMPORTED)
+#set_target_properties(croaring_lib PROPERTIES IMPORTED_LOCATION "${CROARING_LIBRARY}")
+
+
+
 # Section for tcmalloc. The DiskANN tools are always linked to tcmalloc. For Windows, they also need to
 # force-include the _tcmalloc symbol for enabling tcmalloc.
 #

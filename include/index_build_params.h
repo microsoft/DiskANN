@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ann_exception.h"
 #include "common_includes.h"
 #include "parameters.h"
 
@@ -32,7 +33,7 @@ class IndexFilterParamsBuilder
     IndexFilterParamsBuilder &with_save_path_prefix(const std::string &save_path_prefix)
     {
         if (save_path_prefix.empty() || save_path_prefix == "")
-            throw ANNException("Error: save_path_prefix can't be empty", -1);
+            throw diskann::ANNException("Error: save_path_prefix can't be empty", -1);
         this->_save_path_prefix = save_path_prefix;
         return *this;
     }

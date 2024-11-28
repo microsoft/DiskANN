@@ -1,6 +1,6 @@
 
-#include "pq.h"
 #include "pq_l2_distance.h"
+#include "pq.h"
 #include "pq_scratch.h"
 
 // block size for reading/processing large files and matrices in blocks

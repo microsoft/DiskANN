@@ -2,9 +2,9 @@
 // Licensed under the MIT license.
 #pragma once
 
+#include "windows_customizations.h"
 #include <functional>
 #include <iostream>
-#include "windows_customizations.h"
 
 #ifdef EXEC_ENV_OLS
 #ifndef ENABLE_CUSTOM_LOGGER

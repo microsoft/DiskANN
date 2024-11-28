@@ -3,9 +3,9 @@
 
 #pragma once
 
+#include <stdexcept>
 #include <string>
 #include <vector>
-#include <stdexcept>
 
 #include <index.h>
 #include <pq_flash_index.h>

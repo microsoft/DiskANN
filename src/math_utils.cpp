@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include "logger.h"
+#include "utils.h"
 #include <limits>
 #include <malloc.h>
 #include <math_utils.h>
 #include <mkl.h>
-#include "logger.h"
-#include "utils.h"
 
 namespace math_utils
 {

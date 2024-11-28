@@ -45,7 +45,8 @@ void IndexFactory::check_config()
         _config->tag_type != "uint64")
     {
         throw ANNException("ERROR: invalid data type : + " + _config->tag_type +
-                               " is not supported. please select from [int32, uint32, int64, uint64]",
+                               " is not supported. please select from [int32, "
+                               "uint32, int64, uint64]",
                            -1);
     }
 }
@@ -109,7 +110,8 @@ std::shared_ptr<PQDataStore<T>> IndexFactory::construct_pq_datastore(DataStoreSt
         return std::make_shared<diskann::PQDataStore<T>>(dimension, (location_t)(num_points), num_pq_chunks,
                                                          std::move(distance_fn), std::move(quantized_distance_fn));
     default:
-        // REFACTOR TODO: We do support diskPQ - so we may need to add a new class for SSDPQDataStore!
+        // REFACTOR TODO: We do support diskPQ - so we may need to add a new class
+        // for SSDPQDataStore!
         break;
     }
     return nullptr;
@@ -120,7 +122,8 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
 {
     size_t num_points = _config->max_points + _config->num_frozen_pts;
     size_t dim = _config->dimension;
-    // auto graph_store = construct_graphstore(_config->graph_strategy, num_points);
+    // auto graph_store = construct_graphstore(_config->graph_strategy,
+    // num_points);
     auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
     std::shared_ptr<AbstractDataStore<data_type>> pq_data_store = nullptr;
 
@@ -140,8 +143,9 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     std::unique_ptr<AbstractGraphStore> graph_store =
         construct_graphstore(_config->graph_strategy, num_points + _config->num_frozen_pts, max_reserve_degree);
 
-    // REFACTOR TODO: Must construct in-memory PQDatastore if strategy == ONDISK and must construct
-    // in-mem and on-disk PQDataStore if strategy == ONDISK and diskPQ is required.
+    // REFACTOR TODO: Must construct in-memory PQDatastore if strategy == ONDISK
+    // and must construct in-mem and on-disk PQDataStore if strategy == ONDISK and
+    // diskPQ is required.
     return std::make_unique<diskann::Index<data_type, tag_type, label_type>>(*_config, data_store,
                                                                              std::move(graph_store), pq_data_store);
 }
@@ -185,7 +189,9 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &
         return create_instance<data_type, uint64_t>(label_type);
     }
     else
-        throw ANNException("Error: unsupported tag_type please choose from [int32/uint32/int64/uint64]", -1);
+        throw ANNException("Error: unsupported tag_type please choose from "
+                           "[int32/uint32/int64/uint64]",
+                           -1);
 }
 
 template <typename data_type, typename tag_type>
@@ -203,11 +209,17 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &
         throw ANNException("Error: unsupported label_type please choose from [uint/ushort]", -1);
 }
 
-// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<uint8_t>> IndexFactory::construct_datastore(
-//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
-// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<int8_t>> IndexFactory::construct_datastore(
-//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
-// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<float>> IndexFactory::construct_datastore(
-//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
+// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<uint8_t>>
+// IndexFactory::construct_datastore(
+//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric
+//     m);
+// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<int8_t>>
+// IndexFactory::construct_datastore(
+//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric
+//     m);
+// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<float>>
+// IndexFactory::construct_datastore(
+//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric
+//     m);
 
 } // namespace diskann

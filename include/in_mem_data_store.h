@@ -2,8 +2,8 @@
 // Licensed under the MIT license.
 #pragma once
 
-#include <shared_mutex>
 #include <memory>
+#include <shared_mutex>
 
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
@@ -12,10 +12,10 @@
 
 #include "abstract_data_store.h"
 
+#include "aligned_file_reader.h"
 #include "distance.h"
 #include "natural_number_map.h"
 #include "natural_number_set.h"
-#include "aligned_file_reader.h"
 
 namespace diskann
 {

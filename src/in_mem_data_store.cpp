@@ -1,9 +1,9 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <memory>
-#include "abstract_scratch.h"
 #include "in_mem_data_store.h"
+#include "abstract_scratch.h"
+#include <memory>
 
 #include "utils.h"
 

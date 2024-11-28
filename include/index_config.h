@@ -1,7 +1,13 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
+
 #pragma once
 
+#include "ann_exception.h"
 #include "common_includes.h"
+#include "logger.h"
 #include "parameters.h"
+#include <memory>
 
 namespace diskann
 {
@@ -209,13 +215,17 @@ class IndexConfigBuilder
         if (_dynamic_index)
         {
             if (_index_search_params != nullptr && _index_search_params->initial_search_list_size == 0)
-                throw ANNException("Error: please pass initial_search_list_size for building dynamic index.", -1);
+                throw ANNException("Error: please pass initial_search_list_size for "
+                                   "building dynamic index.",
+                                   -1);
         }
 
         // sanity check
         if (_dynamic_index && _num_frozen_pts == 0)
         {
-            diskann::cout << "_num_frozen_pts passed as 0 for dynamic_index. Setting it to 1 for safety." << std::endl;
+            diskann::cout << "_num_frozen_pts passed as 0 for dynamic_index. Setting "
+                             "it to 1 for safety."
+                          << std::endl;
             _num_frozen_pts = 1;
         }
 

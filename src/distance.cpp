@@ -1,11 +1,13 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT license.
 // TODO
 // CHECK COSINE ON LINUX
 
 #ifdef _WINDOWS
 #include <immintrin.h>
+#include <intrin.h>
 #include <smmintrin.h>
 #include <tmmintrin.h>
-#include <intrin.h>
 #else
 #include <immintrin.h>
 #endif
@@ -14,10 +16,10 @@
 #include <cosine_similarity.h>
 #include <iostream>
 
-#include "distance.h"
-#include "utils.h"
-#include "logger.h"
 #include "ann_exception.h"
+#include "distance.h"
+#include "logger.h"
+#include "utils.h"
 
 namespace diskann
 {

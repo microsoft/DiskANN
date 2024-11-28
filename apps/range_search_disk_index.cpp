@@ -2,26 +2,26 @@
 // Licensed under the MIT license.
 
 #include <atomic>
+#include <boost/program_options.hpp>
 #include <cstring>
 #include <iomanip>
 #include <omp.h>
 #include <set>
-#include <boost/program_options.hpp>
 
-#include "index.h"
 #include "disk_utils.h"
+#include "index.h"
 #include "math_utils.h"
 #include "memory_mapper.h"
-#include "pq_flash_index.h"
 #include "partition.h"
-#include "timer.h"
+#include "pq_flash_index.h"
 #include "program_options_utils.hpp"
+#include "timer.h"
 
 #ifndef _WINDOWS
+#include "linux_aligned_file_reader.h"
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include "linux_aligned_file_reader.h"
 #else
 #ifdef USE_BING_INFRA
 #include "bing_aligned_file_reader.h"

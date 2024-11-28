@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include <restapi/common.h>
 #include <cpprest/http_listener.h>
+#include <restapi/common.h>
 
 namespace diskann
 {

@@ -1,18 +1,18 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <omp.h>
-
-#include <type_traits>
-
+#include "ann_exception.h"
 #include "boost/dynamic_bitset.hpp"
 #include "index_factory.h"
 #include "memory_mapper.h"
+#include "tag_uint128.h"
 #include "timer.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
+#include "utils.h"
 #include "windows_customizations.h"
-#include "tag_uint128.h"
+#include <omp.h>
+#include <type_traits>
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
@@ -21,6 +21,7 @@
 #include <xmmintrin.h>
 #endif
 
+#include "filter_utils.h"
 #include "index.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
@@ -92,15 +93,15 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         }
     }
 
-    if (index_config.index_write_params != nullptr)
-    {
-        _indexingQueueSize = index_config.index_write_params->search_list_size;
-        _indexingRange = index_config.index_write_params->max_degree;
-        _indexingMaxC = index_config.index_write_params->max_occlusion_size;
-        _indexingAlpha = index_config.index_write_params->alpha;
-        _filterIndexingQueueSize = index_config.index_write_params->filter_list_size;
-        _indexingThreads = index_config.index_write_params->num_threads;
-        _saturate_graph = index_config.index_write_params->saturate_graph;
+  if (index_config.index_write_params != nullptr) {
+    _indexingQueueSize = index_config.index_write_params->search_list_size;
+    _indexingRange = index_config.index_write_params->max_degree;
+    _indexingMaxC = index_config.index_write_params->max_occlusion_size;
+    _indexingAlpha = index_config.index_write_params->alpha;
+    _filter_indexing_queue_size =
+        index_config.index_write_params->filter_list_size;
+    _indexingThreads = index_config.index_write_params->num_threads;
+    _saturate_graph = index_config.index_write_params->saturate_graph;
 
         if (index_config.index_search_params != nullptr)
         {
@@ -331,7 +332,8 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                 }
                 label_writer.close();
 
-                // write compacted raw_labels if data hence _location_to_labels was also compacted
+                // write compacted raw_labels if data hence _location_to_labels was also
+                // compacted
                 if (compact_before_save && _dynamic_index)
                 {
                     _label_map = load_label_map(std::string(filename) + "_labels_map.txt");
@@ -732,8 +734,8 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
 
 template <typename T, typename TagT, typename LabelT> uint32_t Index<T, TagT, LabelT>::calculate_entry_point()
 {
-    // REFACTOR TODO: This function does not support multi-threaded calculation of medoid.
-    // Must revisit if perf is a concern.
+    // REFACTOR TODO: This function does not support multi-threaded calculation of
+    // medoid. Must revisit if perf is a concern.
     return _data_store->calculate_medoid();
 }
 
@@ -1303,19 +1305,18 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         auto node = visit_order[node_ctr];
 
-        // Find and add appropriate graph edges
-        ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
-        auto scratch = manager.scratch_space();
-        std::vector<uint32_t> pruned_list;
-        if (_filtered_index)
-        {
-            search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
-        }
-        else
-        {
-            search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
-        }
-        assert(pruned_list.size() > 0);
+    // Find and add appropriate graph edges
+    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+    auto scratch = manager.scratch_space();
+    std::vector<uint32_t> pruned_list;
+    if (_filtered_index) {
+      search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch,
+                                 true, _filter_indexing_queue_size);
+    } else {
+      search_for_point_and_prune(node, _indexingQueueSize, pruned_list,
+                                 scratch);
+    }
+    assert(pruned_list.size() > 0);
 
         {
             LockGuard guard(_locks[node]);
@@ -1655,13 +1656,15 @@ void Index<T, TagT, LabelT>::build(const char *filename, const size_t num_points
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    // REFACTOR PQ TODO: We can remove this if and add a check in the InMemDataStore
-    // to not populate_data if it has been called once.
+    // REFACTOR PQ TODO: We can remove this if and add a check in the
+    // InMemDataStore to not populate_data if it has been called once.
     if (_pq_dist)
     {
 #ifdef EXEC_ENV_OLS
         std::stringstream ss;
-        ss << "PQ Build is not supported in DLVS environment (i.e. if EXEC_ENV_OLS is defined)" << std::endl;
+        ss << "PQ Build is not supported in DLVS environment (i.e. if EXEC_ENV_OLS "
+              "is defined)"
+           << std::endl;
         diskann::cerr << ss.str() << std::endl;
         throw ANNException(ss.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 #else
@@ -1819,20 +1822,22 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     infile.seekg(0, std::ios::beg);
     line_cnt = 0;
 
-    while (std::getline(infile, line))
-    {
-        std::istringstream iss(line);
-        std::vector<LabelT> lbls(0);
-        getline(iss, token, '\t');
-        std::istringstream new_iss(token);
-        while (getline(new_iss, token, ','))
-        {
-            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            LabelT token_as_num = (LabelT)std::stoul(token);
-            lbls.push_back(token_as_num);
-            _labels.insert(token_as_num);
-        }
+  while (std::getline(infile, line)) {
+    if (line.find(NO_LABEL_FOR_POINT) != std::string::npos) {
+      line_cnt++;
+      continue;
+    }
+    std::istringstream iss(line);
+    std::vector<LabelT> lbls(0);
+    getline(iss, token, '\t');
+    std::istringstream new_iss(token);
+    while (getline(new_iss, token, ',')) {
+      token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+      token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+      LabelT token_as_num = (LabelT)std::stoul(token);
+      lbls.push_back(token_as_num);
+      _labels.insert(token_as_num);
+    }
 
         std::sort(lbls.begin(), lbls.end());
         _location_to_labels[line_cnt] = lbls;
@@ -1864,8 +1869,8 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
     size_t num_points_labels = 0;
 
     parse_label_file(label_file,
-                     num_points_labels); // determines medoid for each label and identifies
-                                         // the points to label mapping
+                     num_points_labels); // determines medoid for each label and
+                                         // identifies the points to label mapping
 
     std::unordered_map<LabelT, std::vector<uint32_t>> label_to_points;
 
@@ -2891,10 +2896,10 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
             {
                 if (_frozen_pts_used >= _num_frozen_pts)
                 {
-                    throw ANNException(
-                        "Error: For dynamic filtered index, the number of frozen points should be atleast equal "
-                        "to number of unique labels.",
-                        -1);
+                    throw ANNException("Error: For dynamic filtered index, the number of "
+                                       "frozen points should be atleast equal "
+                                       "to number of unique labels.",
+                                       -1);
                 }
 
                 auto fz_location = (int)(_max_points) + _frozen_pts_used; // as first _fz_point
@@ -2950,7 +2955,8 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     // Insert tag and mapping to location
     if (_enable_tags)
     {
-        // if tags are enabled and tag is already inserted. so we can't reuse that tag.
+        // if tags are enabled and tag is already inserted. so we can't reuse that
+        // tag.
         if (_tag_to_location.find(tag) != _tag_to_location.end())
         {
             release_location(location);
@@ -2964,20 +2970,22 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 
     _data_store->set_vector(location, point); // update datastore
 
-    // Find and add appropriate graph edges
-    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
-    auto scratch = manager.scratch_space();
-    std::vector<uint32_t> pruned_list; // it is the set best candidates to connect to this point
-    if (_filtered_index)
-    {
-        // when filtered the best_candidates will share the same label ( label_present > distance)
-        search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
-    }
-    else
-    {
-        search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch);
-    }
-    assert(pruned_list.size() > 0); // should find atleast one neighbour (i.e frozen point acting as medoid)
+  // Find and add appropriate graph edges
+  ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+  auto scratch = manager.scratch_space();
+  std::vector<uint32_t>
+      pruned_list; // it is the set best candidates to connect to this point
+  if (_filtered_index) {
+    // when filtered the best_candidates will share the same label (
+    // label_present > distance)
+    search_for_point_and_prune(location, _indexingQueueSize, pruned_list,
+                               scratch, true, _filter_indexing_queue_size);
+  } else {
+    search_for_point_and_prune(location, _indexingQueueSize, pruned_list,
+                               scratch);
+  }
+  assert(pruned_list.size() > 0); // should find atleast one neighbour (i.e
+                                  // frozen point acting as medoid)
 
     {
         std::shared_lock<std::shared_timed_mutex> tlock(_tag_lock, std::defer_lock);

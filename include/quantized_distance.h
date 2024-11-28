@@ -1,8 +1,8 @@
 #pragma once
+#include "abstract_scratch.h"
 #include <memory>
 #include <string>
 #include <vector>
-#include "abstract_scratch.h"
 
 namespace diskann
 {
@@ -48,9 +48,10 @@ template <typename data_t> class QuantizedDistance
     virtual void preprocessed_distance(PQScratch<data_t> &pq_scratch, const uint32_t n_ids,
                                        std::vector<float> &dists_out) = 0;
 
-    // Currently this function is required for DiskPQ. However, it too can be subsumed
-    // under preprocessed_distance if we add the appropriate scratch variables to
-    // PQScratch and initialize them in pq_flash_index.cpp::disk_iterate_to_fixed_point()
+    // Currently this function is required for DiskPQ. However, it too can be
+    // subsumed under preprocessed_distance if we add the appropriate scratch
+    // variables to PQScratch and initialize them in
+    // pq_flash_index.cpp::disk_iterate_to_fixed_point()
     virtual float brute_force_distance(const float *query_vec, uint8_t *base_vec) = 0;
 };
 } // namespace diskann

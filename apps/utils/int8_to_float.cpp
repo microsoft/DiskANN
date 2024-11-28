@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <iostream>
 #include "utils.h"
+#include <iostream>
 
 int main(int argc, char **argv)
 {

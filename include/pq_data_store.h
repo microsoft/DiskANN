@@ -1,14 +1,15 @@
 #pragma once
-#include <memory>
-#include "distance.h"
-#include "quantized_distance.h"
-#include "pq.h"
 #include "abstract_data_store.h"
+#include "distance.h"
+#include "pq.h"
+#include "quantized_distance.h"
+#include <memory>
 
 namespace diskann
 {
-// REFACTOR TODO: By default, the PQDataStore is an in-memory datastore because both Vamana and
-// DiskANN treat it the same way. But with DiskPQ, that may need to change.
+// REFACTOR TODO: By default, the PQDataStore is an in-memory datastore because
+// both Vamana and DiskANN treat it the same way. But with DiskPQ, that may need
+// to change.
 template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
 {
 
@@ -30,8 +31,8 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     //  vectors file.
     virtual size_t save(const std::string &file_prefix, const location_t num_points) override;
 
-    // Since base class function is pure virtual, we need to declare it here, even though alignent concept is not needed
-    // for Quantized data stores.
+    // Since base class function is pure virtual, we need to declare it here, even
+    // though alignent concept is not needed for Quantized data stores.
     virtual size_t get_aligned_dim() const override;
 
     // Populate quantized data from unaligned data using PQ functionality

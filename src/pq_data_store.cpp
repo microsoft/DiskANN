@@ -1,10 +1,10 @@
 #include <exception>
 
-#include "pq_data_store.h"
+#include "distance.h"
 #include "pq.h"
+#include "pq_data_store.h"
 #include "pq_scratch.h"
 #include "utils.h"
-#include "distance.h"
 
 namespace diskann
 {

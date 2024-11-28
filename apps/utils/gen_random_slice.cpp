@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <omp.h>
+#include "partition.h"
+#include "utils.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -10,10 +11,9 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <omp.h>
 #include <sstream>
 #include <string>
-#include "partition.h"
-#include "utils.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>

@@ -1,13 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <omp.h>
-#include <cstring>
 #include <boost/program_options.hpp>
+#include <cstring>
+#include <omp.h>
 
 #include "index.h"
-#include "utils.h"
 #include "program_options_utils.hpp"
+#include "utils.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -16,9 +16,9 @@
 #include <Windows.h>
 #endif
 
-#include "memory_mapper.h"
 #include "ann_exception.h"
 #include "index_factory.h"
+#include "memory_mapper.h"
 
 namespace po = boost::program_options;
 

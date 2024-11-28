@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include "utils.h"
 #include "pq_common.h"
+#include "utils.h"
 
 namespace diskann
 {

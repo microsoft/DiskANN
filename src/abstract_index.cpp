@@ -1,6 +1,6 @@
+#include "abstract_index.h"
 #include "common_includes.h"
 #include "windows_customizations.h"
-#include "abstract_index.h"
 
 namespace diskann
 {

@@ -43,6 +43,11 @@ const char *FILTERS_FILE_DESCRIPTION =
 const char *LABEL_TYPE_DESCRIPTION =
     "Storage type of Labels {uint/uint32, ushort/uint16}, default value is uint which will consume memory 4 bytes per "
     "filter.  'uint' is an alias for 'uint32' and 'ushort' is an alias for 'uint16'.";
+const char* FILTER_THRESHOLD_DESCRIPTION = "Threshold to break up the existing nodes to generate new graph "
+"internally where each node has a maximum F labels.";
+const char* FILTER_BRUTEFORCE_THRESHOLD_DESCRIPTION = "Use brute force for searching with a filter if it occurs"
+" fewer than this many times in the dataset.";
+
 const char *GROUND_TRUTH_FILE_DESCRIPTION =
     "ground truth file for the queryset"; // what's the format, what's the requirements? does it need to include an
                                           // entry for every item or just a small subset? I have so many questions about

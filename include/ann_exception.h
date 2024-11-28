@@ -2,10 +2,10 @@
 // Licensed under the MIT license.
 
 #pragma once
-#include <string>
-#include <stdexcept>
-#include <system_error>
 #include "windows_customizations.h"
+#include <stdexcept>
+#include <string>
+#include <system_error>
 
 #ifndef _WINDOWS
 #define __FUNCSIG__ __PRETTY_FUNCTION__

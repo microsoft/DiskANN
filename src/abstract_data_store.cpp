@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <vector>
 #include "abstract_data_store.h"
+#include <vector>
 
 namespace diskann
 {

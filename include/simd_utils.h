@@ -2,9 +2,9 @@
 
 #ifdef _WINDOWS
 #include <immintrin.h>
+#include <intrin.h>
 #include <smmintrin.h>
 #include <tmmintrin.h>
-#include <intrin.h>
 #else
 #include <immintrin.h>
 #endif

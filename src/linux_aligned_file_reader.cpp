@@ -3,11 +3,11 @@
 
 #include "linux_aligned_file_reader.h"
 
+#include "tsl/robin_map.h"
+#include "utils.h"
 #include <cassert>
 #include <cstdio>
 #include <iostream>
-#include "tsl/robin_map.h"
-#include "utils.h"
 #define MAX_EVENTS 1024
 
 namespace
@@ -149,7 +149,9 @@ void LinuxAlignedFileReader::register_thread()
         lk.unlock();
         if (ret == -EAGAIN)
         {
-            std::cerr << "io_setup() failed with EAGAIN: Consider increasing /proc/sys/fs/aio-max-nr" << std::endl;
+            std::cerr << "io_setup() failed with EAGAIN: Consider increasing "
+                         "/proc/sys/fs/aio-max-nr"
+                      << std::endl;
         }
         else
         {

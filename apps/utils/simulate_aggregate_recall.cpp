@@ -1,10 +1,10 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <iostream>
-#include <cstdlib>
-#include <random>
 #include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <random>
 
 inline float aggregate_recall(const uint32_t k_aggr, const uint32_t k, const uint32_t npart, uint32_t *count,
                               const std::vector<float> &recalls)
