@@ -3085,12 +3085,18 @@ int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType t
 }
 
 template <typename T, typename TagT, typename LabelT>
-int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType tag, Labelvector &labels)
+int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType tag, const std::vector<std::string>& labels)
 {
     try
     {
-        return this->insert_point(std::any_cast<const T *>(point), std::any_cast<const TagT>(tag),
-                                  labels.get<const std::vector<LabelT>>());
+        std::vector<LabelT> converted_labels;
+        converted_labels.reserve(labels.size());
+        for (const auto& label : labels)
+        {
+            auto converted_label = this->get_converted_label(label);
+            converted_labels.push_back(converted_label);
+        }
+        return this->insert_point(std::any_cast<const T *>(point), std::any_cast<const TagT>(tag), converted_labels);
     }
     catch (const std::bad_any_cast &anycast_e)
     {
