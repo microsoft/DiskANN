@@ -2439,8 +2439,8 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
 
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
 
-    const std::vector<uint32_t> init_ids = get_init_ids();
-
+    std::vector<uint32_t> init_ids = get_init_ids();
+    
     //_distance->preprocess_query(query, _data_store->get_dims(),
     // scratch->aligned_query());
     _data_store->preprocess_query(query, scratch);
@@ -2453,6 +2453,18 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     {
         std::vector<LabelT> filter_vec;
         auto converted_label = this->get_converted_label(filter_label);
+
+        if (_label_to_start_id.find(converted_label) != _label_to_start_id.end())
+        {
+            init_ids.emplace_back(_label_to_start_id[converted_label]);
+        }
+        else
+        {
+            diskann::cout << "No filtered medoid found. exitting "
+                << std::endl; // RKNOTE: If universal label found start there
+            throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+        }
+
         filter_vec.push_back(converted_label);
         iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
     }
