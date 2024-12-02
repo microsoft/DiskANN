@@ -384,6 +384,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
                                     uint32_t filteredLindex = 0);
 
+    void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t>& pruned_list,
+        const std::vector<LabelT>& labels,
+        InMemQueryScratch<T>* scratch,
+        uint32_t filteredLindex);
+
+    void prune_search_result(int location, std::vector<uint32_t>& pruned_list, InMemQueryScratch<T>* scratch);
+
     void prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, std::vector<uint32_t> &pruned_list,
                          InMemQueryScratch<T> *scratch);
 

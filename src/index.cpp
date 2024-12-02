@@ -1034,53 +1034,79 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     {
         _data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        prune_search_result(location, pruned_list, scratch);
     }
     else
     {
+        std::vector<LabelT> labels;
         std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
         if (_dynamic_index)
             tl.lock();
-        std::vector<uint32_t> filter_specific_start_nodes;
-        for (auto &x : _location_to_labels[location])
-            filter_specific_start_nodes.emplace_back(_label_to_start_id[x]);
+
+        labels = _location_to_labels[location];
 
         if (_dynamic_index)
             tl.unlock();
 
-        _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
-                               _location_to_labels[location], false);
-
-        if (Lindex > 0)
-        {
-            // combine candidate pools obtained with filter and unfiltered criteria.
-            std::set<Neighbor> best_candidate_pool;
-            for (auto filtered_neighbor : scratch->pool())
-            {
-                best_candidate_pool.insert(filtered_neighbor);
-            }
-
-            // clear scratch for finding unfiltered candidates
-            scratch->clear();
-
-            _data_store->get_vector(location, scratch->aligned_query());
-            iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
-
-            for (auto unfiltered_neighbour : scratch->pool())
-            {
-                // insert if this neighbour is not already in best_candidate_pool
-                if (best_candidate_pool.find(unfiltered_neighbour) == best_candidate_pool.end())
-                {
-                    best_candidate_pool.insert(unfiltered_neighbour);
-                }
-            }
-
-            scratch->pool().clear();
-            std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
-        }
+        search_for_point_and_prune(location, Lindex, pruned_list, labels, scratch, filteredLindex);
     }
 
-    auto &pool = scratch->pool();
+    assert(_graph_store->get_total_points() == _max_points);
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::search_for_point_and_prune(
+    int location, uint32_t Lindex, 
+    std::vector<uint32_t>& pruned_list,
+    const std::vector<LabelT>& labels,
+    InMemQueryScratch<T>* scratch,
+    uint32_t filteredLindex)
+{
+    std::vector<uint32_t> filter_specific_start_nodes;
+    for (auto& x : labels)
+        filter_specific_start_nodes.emplace_back(_label_to_start_id[x]);
+
+    _data_store->get_vector(location, scratch->aligned_query());
+    iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
+        labels, false);
+
+    if (Lindex > 0)
+    {
+        // combine candidate pools obtained with filter and unfiltered criteria.
+        const std::vector<uint32_t> init_ids = get_init_ids();
+        const std::vector<LabelT> unused_filter_label;
+        std::set<Neighbor> best_candidate_pool;
+        for (auto filtered_neighbor : scratch->pool())
+        {
+            best_candidate_pool.insert(filtered_neighbor);
+        }
+
+        // clear scratch for finding unfiltered candidates
+        scratch->clear();
+
+        _data_store->get_vector(location, scratch->aligned_query());
+        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+
+        for (auto unfiltered_neighbour : scratch->pool())
+        {
+            // insert if this neighbour is not already in best_candidate_pool
+            if (best_candidate_pool.find(unfiltered_neighbour) == best_candidate_pool.end())
+            {
+                best_candidate_pool.insert(unfiltered_neighbour);
+            }
+        }
+
+        scratch->pool().clear();
+        std::copy(best_candidate_pool.begin(), best_candidate_pool.end(), std::back_inserter(scratch->pool()));
+    }
+
+    prune_search_result(location, pruned_list, scratch);
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::prune_search_result(int location, std::vector<uint32_t>& pruned_list, InMemQueryScratch<T>* scratch)
+{
+    auto& pool = scratch->pool();
 
     for (uint32_t i = 0; i < pool.size(); i++)
     {
@@ -1099,7 +1125,6 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     prune_neighbors(location, pool, pruned_list, scratch);
 
     assert(!pruned_list.empty());
-    assert(_graph_store->get_total_points() == _max_points);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -3194,18 +3219,6 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     } // cant insert as active pts >= max_pts
     dl.unlock();
 
-    if (_filtered_index)
-    {
-    //    _location_to_labels[location] = labels; 
-        auto bitsets = _bitmask_buf.get_bitmask(location);
-        memset(bitsets, 0, _bitmask_buf._bitmask_size);
-        simple_bitmask bm(bitsets, _bitmask_buf._bitmask_size);
-        for (LabelT label : labels)
-        {
-            bm.set(label);
-        }
-    }
-
     // Insert tag and mapping to location
     if (_enable_tags)
     {
@@ -3230,7 +3243,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     if (_filtered_index)
     {
         // when filtered the best_candidates will share the same label ( label_present > distance)
-        search_for_point_and_prune(location, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
+        search_for_point_and_prune(location, _indexingQueueSize, pruned_list, labels, scratch, _filterIndexingQueueSize);
     }
     else
     {
@@ -3256,6 +3269,18 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
         }
         _graph_store->set_neighbours(location, neighbor_links);
         assert(_graph_store->get_neighbours(location).size() <= _indexingRange);
+
+        if (_filtered_index)
+        {
+            //    _location_to_labels[location] = labels; 
+            auto bitsets = _bitmask_buf.get_bitmask(location);
+            memset(bitsets, 0, _bitmask_buf._bitmask_size);
+            simple_bitmask bm(bitsets, _bitmask_buf._bitmask_size);
+            for (LabelT label : labels)
+            {
+                bm.set(label);
+            }
+        }
 
         if (_conc_consolidate)
             tlock.unlock();
