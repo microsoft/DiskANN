@@ -1,2 +1,2 @@
 cd build
-./apps/build_memory_index --data_path /nvmessd1/fbv4/prec40M.bin --data_type int8 --dist_fn l2 --index_path_prefix /nvmessd1/fbv4/avarhade/prec40M_earlystop_memory_index_r150_l300 -R 150 -L 300 -T 48 > /home/rakri/avarhade/DiskANN/prec40M/early-stop-build-x-10-y-0/reduce_prune_r150_l300.txt
+./apps/build_memory_index --data_path /nvmessd1/fbv4/prec40M.bin --data_type int8 --dist_fn l2 --index_path_prefix /nvmessd1/fbv4/avarhade/prec40M_earlystop_memory_index_r150_l300_x_10_y_0_L -R 150 -L 300 -T 48 > /home/rakri/avarhade/DiskANN/prec40M/early-stop-build_r150_l300_x10_y0_L.txt

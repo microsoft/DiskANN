@@ -3,20 +3,20 @@ Opened: /nvmessd1/fbv4/gt100_prec40M, size: 10612008, cache_size: 10612008
 Reading truthset file /nvmessd1/fbv4/gt100_prec40M ...
 Metadata: #pts = 13265, #dims = 100... 
 Using AVX2 distance computation DistanceL2Int8.
-Resizing took: 1.3678s
-From graph header, expected_file_size: 7438757948, _max_observed_degree: 64, _start: 11890341, file_frozen_pts: 0
-Loading vamana graph /nvmessd1/fbv4/avarhade/prec40M_memory_index_r64_l100.......done. Index has 40469609 nodes and 1819219872 out-edges, _start is set to 11890341
+Resizing took: 1.35062s
+From graph header, expected_file_size: 18732710752, _max_observed_degree: 150, _start: 11890341, file_frozen_pts: 0
+Loading vamana graph /nvmessd1/fbv4/avarhade/prec40M_memory_index_r150_l300.......done. Index has 40469609 nodes and 4642708073 out-edges, _start is set to 11890341
 Num frozen points:0 _nd: 40469609 _start: 11890341 size(_location_to_tag): 0 size(_tag_to_location):0 Max points: 40469609
 Index loaded
 Using 1 threads to search
   Ls         QPS     Avg dist cmps          Avg hops  Mean Latency (mus)   99.9 Latency   Recall@50
 ===================================================================================================
-  50      363.96           3687.22             70.97             2747.47        8534.45       62.96
-  60      344.07           4195.96             81.27             2906.31       10733.88       65.92
-  70      305.54           4685.40             91.30             3272.87       10640.61       68.19
-  80      274.47           5171.15            101.32             3643.38       13795.25       70.07
-  90      249.35           5654.48            111.37             4010.40       14678.43       71.76
- 100      228.82           6129.37            121.32             4370.23       17002.81       73.17
+  50      204.00           7149.92             55.00             4901.96       15809.95       79.69
+ 100      122.17          11640.27             91.23             8185.00       21637.09       87.33
+ 150       90.58          15499.88            122.88            11039.73       25685.82       90.61
+ 200       73.30          18942.36            151.51            13642.69       30741.64       92.49
+ 250       62.50          22119.38            178.28            15998.88       33482.66       93.71
+ 300       55.09          25015.15            202.91            18151.68       37464.98       94.55
 Done searching. Now saving results 
 Writing bin: /home/rakri/avarhade/Dump/tmp_50_idx_uint32.bin
 bin: #pts = 13265, #dims = 50, size = 2653008B
@@ -24,33 +24,33 @@ Finished writing bin.
 Writing bin: /home/rakri/avarhade/Dump/tmp_50_dists_float.bin
 bin: #pts = 13265, #dims = 50, size = 2653008B
 Finished writing bin.
-Writing bin: /home/rakri/avarhade/Dump/tmp_60_idx_uint32.bin
-bin: #pts = 13265, #dims = 50, size = 2653008B
-Finished writing bin.
-Writing bin: /home/rakri/avarhade/Dump/tmp_60_dists_float.bin
-bin: #pts = 13265, #dims = 50, size = 2653008B
-Finished writing bin.
-Writing bin: /home/rakri/avarhade/Dump/tmp_70_idx_uint32.bin
-bin: #pts = 13265, #dims = 50, size = 2653008B
-Finished writing bin.
-Writing bin: /home/rakri/avarhade/Dump/tmp_70_dists_float.bin
-bin: #pts = 13265, #dims = 50, size = 2653008B
-Finished writing bin.
-Writing bin: /home/rakri/avarhade/Dump/tmp_80_idx_uint32.bin
-bin: #pts = 13265, #dims = 50, size = 2653008B
-Finished writing bin.
-Writing bin: /home/rakri/avarhade/Dump/tmp_80_dists_float.bin
-bin: #pts = 13265, #dims = 50, size = 2653008B
-Finished writing bin.
-Writing bin: /home/rakri/avarhade/Dump/tmp_90_idx_uint32.bin
-bin: #pts = 13265, #dims = 50, size = 2653008B
-Finished writing bin.
-Writing bin: /home/rakri/avarhade/Dump/tmp_90_dists_float.bin
-bin: #pts = 13265, #dims = 50, size = 2653008B
-Finished writing bin.
 Writing bin: /home/rakri/avarhade/Dump/tmp_100_idx_uint32.bin
 bin: #pts = 13265, #dims = 50, size = 2653008B
 Finished writing bin.
 Writing bin: /home/rakri/avarhade/Dump/tmp_100_dists_float.bin
+bin: #pts = 13265, #dims = 50, size = 2653008B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_150_idx_uint32.bin
+bin: #pts = 13265, #dims = 50, size = 2653008B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_150_dists_float.bin
+bin: #pts = 13265, #dims = 50, size = 2653008B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_200_idx_uint32.bin
+bin: #pts = 13265, #dims = 50, size = 2653008B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_200_dists_float.bin
+bin: #pts = 13265, #dims = 50, size = 2653008B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_250_idx_uint32.bin
+bin: #pts = 13265, #dims = 50, size = 2653008B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_250_dists_float.bin
+bin: #pts = 13265, #dims = 50, size = 2653008B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_300_idx_uint32.bin
+bin: #pts = 13265, #dims = 50, size = 2653008B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_300_dists_float.bin
 bin: #pts = 13265, #dims = 50, size = 2653008B
 Finished writing bin.

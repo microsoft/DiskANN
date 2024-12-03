@@ -881,8 +881,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
-    std::queue<int> last_K_insertions;
-    int x = 10;
+    std::queue<int> last_insertions;
+    int x = 5;
     int y = 0;
     float prev_distance_to_query = 0.0;
 
@@ -891,13 +891,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         hops++;
 
         // Check if the sum of elements of the queue is less than y, if yes then exit the loop
-        int sum_last_K_insertions = 0;
-        std::queue<int> temp_queue = last_K_insertions;
+        int sum_last_insertions = 0;
+        std::queue<int> temp_queue = last_insertions;
         while (!temp_queue.empty()) {
-            sum_last_K_insertions += temp_queue.front();
+            sum_last_insertions += temp_queue.front();
             temp_queue.pop();
         }
-        if (sum_last_K_insertions <= y && hops >= x) {
+        if (sum_last_insertions <= y && hops >= x) {
             break;
         }
 
@@ -1007,9 +1007,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             insertions_this_iter += best_L_nodes.check_in_top_k(Neighbor(id_scratch[m], dist_scratch[m]), K);
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
-        last_K_insertions.push(insertions_this_iter);
-        if (last_K_insertions.size() > x) {
-            last_K_insertions.pop();
+        last_insertions.push(insertions_this_iter);
+        if (last_insertions.size() > x) {
+            last_insertions.pop();
         }
     }
     // if (search_invocation){
