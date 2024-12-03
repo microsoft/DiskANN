@@ -2968,7 +2968,6 @@ bool Index<T, TagT, LabelT>::is_frozen_point(uint32_t location) const
                 return true;
             }
         }
-        return false;
     }
 
     return _start == location;
