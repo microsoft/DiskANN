@@ -882,7 +882,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t cmps = 0;
 
     std::queue<int> last_insertions;
-    int x = 5;
+    int x = 7;
     int y = 0;
     float prev_distance_to_query = 0.0;
 
