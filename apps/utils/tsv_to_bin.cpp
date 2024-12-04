@@ -10,7 +10,7 @@ void block_convert_float(std::ifstream &reader, std::ofstream &writer, size_t np
 
     auto cursor = read_buf;
     float val;
-
+    
     for (size_t i = 0; i < npts; i++)
     {
         for (size_t d = 0; d < ndims; ++d)

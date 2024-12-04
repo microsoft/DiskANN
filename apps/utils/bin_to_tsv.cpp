@@ -7,7 +7,7 @@
 template <class T>
 void block_convert(std::ofstream &writer, std::ifstream &reader, T *read_buf, size_t npts, size_t ndims)
 {
-    reader.read((char *)read_buf, npts * ndims * sizeof(float));
+    reader.read((char *)read_buf, npts * ndims * sizeof(T));
 
     for (size_t i = 0; i < npts; i++)
     {
