@@ -305,7 +305,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                                                  dists.data(),
                                                  optimized_beamwidth, maxLperSeller,  use_reorder_data, stats + i);
                 } else {
-                _pFlashIndex->cached_beam_search(query + (i * query_aligned_dim), recall_at, L,
+                _pFlashIndex->cached_beam_search(query + (i * query_aligned_dim), K_to_use, L,
                                                  results.data(),
                                                  dists.data(),
                                                  optimized_beamwidth, std::numeric_limits<uint32_t>::max(),  use_reorder_data, stats + i);
