@@ -234,7 +234,14 @@ template <typename data_t> location_t PQDataStore<data_t>::load_impl(const std::
     auto pivots_file = _pq_distance_fn->get_pivot_data_filename(file_prefix);
     _pq_distance_fn->load_pivot_data(pivots_file, _num_chunks);
 
+    _data_size = num_points * _num_chunks * sizeof(data_t);
+
     return this->_capacity;
+}
+
+template <typename data_t> size_t PQDataStore<data_t>::get_data_size() const
+{
+    return _data_size;
 }
 
 template <typename data_t> location_t PQDataStore<data_t>::expand(const location_t new_size)
