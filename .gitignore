@@ -378,3 +378,7 @@ gperftools
 
 # Rust
 rust/target
+
+# bazel
+bazel-*
+MODULE.bazel*
