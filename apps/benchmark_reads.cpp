@@ -3,26 +3,21 @@
 #include "windows_aligned_file_reader.h"
 #include "aligned_file_reader.h"
 #include "utils.h"
+#include "timer.h"
+#include <omp.h>
+#include <concurrent_queue.h>
 
 using namespace std;
 using namespace diskann;
 
-#define IS_ALIGNED(X, Y) ((uint64_t)(X) % (uint64_t)(Y) == 0)
-
 #define SECTOR_LEN 4096
 
-void do_reads()
+void do_reads(WindowsAlignedFileReader *reader, char *buf)
 {
-    string file_name = "C:\\DiskANN\\Data\\turning_100k\\index_disk.index";
-    auto reader = new WindowsAlignedFileReader();
-    reader->open(file_name.c_str());
     auto ctx = reader->get_ctx();
 
     std::vector<AlignedRead> read_reqs;
     int num_sectors = 100;
-
-    char *buf = nullptr;
-    alloc_aligned((void **)&buf, num_sectors * SECTOR_LEN, SECTOR_LEN);
 
     // create read requests
     for (size_t i = 0; i < num_sectors; ++i)
@@ -36,18 +31,56 @@ void do_reads()
             read_reqs.push_back(read);
     }
 
-    auto s = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < 10000; i++)
-    {
-        reader->read(read_reqs, ctx, false);
-    }
-    auto e = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> diff = e - s;
-    cout << "Time taken to read: " << diff.count() << endl;
+    reader->read(read_reqs, ctx, false);
 }
 
-int main()
+void do_multiple_reads_with_threads(int thread_count)
 {
+    string file_name = "C:\\DiskANN\\Data\\turning_100k\\index_disk.index";
+    auto reader = new WindowsAlignedFileReader();
+    reader->open(file_name.c_str());
+    int num_sectors = 100;
+
+    ConcurrentQueue<char*> buffer_pool;
+
+    omp_set_num_threads(thread_count);
+
+#pragma omp parallel for num_threads((int)thread_count)
+    for (int i = 0; i < thread_count; i++)
+    {
+        char *buf = nullptr;
+        alloc_aligned((void **)&buf, num_sectors * SECTOR_LEN, SECTOR_LEN);
+        buffer_pool.push(buf);
+        reader->register_thread();
+    }
+
+    Timer timer;
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int i = 0; i < 10000; i++)
+    {
+        char *buf = buffer_pool.pop();
+        do_reads(reader, buf);
+        buffer_pool.push(buf);
+    }
+    cout << "Time taken to read in microseconds: " << timer.elapsed() << endl;
+
+    reader->close();
+}
+
+int main(int argc, char *argv[])
+{
+    int val = 1;
+    if (argc >= 2)
+    {
+        std::istringstream iss( argv[1] );
+
+        if (iss >> val)
+        {
+            cout<<"Got cmd argument"<<endl;
+        }
+    }
+    cout<<"Using "<<val<<" threads."<<endl;
+
     cout << "Hello World" << endl;
-    do_reads();
+    do_multiple_reads_with_threads(val);
 }
