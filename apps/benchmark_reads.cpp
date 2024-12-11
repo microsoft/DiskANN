@@ -5,7 +5,6 @@
 #include "utils.h"
 #include "timer.h"
 #include <omp.h>
-#include <concurrent_queue.h>
 
 using namespace std;
 using namespace diskann;
@@ -41,7 +40,7 @@ void do_multiple_reads_with_threads(int thread_count)
     reader->open(file_name.c_str());
     int num_sectors = 100;
 
-    ConcurrentQueue<char*> buffer_pool;
+    vector<char *> buffers(thread_count);
 
     omp_set_num_threads(thread_count);
 
@@ -50,7 +49,7 @@ void do_multiple_reads_with_threads(int thread_count)
     {
         char *buf = nullptr;
         alloc_aligned((void **)&buf, num_sectors * SECTOR_LEN, SECTOR_LEN);
-        buffer_pool.push(buf);
+        buffers[i] = buf;
         reader->register_thread();
     }
 
@@ -58,9 +57,8 @@ void do_multiple_reads_with_threads(int thread_count)
 #pragma omp parallel for schedule(dynamic, 1)
     for (int i = 0; i < 10000; i++)
     {
-        char *buf = buffer_pool.pop();
+        char *buf = buffers[omp_get_thread_num()];
         do_reads(reader, buf);
-        buffer_pool.push(buf);
     }
     cout << "Time taken to read in microseconds: " << timer.elapsed() << endl;
 
@@ -72,14 +70,14 @@ int main(int argc, char *argv[])
     int val = 1;
     if (argc >= 2)
     {
-        std::istringstream iss( argv[1] );
+        std::istringstream iss(argv[1]);
 
         if (iss >> val)
         {
-            cout<<"Got cmd argument"<<endl;
+            cout << "Got cmd argument" << endl;
         }
     }
-    cout<<"Using "<<val<<" threads."<<endl;
+    cout << "Using " << val << " threads." << endl;
 
     cout << "Hello World" << endl;
     do_multiple_reads_with_threads(val);
