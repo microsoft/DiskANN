@@ -1,5 +1,6 @@
 #pragma once
 #include "windows_customizations.h"
+#include <cstdint>
 #include <cstring>
 
 namespace diskann

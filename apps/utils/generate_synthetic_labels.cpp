@@ -1,12 +1,12 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <iostream>
-#include <random>
-#include <boost/program_options.hpp>
-#include <math.h>
-#include <cmath>
 #include "utils.h"
+#include <boost/program_options.hpp>
+#include <cmath>
+#include <iostream>
+#include <math.h>
+#include <random>
 
 namespace po = boost::program_options;
 class ZipfDistribution

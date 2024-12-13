@@ -9,13 +9,13 @@
 #include <malloc.h>
 #include <minwinbase.h>
 
-#include <cstdio>
-#include <mutex>
-#include <thread>
 #include "aligned_file_reader.h"
 #include "tsl/robin_map.h"
 #include "utils.h"
 #include "windows_customizations.h"
+#include <cstdio>
+#include <mutex>
+#include <thread>
 
 class WindowsAlignedFileReader : public AlignedFileReader
 {

@@ -1,15 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include "filter_utils.h"
 #include <boost/program_options.hpp>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <omp.h>
 #include <random>
 #include <string>
 #include <tuple>
-#include "filter_utils.h"
-#include <omp.h>
 #ifndef _WINDOWS
 #include <sys/uio.h>
 #endif
@@ -17,8 +17,8 @@
 #include "index.h"
 #include "memory_mapper.h"
 #include "parameters.h"
-#include "utils.h"
 #include "program_options_utils.hpp"
+#include "utils.h"
 
 namespace po = boost::program_options;
 typedef std::tuple<std::vector<std::vector<uint32_t>>, uint64_t> stitch_indices_return_values;

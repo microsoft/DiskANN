@@ -9,21 +9,21 @@
 #include "aligned_file_reader.h"
 #endif
 
+#include "abstract_index.h"
 #include "distance.h"
+#include "in_mem_data_store.h"
+#include "in_mem_graph_store.h"
 #include "locking.h"
 #include "natural_number_map.h"
 #include "natural_number_set.h"
 #include "neighbor.h"
 #include "parameters.h"
+#include "scratch.h"
 #include "utils.h"
 #include "windows_customizations.h"
-#include "scratch.h"
-#include "in_mem_data_store.h"
-#include "in_mem_graph_store.h"
-#include "abstract_index.h"
 
-#include "quantized_distance.h"
 #include "pq_data_store.h"
+#include "quantized_distance.h"
 
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
@@ -55,18 +55,19 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
   public:
     // Constructor for Bulk operations and for creating the index object solely
     // for loading a prexisting index.
-    DISKANN_DLLEXPORT Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store,
-                            std::unique_ptr<AbstractGraphStore> graph_store,
-                            std::shared_ptr<AbstractDataStore<T>> pq_data_store = nullptr);
+    DISKANN_DLLEXPORT
+    Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store,
+          std::unique_ptr<AbstractGraphStore> graph_store,
+          std::shared_ptr<AbstractDataStore<T>> pq_data_store = nullptr);
 
     // Constructor for incremental index
-    DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
-                            const std::shared_ptr<IndexWriteParameters> index_parameters,
-                            const std::shared_ptr<IndexSearchParams> index_search_params,
-                            const size_t num_frozen_pts = 0, const bool dynamic_index = false,
-                            const bool enable_tags = false, const bool concurrent_consolidate = false,
-                            const bool pq_dist_build = false, const size_t num_pq_chunks = 0,
-                            const bool use_opq = false, const bool filtered_index = false);
+    DISKANN_DLLEXPORT
+    Index(Metric m, const size_t dim, const size_t max_points,
+          const std::shared_ptr<IndexWriteParameters> index_parameters,
+          const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts = 0,
+          const bool dynamic_index = false, const bool enable_tags = false, const bool concurrent_consolidate = false,
+          const bool pq_dist_build = false, const size_t num_pq_chunks = 0, const bool use_opq = false,
+          const bool filtered_index = false);
 
     DISKANN_DLLEXPORT ~Index();
 
@@ -376,18 +377,19 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Filter Support
 
     bool _filtered_index = false;
-    // Location to label is only updated during insert_point(), all other reads are protected by
-    // default as a location can only be released at end of consolidate deletes
+    // Location to label is only updated during insert_point(), all other reads
+    // are protected by default as a location can only be released at end of
+    // consolidate deletes
     std::vector<std::vector<LabelT>> _location_to_labels;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
 
-    bool _use_universal_label = false;
-    LabelT _universal_label = 0;
-    uint32_t _filterIndexingQueueSize;
-    std::unordered_map<std::string, LabelT> _label_map;
+  bool _use_universal_label = false;
+  LabelT _universal_label = 0;
+  uint32_t _filter_indexing_queue_size;
+  std::unordered_map<std::string, LabelT> _label_map;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;
@@ -436,7 +438,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::shared_timed_mutex // Ensure only one consolidate or compact_data is
         _consolidate_lock;  // ever active
     std::shared_timed_mutex // RW lock for _tag_to_location,
-        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points, _label_to_start_id
+        _tag_lock;          // _location_to_tag, _empty_slots, _nd, _max_points,
+                            // _label_to_start_id
     std::shared_timed_mutex // RW Lock on _delete_set and _data_compacted
         _delete_lock;       // variable
 

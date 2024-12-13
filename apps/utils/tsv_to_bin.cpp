@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <iostream>
 #include "utils.h"
+#include <iostream>
 
 void block_convert_float(std::ifstream &reader, std::ofstream &writer, size_t npts, size_t ndims)
 {

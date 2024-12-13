@@ -2,13 +2,14 @@
 // Licensed under the MIT license.
 
 #pragma once
+#include <cassert>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 
-#include "logger.h"
 #include "ann_exception.h"
+#include "logger.h"
 
 // sequential cached reads
 class cached_ifstream

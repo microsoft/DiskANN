@@ -7,15 +7,15 @@
 
 #include "boost_dynamic_bitset_fwd.h"
 // #include "boost/dynamic_bitset.hpp"
-#include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
+#include "tsl/robin_set.h"
 #include "tsl/sparse_map.h"
 
-#include "aligned_file_reader.h"
 #include "abstract_scratch.h"
-#include "neighbor.h"
-#include "defaults.h"
+#include "aligned_file_reader.h"
 #include "concurrent_queue.h"
+#include "defaults.h"
+#include "neighbor.h"
 
 namespace diskann
 {

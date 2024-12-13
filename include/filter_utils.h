@@ -3,19 +3,20 @@
 
 #pragma once
 #include <algorithm>
-#include <fcntl.h>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <random>
 #include <set>
-#include <tuple>
 #include <string>
+#include <unordered_set>
 #include <tsl/robin_map.h>
 #include <tsl/robin_set.h>
+#include <tuple>
 #ifdef __APPLE__
 #else
 #include <malloc.h>
@@ -48,8 +49,15 @@ typedef std::tuple<std::vector<label_set>, tsl::robin_map<std::string, uint32_t>
     parse_label_file_return_values;
 typedef std::tuple<std::vector<std::vector<uint32_t>>, uint64_t> load_label_index_return_values;
 
-namespace diskann
-{
+
+namespace diskann {
+
+  //CONSTANTS
+  DISKANN_DLLEXPORT extern const char* NO_LABEL_FOR_POINT;
+  DISKANN_DLLEXPORT extern const char FILTERS_LABEL_DELIMITER;
+  typedef std::map<std::string, std::unordered_set<location_t>> inverted_index_t;
+
+
 template <typename T>
 DISKANN_DLLEXPORT void generate_label_indices(path input_data_path, path final_index_path_prefix, label_set all_labels,
                                               unsigned R, unsigned L, float alpha, unsigned num_threads);
@@ -67,6 +75,13 @@ template <typename T>
 DISKANN_DLLEXPORT tsl::robin_map<std::string, std::vector<uint32_t>> generate_label_specific_vector_files_compat(
     path input_data_path, tsl::robin_map<std::string, uint32_t> labels_to_number_of_points,
     std::vector<label_set> point_ids_to_labels, label_set all_labels);
+
+template<typename T>
+DISKANN_DLLEXPORT void separate_brute_forceable_points(
+  const std::string& base_file, const std::string& label_file,
+  const location_t filter_bf_threshold,
+  const std::string& new_lbl_file,
+  const std::string& bf_data_file);
 
 /*
  * For each label, generates a file containing all vectors that have said label.

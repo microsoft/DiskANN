@@ -1,20 +1,20 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <abstract_index.h>
+#include <boost/program_options.hpp>
+#include <future>
 #include <index.h>
+#include <index_factory.h>
 #include <numeric>
 #include <omp.h>
 #include <string.h>
 #include <time.h>
 #include <timer.h>
-#include <boost/program_options.hpp>
-#include <future>
-#include <abstract_index.h>
-#include <index_factory.h>
 
-#include "utils.h"
 #include "filter_utils.h"
 #include "program_options_utils.hpp"
+#include "utils.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>

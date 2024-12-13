@@ -3,10 +3,10 @@
 
 #pragma once
 #include <algorithm>
-#include <fcntl.h>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -96,9 +96,12 @@ DISKANN_DLLEXPORT int build_disk_index(
     diskann::Metric _compareMetric, bool use_opq = false,
     const std::string &codebook_prefix = "", // default is empty for no codebook pass in
     bool use_filters = false,
-    const std::string &label_file = std::string(""), // default is empty string for no label_file
-    const std::string &universal_label = "", const uint32_t filter_threshold = 0,
-    const uint32_t Lf = 0); // default is empty string for no universal label
+    const std::string &label_file =
+        std::string(""), // default is empty string for no label_file
+    const std::string &universal_label = "",
+    const uint32_t filter_threshold = 0,
+    const uint32_t Lf = 0, 
+    const uint32_t filter_bf_threshold = 0); // default is empty string for no universal label
 
 template <typename T>
 DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file, const std::string mem_index_file,

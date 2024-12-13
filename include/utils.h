@@ -20,14 +20,14 @@ typedef HANDLE FileHandle;
 typedef int FileHandle;
 #endif
 
+#include "ann_exception.h"
+#include "cached_io.h"
 #include "distance.h"
 #include "logger.h"
-#include "cached_io.h"
-#include "ann_exception.h"
-#include "windows_customizations.h"
+#include "tag_uint128.h"
 #include "tsl/robin_set.h"
 #include "types.h"
-#include "tag_uint128.h"
+#include "windows_customizations.h"
 #include <any>
 
 #ifdef EXEC_ENV_OLS
@@ -175,6 +175,33 @@ inline int delete_file(const std::string &fileName)
     {
         return 0;
     }
+}
+
+inline std::string trim(const std::string& str) {
+  // Find the first non-whitespace character
+  size_t start = 0;
+  while (start < str.size() && std::isspace(str[start])) {
+    ++start;
+  }
+
+  // Find the last non-whitespace character
+  size_t end = str.size();
+  while (end > start && std::isspace(str[end - 1])) {
+    --end;
+  }
+
+  // Return the substring from start to end
+  return str.substr(start, end - start);
+}
+
+//VERY INEFFICIENT SPLIT_FUNCTION. USE IT AT YOUR OWN RISK.
+inline void split_string(const std::string& str, const char sep, std::vector<std::string>& split_strings) {
+  std::string token;
+  std::istringstream iss(str);
+  while (getline(iss, token, sep)) {
+    token = trim(token);
+    split_strings.push_back(token);
+  }
 }
 
 // generates formatted_label and _labels_map file.
@@ -1188,8 +1215,8 @@ template <> inline const char *diskann_type_to_name<int64_t>()
 }
 
 #ifdef _WINDOWS
-#include <intrin.h>
 #include <Psapi.h>
+#include <intrin.h>
 
 extern bool AvxSupportedCPU;
 extern bool Avx2SupportedCPU;

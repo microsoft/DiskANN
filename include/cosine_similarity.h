@@ -3,16 +3,16 @@
 
 #pragma once
 
-#include <immintrin.h>
-#include <smmintrin.h>
-#include <tmmintrin.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
-#include <vector>
+#include <immintrin.h>
 #include <limits>
-#include <algorithm>
+#include <smmintrin.h>
 #include <stdexcept>
+#include <tmmintrin.h>
+#include <vector>
 
 #include "simd_utils.h"
 

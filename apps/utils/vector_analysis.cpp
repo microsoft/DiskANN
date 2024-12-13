@@ -1,18 +1,18 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <omp.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+#include <fcntl.h>
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <omp.h>
 #include <sstream>
 #include <string>
-#include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <typeinfo>

@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <vector>
 #include <boost/dynamic_bitset.hpp>
+#include <vector>
 
-#include "scratch.h"
 #include "pq_scratch.h"
+#include "scratch.h"
 
 namespace diskann
 {
