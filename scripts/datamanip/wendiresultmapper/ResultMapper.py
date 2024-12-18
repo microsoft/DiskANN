@@ -11,12 +11,6 @@ def print_one(table_name, df):
     print("\n\n")
 
 def main():
-    # origquery_file = "E:\\data\\FromWendi\\Q_vector_and_filter_20240724.tsv"
-    # query_pipe_sep_file = "E:\\data\\FromWendi\\only_query_pipe_sep.tsv"
-    # query_sf_file = "E:\\data\\FromWendi\\query_filters.sf.txt"
-    # results_file = "D:\\bin\\github\\wendi-fil-l2_L3_results.tsv"
-    #docs_master_file = "E:\\data\\FromWendi\\D_vector_and_filter_20240724.tsv"
-    #results_with_doc_ids_file = "E:\\data\\FromWendi\\result_list_with_doc_ids.tsv"
 
     qhash_id_map_file = "E:\\data\\FromWendi\\new\\query_hash_vecid_map.tsv"
     query_sf_filters_file = "E:\\data\\FromWendi\\new\\query_filters.tsv"
@@ -40,44 +34,45 @@ def main():
     dhash_docid_map_df = pd.read_csv(dhash_docid_map_file, sep='\t', header=None, names=cn3, encoding='utf-8')
     print_one("DocHash To DocId", dhash_docid_map_df)
 
-    # cn4 = ['query_vec_id', 'results']
-    # query_results_raw_df = pd.read_csv(query_results_raw_file, sep='\t', header=None, names=cn4, encoding='utf-8')
-    # print_one("Query Results Raw", query_results_raw_df)
+    cn4 = ['query_vec_id', 'results']
+    query_results_raw_df = pd.read_csv(query_results_raw_file, sep='\t', header=None, names=cn4, encoding='utf-8')
+    print_one("Query Results Raw", query_results_raw_df)
 
-    # cn5 = ['query_vec_id', 'doc_vec_id', 'score', 'match_type']
-    # processed_results_df = pd.DataFrame(columns=cn5)
-
-    # for index, row in query_results_raw_df.iterrows():
-    #     result_str = row['results']
-    #     detailed_result_list = result_str.split('),')
-    #     if index % 1000 == 0:
-    #         print("Processing row: {}".format(index))
-    #     detailed_result_rows = {'query_vec_id': [], 'doc_vec_id': [], 'score': [], 'match_type': []}
-    #     for detailed_result in detailed_result_list:
-    #         detailed_result = detailed_result.strip('(').strip(')').strip()
-    #         if detailed_result == '':
-    #             continue
-    #         result_id_score_match = detailed_result.split(',')
-    #         detailed_result_rows['query_vec_id'].append(row['query_vec_id'])
-    #         detailed_result_rows['doc_vec_id'].append(result_id_score_match[0])
-    #         detailed_result_rows['score'].append(result_id_score_match[1])
-    #         detailed_result_rows['match_type'].append(result_id_score_match[2])
-    #     processed_results_df = pd.concat([processed_results_df, pd.DataFrame(detailed_result_rows)], ignore_index=True)
-    # print_one("Processed Results", processed_results_df)
-
-    # processed_results_df.to_csv("E:\\data\\FromWendi\\new\\results_with_query_and_docids.tsv", sep='\t', index=False)
-
-    #Do the final merge between processed_results_df and dhash_docid_map_df
     cn5 = ['query_vec_id', 'doc_vec_id', 'score', 'match_type']
-    processed_results_df = pd.read_csv("E:\\data\\FromWendi\\new\\results_with_query_and_docids.tsv", names=cn5, sep='\t', encoding='utf-8')
+    processed_results_df = pd.DataFrame(columns=cn5)
+
+    for index, row in query_results_raw_df.iterrows():
+        result_str = row['results']
+        detailed_result_list = result_str.split('),')
+        if index % 1000 == 0:
+            print("Processing row: {}".format(index))
+        detailed_result_rows = {'query_vec_id': [], 'doc_vec_id': [], 'score': [], 'match_type': []}
+        for detailed_result in detailed_result_list:
+            detailed_result = detailed_result.strip('(').strip(')').strip()
+            if detailed_result == '':
+                continue
+            result_id_score_match = detailed_result.split(',')
+            detailed_result_rows['query_vec_id'].append(row['query_vec_id'])
+            detailed_result_rows['doc_vec_id'].append(result_id_score_match[0])
+            detailed_result_rows['score'].append(result_id_score_match[1])
+            detailed_result_rows['match_type'].append(result_id_score_match[2])
+        processed_results_df = pd.concat([processed_results_df, pd.DataFrame(detailed_result_rows)], ignore_index=True)
     print_one("Processed Results", processed_results_df)
+
+    #If there is a possibility of running out of memory while processing this data
+    #save the processed_results_df to a file and read it back.
+    #processed_results_df.to_csv("E:\\data\\FromWendi\\new\\results_with_query_and_docids.tsv", sep='\t', index=False)
+    #Do the final merge between processed_results_df and dhash_docid_map_df
+    # cn5 = ['query_vec_id', 'doc_vec_id', 'score', 'match_type']
+    # processed_results_df = pd.read_csv("E:\\data\\FromWendi\\new\\results_with_query_and_docids.tsv", names=cn5, sep='\t', encoding='utf-8')
+    # print_one("Processed Results", processed_results_df)
 
     processed_results_with_filters = pd.merge(processed_results_df, query_sf_filters_df, on = 'query_vec_id', how='inner')
     print_one("Results With Filters", processed_results_with_filters)
 
     results_with_query_hash = pd.merge(processed_results_with_filters, qhash_id_map_df, on = 'query_vec_id', how='inner')
     final_results = pd.merge(results_with_query_hash, dhash_docid_map_df, on = 'doc_vec_id', how='inner')
-    final_results.to_csv("E:\\data\\FromWendi\\new\\final_results.tsv", sep='\t', index=False)
+    final_results.to_csv(final_results_file, sep='\t', index=False)
 
 
     
