@@ -659,7 +659,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     
     reposition_frozen_point_to_end();
 
-    _table_stats.tag_memory_usage = _table_stats.node_mem_usage
+    _table_stats.total_mem_usage = _table_stats.node_mem_usage
         + _table_stats.graph_mem_usage
         + _table_stats.label_mem_usage
         + _table_stats.tag_memory_usage;
