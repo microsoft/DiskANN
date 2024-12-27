@@ -491,7 +491,6 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
                         }
                     }
                 }
-                delete[] nbr_buffers[i].second;
             }
         }
 
