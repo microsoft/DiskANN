@@ -413,6 +413,7 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
     uint64_t lvl = 1;
     uint64_t prev_node_set_size = 0;
     uint64_t current_count = 0;
+    bool finish_flag = false;
     while (cur_level->size() != 0)
     {
         // swap prev_level and cur_level
@@ -438,7 +439,6 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
             std::sort(nodes_to_expand.begin(), nodes_to_expand.end());
 
         diskann::cout << "Level: " << lvl << std::flush;
-        bool finish_flag = false;
 
         uint64_t BLOCK_SIZE = 1024;
         uint64_t nblocks = DIV_ROUND_UP(nodes_to_expand.size(), BLOCK_SIZE);
