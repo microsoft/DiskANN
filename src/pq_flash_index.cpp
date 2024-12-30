@@ -413,7 +413,6 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
     uint64_t lvl = 1;
     uint64_t prev_node_set_size = 0;
     uint64_t current_count = 0;
-    bool finish_flag = false;
     while (cur_level->size() != 0)
     {
         // swap prev_level and cur_level
@@ -479,15 +478,11 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
                     uint32_t *nbrs = nbr_buffers[i].second;
 
                     // explore next level
-                    for (uint32_t j = 0; j < nnbrs && !finish_flag; j++)
+                    for (uint32_t j = 0; j < nnbrs && (cur_level->size() + node_set.size() < num_nodes_to_cache); j++)
                     {
                         if (node_set.find(nbrs[j]) == node_set.end())
                         {
                             cur_level->insert(nbrs[j]);
-                        }
-                        if (cur_level->size() + node_set.size() >= num_nodes_to_cache)
-                        {
-                            finish_flag = true;
                         }
                     }
                 }
