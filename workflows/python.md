@@ -90,7 +90,7 @@ index = dap.StaticDiskIndex(
 some_index: np.uint32 = ... # the index in our `q` array of points that we will be using to query on an individual basis
 my_query_vector: np.typing.NDArray[my_dtype] = q[some_index] # make sure this is a 1-d array of the same dimensionality as your index!
 # normalize if required by my_query_vector /= np.linalg.norm(my_query_vector)
-internal_indices, distances = index.query(
+internal_indices, distances = index.search(
     query=my_query_vector,
     k_neighbors=25,
     complexity=50,  # must be as big or bigger than `k_neighbors`
@@ -108,7 +108,7 @@ actual_identifiers = index_to_identifiers_map[internal_indices]  # using np fanc
 ```python
 import multiprocessing
 
-internal_indices, distances = index.batch_query(
+internal_indices, distances = index.batch_search(
     queries=q,
     k_neighbors=25,
     complexity=50,
