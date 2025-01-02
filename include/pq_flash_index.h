@@ -19,9 +19,9 @@
 
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 #define DEFAULT_VISITED_RESERVE_SIZE 4096
-//default max filters per query is set to the same 
-//as what we expect Bing to provide. If this is overkill,
-//it can be set by clients in the load() function
+// default max filters per query is set to the same
+// as what we expect Bing to provide. If this is overkill,
+// it can be set by clients in the load() function
 #define DEFAULT_MAX_FILTERS_PER_QUERY 4096
 
 namespace diskann
@@ -51,8 +51,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT int load_from_separate_paths(diskann::MemoryMappedFiles &files, uint32_t num_threads,
                                                    const char *index_filepath, const char *pivots_filepath,
-                                                   const char *compressed_filepath,
-                                                   uint32_t max_filters_per_query);
+                                                   const char *compressed_filepath, uint32_t max_filters_per_query);
 #else
     DISKANN_DLLEXPORT int load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
                                                    const char *pivots_filepath, const char *compressed_filepath,

@@ -33,8 +33,9 @@
 
 namespace po = boost::program_options;
 
-#ifdef DISKANN_DEBUG_PRINT_RETSET 
-void dump_retset(uint64_t test_id, uint64_t query_num, diskann::QueryStats *stats, const std::string &result_output_prefix)
+#ifdef DISKANN_DEBUG_PRINT_RETSET
+void dump_retset(uint64_t test_id, uint64_t query_num, diskann::QueryStats *stats,
+                 const std::string &result_output_prefix)
 {
     std::stringstream ss;
     if (stats != nullptr)
@@ -44,12 +45,10 @@ void dump_retset(uint64_t test_id, uint64_t query_num, diskann::QueryStats *stat
             ss << i << "\t";
             for (int j = 0; j < (stats + i)->query_retset.size(); j++)
             {
-                ss << "(" << (stats + i)->query_retset[j].id << ", " << (stats + i)->query_retset[j].distance
-                   << "), ";
+                ss << "(" << (stats + i)->query_retset[j].id << ", " << (stats + i)->query_retset[j].distance << "), ";
             }
             ss << std::endl;
         }
-
     }
     std::string results_file = result_output_prefix + "_L" + std::to_string(test_id) + "_retset.tsv";
     std::ofstream writer(results_file);
@@ -148,7 +147,6 @@ void write_gt_to_tsv(const std::string &cur_result_path, uint64_t query_num, uin
 }
 #endif
 
-
 void print_stats(std::string category, std::vector<float> percentiles, std::vector<float> results)
 {
     diskann::cout << std::setw(20) << category << ": " << std::flush;
@@ -165,10 +163,10 @@ void print_stats(std::string category, std::vector<float> percentiles, std::vect
     diskann::cout << std::endl;
 }
 
-template<typename T, typename LabelT>
+template <typename T, typename LabelT>
 void parse_labels_of_query(const std::string &filters_for_query,
-                                      std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &pFlashIndex,
-                                      std::vector<LabelT> &label_ids_for_query)
+                           std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &pFlashIndex,
+                           std::vector<LabelT> &label_ids_for_query)
 {
     std::vector<std::string> label_strs_for_query;
     diskann::split_string(filters_for_query, FILTER_OR_SEPARATOR, label_strs_for_query);
@@ -178,10 +176,11 @@ void parse_labels_of_query(const std::string &filters_for_query,
     }
 }
 
-template<typename T, typename LabelT> 
+template <typename T, typename LabelT>
 void populate_label_ids(const std::vector<std::string> &filters_of_queries,
                         std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &pFlashIndex,
-                        std::vector<std::vector<LabelT>> &label_ids_of_queries, bool apply_one_to_all, uint32_t query_count)
+                        std::vector<std::vector<LabelT>> &label_ids_of_queries, bool apply_one_to_all,
+                        uint32_t query_count)
 {
     if (apply_one_to_all)
     {
@@ -332,10 +331,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     std::vector<std::vector<LabelT>> per_query_label_ids;
     if (filtered_search)
     {
-        populate_label_ids(query_filters, _pFlashIndex, per_query_label_ids, (query_filters.size() == 1), query_num );
+        populate_label_ids(query_filters, _pFlashIndex, per_query_label_ids, (query_filters.size() == 1), query_num);
     }
-
-    
 
     diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
     diskann::cout.precision(2);
@@ -402,8 +399,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             {
                 _pFlashIndex->cached_beam_search(
                     query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),
-                    query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, per_query_label_ids[i],
-                    search_io_limit, use_reorder_data, stats + i);
+                    query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true,
+                    per_query_label_ids[i], search_io_limit, use_reorder_data, stats + i);
             }
         }
         auto e = std::chrono::high_resolution_clock::now();
@@ -448,7 +445,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
                       << std::setw(16) << mean_io_us << std::setw(16) << mean_cpuus;
         if (calc_recall_flag)
         {
-            diskann::cout << std::setw(16) << recall << std::endl ; 
+            diskann::cout << std::setw(16) << recall << std::endl;
         }
         else
         {

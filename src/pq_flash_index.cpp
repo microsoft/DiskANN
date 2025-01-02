@@ -121,7 +121,8 @@ template <typename T, typename LabelT> inline T *PQFlashIndex<T, LabelT>::offset
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve, uint64_t max_filters_per_query)
+void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve,
+                                                uint64_t max_filters_per_query)
 {
     diskann::cout << "Setting up thread-specific contexts for nthreads: " << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
@@ -561,7 +562,8 @@ void PQFlashIndex<T, LabelT>::generate_random_labels(std::vector<LabelT> &labels
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::load_label_map(std::basic_istream<char> &map_reader, std::unordered_map<std::string, LabelT>& string_to_int_map)
+void PQFlashIndex<T, LabelT>::load_label_map(std::basic_istream<char> &map_reader,
+                                             std::unordered_map<std::string, LabelT> &string_to_int_map)
 {
     std::string line, token;
     LabelT token_as_num;
@@ -589,8 +591,7 @@ LabelT PQFlashIndex<T, LabelT>::get_converted_label(const std::string &filter_la
         return _universal_filter_label;
     }
     std::stringstream stream;
-    stream << "Unable to find label " << filter_label
-           << " in the Label Map ";
+    stream << "Unable to find label " << filter_label << " in the Label Map ";
     diskann::cerr << stream.str() << std::endl;
     throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 }
@@ -677,7 +678,6 @@ bool PQFlashIndex<T, LabelT>::point_has_any_label(uint32_t point_id, const std::
     }
     return ret_val;
 }
-
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile, size_t &num_points_labels)
@@ -769,7 +769,8 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_univers
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::load_label_medoid_map(const std::string& labels_to_medoids_filepath, std::istream& medoid_stream)
+void PQFlashIndex<T, LabelT>::load_label_medoid_map(const std::string &labels_to_medoids_filepath,
+                                                    std::istream &medoid_stream)
 {
     std::string line, token;
 
@@ -831,7 +832,7 @@ void PQFlashIndex<T, LabelT>::load_dummy_map(const std::string &dummy_map_filepa
     }
     catch (std::system_error &e)
     {
-        throw FileException (dummy_map_filepath, e, __FUNCSIG__, __FILE__, __LINE__);
+        throw FileException(dummy_map_filepath, e, __FUNCSIG__, __FILE__, __LINE__);
     }
 }
 
@@ -940,10 +941,12 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_labels
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
-int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix, uint32_t max_filters_per_query)
+int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix,
+                                  uint32_t max_filters_per_query)
 {
 #else
-template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix, uint32_t max_filters_per_query)
+template <typename T, typename LabelT>
+int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix, uint32_t max_filters_per_query)
 {
 #endif
     std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
@@ -1405,15 +1408,17 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     NeighborPriorityQueue &retset = query_scratch->retset;
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
     tsl::robin_set<location_t> full_retset_ids;
-    if (use_filters) {
+    if (use_filters)
+    {
         uint64_t size_to_reserve = std::max(l_search, (std::min((uint64_t)filter_label_count, this->_max_degree) + 1));
         retset.reserve(size_to_reserve);
-        full_retset.reserve(4096); 
+        full_retset.reserve(4096);
         full_retset_ids.reserve(4096);
-    } else {
+    }
+    else
+    {
         retset.reserve(l_search + 1);
     }
-
 
     uint32_t best_medoid = 0;
     uint32_t cur_list_size = 0;
@@ -1437,7 +1442,9 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 #endif
         visited.insert(best_medoid);
         cur_list_size = 1;
-    } else {
+    }
+    else
+    {
         std::vector<location_t> filter_specific_medoids;
         filter_specific_medoids.reserve(filter_label_count);
         location_t ctr = 0;
@@ -1455,12 +1462,12 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         for (ctr = 0; ctr < filter_specific_medoids.size(); ctr++)
         {
             retset.insert(Neighbor(filter_specific_medoids[ctr], dist_scratch[ctr]));
-            //retset[ctr].id = filter_specific_medoids[ctr];
-            //retset[ctr].distance = dist_scratch[ctr];
-            //retset[ctr].expanded = false;
+            // retset[ctr].id = filter_specific_medoids[ctr];
+            // retset[ctr].distance = dist_scratch[ctr];
+            // retset[ctr].expanded = false;
             visited.insert(filter_specific_medoids[ctr]);
         }
-        cur_list_size = (uint32_t) filter_specific_medoids.size();
+        cur_list_size = (uint32_t)filter_specific_medoids.size();
     }
 
     uint32_t cmps = 0;
@@ -1477,10 +1484,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t *>>> cached_nhoods;
     cached_nhoods.reserve(2 * beam_width);
 
-    //if we are doing multi-filter search we don't want to restrict the number of IOs
-    //at present. Must revisit this decision later.
+    // if we are doing multi-filter search we don't want to restrict the number of IOs
+    // at present. Must revisit this decision later.
     uint32_t max_ios_for_query = use_filters || (io_limit == 0) ? std::numeric_limits<uint32_t>::max() : io_limit;
-    const std::vector<LabelT>& label_ids = filter_labels; //avoid renaming. 
+    const std::vector<LabelT> &label_ids = filter_labels; // avoid renaming.
     std::vector<LabelT> lbl_vec;
 
     while (retset.has_unexpanded_node() && num_ios < max_ios_for_query)
@@ -1494,9 +1501,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         // find new beam
         uint32_t num_seen = 0;
 
-
         for (const auto &lbl : label_ids)
-        { 
+        {
             uint32_t lbl_marker = 0;
             while (lbl_marker < cur_list_size)
             {
@@ -1522,7 +1528,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     retset[lbl_marker].expanded = true;
                     if (this->_count_visited_nodes)
                     {
-                        reinterpret_cast<std::atomic<uint32_t> &>(this->_node_visit_counter[retset[lbl_marker].id].second)
+                        reinterpret_cast<std::atomic<uint32_t> &>(
+                            this->_node_visit_counter[retset[lbl_marker].id].second)
                             .fetch_add(1);
                     }
                     break;
@@ -1645,7 +1652,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 #ifdef DISKANN_DEBUG_PRINT_RETSET
                     stats->query_retset.push_back(nn);
 #endif
-
                 }
             }
         }
@@ -1687,7 +1693,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 full_retset.push_back(Neighbor(real_id, cur_expanded_dist));
                 full_retset_ids.insert(real_id);
             }
-            
+
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
             cpu_timer.reset();
@@ -1723,7 +1729,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 #ifdef DISKANN_DEBUG_PRINT_RETSET
                     stats->query_retset.push_back(nn);
 #endif
-
                 }
             }
 

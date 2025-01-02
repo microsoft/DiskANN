@@ -252,7 +252,7 @@ double calculate_range_search_recall(uint32_t num_queries, std::vector<std::vect
     return total_recall / (num_queries);
 }
 
-void split_string(const std::string &string_to_split, const std::string& delimiter, std::vector<std::string> &pieces)
+void split_string(const std::string &string_to_split, const std::string &delimiter, std::vector<std::string> &pieces)
 {
     size_t start = 0;
     size_t end;

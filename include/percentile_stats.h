@@ -35,7 +35,7 @@ struct QueryStats
     unsigned n_hops = 0;       // # search hops
 
 #ifdef DISKANN_DEBUG_PRINT_RETSET
-    std::vector<Neighbor> query_retset; //copy of the retset to debug PQ distances.
+    std::vector<Neighbor> query_retset; // copy of the retset to debug PQ distances.
 #endif
 };
 

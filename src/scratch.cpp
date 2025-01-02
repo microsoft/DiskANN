@@ -93,7 +93,8 @@ template <typename T> void SSDQueryScratch<T>::reset()
     full_retset.clear();
 }
 
-template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, size_t max_filters_per_query)
+template <typename T>
+SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, size_t max_filters_per_query)
 {
     size_t coord_alloc_size = ROUND_UP(sizeof(T) * aligned_dim, 256);
 
@@ -124,7 +125,8 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
 }
 
 template <typename T>
-SSDThreadData<T>::SSDThreadData(size_t aligned_dim, size_t visited_reserve, size_t max_filters_per_query) : scratch(aligned_dim, visited_reserve, max_filters_per_query)
+SSDThreadData<T>::SSDThreadData(size_t aligned_dim, size_t visited_reserve, size_t max_filters_per_query)
+    : scratch(aligned_dim, visited_reserve, max_filters_per_query)
 {
 }
 
