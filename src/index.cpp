@@ -1952,7 +1952,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels)
 {
-    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels);
+    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels + 1);
     _bitmask_buf._buf.resize(pts_to_labels.size() * _bitmask_buf._bitmask_size, 0);
 
     for (size_t i = 0; i < pts_to_labels.size(); i++)
@@ -1999,7 +1999,8 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
         line_cnt++;
     }
 
-    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels);
+    // label is counting by 1, so additional 1 bit is needed
+    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels + 1);
     _bitmask_buf._buf.resize(line_cnt * _bitmask_buf._bitmask_size, 0);
     
     infile.clear();
