@@ -355,13 +355,12 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
 
     tsl::robin_set<uint32_t> node_set;
 
-    // Do not cache more than 10% of the nodes in the index
-    uint64_t tenp_nodes = (uint64_t)(std::round(this->_num_points * 0.1));
-    if (num_nodes_to_cache > tenp_nodes)
+    // If num_nodes_to_cache is more than total_nodes then reduce num_nodes_to_cache to total_nodes.
+    if (num_nodes_to_cache > this->_num_points)
     {
-        diskann::cout << "Reducing nodes to cache from: " << num_nodes_to_cache << " to: " << tenp_nodes
-                      << "(10 percent of total nodes:" << this->_num_points << ")" << std::endl;
-        num_nodes_to_cache = tenp_nodes == 0 ? 1 : tenp_nodes;
+        diskann::cout << "Reducing nodes to cache from: " << num_nodes_to_cache
+                      << " to total nodes:" << this->_num_points << std::endl;
+        num_nodes_to_cache = this->_num_points;
     }
     diskann::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
 
