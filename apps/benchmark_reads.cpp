@@ -38,13 +38,14 @@ void do_multiple_reads_with_threads(int thread_count)
     string file_name = "F:\\indices\\turing_10m\\disk_index_disk.index";
     auto reader = new WindowsAlignedFileReader();
     reader->open(file_name.c_str());
-    int batches_of = 100;
+    int total_reads = 1000000;
+    int batches_of = 5;
 
     vector<char *> buffers(thread_count);
 
-    omp_set_num_threads(thread_count);
+    // omp_set_num_threads(thread_count);
 
-#pragma omp parallel for num_threads((int)thread_count)
+// #pragma omp parallel for num_threads((int)thread_count)
     for (int i = 0; i < thread_count; i++)
     {
         char *buf = nullptr;
@@ -53,9 +54,9 @@ void do_multiple_reads_with_threads(int thread_count)
         reader->register_thread();
     }
 
-    int no_of_reads = 10000;
+    int no_of_reads = total_reads / batches_of;
     Timer timer;
-#pragma omp parallel for schedule(dynamic, 1)
+// #pragma omp parallel for schedule(dynamic, 1)
     for (int i = 0; i < no_of_reads; i++)
     {
         char *buf = buffers[omp_get_thread_num()];
