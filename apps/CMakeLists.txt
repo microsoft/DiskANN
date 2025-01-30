@@ -31,6 +31,9 @@ target_link_libraries(test_insert_deletes_consolidate ${PROJECT_NAME} ${DISKANN_
 add_executable(benchmark_reads benchmark_reads.cpp)
 target_link_libraries(benchmark_reads ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
+add_executable(benchmark_reads_single_threaded benchmark_reads_single_threaded.cpp)
+target_link_libraries(benchmark_reads_single_threaded ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
+
 if (NOT MSVC)
     install(TARGETS build_memory_index
             build_stitched_index
