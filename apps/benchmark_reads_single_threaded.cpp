@@ -66,7 +66,7 @@ int main(int argc, char *argv[])
             // cout << "Got cmd argument" << endl;
         }
     }
-    cout << "Using batches of " << val << endl;
+    // cout << "Using batches of " << val << endl;
 
     // cout << "Hello World" << endl;
     do_reads_in_batches_of(val);
