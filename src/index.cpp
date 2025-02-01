@@ -796,7 +796,7 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
     if (_tag_to_location.find(tag) == _tag_to_location.end())
     {
-        diskann::cout << "Tag " << tag << " does not exist" << std::endl;
+        // diskann::cout << "Tag " << tag << " does not exist" << std::endl;
         return -1;
     }
 
