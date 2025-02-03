@@ -13,15 +13,17 @@ using namespace diskann;
 #define SECTOR_LEN 4096
 #define TOTAL_READS 1000000
 
-void do_reads(WindowsAlignedFileReader* reader, vector<AlignedRead>& read_reqs, uniform_int_distribution<> &distrib, mt19937 &gen)
+vector<long long int> random_sector_ids(TOTAL_READS);
+
+void do_reads(WindowsAlignedFileReader* reader, vector<AlignedRead>& read_reqs, int batch_num)
 {
     auto ctx = reader->get_ctx();
+    size_t batch_size = read_reqs.size();
 
     // Modify read requests
-    for (auto& read_req : read_reqs)
+    for (int i = 0; i < batch_size; i++)
     {
-        long long int sector_id = distrib(gen);
-        read_req.offset = sector_id * SECTOR_LEN;
+        read_reqs[i].offset = random_sector_ids[batch_num * batch_size + i] * SECTOR_LEN;
     }
 
     reader->read(read_reqs, ctx, false);
@@ -52,12 +54,16 @@ void do_reads_in_batches_of(int batches_of)
     uniform_int_distribution<> distrib(0, 1650000);
     random_device rd;
     mt19937 gen(rd());
+    for (int i = 0; i < TOTAL_READS; i++)
+    {
+        random_sector_ids[i] = distrib(gen);
+    }
 
     int no_of_reads = TOTAL_READS / batches_of;
     Timer timer;
     for (int i = 0; i < no_of_reads; i++)
     {
-        do_reads(reader, read_reqs, distrib, gen);
+        do_reads(reader, read_reqs, i);
     }
     // cout << "Time taken to read in microseconds: " << timer.elapsed() << endl;
     cout << timer.elapsed() << endl;
