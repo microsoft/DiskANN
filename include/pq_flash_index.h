@@ -15,6 +15,7 @@
 #include "scratch.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
+#include "label_bitmask.h"
 
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 
@@ -49,16 +50,16 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
 
-#ifdef EXEC_ENV_OLS
-    DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(MemoryMappedFiles &files, std::string sample_bin,
-                                                                   uint64_t l_search, uint64_t beamwidth,
-                                                                   uint64_t num_nodes_to_cache, uint32_t nthreads,
-                                                                   std::vector<uint32_t> &node_list);
-#else
-    DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(std::string sample_bin, uint64_t l_search,
-                                                                   uint64_t beamwidth, uint64_t num_nodes_to_cache,
-                                                                   uint32_t num_threads,
-                                                                   std::vector<uint32_t> &node_list);
+//#ifdef EXEC_ENV_OLS
+//    DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(MemoryMappedFiles &files, std::string sample_bin,
+//                                                                   uint64_t l_search, uint64_t beamwidth,
+//                                                                   uint64_t num_nodes_to_cache, uint32_t nthreads,
+//                                                                   std::vector<uint32_t> &node_list);
+//#else
+//    DISKANN_DLLEXPORT void generate_cache_list_from_sample_queries(std::string sample_bin, uint64_t l_search,
+//                                                                   uint64_t beamwidth, uint64_t num_nodes_to_cache,
+//                                                                   uint32_t num_threads,
+//                                                                   std::vector<uint32_t> &node_list);
 #endif
 
     DISKANN_DLLEXPORT void cache_bfs_levels(uint64_t num_nodes_to_cache, std::vector<uint32_t> &node_list,
@@ -127,8 +128,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void parse_label_file(std::basic_istream<char>& infile, size_t &num_pts_labels);
     DISKANN_DLLEXPORT void get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
                                                    uint32_t &num_total_labels);
-    DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
-                                                  const uint32_t nthreads);
+    //DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
+    //                                              const uint32_t nthreads);
     void reset_stream_for_reading(std::basic_istream<char> &infile);
 
     // sector # on disk where node_id is present with in the graph part
@@ -231,9 +232,11 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _reoreder_data_offset = 0;
 
     // filter support
-    uint32_t *_pts_to_label_offsets = nullptr;
-    uint32_t *_pts_to_label_counts = nullptr;
-    LabelT *_pts_to_labels = nullptr;
+    //uint32_t *_pts_to_label_offsets = nullptr;
+    //uint32_t *_pts_to_label_counts = nullptr;
+    //LabelT *_pts_to_labels = nullptr;
+    simple_bitmask_buf _bitmask_buf;
+
     std::unordered_map<LabelT, std::vector<uint32_t>> _filter_to_medoid_ids;
     bool _use_universal_label = false;
     LabelT _universal_filter_label;

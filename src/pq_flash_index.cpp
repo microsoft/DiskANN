@@ -82,18 +82,18 @@ template <typename T, typename LabelT> PQFlashIndex<T, LabelT>::~PQFlashIndex()
         this->reader->deregister_all_threads();
         reader->close();
     }
-    if (_pts_to_label_offsets != nullptr)
-    {
-        delete[] _pts_to_label_offsets;
-    }
-    if (_pts_to_label_counts != nullptr)
-    {
-        delete[] _pts_to_label_counts;
-    }
-    if (_pts_to_labels != nullptr)
-    {
-        delete[] _pts_to_labels;
-    }
+    //if (_pts_to_label_offsets != nullptr)
+    //{
+    //    delete[] _pts_to_label_offsets;
+    //}
+    //if (_pts_to_label_counts != nullptr)
+    //{
+    //    delete[] _pts_to_label_counts;
+    //}
+    //if (_pts_to_labels != nullptr)
+    //{
+    //    delete[] _pts_to_labels;
+    //}
     if (_medoids != nullptr)
     {
         delete[] _medoids;
@@ -258,99 +258,99 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_cache_
     diskann::cout << "..done." << std::endl;
 }
 
-#ifdef EXEC_ENV_OLS
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(MemoryMappedFiles &files, std::string sample_bin,
-                                                                      uint64_t l_search, uint64_t beamwidth,
-                                                                      uint64_t num_nodes_to_cache, uint32_t nthreads,
-                                                                      std::vector<uint32_t> &node_list)
-{
-#else
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::string sample_bin, uint64_t l_search,
-                                                                      uint64_t beamwidth, uint64_t num_nodes_to_cache,
-                                                                      uint32_t nthreads,
-                                                                      std::vector<uint32_t> &node_list)
-{
-#endif
-    if (num_nodes_to_cache >= this->_num_points)
-    {
-        // for small num_points and big num_nodes_to_cache, use below way to get the node_list quickly
-        node_list.resize(this->_num_points);
-        for (uint32_t i = 0; i < this->_num_points; ++i)
-        {
-            node_list[i] = i;
-        }
-        return;
-    }
-
-    this->_count_visited_nodes = true;
-    this->_node_visit_counter.clear();
-    this->_node_visit_counter.resize(this->_num_points);
-    for (uint32_t i = 0; i < _node_visit_counter.size(); i++)
-    {
-        this->_node_visit_counter[i].first = i;
-        this->_node_visit_counter[i].second = 0;
-    }
-
-    uint64_t sample_num, sample_dim, sample_aligned_dim;
-    T *samples;
-
-#ifdef EXEC_ENV_OLS
-    if (files.fileExists(sample_bin))
-    {
-        diskann::load_aligned_bin<T>(files, sample_bin, samples, sample_num, sample_dim, sample_aligned_dim);
-    }
-#else
-    if (file_exists(sample_bin))
-    {
-        diskann::load_aligned_bin<T>(sample_bin, samples, sample_num, sample_dim, sample_aligned_dim);
-    }
-#endif
-    else
-    {
-        diskann::cerr << "Sample bin file not found. Not generating cache." << std::endl;
-        return;
-    }
-
-    std::vector<uint64_t> tmp_result_ids_64(sample_num, 0);
-    std::vector<float> tmp_result_dists(sample_num, 0);
-
-    bool filtered_search = false;
-    std::vector<LabelT> random_query_filters(sample_num);
-    if (_filter_to_medoid_ids.size() != 0)
-    {
-        filtered_search = true;
-        generate_random_labels(random_query_filters, (uint32_t)sample_num, nthreads);
-    }
-
-#pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
-    for (int64_t i = 0; i < (int64_t)sample_num; i++)
-    {
-        auto &label_for_search = random_query_filters[i];
-        // run a search on the sample query with a random label (sampled from base label distribution), and it will
-        // concurrently update the node_visit_counter to track most visited nodes. The last false is to not use the
-        // "use_reorder_data" option which enables a final reranking if the disk index itself contains only PQ data.
-        cached_beam_search(samples + (i * sample_aligned_dim), 1, l_search, tmp_result_ids_64.data() + i,
-                           tmp_result_dists.data() + i, beamwidth, filtered_search, label_for_search, false);
-    }
-
-    std::sort(this->_node_visit_counter.begin(), _node_visit_counter.end(),
-              [](std::pair<uint32_t, uint32_t> &left, std::pair<uint32_t, uint32_t> &right) {
-                  return left.second > right.second;
-              });
-    node_list.clear();
-    node_list.shrink_to_fit();
-    num_nodes_to_cache = std::min(num_nodes_to_cache, this->_node_visit_counter.size());
-    node_list.reserve(num_nodes_to_cache);
-    for (uint64_t i = 0; i < num_nodes_to_cache; i++)
-    {
-        node_list.push_back(this->_node_visit_counter[i].first);
-    }
-    this->_count_visited_nodes = false;
-
-    diskann::aligned_free(samples);
-}
+//#ifdef EXEC_ENV_OLS
+//template <typename T, typename LabelT>
+//void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(MemoryMappedFiles &files, std::string sample_bin,
+//                                                                      uint64_t l_search, uint64_t beamwidth,
+//                                                                      uint64_t num_nodes_to_cache, uint32_t nthreads,
+//                                                                      std::vector<uint32_t> &node_list)
+//{
+//#else
+//template <typename T, typename LabelT>
+//void PQFlashIndex<T, LabelT>::generate_cache_list_from_sample_queries(std::string sample_bin, uint64_t l_search,
+//                                                                      uint64_t beamwidth, uint64_t num_nodes_to_cache,
+//                                                                      uint32_t nthreads,
+//                                                                      std::vector<uint32_t> &node_list)
+//{
+//#endif
+//    if (num_nodes_to_cache >= this->_num_points)
+//    {
+//        // for small num_points and big num_nodes_to_cache, use below way to get the node_list quickly
+//        node_list.resize(this->_num_points);
+//        for (uint32_t i = 0; i < this->_num_points; ++i)
+//        {
+//            node_list[i] = i;
+//        }
+//        return;
+//    }
+//
+//    this->_count_visited_nodes = true;
+//    this->_node_visit_counter.clear();
+//    this->_node_visit_counter.resize(this->_num_points);
+//    for (uint32_t i = 0; i < _node_visit_counter.size(); i++)
+//    {
+//        this->_node_visit_counter[i].first = i;
+//        this->_node_visit_counter[i].second = 0;
+//    }
+//
+//    uint64_t sample_num, sample_dim, sample_aligned_dim;
+//    T *samples;
+//
+//#ifdef EXEC_ENV_OLS
+//    if (files.fileExists(sample_bin))
+//    {
+//        diskann::load_aligned_bin<T>(files, sample_bin, samples, sample_num, sample_dim, sample_aligned_dim);
+//    }
+//#else
+//    if (file_exists(sample_bin))
+//    {
+//        diskann::load_aligned_bin<T>(sample_bin, samples, sample_num, sample_dim, sample_aligned_dim);
+//    }
+//#endif
+//    else
+//    {
+//        diskann::cerr << "Sample bin file not found. Not generating cache." << std::endl;
+//        return;
+//    }
+//
+//    std::vector<uint64_t> tmp_result_ids_64(sample_num, 0);
+//    std::vector<float> tmp_result_dists(sample_num, 0);
+//
+//    bool filtered_search = false;
+//    std::vector<LabelT> random_query_filters(sample_num);
+//    if (_filter_to_medoid_ids.size() != 0)
+//    {
+//        filtered_search = true;
+//        generate_random_labels(random_query_filters, (uint32_t)sample_num, nthreads);
+//    }
+//
+//#pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
+//    for (int64_t i = 0; i < (int64_t)sample_num; i++)
+//    {
+//        auto &label_for_search = random_query_filters[i];
+//        // run a search on the sample query with a random label (sampled from base label distribution), and it will
+//        // concurrently update the node_visit_counter to track most visited nodes. The last false is to not use the
+//        // "use_reorder_data" option which enables a final reranking if the disk index itself contains only PQ data.
+//        cached_beam_search(samples + (i * sample_aligned_dim), 1, l_search, tmp_result_ids_64.data() + i,
+//                           tmp_result_dists.data() + i, beamwidth, filtered_search, label_for_search, false);
+//    }
+//
+//    std::sort(this->_node_visit_counter.begin(), _node_visit_counter.end(),
+//              [](std::pair<uint32_t, uint32_t> &left, std::pair<uint32_t, uint32_t> &right) {
+//                  return left.second > right.second;
+//              });
+//    node_list.clear();
+//    node_list.shrink_to_fit();
+//    num_nodes_to_cache = std::min(num_nodes_to_cache, this->_node_visit_counter.size());
+//    node_list.reserve(num_nodes_to_cache);
+//    for (uint64_t i = 0; i < num_nodes_to_cache; i++)
+//    {
+//        node_list.push_back(this->_node_visit_counter[i].first);
+//    }
+//    this->_count_visited_nodes = false;
+//
+//    diskann::aligned_free(samples);
+//}
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std::vector<uint32_t> &node_list,
@@ -548,32 +548,32 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::use_medoids
     }
 }
 
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
-                                                     const uint32_t nthreads)
-{
-    std::random_device rd;
-    labels.clear();
-    labels.resize(num_labels);
-
-    uint64_t num_total_labels = _pts_to_label_offsets[_num_points - 1] + _pts_to_label_counts[_num_points - 1];
-    std::mt19937 gen(rd());
-    if (num_total_labels == 0)
-    {
-        std::stringstream stream;
-        stream << "No labels found in data. Not sampling random labels ";
-        diskann::cerr << stream.str() << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-    std::uniform_int_distribution<uint64_t> dis(0, num_total_labels - 1);
-
-#pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
-    for (int64_t i = 0; i < num_labels; i++)
-    {
-        uint64_t rnd_loc = dis(gen);
-        labels[i] = (LabelT)_pts_to_labels[rnd_loc];
-    }
-}
+//template <typename T, typename LabelT>
+//void PQFlashIndex<T, LabelT>::generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
+//                                                     const uint32_t nthreads)
+//{
+//    std::random_device rd;
+//    labels.clear();
+//    labels.resize(num_labels);
+//
+//    uint64_t num_total_labels = _pts_to_label_offsets[_num_points - 1] + _pts_to_label_counts[_num_points - 1];
+//    std::mt19937 gen(rd());
+//    if (num_total_labels == 0)
+//    {
+//        std::stringstream stream;
+//        stream << "No labels found in data. Not sampling random labels ";
+//        diskann::cerr << stream.str() << std::endl;
+//        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+//    }
+//    std::uniform_int_distribution<uint64_t> dis(0, num_total_labels - 1);
+//
+//#pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
+//    for (int64_t i = 0; i < num_labels; i++)
+//    {
+//        uint64_t rnd_loc = dis(gen);
+//        labels[i] = (LabelT)_pts_to_labels[rnd_loc];
+//    }
+//}
 
 template <typename T, typename LabelT>
 std::unordered_map<std::string, LabelT> PQFlashIndex<T, LabelT>::load_label_map(std::basic_istream<char> &map_reader)
@@ -872,38 +872,24 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     this->_table_stats.node_mem_usage = npts_u64 * nchunks_u64;
 
 #ifdef EXEC_ENV_OLS
-    if (files.fileExists(labels_file))
-    {
-        FileContent &content_labels = files.getContent(labels_file);
-        std::stringstream infile(std::string((const char *)content_labels._content, content_labels._size));
+    FileContent& content_labels_map = files.getContent(labels_map_file);
+    std::stringstream map_reader(std::string((const char*)content_labels_map._content, content_labels_map._size));
 #else
-    if (file_exists(labels_file))
-    {
-        std::ifstream infile(labels_file, std::ios::binary);
-        if (infile.fail())
-        {
-            throw diskann::ANNException(std::string("Failed to open file ") + labels_file, -1);
-        }
+    std::ifstream map_reader(labels_map_file);
 #endif
-        parse_label_file(infile, num_pts_in_label_file);
-        assert(num_pts_in_label_file == this->_num_points);
+    _label_map = load_label_map(map_reader);
+    this->_table_stats.label_count = _label_map.size();
 
 #ifndef EXEC_ENV_OLS
-        infile.close();
+    map_reader.close();
 #endif
 
-#ifdef EXEC_ENV_OLS
-        FileContent &content_labels_map = files.getContent(labels_map_file);
-        std::stringstream map_reader(std::string((const char *)content_labels_map._content, content_labels_map._size));
-#else
-        std::ifstream map_reader(labels_map_file);
-#endif
-        _label_map = load_label_map(map_reader);
-        this->_table_stats.label_count = _label_map.size();
-
-#ifndef EXEC_ENV_OLS
-        map_reader.close();
-#endif
+    label_helper().parse_label_file_in_bitset(
+        labels_file,
+        num_pts_in_label_file,
+        _label_map.size(),
+        _bitmask_buf,
+        _table_stats);
 
 #ifdef EXEC_ENV_OLS
         if (files.fileExists(labels_to_medoids))
@@ -1343,6 +1329,15 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     T *aligned_query_T = query_scratch->aligned_query_T();
     float *query_float = pq_query_scratch->aligned_query_float;
     float *query_rotated = pq_query_scratch->rotated_query;
+
+    simple_bitmask_full_val bitmask_full_val;
+
+    std::vector<std::uint64_t>& query_bitmask_buf = query_scratch->query_label_bitmask();
+    if (use_filter)
+    {
+        query_bitmask_buf.resize(_bitmask_buf._bitmask_size, 0);
+        bitmask_full_val._mask = query_bitmask_buf.data();
+    }
 
     // normalization step. for cosine, we simply normalize the query
     // for mips, we normalize the first d-1 dims, and add a 0 for last dim, since an extra coordinate was used to

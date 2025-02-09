@@ -97,9 +97,10 @@ template <typename T> void SSDQueryScratch<T>::reset()
     visited.clear();
     retset.clear();
     full_retset.clear();
+    _query_label_bitmask.clear();
 }
 
-template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve)
+template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, size_t bitmask_size)
 {
     size_t coord_alloc_size = ROUND_UP(sizeof(T) * aligned_dim, 256);
 
@@ -115,6 +116,11 @@ template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, si
 
     visited.reserve(visited_reserve);
     full_retset.reserve(visited_reserve);
+
+    if (bitmask_size > 0)
+    {
+        _query_label_bitmask.resize(bitmask_size, 0);
+    }
 }
 
 template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
