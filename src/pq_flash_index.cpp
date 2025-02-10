@@ -1320,6 +1320,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
                                                  const uint32_t io_limit, const bool use_reorder_data,
+                                                 std::function<float(std::uint32_t)> rerank_fn,
                                                  QueryStats *stats)
 {
 
@@ -1543,6 +1544,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             {
                 cur_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
             }
+            else if (rerank_fn != nullptr)
+            {
+                cur_expanded_dist = rerank_fn(cached_nhood.first);
+            }
             else
             {
                 if (metric == diskann::Metric::INNER_PRODUCT)
@@ -1608,6 +1613,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             if (!_use_disk_index_pq)
             {
                 cur_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
+            }
+            else if (rerank_fn != nullptr)
+            {
+                cur_expanded_dist = rerank_fn(frontier_nhood.first);
             }
             else
             {
