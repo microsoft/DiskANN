@@ -13,6 +13,7 @@
 #include "utils.h"
 #include "windows_customizations.h"
 #include "scratch.h"
+#include "reorder_data.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 
@@ -82,7 +83,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_filter, const LabelT &filter_label,
                                               const uint32_t io_limit, const bool use_reorder_data = false,
-                                              std::function<float(std::uint32_t)> rerank_fn = nullptr,
+                                              std::function<float(const reorder_data&)> rerank_fn = nullptr,
                                               QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
