@@ -1332,14 +1332,17 @@ template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
-                                                 const uint32_t io_limit, const uint32_t max_l_per_seller, const bool use_reorder_data,
+                                                 const uint32_t io_limit, const uint32_t max_k_per_seller, const bool use_reorder_data,
                                                  QueryStats *stats)
 {
 
     bool diverse_search = false;
-    if (max_l_per_seller != std::numeric_limits<uint32_t>::max())
+    uint32_t max_l_per_seller = std::numeric_limits<uint32_t>::max();
+    if (max_k_per_seller != std::numeric_limits<uint32_t>::max())
+    {
         diverse_search = true;
-
+        max_l_per_seller = max_k_per_seller * (l_search / k_search);
+    }
 
     uint64_t num_sector_per_nodes = DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
     if (beam_width > num_sector_per_nodes * defaults::MAX_N_SECTOR_READS)
@@ -1762,6 +1765,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     if (diverse_search) {
         best_diverse_nodes_ref.clear();
+        best_diverse_nodes_ref.setup(k_search, max_k_per_seller);
+
         for (auto &x : full_retset) {
             best_diverse_nodes_ref.insert(x.id, x.distance);
         }
