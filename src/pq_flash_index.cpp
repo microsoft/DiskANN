@@ -1288,7 +1288,9 @@ bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader, IOConte
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const bool use_reorder_data, QueryStats *stats)
+                                                 const bool use_reorder_data, 
+                                                 std::function<float(const std::uint8_t*, size_t)> rerank_fn,
+                                                 QueryStats *stats)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, std::numeric_limits<uint32_t>::max(),
                        use_reorder_data, stats);
@@ -1298,21 +1300,24 @@ template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
-                                                 const bool use_reorder_data, QueryStats *stats)
+                                                 const bool use_reorder_data,
+                                                 std::function<float(const std::uint8_t*, size_t)> rerank_fn,
+                                                 QueryStats *stats)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
-                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+                       std::numeric_limits<uint32_t>::max(), use_reorder_data, rerank_fn, stats);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const uint32_t io_limit, const bool use_reorder_data,
+                                                 std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
     LabelT dummy_filter = 0;
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
-                       use_reorder_data, stats);
+                       use_reorder_data, rerank_fn, stats);
 }
 
 template <typename T, typename LabelT>
@@ -1320,7 +1325,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
                                                  const uint32_t io_limit, const bool use_reorder_data,
-                                                 std::function<float(const reorder_data&)> rerank_fn,
+                                                 std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
 
@@ -1711,10 +1716,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             auto location = (sector_scratch + i * defaults::SECTOR_LEN) + VECTOR_SECTOR_OFFSET(id);
             if (rerank_fn != nullptr)
             {
-                reorder_data rd;
-                rd.data = (std::uint8_t *)location;
-                rd.size = >this->_data_dim * sizeof(T);
-                full_retset[i].distance = rerank_fn(rd);
+                full_retset[i].distance = rerank_fn((std::uint8_t*)location, this->_data_dim * sizeof(T));
             }
             else
             {
