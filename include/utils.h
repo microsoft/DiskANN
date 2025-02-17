@@ -263,7 +263,11 @@ inline void alloc_aligned(void **ptr, size_t size, size_t align)
 #ifndef _WINDOWS
     *ptr = ::aligned_alloc(align, size);
 #else
-    *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
+    #ifdef EXEC_ENV_OLS
+        *ptr = static_cast<void *>(operator new(size, std::align_val_t(align)));
+    #else
+        *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
+    #endif
 #endif
     if (*ptr == nullptr)
         report_memory_allocation_failure();
