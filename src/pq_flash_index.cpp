@@ -1063,7 +1063,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
 #ifndef EXEC_ENV_OLS
 // TODO: Make this friendly for DLVS
-        this->_seller_file = std ::string(_disk_index_file) + "_sellers.txt";
+        this->_seller_file = std ::string(index_filepath) + "_sellers.txt";
+        std::cout<<this->_seller_file << std::endl;
         if(file_exists(this->_seller_file)) {
         uint64_t nrows_seller_file;
         parse_seller_file(this->_seller_file, nrows_seller_file);
@@ -1715,7 +1716,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (use_reorder_data)
     {
         if (!(this->_reorder_data_exists))
-        {
+        { 
             throw ANNException("Requested use of reordering data which does "
                                "not exist in index "
                                "file",
