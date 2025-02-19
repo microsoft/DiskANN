@@ -880,7 +880,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
                 throw ANNException("Mismatch in num_points between reorder "
                                    "data file and base file",
                                    -1, __FUNCSIG__, __FILE__, __LINE__);
-            if (reorder_data_file_size != 8 + sizeof(float) * (size_t)npts_reorder_file * (size_t)ndims_reorder_file)
+            if (reorder_data_file_size != 8 + sizeof(T) * (size_t)npts_reorder_file * (size_t)ndims_reorder_file)
                 throw ANNException("Discrepancy in reorder data file size ", -1, __FUNCSIG__, __FILE__, __LINE__);
         }
         catch (std::system_error &e)
@@ -1067,7 +1067,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     {
         diskann::cout << "Index written. Appending reorder data..." << std::endl;
 
-        auto vec_len = ndims_reorder_file * sizeof(float);
+        auto vec_len = ndims_reorder_file * sizeof(T);
         std::unique_ptr<char[]> vec_buf = std::make_unique<char[]>(vec_len);
 
         for (uint64_t sector = 0; sector < n_reorder_sectors; sector++)
@@ -1101,7 +1101,8 @@ template <typename T, typename LabelT>
 int build_disk_index(const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters,
                      diskann::Metric compareMetric, bool use_opq, const std::string &codebook_prefix, bool use_filters,
                      const std::string &label_file, const std::string &universal_label, const uint32_t filter_threshold,
-                     const uint32_t Lf)
+                     const uint32_t Lf,
+                     const char* reorderDataFilePath)
 {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
@@ -1341,7 +1342,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
             diskann::create_disk_layout<uint8_t>(disk_pq_compressed_vectors_path, mem_index_path, disk_index_path);
         else
             diskann::create_disk_layout<uint8_t>(disk_pq_compressed_vectors_path, mem_index_path, disk_index_path,
-                                                 data_file_to_use.c_str());
+                                                reorderDataFilePath);
     }
     diskann::cout << timer.elapsed_seconds_for_step("generating disk layout") << std::endl;
 
@@ -1433,21 +1434,24 @@ template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint32_t>(const char *da
                                                                   const std::string &codebook_prefix, bool use_filters,
                                                                   const std::string &label_file,
                                                                   const std::string &universal_label,
-                                                                  const uint32_t filter_threshold, const uint32_t Lf);
+                                                                  const uint32_t filter_threshold, const uint32_t Lf,
+                                                                  const char* reorderDataFilePath);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                    const char *indexBuildParameters,
                                                                    diskann::Metric compareMetric, bool use_opq,
                                                                    const std::string &codebook_prefix, bool use_filters,
                                                                    const std::string &label_file,
                                                                    const std::string &universal_label,
-                                                                   const uint32_t filter_threshold, const uint32_t Lf);
+                                                                   const uint32_t filter_threshold, const uint32_t Lf,
+                                                                   const char* reorderDataFilePath);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                  const char *indexBuildParameters,
                                                                  diskann::Metric compareMetric, bool use_opq,
                                                                  const std::string &codebook_prefix, bool use_filters,
                                                                  const std::string &label_file,
                                                                  const std::string &universal_label,
-                                                                 const uint32_t filter_threshold, const uint32_t Lf);
+                                                                 const uint32_t filter_threshold, const uint32_t Lf,
+                                                                 const char* reorderDataFilePath);
 // LabelT = uint16
 template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                   const char *indexBuildParameters,
@@ -1455,21 +1459,24 @@ template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint16_t>(const char *da
                                                                   const std::string &codebook_prefix, bool use_filters,
                                                                   const std::string &label_file,
                                                                   const std::string &universal_label,
-                                                                  const uint32_t filter_threshold, const uint32_t Lf);
+                                                                  const uint32_t filter_threshold, const uint32_t Lf,
+                                                                  const char* reorderDataFilePath);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                    const char *indexBuildParameters,
                                                                    diskann::Metric compareMetric, bool use_opq,
                                                                    const std::string &codebook_prefix, bool use_filters,
                                                                    const std::string &label_file,
                                                                    const std::string &universal_label,
-                                                                   const uint32_t filter_threshold, const uint32_t Lf);
+                                                                   const uint32_t filter_threshold, const uint32_t Lf,
+                                                                   const char* reorderDataFilePath);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                  const char *indexBuildParameters,
                                                                  diskann::Metric compareMetric, bool use_opq,
                                                                  const std::string &codebook_prefix, bool use_filters,
                                                                  const std::string &label_file,
                                                                  const std::string &universal_label,
-                                                                 const uint32_t filter_threshold, const uint32_t Lf);
+                                                                 const uint32_t filter_threshold, const uint32_t Lf,
+                                                                 const char* reorderDataFilePath);
 
 template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,
