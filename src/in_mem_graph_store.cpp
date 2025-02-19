@@ -200,19 +200,27 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
 int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size_t num_points,
                                 const size_t num_frozen_points, const uint32_t start)
 {
+    diskann::cout << "Start graph saving to ckp1 " << index_path_prefix << std::endl;
     std::ofstream out;
     open_file_to_write(out, index_path_prefix);
-
+    diskann::cout << "Open_file finished " << index_path_prefix << std::endl;
     size_t file_offset = 0;
     out.seekp(file_offset, out.beg);
+    diskann::cout << "seekp finished " << index_path_prefix << std::endl;
     size_t index_size = 24;
     uint32_t max_degree = 0;
+    diskann::cout << "start writting bits chp1 " << index_path_prefix << std::endl;
     out.write((char *)&index_size, sizeof(uint64_t));
+    diskann::cout << "start writting bits chp2 " << index_path_prefix << std::endl;
     out.write((char *)&_max_observed_degree, sizeof(uint32_t));
+    diskann::cout << "start writting bits chp3 " << index_path_prefix << std::endl;
     uint32_t ep_u32 = start;
     out.write((char *)&ep_u32, sizeof(uint32_t));
+    diskann::cout << "start writting bits chp4 " << index_path_prefix << std::endl;
     out.write((char *)&num_frozen_points, sizeof(size_t));
+    diskann::cout << "start writting bits chp5 " << index_path_prefix << std::endl;
 
+    diskann::cout << "Start graph saving to ckp2 " << index_path_prefix << std::endl;
     // Note: num_points = _nd + _num_frozen_points
     for (uint32_t i = 0; i < num_points; i++)
     {
@@ -226,6 +234,11 @@ int InMemGraphStore::save_graph(const std::string &index_path_prefix, const size
     out.write((char *)&index_size, sizeof(uint64_t));
     out.write((char *)&max_degree, sizeof(uint32_t));
     out.close();
+
+    std::ifstream file(index_path_prefix, std::ifstream::ate | std::ifstream::binary);
+    std::streamsize size = file.tellg();
+    file.close();
+    diskann::cout << "Graph saved to " << index_path_prefix << " size: " << size << std::endl;
     return (int)index_size;
 }
 

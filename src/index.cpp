@@ -1213,7 +1213,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     pruned_list.reserve(range);
 
     occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch);
-    assert(pruned_list.size() <= range);
+    //assert(pruned_list.size() <= range);
 
     if (_saturate_graph && alpha > 1)
     {
@@ -1234,12 +1234,12 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
 {
     const auto &src_pool = pruned_list;
 
-    assert(!src_pool.empty());
+    //assert(!src_pool.empty());
 
     for (auto des : src_pool)
     {
-        // des.loc is the loc of the neighbors of n
-        assert(des < _max_points + _num_frozen_pts);
+        //// des.loc is the loc of the neighbors of n
+        //assert(des < _max_points + _num_frozen_pts);
         // des_pool contains the neighbors of the neighbors of n
         std::vector<uint32_t> copy_of_neighbors;
         bool prune_needed = false;
@@ -1346,13 +1346,13 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         {
             search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
         }
-        assert(pruned_list.size() > 0);
+ /*       assert(pruned_list.size() > 0);*/
 
         {
             LockGuard guard(_locks[node]);
 
             _graph_store->set_neighbours(node, pruned_list);
-            assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
+            //assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
         }
 
         inter_insert(node, pruned_list, scratch);

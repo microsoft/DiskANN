@@ -159,6 +159,11 @@ inline int delete_file(const std::string &fileName)
 {
     if (file_exists(fileName))
     {
+        std::ifstream file(fileName, std::ifstream::ate | std::ifstream::binary);
+        std::streamsize size = file.tellg();
+        file.close();
+        diskann::cout << "Deleting file: " << fileName << " size: " << size << std::endl;
+
         auto rc = ::remove(fileName.c_str());
         if (rc != 0)
         {
@@ -168,6 +173,9 @@ inline int delete_file(const std::string &fileName)
                              "If you see this message, please contact the diskann team."
                           << std::endl;
         }
+
+        diskann::cout << "Deleted file: " << fileName << " size: " << size << std::endl;
+
         return rc;
     }
     else
@@ -731,7 +739,7 @@ inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t
 
     writer.write((char *)data, npts * ndims * sizeof(T));
     writer.close();
-    diskann::cout << "Finished writing bin." << std::endl;
+    diskann::cout << "Finished writing bin." << filename << std::endl;
     return bytes_written;
 }
 
@@ -942,6 +950,7 @@ template <typename T>
 inline size_t save_data_in_base_dimensions(const std::string &filename, T *data, size_t npts, size_t ndims,
                                            size_t aligned_dim, size_t offset = 0)
 {
+    diskann::cout << "Start writing data in base dimentions cpk1 " << filename << std::endl;
     std::ofstream writer; //(filename, std::ios::binary | std::ios::out);
     open_file_to_write(writer, filename);
     int npts_i32 = (int)npts, ndims_i32 = (int)ndims;
@@ -949,11 +958,18 @@ inline size_t save_data_in_base_dimensions(const std::string &filename, T *data,
     writer.seekp(offset, writer.beg);
     writer.write((char *)&npts_i32, sizeof(int));
     writer.write((char *)&ndims_i32, sizeof(int));
+
+    diskann::cout << "Start writing data in base dimentions cpk2 " << filename << std::endl;
     for (size_t i = 0; i < npts; i++)
     {
         writer.write((char *)(data + i * aligned_dim), ndims * sizeof(T));
     }
     writer.close();
+
+    std::ifstream file(filename, std::ifstream::ate | std::ifstream::binary);
+    std::streamsize size = file.tellg();
+    file.close();
+    diskann::cout << "Finished writing data in base dimentions." << filename << " size: " << size << std::endl;
     return bytes_written;
 }
 

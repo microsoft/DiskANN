@@ -77,5 +77,6 @@ const char *UNIVERSAL_LABEL =
     "in the labels file instead of listing all labels for a node.  DiskANN will not automatically assign a "
     "universal label to a node.";
 const char *FILTERED_LBUILD = "Build complexity for filtered points, higher value results in better graphs";
-
+const char *SUBSHARD_ID_DESCRIPTION = "multi shard id for distributed multishard index build";
+const char *NUM_PARTS_DESCRIPTION = "Number of parts to split the index for distributed multishard index build";
 } // namespace program_options_utils
