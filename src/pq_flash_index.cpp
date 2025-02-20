@@ -1532,6 +1532,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     cmps++;
                     float dist = dist_scratch[m];
                     Neighbor nn(id, dist);
+                    // expand the neighbor here
                     retset.insert(nn);
                 }
             }
