@@ -681,6 +681,8 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         return 0;
     }
 
+    diskann::cout << "Full index does not fit in RAM budget, building in multiple shots" << std::endl;
+
     // where the universal label is to be saved in the final graph
     std::string final_index_universal_label_file = mem_index_path + "_universal_label.txt";
 
@@ -1115,8 +1117,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     {
         diskann::cout << "Correct usage of parameters is R (max degree)\n"
                          "L (indexing list size, better if >= R)\n"
-                         "B (RAM limit of final index in GB)\n"
-                         "M (memory limit while indexing)\n"
+                         "B (RAM limit of final index in GB)\n" // search
+                         "M (memory limit while indexing)\n"    // build
                          "T (number of threads for indexing)\n"
                          "B' (PQ bytes for disk index: optional parameter for "
                          "very large dimensional data)\n"
@@ -1285,8 +1287,10 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
 
     size_t points_num, dim;
 
+    diskann::cout << "getting bin metadata" << std::endl;
     Timer timer;
     diskann::get_bin_metadata(data_file_to_use.c_str(), points_num, dim);
+    diskann::cout << timer.elapsed_seconds_for_step("getting bin metadata") << std::endl;
     const double p_val = ((double)MAX_PQ_TRAINING_SET_SIZE / (double)points_num);
 
     if (use_disk_pq)

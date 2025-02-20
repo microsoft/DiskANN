@@ -3,11 +3,15 @@
 
 #include "common_includes.h"
 
+#include <algorithm>
+#include <memory>
+
 #include "timer.h"
 #include "pq.h"
 #include "pq_scratch.h"
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
+#include "embedding_compute.h"
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -1339,6 +1343,16 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                // we have a rotation matrix
     float *pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
     _pq_table.populate_chunk_distances(query_rotated, pq_dists);
+    // Preprocess Distance b/w Query Vector and Centroids
+    //            Chunk 1 | Chunk 2 | Chunk 3
+    // Centroid 1  d[1][1]  d[1][2]  d[1][3]
+    // Centroid 2
+    // Centroid 3
+    // Centroid 4
+    // Centroid 5
+    // Centroid 6
+    // Centroid 7
+    // Centroid 8
 
     // query <-> neighbor list
     float *dist_scratch = pq_query_scratch->aligned_dist_scratch;
@@ -1347,6 +1361,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     // lambda to batch compute query<-> node distances in PQ space
     auto compute_dists = [this, pq_coord_scratch, pq_dists](const uint32_t *ids, const uint64_t n_ids,
                                                             float *dists_out) {
+        // Vector[0], {3, 6, 2}
+        // Distance = d[3][1] + d[6][2] + d[2][3]
         diskann::aggregate_coords(ids, n_ids, this->data, this->_n_chunks, pq_coord_scratch);
         diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->_n_chunks, pq_dists, dists_out);
     };
@@ -1356,6 +1372,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     NeighborPriorityQueue &retset = query_scratch->retset;
     retset.reserve(l_search);
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
+    std::vector<T *> points_to_compute; // Store points for later embedding computation
 
     uint32_t best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();
@@ -1487,20 +1504,21 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         {
             auto global_cache_iter = _coord_cache.find(cached_nhood.first);
             T *node_fp_coords_copy = global_cache_iter->second;
-            float cur_expanded_dist;
-            if (!_use_disk_index_pq)
-            {
-                cur_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
-            }
-            else
-            {
-                if (metric == diskann::Metric::INNER_PRODUCT)
-                    cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
-                else
-                    cur_expanded_dist = _disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
-                        query_float, (uint8_t *)node_fp_coords_copy);
-            }
-            full_retset.push_back(Neighbor((uint32_t)cached_nhood.first, cur_expanded_dist));
+            // float cur_expanded_dist;
+            // if (!_use_disk_index_pq)
+            // {
+            //     cur_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
+            // }
+            // else
+            // {
+            //     if (metric == diskann::Metric::INNER_PRODUCT)
+            //         cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
+            //     else
+            //         cur_expanded_dist = _disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
+            //             query_float, (uint8_t *)node_fp_coords_copy);
+            // }
+            // full_retset.push_back(Neighbor((uint32_t)cached_nhood.first, cur_expanded_dist));
+            points_to_compute.push_back(node_fp_coords_copy);
 
             uint64_t nnbrs = cached_nhood.second.first;
             uint32_t *node_nbrs = cached_nhood.second.second;
@@ -1553,19 +1571,21 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             uint64_t nnbrs = (uint64_t)(*node_buf);
             T *node_fp_coords = offset_to_node_coords(node_disk_buf);
             memcpy(data_buf, node_fp_coords, _disk_bytes_per_point);
-            float cur_expanded_dist;
-            if (!_use_disk_index_pq)
-            {
-                cur_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
-            }
-            else
-            {
-                if (metric == diskann::Metric::INNER_PRODUCT)
-                    cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
-                else
-                    cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
-            }
-            full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
+            // float cur_expanded_dist;
+            // if (!_use_disk_index_pq)
+            // {
+            //     cur_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
+            // }
+            // else
+            // {
+            //     if (metric == diskann::Metric::INNER_PRODUCT)
+            //         cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
+            //     else
+            //         cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
+            // }
+            // full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
+            points_to_compute.push_back(data_buf);
+
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
             cpu_timer.reset();
@@ -1608,6 +1628,41 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         }
 
         hops++;
+    }
+
+    diskann::cout << "hops: " << hops << std::endl;
+
+    // Now compute all embeddings at once using micro/embedd_micro.py
+    if (!points_to_compute.empty())
+    {
+        static bool initialized = false;
+        if (!initialized)
+        {
+            // Initialize with your model path
+            EmbeddingComputer::getInstance().initialize("facebook/contriever");
+            initialized = true;
+        }
+
+        // Compute embeddings for all points
+        auto embeddings = EmbeddingComputer::getInstance().computeEmbeddings(points_to_compute, this->_data_dim,
+                                                                             32 // batch size
+        );
+
+        // Update full_retset with computed distances
+        size_t emb_dim = embeddings.size() / points_to_compute.size();
+        for (size_t i = 0; i < points_to_compute.size(); i++)
+        {
+            float dist;
+            if (metric == diskann::Metric::INNER_PRODUCT)
+            {
+                dist = -_dist_cmp_float->compare(query_float, embeddings.data() + i * emb_dim, emb_dim);
+            }
+            else
+            {
+                dist = _dist_cmp_float->compare(query_float, embeddings.data() + i * emb_dim, emb_dim);
+            }
+            full_retset.push_back(Neighbor(i, dist));
+        }
     }
 
     // re-sort by distance

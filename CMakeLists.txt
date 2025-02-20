@@ -16,8 +16,35 @@
 
 
 # Some variables like MSVC are defined only after project(), so put that first.
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.10)
 project(diskann)
+
+option(PYBIND "Build with Python bindings" ON)
+
+if(PYBIND)
+    # Find Python
+    find_package(Python 3.6 COMPONENTS Interpreter Development REQUIRED)
+    execute_process(
+        COMMAND "${Python_EXECUTABLE}" -c "import pybind11; print(pybind11.get_cmake_dir())"
+        OUTPUT_VARIABLE pybind11_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    find_package(pybind11 CONFIG REQUIRED)
+    
+    message(STATUS "Python include dirs: ${Python_INCLUDE_DIRS}")
+    message(STATUS "Pybind11 include dirs: ${pybind11_INCLUDE_DIRS}")
+    
+    # Add pybind11 include directories
+    include_directories(SYSTEM ${pybind11_INCLUDE_DIRS} ${Python_INCLUDE_DIRS})
+    
+    # Add compilation definitions
+    add_definitions(-DPYBIND11_EMBEDDED)
+    
+    # Set visibility flags
+    if(NOT MSVC)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden")
+    endif()
+endif()
 
 set(CMAKE_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
@@ -286,7 +313,7 @@ if(MSVC)
 	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
 else()
     set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -msse2 -ftree-vectorize -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -msse2 -ftree-vectorize -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2 -fPIC")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG")
     if (NOT PYBIND)
         set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG -Ofast")
@@ -295,7 +322,7 @@ else()
         endif()
     else()
         # -Ofast is not supported in a python extension module
-        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG -fPIC")
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG")
     endif()
 endif()
 
@@ -331,3 +358,6 @@ include(clang-format.cmake)
 if(PYBIND)
     add_subdirectory(python)
 endif()
+
+target_link_libraries(diskann ${PYBIND11_LIBRARIES})
+target_link_libraries(diskann_s ${PYBIND11_LIBRARIES})
