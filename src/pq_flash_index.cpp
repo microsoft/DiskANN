@@ -1718,41 +1718,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         hops++;
     }
 
-    diskann::cout << "hops: " << hops << std::endl;
-
-    // Now compute all embeddings at once using micro/embedd_micro.py
-    if (!points_to_compute.empty())
-    {
-        static bool initialized = false;
-        if (!initialized)
-        {
-            // Initialize with your model path
-            EmbeddingComputer::getInstance().initialize("facebook/contriever");
-            initialized = true;
-        }
-
-        // Compute embeddings for all points
-        auto embeddings = EmbeddingComputer::getInstance().computeEmbeddings(points_to_compute, this->_data_dim,
-                                                                             32 // batch size
-        );
-
-        // Update full_retset with computed distances
-        size_t emb_dim = embeddings.size() / points_to_compute.size();
-        for (size_t i = 0; i < points_to_compute.size(); i++)
-        {
-            float dist;
-            if (metric == diskann::Metric::INNER_PRODUCT)
-            {
-                dist = -_dist_cmp_float->compare(query_float, embeddings.data() + i * emb_dim, emb_dim);
-            }
-            else
-            {
-                dist = _dist_cmp_float->compare(query_float, embeddings.data() + i * emb_dim, emb_dim);
-            }
-            full_retset.push_back(Neighbor(i, dist));
-        }
-    }
-
     // timer
     if (USE_DEFERRED_FETCH)
     {
