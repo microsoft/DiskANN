@@ -353,6 +353,10 @@ if (RESTAPI)
     add_subdirectory(apps/restapi)
 endif()
 
+find_package(CURL REQUIRED)
+find_package(nlohmann_json REQUIRED)
+target_link_libraries(diskann PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)
+
 include(clang-format.cmake)
 
 if(PYBIND)

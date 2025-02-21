@@ -44,7 +44,7 @@ class StaticMemoryIndex:
         distance_metric: Optional[DistanceMetric] = None,
         vector_dtype: Optional[VectorDType] = None,
         dimensions: Optional[int] = None,
-        enable_filters: bool = False
+        enable_filters: bool = False,
     ):
         """
         ### Parameters
@@ -86,9 +86,11 @@ class StaticMemoryIndex:
                     for line in labels_map_if:
                         (key, val) = line.split("\t")
                         self._labels_map[key] = int(val)
-                with open(f"{index_prefix_path}_label_metadata.json", "r") as labels_metadata_if:
+                with open(
+                    f"{index_prefix_path}_label_metadata.json", "r"
+                ) as labels_metadata_if:
                     self._labels_metadata = json.load(labels_metadata_if)
-            except: # noqa: E722
+            except:  # noqa: E722
                 # exceptions are basically presumed to be either file not found or file not formatted correctly
                 raise RuntimeException("Filter labels file was unable to be processed.")
         vector_dtype, metric, num_points, dims = _ensure_index_metadata(
@@ -125,7 +127,12 @@ class StaticMemoryIndex:
         )
 
     def search(
-            self, query: VectorLike, k_neighbors: int, complexity: int, filter_label: str = ""
+        self,
+        query: VectorLike,
+        k_neighbors: int,
+        complexity: int,
+        filter_label: str = "",
+        USE_DEFERRED_FETCH: bool = False,
     ) -> QueryResponse:
         """
         Searches the index by a single query vector.
@@ -155,7 +162,7 @@ class StaticMemoryIndex:
             _query.shape[0] == self._dimensions,
             f"query vector must have the same dimensionality as the index; index dimensionality: {self._dimensions}, "
             f"query dimensionality: {_query.shape[0]}",
-            )
+        )
         _assert_is_positive_uint32(k_neighbors, "k_neighbors")
         _assert_is_nonnegative_uint32(complexity, "complexity")
 
@@ -166,17 +173,18 @@ class StaticMemoryIndex:
             complexity = k_neighbors
 
         if filter_label == "":
-            neighbors, distances = self._index.search(query=_query, knn=k_neighbors, complexity=complexity)
+            neighbors, distances = self._index.search(
+                query=_query,
+                knn=k_neighbors,
+                complexity=complexity,
+                USE_DEFERRED_FETCH=USE_DEFERRED_FETCH,
+            )
         else:
             filter = self._labels_map[filter_label]
             neighbors, distances = self._index.search_with_filter(
-                query=query,
-                knn=k_neighbors,
-                complexity=complexity,
-                filter=filter
+                query=query, knn=k_neighbors, complexity=complexity, filter=filter
             )
         return QueryResponse(identifiers=neighbors, distances=distances)
-
 
     def batch_search(
         self,
@@ -184,6 +192,7 @@ class StaticMemoryIndex:
         k_neighbors: int,
         complexity: int,
         num_threads: int,
+        USE_DEFERRED_FETCH: bool = False,
     ) -> QueryResponseBatch:
         """
         Searches the index by a batch of query vectors.
@@ -224,5 +233,6 @@ class StaticMemoryIndex:
             knn=k_neighbors,
             complexity=complexity,
             num_threads=num_threads,
+            USE_DEFERRED_FETCH=USE_DEFERRED_FETCH,
         )
         return QueryResponseBatch(identifiers=neighbors, distances=distances)

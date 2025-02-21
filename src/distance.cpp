@@ -199,7 +199,7 @@ float DistanceL2Float::compare(const float *a, const float *b, uint32_t size) co
         }
         __m256 a_vec = _mm256_load_ps(a + 8 * j);
         // load b_vec
-        __m256 b_vec = _mm256_load_ps(b + 8 * j);
+    __m256 b_vec = _mm256_load_ps(b + 8 * j);
         // a_vec - b_vec
         __m256 tmp_vec = _mm256_sub_ps(a_vec, b_vec);
 

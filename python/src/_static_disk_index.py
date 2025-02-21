@@ -106,9 +106,15 @@ class StaticDiskIndex:
             num_nodes_to_cache=num_nodes_to_cache,
             cache_mechanism=cache_mechanism,
         )
+        print("After index init")
 
     def search(
-        self, query: VectorLike, k_neighbors: int, complexity: int, beam_width: int = 2
+        self,
+        query: VectorLike,
+        k_neighbors: int,
+        complexity: int,
+        beam_width: int = 2,
+        USE_DEFERRED_FETCH: bool = False,
     ) -> QueryResponse:
         """
         Searches the index by a single query vector.
@@ -143,6 +149,7 @@ class StaticDiskIndex:
             knn=k_neighbors,
             complexity=complexity,
             beam_width=beam_width,
+            USE_DEFERRED_FETCH=USE_DEFERRED_FETCH,
         )
         return QueryResponse(identifiers=neighbors, distances=distances)
 
@@ -153,6 +160,7 @@ class StaticDiskIndex:
         complexity: int,
         num_threads: int,
         beam_width: int = 2,
+        USE_DEFERRED_FETCH: bool = False,
     ) -> QueryResponseBatch:
         """
         Searches the index by a batch of query vectors.
@@ -188,6 +196,7 @@ class StaticDiskIndex:
             complexity = k_neighbors
 
         num_queries, dim = _queries.shape
+        print("USE_DEFERRED_FETCH", USE_DEFERRED_FETCH)
         neighbors, distances = self._index.batch_search(
             queries=_queries,
             num_queries=num_queries,
@@ -195,5 +204,6 @@ class StaticDiskIndex:
             complexity=complexity,
             beam_width=beam_width,
             num_threads=num_threads,
+            USE_DEFERRED_FETCH=USE_DEFERRED_FETCH,
         )
         return QueryResponseBatch(identifiers=neighbors, distances=distances)

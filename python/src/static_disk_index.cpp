@@ -14,6 +14,8 @@ StaticDiskIndex<DT>::StaticDiskIndex(const diskann::Metric metric, const std::st
                                      const uint32_t cache_mechanism)
     : _reader(std::make_shared<PlatformSpecificAlignedFileReader>()), _index(_reader, metric)
 {
+    std::cout << "Before index load" << std::endl;
+
     const uint32_t _num_threads = num_threads != 0 ? num_threads : omp_get_num_procs();
     int load_success = _index.load(_num_threads, index_path_prefix.c_str());
     if (load_success != 0)
@@ -29,6 +31,7 @@ StaticDiskIndex<DT>::StaticDiskIndex(const diskann::Metric metric, const std::st
     {
         cache_bfs_levels(num_nodes_to_cache);
     }
+    std::cout << "After index load" << std::endl;
 }
 
 template <typename DT> void StaticDiskIndex<DT>::cache_bfs_levels(const size_t num_nodes_to_cache)
@@ -56,7 +59,7 @@ void StaticDiskIndex<DT>::cache_sample_paths(const size_t num_nodes_to_cache, co
 template <typename DT>
 NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::search(
     py::array_t<DT, py::array::c_style | py::array::forcecast> &query, const uint64_t knn, const uint64_t complexity,
-    const uint64_t beam_width)
+    const uint64_t beam_width, const bool USE_DEFERRED_FETCH)
 {
     py::array_t<StaticIdType> ids(knn);
     py::array_t<float> dists(knn);
@@ -66,7 +69,7 @@ NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::search(
     diskann::QueryStats stats;
 
     _index.cached_beam_search(query.data(), knn, complexity, u64_ids.data(), dists.mutable_data(), beam_width, false,
-                              &stats);
+                              &stats, USE_DEFERRED_FETCH);
 
     auto r = ids.mutable_unchecked<1>();
     for (uint64_t i = 0; i < knn; ++i)
@@ -78,7 +81,7 @@ NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::search(
 template <typename DT>
 NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::batch_search(
     py::array_t<DT, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries, const uint64_t knn,
-    const uint64_t complexity, const uint64_t beam_width, const uint32_t num_threads)
+    const uint64_t complexity, const uint64_t beam_width, const uint32_t num_threads, const bool USE_DEFERRED_FETCH)
 {
     py::array_t<StaticIdType> ids({num_queries, knn});
     py::array_t<float> dists({num_queries, knn});
@@ -88,11 +91,11 @@ NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::batch_search(
     std::vector<uint64_t> u64_ids(knn * num_queries);
 
 #pragma omp parallel for schedule(dynamic, 1) default(none)                                                            \
-    shared(num_queries, queries, knn, complexity, u64_ids, dists, beam_width)
+    shared(num_queries, queries, knn, complexity, u64_ids, dists, beam_width, USE_DEFERRED_FETCH)
     for (int64_t i = 0; i < (int64_t)num_queries; i++)
     {
         _index.cached_beam_search(queries.data(i), knn, complexity, u64_ids.data() + i * knn, dists.mutable_data(i),
-                                  beam_width);
+                                  beam_width, USE_DEFERRED_FETCH);
     }
 
     auto r = ids.mutable_unchecked();

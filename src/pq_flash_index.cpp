@@ -11,7 +11,8 @@
 #include "pq_scratch.h"
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
-#include "embedding_compute.h"
+#include <curl/curl.h>
+#include <nlohmann/json.hpp>
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -1241,31 +1242,115 @@ bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader, IOConte
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const bool use_reorder_data, QueryStats *stats)
+                                                 const bool use_reorder_data, QueryStats *stats,
+                                                 bool USE_DEFERRED_FETCH)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, std::numeric_limits<uint32_t>::max(),
-                       use_reorder_data, stats);
+                       use_reorder_data, stats, USE_DEFERRED_FETCH);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
-                                                 const bool use_reorder_data, QueryStats *stats)
+                                                 const bool use_reorder_data, QueryStats *stats,
+                                                 bool USE_DEFERRED_FETCH)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
-                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats, USE_DEFERRED_FETCH);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const uint32_t io_limit, const bool use_reorder_data,
-                                                 QueryStats *stats)
+                                                 QueryStats *stats, bool USE_DEFERRED_FETCH)
 {
     LabelT dummy_filter = 0;
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
-                       use_reorder_data, stats);
+                       use_reorder_data, stats, USE_DEFERRED_FETCH);
+}
+
+using json = nlohmann::json;
+
+static size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp)
+{
+    size_t real_size = size * nmemb;
+    std::string *str = static_cast<std::string *>(userp);
+    str->append(static_cast<char *>(contents), real_size);
+    return real_size;
+}
+
+bool fetch_embeddings_http(const std::vector<uint32_t> &node_ids, std::vector<std::vector<float>> &out_embeddings)
+{
+    static bool curl_initialized = false;
+    if (!curl_initialized)
+    {
+        if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK)
+        {
+            diskann::cerr << "curl_global_init failed" << std::endl;
+            return false;
+        }
+        curl_initialized = true;
+    }
+    json jBody;
+    jBody["node_ids"] = node_ids;
+    std::string req_str = jBody.dump();
+
+    CURL *curl = curl_easy_init();
+    if (!curl)
+        return false;
+
+    std::string url = "http://127.0.0.1:8001/embed";
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, req_str.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, req_str.size());
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+    std::string response_str;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_str);
+
+    CURLcode res = curl_easy_perform(curl);
+    bool success = (res == CURLE_OK);
+    if (!success)
+    {
+        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+    }
+
+    if (success)
+    {
+        try
+        {
+            json jResp = json::parse(response_str);
+            auto jEmb = jResp["embeddings"];
+            out_embeddings.resize(jEmb.size());
+            for (size_t i = 0; i < jEmb.size(); i++)
+            {
+                std::vector<float> vec;
+                vec.reserve(jEmb[i].size());
+                for (auto &val : jEmb[i])
+                {
+                    vec.push_back(val.get<float>());
+                }
+                out_embeddings[i] = std::move(vec);
+            }
+        }
+        catch (...)
+        {
+            success = false;
+        }
+    }
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return success;
 }
 
 template <typename T, typename LabelT>
@@ -1273,9 +1358,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
                                                  const uint32_t io_limit, const bool use_reorder_data,
-                                                 QueryStats *stats)
+                                                 QueryStats *stats, bool USE_DEFERRED_FETCH)
 {
-
+    // printf("cached_beam_search\n");
+    // diskann::cout << "cached_beam_search" << std::endl;
     uint64_t num_sector_per_nodes = DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
     if (beam_width > num_sector_per_nodes * defaults::MAX_N_SECTOR_READS)
         throw ANNException("Beamwidth can not be higher than defaults::MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__,
@@ -1503,22 +1589,26 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         for (auto &cached_nhood : cached_nhoods)
         {
             auto global_cache_iter = _coord_cache.find(cached_nhood.first);
+            int node_id = cached_nhood.first;
             T *node_fp_coords_copy = global_cache_iter->second;
-            // float cur_expanded_dist;
-            // if (!_use_disk_index_pq)
-            // {
-            //     cur_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
-            // }
-            // else
-            // {
-            //     if (metric == diskann::Metric::INNER_PRODUCT)
-            //         cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
-            //     else
-            //         cur_expanded_dist = _disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
-            //             query_float, (uint8_t *)node_fp_coords_copy);
-            // }
-            // full_retset.push_back(Neighbor((uint32_t)cached_nhood.first, cur_expanded_dist));
-            points_to_compute.push_back(node_fp_coords_copy);
+            float cur_expanded_dist;
+            if (!_use_disk_index_pq && !USE_DEFERRED_FETCH)
+            {
+                cur_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
+            }
+            else if (USE_DEFERRED_FETCH)
+            {
+                cur_expanded_dist = 0.0f;
+            }
+            else
+            {
+                if (metric == diskann::Metric::INNER_PRODUCT)
+                    cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
+                else
+                    cur_expanded_dist = _disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
+                        query_float, (uint8_t *)node_fp_coords_copy);
+            }
+            full_retset.push_back(Neighbor((uint32_t)node_id, cur_expanded_dist));
 
             uint64_t nnbrs = cached_nhood.second.first;
             uint32_t *node_nbrs = cached_nhood.second.second;
@@ -1571,21 +1661,19 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             uint64_t nnbrs = (uint64_t)(*node_buf);
             T *node_fp_coords = offset_to_node_coords(node_disk_buf);
             memcpy(data_buf, node_fp_coords, _disk_bytes_per_point);
-            // float cur_expanded_dist;
-            // if (!_use_disk_index_pq)
-            // {
-            //     cur_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
-            // }
-            // else
-            // {
-            //     if (metric == diskann::Metric::INNER_PRODUCT)
-            //         cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
-            //     else
-            //         cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
-            // }
-            // full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
-            points_to_compute.push_back(data_buf);
-
+            float cur_expanded_dist;
+            if (!_use_disk_index_pq)
+            {
+                cur_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
+            }
+            else
+            {
+                if (metric == diskann::Metric::INNER_PRODUCT)
+                    cur_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
+                else
+                    cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
+            }
+            full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
             cpu_timer.reset();
@@ -1665,7 +1753,51 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         }
     }
 
-    // re-sort by distance
+    // timer
+    if (USE_DEFERRED_FETCH)
+    {
+        diskann::cout << "hops: " << hops << std::endl;
+
+        std::vector<uint32_t> node_ids;
+        node_ids.reserve(full_retset.size());
+        for (auto &nr : full_retset)
+        {
+            node_ids.push_back(nr.id);
+        }
+
+        Timer fetch_timer;
+        std::vector<std::vector<float>> real_embeddings;
+        bool success = fetch_embeddings_http(node_ids, real_embeddings);
+        if (!success)
+        {
+            throw ANNException("Failed to fetch embeddings", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        diskann::cout << "real_embeddings.size(): " << real_embeddings.size() << std::endl;
+        diskann::cout << "fetch_timer.elapsed(): " << fetch_timer.elapsed() << std::endl;
+
+        // compute real-dist
+        Timer compute_timer;
+        for (size_t i = 0; i < full_retset.size(); i++)
+        {
+            size_t emb_size = real_embeddings[i].size();
+            float *aligned_emb = (float *)_mm_malloc(emb_size * sizeof(float), 32);
+            if (!aligned_emb)
+            {
+                throw ANNException("Failed to allocate aligned memory", -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+            std::memcpy(aligned_emb, real_embeddings[i].data(), emb_size * sizeof(float));
+            float dist = static_cast<Distance<float> *>(_dist_cmp_float.get())
+                             ->compare(query_float, aligned_emb, (uint32_t)_aligned_dim);
+            if (metric == diskann::Metric::INNER_PRODUCT)
+                dist = -dist;
+            full_retset[i].distance = dist;
+            _mm_free(aligned_emb);
+        }
+        diskann::cout << "compute_timer.elapsed(): " << compute_timer.elapsed() << std::endl;
+    }
+
+    // sort
     std::sort(full_retset.begin(), full_retset.end());
 
     if (use_reorder_data)
