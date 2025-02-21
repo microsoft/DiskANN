@@ -40,11 +40,12 @@ template <typename DT> class StaticDiskIndex
     void cache_sample_paths(size_t num_nodes_to_cache, const std::string &warmup_query_file, uint32_t num_threads);
 
     NeighborsAndDistances<StaticIdType> search(py::array_t<DT, py::array::c_style | py::array::forcecast> &query,
-                                               uint64_t knn, uint64_t complexity, uint64_t beam_width);
+                                               uint64_t knn, uint64_t complexity, uint64_t beam_width,
+                                               bool USE_DEFERRED_FETCH = false);
 
     NeighborsAndDistances<StaticIdType> batch_search(
         py::array_t<DT, py::array::c_style | py::array::forcecast> &queries, uint64_t num_queries, uint64_t knn,
-        uint64_t complexity, uint64_t beam_width, uint32_t num_threads);
+        uint64_t complexity, uint64_t beam_width, uint32_t num_threads, bool USE_DEFERRED_FETCH = false);
 
   private:
     std::shared_ptr<AlignedFileReader> _reader;

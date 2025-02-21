@@ -1239,31 +1239,33 @@ bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader, IOConte
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const bool use_reorder_data, QueryStats *stats)
+                                                 const bool use_reorder_data, QueryStats *stats,
+                                                 bool USE_DEFERRED_FETCH)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, std::numeric_limits<uint32_t>::max(),
-                       use_reorder_data, stats);
+                       use_reorder_data, stats, USE_DEFERRED_FETCH);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
-                                                 const bool use_reorder_data, QueryStats *stats)
+                                                 const bool use_reorder_data, QueryStats *stats,
+                                                 bool USE_DEFERRED_FETCH)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
-                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats, USE_DEFERRED_FETCH);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const uint32_t io_limit, const bool use_reorder_data,
-                                                 QueryStats *stats)
+                                                 QueryStats *stats, bool USE_DEFERRED_FETCH)
 {
     LabelT dummy_filter = 0;
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
-                       use_reorder_data, stats);
+                       use_reorder_data, stats, USE_DEFERRED_FETCH);
 }
 
 using json = nlohmann::json;
@@ -1353,7 +1355,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
                                                  const uint32_t io_limit, const bool use_reorder_data,
-                                                 QueryStats *stats)
+                                                 QueryStats *stats, bool USE_DEFERRED_FETCH)
 {
     // printf("cached_beam_search\n");
     // diskann::cout << "cached_beam_search" << std::endl;
@@ -1574,9 +1576,13 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             int node_id = cached_nhood.first;
             T *node_fp_coords_copy = global_cache_iter->second;
             float cur_expanded_dist;
-            if (!_use_disk_index_pq)
+            if (!_use_disk_index_pq && !USE_DEFERRED_FETCH)
             {
                 cur_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
+            }
+            else if (USE_DEFERRED_FETCH)
+            {
+                cur_expanded_dist = 0.0f;
             }
             else
             {
@@ -1586,8 +1592,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     cur_expanded_dist = _disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
                         query_float, (uint8_t *)node_fp_coords_copy);
             }
-            full_retset.push_back(Neighbor((uint32_t)node_id, 0.0f));
-            // full_retset.push_back(Neighbor((uint32_t)node_id, cur_expanded_dist));
+            full_retset.push_back(Neighbor((uint32_t)node_id, cur_expanded_dist));
 
             uint64_t nnbrs = cached_nhood.second.first;
             uint32_t *node_nbrs = cached_nhood.second.second;
@@ -1642,9 +1647,13 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             memcpy(data_buf, node_fp_coords, _disk_bytes_per_point);
             int node_id = frontier_nhood.first;
             float cur_expanded_dist;
-            if (!_use_disk_index_pq)
+            if (!_use_disk_index_pq && !USE_DEFERRED_FETCH)
             {
                 cur_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
+            }
+            else if (USE_DEFERRED_FETCH)
+            {
+                cur_expanded_dist = 0.0f;
             }
             else
             {
@@ -1653,8 +1662,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 else
                     cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
             }
-            full_retset.push_back(Neighbor(node_id, 0.0f));
-            // full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
+            full_retset.push_back(Neighbor(node_id, cur_expanded_dist));
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
             cpu_timer.reset();
@@ -1698,46 +1706,51 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         hops++;
     }
-    diskann::cout << "hops: " << hops << std::endl;
-
-    std::vector<uint32_t> node_ids;
-    node_ids.reserve(full_retset.size());
-    for (auto &nr : full_retset)
-    {
-        node_ids.push_back(nr.id);
-    }
 
     // timer
-    Timer fetch_timer;
-    std::vector<std::vector<float>> real_embeddings;
-    bool success = fetch_embeddings_http(node_ids, real_embeddings);
-    if (!success)
+    if (USE_DEFERRED_FETCH)
     {
-        throw ANNException("Failed to fetch embeddings", -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
+        diskann::cout << "hops: " << hops << std::endl;
 
-    diskann::cout << "real_embeddings.size(): " << real_embeddings.size() << std::endl;
-    diskann::cout << "fetch_timer.elapsed(): " << fetch_timer.elapsed() << std::endl;
-
-    // compute real-dist
-    Timer compute_timer;
-    for (size_t i = 0; i < full_retset.size(); i++)
-    {
-        size_t emb_size = real_embeddings[i].size();
-        float *aligned_emb = (float *)_mm_malloc(emb_size * sizeof(float), 32);
-        if (!aligned_emb)
+        std::vector<uint32_t> node_ids;
+        node_ids.reserve(full_retset.size());
+        for (auto &nr : full_retset)
         {
-            throw ANNException("Failed to allocate aligned memory", -1, __FUNCSIG__, __FILE__, __LINE__);
+            node_ids.push_back(nr.id);
         }
-        std::memcpy(aligned_emb, real_embeddings[i].data(), emb_size * sizeof(float));
-        float dist = static_cast<Distance<float> *>(_dist_cmp_float.get())
-                         ->compare(query_float, aligned_emb, (uint32_t)_aligned_dim);
-        if (metric == diskann::Metric::INNER_PRODUCT)
-            dist = -dist;
-        full_retset[i].distance = dist;
-        _mm_free(aligned_emb);
+
+        Timer fetch_timer;
+        std::vector<std::vector<float>> real_embeddings;
+        bool success = fetch_embeddings_http(node_ids, real_embeddings);
+        if (!success)
+        {
+            throw ANNException("Failed to fetch embeddings", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        diskann::cout << "real_embeddings.size(): " << real_embeddings.size() << std::endl;
+        diskann::cout << "fetch_timer.elapsed(): " << fetch_timer.elapsed() << std::endl;
+
+        // compute real-dist
+        Timer compute_timer;
+        for (size_t i = 0; i < full_retset.size(); i++)
+        {
+            size_t emb_size = real_embeddings[i].size();
+            float *aligned_emb = (float *)_mm_malloc(emb_size * sizeof(float), 32);
+            if (!aligned_emb)
+            {
+                throw ANNException("Failed to allocate aligned memory", -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+            std::memcpy(aligned_emb, real_embeddings[i].data(), emb_size * sizeof(float));
+            float dist = static_cast<Distance<float> *>(_dist_cmp_float.get())
+                             ->compare(query_float, aligned_emb, (uint32_t)_aligned_dim);
+            if (metric == diskann::Metric::INNER_PRODUCT)
+                dist = -dist;
+            full_retset[i].distance = dist;
+            _mm_free(aligned_emb);
+        }
+        diskann::cout << "compute_timer.elapsed(): " << compute_timer.elapsed() << std::endl;
     }
-    diskann::cout << "compute_timer.elapsed(): " << compute_timer.elapsed() << std::endl;
+
     // sort
     std::sort(full_retset.begin(), full_retset.end());
 
