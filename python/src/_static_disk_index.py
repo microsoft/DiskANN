@@ -115,6 +115,7 @@ class StaticDiskIndex:
         complexity: int,
         beam_width: int = 2,
         USE_DEFERRED_FETCH: bool = False,
+        skip_search_reorder: bool = False,
     ) -> QueryResponse:
         """
         Searches the index by a single query vector.
@@ -131,6 +132,7 @@ class StaticDiskIndex:
           throughput with a fixed SSD IOps rating, use W=1. For best latency, use W=4,8 or higher complexity search.
           Specifying 0 will optimize the beamwidth depending on the number of threads performing search, but will
           involve some tuning overhead.
+        - **skip_search_reorder**: Whether to skip search reorder for diskann search.
         """
         _query = _castable_dtype_or_raise(query, expected=self._vector_dtype)
         _assert(len(_query.shape) == 1, "query vector must be 1-d")
@@ -150,6 +152,7 @@ class StaticDiskIndex:
             complexity=complexity,
             beam_width=beam_width,
             USE_DEFERRED_FETCH=USE_DEFERRED_FETCH,
+            skip_search_reorder=skip_search_reorder,
         )
         return QueryResponse(identifiers=neighbors, distances=distances)
 
@@ -161,6 +164,7 @@ class StaticDiskIndex:
         num_threads: int,
         beam_width: int = 2,
         USE_DEFERRED_FETCH: bool = False,
+        skip_search_reorder: bool = False,
     ) -> QueryResponseBatch:
         """
         Searches the index by a batch of query vectors.
@@ -181,6 +185,7 @@ class StaticDiskIndex:
           throughput with a fixed SSD IOps rating, use W=1. For best latency, use W=4,8 or higher complexity search.
           Specifying 0 will optimize the beamwidth depending on the number of threads performing search, but will
           involve some tuning overhead.
+        - **skip_search_reorder**: Whether to skip search reorder for diskann search.
         """
         _queries = _castable_dtype_or_raise(queries, expected=self._vector_dtype)
         _assert_2d(_queries, "queries")
@@ -196,7 +201,9 @@ class StaticDiskIndex:
             complexity = k_neighbors
 
         num_queries, dim = _queries.shape
-        print("USE_DEFERRED_FETCH", USE_DEFERRED_FETCH)
+        print(
+            f"USE_DEFERRED_FETCH={USE_DEFERRED_FETCH} skip_search_reorder={skip_search_reorder}"
+        )
         neighbors, distances = self._index.batch_search(
             queries=_queries,
             num_queries=num_queries,
@@ -205,5 +212,6 @@ class StaticDiskIndex:
             beam_width=beam_width,
             num_threads=num_threads,
             USE_DEFERRED_FETCH=USE_DEFERRED_FETCH,
+            skip_search_reorder=skip_search_reorder,
         )
         return QueryResponseBatch(identifiers=neighbors, distances=distances)

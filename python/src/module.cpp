@@ -91,9 +91,10 @@ template <typename T> inline void add_variant(py::module_ &m, const Variant &var
              "cache_mechanism"_a = 1)
         .def("cache_bfs_levels", &diskannpy::StaticDiskIndex<T>::cache_bfs_levels, "num_nodes_to_cache"_a)
         .def("search", &diskannpy::StaticDiskIndex<T>::search, "query"_a, "knn"_a, "complexity"_a, "beam_width"_a,
-             "USE_DEFERRED_FETCH"_a = false)
+             "USE_DEFERRED_FETCH"_a = false, "skip_search_reorder"_a = false)
         .def("batch_search", &diskannpy::StaticDiskIndex<T>::batch_search, "queries"_a, "num_queries"_a, "knn"_a,
-             "complexity"_a, "beam_width"_a, "num_threads"_a, "USE_DEFERRED_FETCH"_a = false);
+             "complexity"_a, "beam_width"_a, "num_threads"_a, "USE_DEFERRED_FETCH"_a = false,
+             "skip_search_reorder"_a = false);
 }
 
 PYBIND11_MODULE(_diskannpy, m)

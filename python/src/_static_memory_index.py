@@ -133,6 +133,7 @@ class StaticMemoryIndex:
         complexity: int,
         filter_label: str = "",
         USE_DEFERRED_FETCH: bool = False,
+        skip_search_reorder: bool = False,
     ) -> QueryResponse:
         """
         Searches the index by a single query vector.
@@ -178,6 +179,7 @@ class StaticMemoryIndex:
                 knn=k_neighbors,
                 complexity=complexity,
                 USE_DEFERRED_FETCH=USE_DEFERRED_FETCH,
+                skip_search_reorder=skip_search_reorder,
             )
         else:
             filter = self._labels_map[filter_label]
@@ -193,6 +195,7 @@ class StaticMemoryIndex:
         complexity: int,
         num_threads: int,
         USE_DEFERRED_FETCH: bool = False,
+        skip_search_reorder: bool = False,
     ) -> QueryResponseBatch:
         """
         Searches the index by a batch of query vectors.
@@ -234,5 +237,6 @@ class StaticMemoryIndex:
             complexity=complexity,
             num_threads=num_threads,
             USE_DEFERRED_FETCH=USE_DEFERRED_FETCH,
+            skip_search_reorder=skip_search_reorder,
         )
         return QueryResponseBatch(identifiers=neighbors, distances=distances)
