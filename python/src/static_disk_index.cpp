@@ -95,7 +95,7 @@ NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::batch_search(
     for (int64_t i = 0; i < (int64_t)num_queries; i++)
     {
         _index.cached_beam_search(queries.data(i), knn, complexity, u64_ids.data() + i * knn, dists.mutable_data(i),
-                                  beam_width, USE_DEFERRED_FETCH);
+                                  beam_width, false, nullptr, USE_DEFERRED_FETCH);
     }
 
     auto r = ids.mutable_unchecked();
