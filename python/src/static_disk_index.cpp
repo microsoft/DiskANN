@@ -80,7 +80,7 @@ NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::batch_search(
     py::array_t<DT, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries, const uint64_t knn,
     const uint64_t complexity, const uint64_t beam_width, const uint32_t num_threads)
 {
-    py::array_t<StaticIdType> ids({num_queries, knn});
+    py::array_t<uint64_t> ids({num_queries, knn});
     py::array_t<float> dists({num_queries, knn});
 
     omp_set_num_threads(num_threads);
