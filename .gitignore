@@ -380,3 +380,5 @@ gperftools
 rust/target
 
 python/src/*.so
+
+compile_commands.json

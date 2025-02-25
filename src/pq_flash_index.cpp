@@ -3,7 +3,7 @@
 
 #include "common_includes.h"
 
-#include <algoritrehm>
+#include <algorithm>
 #include <memory>
 
 #include "timer.h"
@@ -1590,16 +1590,21 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         for (auto &cached_nhood : cached_nhoods)
         {
             auto global_cache_iter = _coord_cache.find(cached_nhood.first);
-            int node_id = cached_nhood.first;
+            uint32_t node_id = cached_nhood.first;
             T *node_fp_coords_copy = global_cache_iter->second;
             float cur_expanded_dist;
-            if (!_use_disk_index_pq && !USE_DEFERRED_FETCH)
+            if (skip_search_reorder)
             {
-                cur_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
+                compute_dists(&node_id, 1, dist_scratch);
+                cur_expanded_dist = dist_scratch[0]; // Store the distance in dist_scratch
             }
             else if (USE_DEFERRED_FETCH)
             {
                 cur_expanded_dist = 0.0f;
+            }
+            else if (!_use_disk_index_pq)
+            {
+                cur_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
             }
             else
             {
@@ -1609,7 +1614,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     cur_expanded_dist = _disk_pq_table.l2_distance( // disk_pq does not support OPQ yet
                         query_float, (uint8_t *)node_fp_coords_copy);
             }
-            full_retset.push_back(Neighbor((uint32_t)node_id, cur_expanded_dist));
+            full_retset.push_back(Neighbor(node_id, cur_expanded_dist));
 
             uint64_t nnbrs = cached_nhood.second.first;
             uint32_t *node_nbrs = cached_nhood.second.second;
@@ -1657,13 +1662,25 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         for (auto &frontier_nhood : frontier_nhoods)
         {
 #endif
-            char *node_disk_buf = offset_to_node(frontier_nhood.second, frontier_nhood.first);
+            uint32_t node_id = frontier_nhood.first;
+            char *node_disk_buf = offset_to_node(frontier_nhood.second, node_id);
             uint32_t *node_buf = offset_to_node_nhood(node_disk_buf);
             uint64_t nnbrs = (uint64_t)(*node_buf);
             T *node_fp_coords = offset_to_node_coords(node_disk_buf);
             memcpy(data_buf, node_fp_coords, _disk_bytes_per_point);
             float cur_expanded_dist;
-            if (!_use_disk_index_pq)
+            // If skip_reorder is true, compute distance using PQ
+            if (skip_search_reorder)
+            {
+                // Use PQ-based distance computation, avoid using full coordinates
+                compute_dists(&node_id, 1, dist_scratch);
+                cur_expanded_dist = dist_scratch[0]; // Store the distance in dist_scratch
+            }
+            else if (USE_DEFERRED_FETCH)
+            {
+                cur_expanded_dist = 0.0f;
+            }
+            else if (!_use_disk_index_pq)
             {
                 cur_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
             }
@@ -1674,7 +1691,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 else
                     cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
             }
-            full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
+            full_retset.push_back(Neighbor(node_id, cur_expanded_dist));
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
             cpu_timer.reset();
@@ -1763,10 +1780,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         diskann::cout << "compute_timer.elapsed(): " << compute_timer.elapsed() << std::endl;
     }
 
-    if (!skip_search_reorder)
-    {
-        std::sort(full_retset.begin(), full_retset.end());
-    }
+    std::sort(full_retset.begin(), full_retset.end());
 
     if (use_reorder_data)
     {
