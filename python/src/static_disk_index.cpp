@@ -80,25 +80,25 @@ NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::batch_search(
     py::array_t<DT, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries, const uint64_t knn,
     const uint64_t complexity, const uint64_t beam_width, const uint32_t num_threads)
 {
-    py::array_t<uint64_t> ids({num_queries, knn});
+    py::array_t<StaticIdType> ids({num_queries, knn});
     py::array_t<float> dists({num_queries, knn});
 
     omp_set_num_threads(num_threads);
 
-    // std::vector<uint64_t> u64_ids(knn * num_queries);
+    std::vector<uint64_t> u64_ids(knn * num_queries);
 
 #pragma omp parallel for schedule(dynamic, 1) default(none)                                                            \
     shared(num_queries, queries, knn, complexity, u64_ids, dists, beam_width)
     for (int64_t i = 0; i < (int64_t)num_queries; i++)
     {
-        _index.cached_beam_search(queries.data(i), knn, complexity, ids.mutable_data(i) + i * knn, dists.mutable_data(i),
+        _index.cached_beam_search(queries.data(i), knn, complexity, u64_ids.data() + i * knn, dists.mutable_data(i),
                                   beam_width);
     }
 
-    // auto r = ids.mutable_unchecked();
-    // for (uint64_t i = 0; i < num_queries; ++i)
-    //     for (uint64_t j = 0; j < knn; ++j)
-    //         r(i, j) = (uint32_t)u64_ids[i * knn + j];
+    auto r = ids.mutable_unchecked();
+    for (uint64_t i = 0; i < num_queries; ++i)
+        for (uint64_t j = 0; j < knn; ++j)
+            r(i, j) = (uint32_t)u64_ids[i * knn + j];
 
     return std::make_pair(ids, dists);
 }
