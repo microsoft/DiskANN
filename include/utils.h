@@ -278,7 +278,13 @@ inline void realloc_aligned(void **ptr, size_t size, size_t align)
     if (IS_ALIGNED(size, align) == 0)
         report_misalignment_of_requested_size(align);
 #ifdef _WINDOWS
-    *ptr = ::_aligned_realloc(*ptr, size, align);
+    #ifdef EXEC_ENV_OLS
+        void *newptr = static_cast<void *>(operator new(size, std::align_val_t(align)));
+        std::memcpy(newptr, ptr, size);
+        ptr = newptr;
+    #else
+        *ptr = ::_aligned_realloc(*ptr, size, align);
+    #endif
 #else
     diskann::cerr << "No aligned realloc on GCC. Must malloc and mem_align, "
                      "left it out for now."
@@ -306,7 +312,11 @@ inline void aligned_free(void *ptr)
 #ifndef _WINDOWS
     free(ptr);
 #else
-    ::_aligned_free(ptr);
+    #ifdef EXEC_ENV_OLS
+        delete ptr;
+    #else
+        ::_aligned_free(ptr);
+    #endif
 #endif
 }
 
