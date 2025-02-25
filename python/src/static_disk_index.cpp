@@ -54,33 +54,33 @@ void StaticDiskIndex<DT>::cache_sample_paths(const size_t num_nodes_to_cache, co
 }
 
 template <typename DT>
-NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::search(
+NeighborsAndDistances<StaticDiskIdType> StaticDiskIndex<DT>::search(
     py::array_t<DT, py::array::c_style | py::array::forcecast> &query, const uint64_t knn, const uint64_t complexity,
     const uint64_t beam_width)
 {
-    py::array_t<StaticIdType> ids(knn);
+    py::array_t<StaticDiskIdType> ids(knn);
     py::array_t<float> dists(knn);
 
-    std::vector<uint32_t> u32_ids(knn);
-    std::vector<uint64_t> u64_ids(knn);
+    // std::vector<uint32_t> u32_ids(knn);
+    // std::vector<uint64_t> u64_ids(knn);
     diskann::QueryStats stats;
 
-    _index.cached_beam_search(query.data(), knn, complexity, u64_ids.data(), dists.mutable_data(), beam_width, false,
+    _index.cached_beam_search(query.data(), knn, complexity, ids.mutable_data(), dists.mutable_data(), beam_width, false,
                               &stats);
 
-    auto r = ids.mutable_unchecked<1>();
-    for (uint64_t i = 0; i < knn; ++i)
-        r(i) = (unsigned)u64_ids[i];
+    // auto r = ids.mutable_unchecked<1>();
+    // for (uint64_t i = 0; i < knn; ++i)
+    //     r(i) = (unsigned)u64_ids[i];
 
     return std::make_pair(ids, dists);
 }
 
 template <typename DT>
-NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::batch_search(
+NeighborsAndDistances<StaticDiskIdType> StaticDiskIndex<DT>::batch_search(
     py::array_t<DT, py::array::c_style | py::array::forcecast> &queries, const uint64_t num_queries, const uint64_t knn,
     const uint64_t complexity, const uint64_t beam_width, const uint32_t num_threads)
 {
-    py::array_t<StaticIdType> ids({num_queries, knn});
+    py::array_t<StaticDiskIdType> ids({num_queries, knn});
     py::array_t<float> dists({num_queries, knn});
 
     omp_set_num_threads(num_threads);

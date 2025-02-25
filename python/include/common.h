@@ -17,6 +17,7 @@ namespace diskannpy
 typedef uint32_t filterT;
 
 typedef uint32_t StaticIdType;
+typedef uint64_t StaticDiskIdType;
 typedef uint32_t DynamicIdType;
 
 template <class IdType> using NeighborsAndDistances = std::pair<py::array_t<IdType>, py::array_t<float>>;
