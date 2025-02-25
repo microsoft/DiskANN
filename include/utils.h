@@ -281,7 +281,7 @@ inline void realloc_aligned(void **ptr, size_t size, size_t align)
     #ifdef EXEC_ENV_OLS
         void *newptr = static_cast<void *>(operator new(size, std::align_val_t(align)));
         std::memcpy(newptr, ptr, size);
-        ptr = newptr;
+        *ptr = newptr;
     #else
         *ptr = ::_aligned_realloc(*ptr, size, align);
     #endif
