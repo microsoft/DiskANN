@@ -85,20 +85,20 @@ NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::batch_search(
 
     omp_set_num_threads(num_threads);
 
-    std::vector<uint64_t> u64_ids(knn * num_queries);
+    // std::vector<uint64_t> u64_ids(knn * num_queries);
 
 #pragma omp parallel for schedule(dynamic, 1) default(none)                                                            \
-    shared(num_queries, queries, knn, complexity, u64_ids, dists, beam_width)
+    shared(num_queries, queries, knn, complexity, ids, dists, beam_width)
     for (int64_t i = 0; i < (int64_t)num_queries; i++)
     {
-        _index.cached_beam_search(queries.data(i), knn, complexity, u64_ids.data() + i * knn, dists.mutable_data(i),
+        _index.cached_beam_search(queries.data(i), knn, complexity, ids.mutable_data(i) + i * knn, dists.mutable_data(i),
                                   beam_width);
     }
 
-    auto r = ids.mutable_unchecked();
-    for (uint64_t i = 0; i < num_queries; ++i)
-        for (uint64_t j = 0; j < knn; ++j)
-            r(i, j) = (uint32_t)u64_ids[i * knn + j];
+    // auto r = ids.mutable_unchecked();
+    // for (uint64_t i = 0; i < num_queries; ++i)
+    //     for (uint64_t j = 0; j < knn; ++j)
+    //         r(i, j) = (uint32_t)u64_ids[i * knn + j];
 
     return std::make_pair(ids, dists);
 }
