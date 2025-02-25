@@ -279,8 +279,10 @@ inline void realloc_aligned(void **ptr, size_t size, size_t align)
         report_misalignment_of_requested_size(align);
 #ifdef _WINDOWS
     #ifdef EXEC_ENV_OLS
-        void *newptr = static_cast<void *>(operator new(size, std::align_val_t(align)));
-        std::memcpy(newptr, ptr, size);
+        void *newptr;
+        alloc_aligned(&newptr, size, align);
+        std::memcpy(newptr, *ptr, size);
+        aligned_free(*ptr);
         *ptr = newptr;
     #else
         *ptr = ::_aligned_realloc(*ptr, size, align);
@@ -314,6 +316,7 @@ inline void aligned_free(void *ptr)
 #else
     #ifdef EXEC_ENV_OLS
         delete ptr;
+        ptr = nullptr;
     #else
         ::_aligned_free(ptr);
     #endif
