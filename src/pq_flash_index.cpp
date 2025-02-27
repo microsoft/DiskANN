@@ -1119,12 +1119,6 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     READ_U64(index_metadata, this->_reorder_data_exists);
     if (this->_reorder_data_exists)
     {
-        if (this->_use_disk_index_pq == false)
-        {
-            throw ANNException("Reordering is designed for used with disk PQ "
-                               "compression option",
-                               -1, __FUNCSIG__, __FILE__, __LINE__);
-        }
         READ_U64(index_metadata, this->_reorder_data_start_sector);
         READ_U64(index_metadata, this->_ndims_reorder_vecs);
         READ_U64(index_metadata, this->_nvecs_per_sector);
