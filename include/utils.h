@@ -316,7 +316,8 @@ inline void aligned_free(void *ptr)
     free(ptr);
 #else
     #ifdef EXEC_ENV_OLS
-        diskann::cout << "No aligned free on custom allocator"<< std::endl;
+        delete ptr;
+        ptr = nullptr;
     #else
         ::_aligned_free(ptr);
     #endif
