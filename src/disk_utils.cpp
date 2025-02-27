@@ -1067,6 +1067,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     {
         diskann::cout << "Index written. Appending reorder data..." << std::endl;
 
+        cur_node_id = 0;
         auto vec_len = ndims_reorder_file * sizeof(T);
         std::unique_ptr<char[]> vec_buf = std::make_unique<char[]>(vec_len);
 
@@ -1079,7 +1080,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
             memset(sector_buf.get(), 0, defaults::SECTOR_LEN);
 
-            for (uint64_t sector_node_id = 0; sector_node_id < n_data_nodes_per_sector && sector_node_id < npts_64;
+            for (uint64_t sector_node_id = 0; sector_node_id < n_data_nodes_per_sector && cur_node_id < npts_64;
                  sector_node_id++)
             {
                 memset(vec_buf.get(), 0, vec_len);
@@ -1087,6 +1088,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
                 // copy node buf into sector_node_buf
                 memcpy(sector_buf.get() + (sector_node_id * vec_len), vec_buf.get(), vec_len);
+                cur_node_id++;
             }
             // flush sector to disk
             diskann_writer.write(sector_buf.get(), defaults::SECTOR_LEN);
