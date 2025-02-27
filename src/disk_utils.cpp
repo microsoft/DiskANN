@@ -942,7 +942,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
     if (append_reorder_data)
     {
-        n_data_nodes_per_sector = defaults::SECTOR_LEN / (ndims_reorder_file * sizeof(float));
+        n_data_nodes_per_sector = defaults::SECTOR_LEN / (ndims_reorder_file * sizeof(T));
         n_reorder_sectors = ROUND_UP(npts_64, n_data_nodes_per_sector) / n_data_nodes_per_sector;
     }
     uint64_t disk_index_file_size = (n_sectors + n_reorder_sectors + 1) * defaults::SECTOR_LEN;
