@@ -32,7 +32,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const std::string &query_file, const std::string &truthset_file, const uint32_t num_threads,
                         const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
-                        const std::vector<std::vector<std::string>> &query_filters,
+                        const std::vector<std::vector<std::vector<std::string>>> &query_filters,
                         const uint32_t filter_penalty_threshold, const uint32_t bruteforce_threshold,
                         const uint32_t clustering_threshold, uint32_t L_for_print, const float fail_if_recall_below,
                         uint32_t maxN = 10000000, float p1 = 0.1, float p2 = 0.1)
@@ -218,7 +218,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 old_g = num_graphs;
                 old_c = num_clusters;
                 method_used = 0;
-                std::vector<std::string> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+                std::vector<std::vector<std::string>> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
 
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
                                                          query_result_ids[test_id].data() + i * recall_at,
@@ -248,7 +248,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 else
                 {
                     std::vector<std::string> raw_filter =
-                        query_filters.size() == 1 ? query_filters[0] : query_filters[i];
+                        query_filters.size() == 1 ? query_filters[0][0] : query_filters[i][0];
 
                     index->search_with_tags(query + i * query_aligned_dim, recall_at, L,
                                             query_result_tags.data() + i * recall_at, nullptr, res, true,
@@ -598,16 +598,18 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    std::vector<std::vector<std::string>> query_filters;
+    std::vector<std::vector<std::vector<std::string>>> query_filters;
     if (filter_label != "")
     {
-        std::vector<std::string> single_filter;
-        single_filter.push_back(filter_label);
+        std::vector<std::vector<std::string>> single_filter;
+        std::vector<std::string> tmp;
+        tmp.push_back(filter_label);
+        single_filter.push_back(tmp);
         query_filters.push_back(single_filter);
     }
     else if (query_filters_file != "")
     {
-        query_filters = read_file_to_vector_of_strings(query_filters_file);
+        query_filters = read_file_to_vector_of_vector_of_strings(query_filters_file);
     }
 
     use_global_start = global_start;

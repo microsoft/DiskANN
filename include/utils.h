@@ -1083,10 +1083,10 @@ template <typename T = float> inline void normalize(T *arr, const size_t dim)
     }
 }
 
-inline std::vector<std::vector<std::string>> read_file_to_vector_of_strings(const std::string &filename,
+inline std::vector<std::vector<std::vector<std::string>>> read_file_to_vector_of_vector_of_strings(const std::string &filename,
                                                                             bool unique = false)
 {
-    std::vector<std::vector<std::string>> query_filters;
+    std::vector<std::vector<std::vector<std::string>>> query_filters;
     std::ifstream file(filename);
     std::string line, token;
 
@@ -1097,7 +1097,32 @@ inline std::vector<std::vector<std::string>> read_file_to_vector_of_strings(cons
 
     while (std::getline(file, line))
     {
+
         std::istringstream iss(line);
+        std::vector<std::vector<std::string>> lbls(0);
+
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        while (getline(new_iss, token, '&'))
+        {
+            std::vector<std::string> or_clause(0);
+            std::istringstream inner_iss(token);
+            while (getline(inner_iss, token, '|'))
+            {
+//                if (print_flag)
+//                    std::cout<<token<<" || ";
+                token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+                token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+                or_clause.push_back(token);
+//                labels.insert(token);
+            }
+            lbls.push_back(or_clause);
+        }
+        //        std::sort(lbls.begin(), lbls.end());
+        query_filters.push_back(lbls);
+
+
+/*        std::istringstream iss(line);
         std::vector<std::string> lbls(0);
         while (getline(iss, token, '&'))
         {
@@ -1105,11 +1130,61 @@ inline std::vector<std::vector<std::string>> read_file_to_vector_of_strings(cons
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             lbls.push_back(token);
         }
-        query_filters.push_back(lbls);
+        query_filters.push_back(lbls);*/ 
     }
     std::cout << "Populated labels for " << query_filters.size() << " queries" << std::endl;
     return query_filters;
 }
+
+
+inline std::vector<std::vector<std::string>> read_file_to_vector_of_strings(const std::string &filename,
+    bool unique = false)
+{
+std::vector<std::vector<std::string>> query_filters;
+std::ifstream file(filename);
+std::string line, token;
+
+if (file.fail())
+{
+throw diskann::ANNException(std::string("Failed to open file ") + filename, -1);
+}
+
+while (std::getline(file, line))
+{
+
+std::istringstream iss(line);
+std::vector<std::string> lbls(0);
+
+getline(iss, token, '\t');
+std::istringstream new_iss(token);
+while (getline(new_iss, token, '&'))
+{
+
+//                if (print_flag)
+//                    std::cout<<token<<" || ";
+token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+//                labels.insert(token);
+lbls.push_back(token);
+}
+//        std::sort(lbls.begin(), lbls.end());
+query_filters.push_back(lbls);
+
+
+/*        std::istringstream iss(line);
+std::vector<std::string> lbls(0);
+while (getline(iss, token, '&'))
+{
+token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+lbls.push_back(token);
+}
+query_filters.push_back(lbls);*/ 
+}
+std::cout << "Populated labels for " << query_filters.size() << " queries" << std::endl;
+return query_filters;
+}
+
 
 inline void clean_up_artifacts(tsl::robin_set<std::string> paths_to_clean, tsl::robin_set<std::string> path_suffixes)
 {

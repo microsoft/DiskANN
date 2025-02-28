@@ -416,8 +416,8 @@ inline void parse_query_label_file(const std::string &query_label_file,
             std::istringstream inner_iss(token);
             while (getline(inner_iss, token, '|'))
             {
-                if (print_flag)
-                    std::cout<<token<<" || ";
+//                if (print_flag)
+//                    std::cout<<token<<" || ";
                 token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
                 token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
                 or_clause.push_back(token);
