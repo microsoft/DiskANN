@@ -353,14 +353,63 @@ if (RESTAPI)
     add_subdirectory(apps/restapi)
 endif()
 
-find_package(CURL REQUIRED)
-find_package(nlohmann_json REQUIRED)
-target_link_libraries(diskann PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)
-
 include(clang-format.cmake)
 
 if(PYBIND)
     add_subdirectory(python)
+endif()
+
+###############################################################################
+# PROTOBUF SECTION (CORRECTED FIX)
+###############################################################################
+find_package(Protobuf REQUIRED)
+include_directories(${Protobuf_INCLUDE_DIRS})
+
+set(PROTO_FILES
+  ${PROJECT_SOURCE_DIR}/../embedding.proto
+)
+
+if(NOT EXISTS ${PROTO_FILES})
+    message(FATAL_ERROR "embedding.proto not found at ${PROTO_FILES}")
+endif()
+
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
+
+add_library(proto_embeddings STATIC ${PROTO_SRCS} ${PROTO_HDRS})
+target_link_libraries(proto_embeddings PUBLIC ${Protobuf_LIBRARIES})
+
+target_include_directories(proto_embeddings PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+# Also add the conda environment's include directory to proto_embeddings
+target_include_directories(proto_embeddings PUBLIC /home/other_users/andy/.conda/envs/scaling/include)
+
+# For diskann target
+target_link_libraries(diskann PRIVATE proto_embeddings ${Protobuf_LIBRARIES})
+target_include_directories(diskann PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+# For diskann_s target (you MUST add this!)
+target_link_libraries(diskann_s PRIVATE proto_embeddings ${Protobuf_LIBRARIES})
+target_include_directories(diskann_s PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+###############################################################################
+# ZEROMQ SECTION - REQUIRED
+###############################################################################
+find_package(ZeroMQ QUIET)
+if(NOT ZeroMQ_FOUND)
+    find_path(ZeroMQ_INCLUDE_DIR zmq.h)
+    find_library(ZeroMQ_LIBRARY zmq)
+    if(ZeroMQ_INCLUDE_DIR AND ZeroMQ_LIBRARY)
+        set(ZeroMQ_FOUND TRUE)
+    endif()
+endif()
+
+if(ZeroMQ_FOUND)
+    message(STATUS "Found ZeroMQ: ${ZeroMQ_LIBRARY}")
+    include_directories(${ZeroMQ_INCLUDE_DIR})
+    target_link_libraries(diskann PRIVATE ${ZeroMQ_LIBRARY})
+    target_link_libraries(diskann_s PRIVATE ${ZeroMQ_LIBRARY})
+    add_definitions(-DUSE_ZEROMQ)
+else()
+    message(FATAL_ERROR "ZeroMQ is required but not found. Please install ZeroMQ and try again.")
 endif()
 
 target_link_libraries(diskann ${PYBIND11_LIBRARIES})

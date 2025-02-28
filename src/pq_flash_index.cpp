@@ -11,8 +11,8 @@
 #include "pq_scratch.h"
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
-#include <curl/curl.h>
-#include <nlohmann/json.hpp>
+#include "embedding.pb.h" // from embedding.proto -> embedding.pb.h
+#include <zmq.h>
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -1272,86 +1272,118 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                        use_reorder_data, stats, USE_DEFERRED_FETCH, skip_search_reorder);
 }
 
-using json = nlohmann::json;
-
+// A helper callback for cURL
 static size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp)
 {
-    size_t real_size = size * nmemb;
-    std::string *str = static_cast<std::string *>(userp);
-    str->append(static_cast<char *>(contents), real_size);
-    return real_size;
+    ((std::string *)userp)->append((char *)contents, size * nmemb);
+    return size * nmemb;
 }
 
-bool fetch_embeddings_http(const std::vector<uint32_t> &node_ids, std::vector<std::vector<float>> &out_embeddings)
+bool fetch_embeddings_zmq(const std::vector<uint32_t> &node_ids, std::vector<std::vector<float>> &out_embeddings)
 {
-    static bool curl_initialized = false;
-    if (!curl_initialized)
+    // (1) BUILD PROTO
+    protoembedding::NodeEmbeddingRequest req_proto;
+    for (auto id : node_ids)
+        req_proto.add_node_ids(id);
+
+    std::string req_str;
+    req_proto.SerializeToString(&req_str); // Binary proto serialization
+
+    // (2) Setup ZMQ context and socket (only once)
+    static bool s_zmq_initialized = false;
+    static void *s_context = nullptr;
+    static void *s_socket = nullptr;
+
+    if (!s_zmq_initialized)
     {
-        if (curl_global_init(CURL_GLOBAL_ALL) != CURLE_OK)
+        // Initialize ZMQ context
+        s_context = zmq_ctx_new();
+        if (!s_context)
         {
-            diskann::cerr << "curl_global_init failed" << std::endl;
+            std::cerr << "zmq_ctx_new failed\n";
             return false;
         }
-        curl_initialized = true;
-    }
-    json jBody;
-    jBody["node_ids"] = node_ids;
-    std::string req_str = jBody.dump();
 
-    CURL *curl = curl_easy_init();
-    if (!curl)
+        // Create REQ socket
+        s_socket = zmq_socket(s_context, ZMQ_REQ);
+        if (!s_socket)
+        {
+            std::cerr << "zmq_socket failed\n";
+            zmq_ctx_destroy(s_context);
+            return false;
+        }
+
+        // Set socket options for better performance
+        int timeout = 30000; // 30 seconds in milliseconds
+        zmq_setsockopt(s_socket, ZMQ_RCVTIMEO, &timeout, sizeof(timeout));
+        zmq_setsockopt(s_socket, ZMQ_SNDTIMEO, &timeout, sizeof(timeout));
+
+        // Connect to the server
+        if (zmq_connect(s_socket, "tcp://127.0.0.1:5555") != 0)
+        {
+            std::cerr << "zmq_connect failed: " << zmq_strerror(zmq_errno()) << "\n";
+            zmq_close(s_socket);
+            zmq_ctx_destroy(s_context);
+            return false;
+        }
+
+        s_zmq_initialized = true;
+    }
+
+    // (3) Send request
+    if (zmq_send(s_socket, req_str.data(), req_str.size(), 0) < 0)
+    {
+        std::cerr << "zmq_send failed: " << zmq_strerror(zmq_errno()) << "\n";
         return false;
-
-    std::string url = "http://127.0.0.1:8001/embed";
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, req_str.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, req_str.size());
-    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 1L);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-
-    struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-    std::string response_str;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_str);
-
-    CURLcode res = curl_easy_perform(curl);
-    bool success = (res == CURLE_OK);
-    if (!success)
-    {
-        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
     }
 
-    if (success)
+    // (4) Receive response
+    zmq_msg_t response;
+    zmq_msg_init(&response);
+
+    if (zmq_msg_recv(&response, s_socket, 0) < 0)
     {
-        try
-        {
-            json jResp = json::parse(response_str);
-            auto jEmb = jResp["embeddings"];
-            out_embeddings.resize(jEmb.size());
-            for (size_t i = 0; i < jEmb.size(); i++)
-            {
-                std::vector<float> vec;
-                vec.reserve(jEmb[i].size());
-                for (auto &val : jEmb[i])
-                {
-                    vec.push_back(val.get<float>());
-                }
-                out_embeddings[i] = std::move(vec);
-            }
-        }
-        catch (...)
-        {
-            success = false;
-        }
+        std::cerr << "zmq_msg_recv failed: " << zmq_strerror(zmq_errno()) << "\n";
+        zmq_msg_close(&response);
+        return false;
     }
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
-    return success;
+
+    // Get response data
+    void *response_data = zmq_msg_data(&response);
+    size_t response_size = zmq_msg_size(&response);
+
+    // (5) PARSE NodeEmbeddingResponse
+    protoembedding::NodeEmbeddingResponse resp_proto;
+    if (!resp_proto.ParseFromArray(response_data, static_cast<int>(response_size)))
+    {
+        std::cerr << "Failed to parse NodeEmbeddingResponse from server.\n";
+        zmq_msg_close(&response);
+        return false;
+    }
+
+    zmq_msg_close(&response);
+
+    // Process embeddings
+    out_embeddings.clear();
+    out_embeddings.reserve(resp_proto.embeddings_size());
+
+    for (int i = 0; i < resp_proto.embeddings_size(); i++)
+    {
+        const auto &embMsg = resp_proto.embeddings(i);
+        const auto &vals = embMsg.values();
+        out_embeddings.emplace_back(vals.begin(), vals.end());
+    }
+
+    return true;
+}
+
+/**
+ * fetch_embeddings_http: Function for backward compatibility, now uses ZMQ exclusively
+ */
+bool fetch_embeddings_http(const std::vector<uint32_t> &node_ids, std::vector<std::vector<float>> &out_embeddings)
+{
+    // Use ZMQ implementation exclusively
+    return fetch_embeddings_zmq(node_ids, out_embeddings);
 }
 
 template <typename T, typename LabelT>
