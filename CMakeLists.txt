@@ -16,7 +16,7 @@
 
 
 # Some variables like MSVC are defined only after project(), so put that first.
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 project(diskann)
 
 option(PYBIND "Build with Python bindings" ON)
@@ -358,41 +358,52 @@ include(clang-format.cmake)
 if(PYBIND)
     add_subdirectory(python)
 endif()
+###############################################################################
+# PROTOBUF SECTION - Corrected to use CONFIG mode explicitly
+###############################################################################
+set(Protobuf_USE_STATIC_LIBS OFF)
 
-###############################################################################
-# PROTOBUF SECTION (CORRECTED FIX)
-###############################################################################
+find_package(ZLIB REQUIRED)
+
 find_package(Protobuf REQUIRED)
+
+message(STATUS "Protobuf found: ${Protobuf_VERSION}")
+message(STATUS "Protobuf include dirs: ${Protobuf_INCLUDE_DIRS}")
+message(STATUS "Protobuf libraries: ${Protobuf_LIBRARIES}")
+message(STATUS "Protobuf protoc executable: ${Protobuf_PROTOC_EXECUTABLE}")
+
 include_directories(${Protobuf_INCLUDE_DIRS})
 
-set(PROTO_FILES
-  ${PROJECT_SOURCE_DIR}/../embedding.proto
+protobuf_generate(
+    PROTOS ${PROJECT_SOURCE_DIR}/../embedding.proto
+    OUT_VAR generated_proto_sources
+    IMPORT_DIRS ${PROJECT_SOURCE_DIR}/../
 )
 
-if(NOT EXISTS ${PROTO_FILES})
-    message(FATAL_ERROR "embedding.proto not found at ${PROTO_FILES}")
-endif()
+add_library(proto_embeddings STATIC ${generated_proto_sources})
+target_link_libraries(proto_embeddings PUBLIC protobuf::libprotobuf)
+target_include_directories(proto_embeddings PUBLIC 
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${Protobuf_INCLUDE_DIRS}
+)
 
-protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_FILES})
+target_link_libraries(diskann PRIVATE proto_embeddings protobuf::libprotobuf)
+target_include_directories(diskann PRIVATE 
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${Protobuf_INCLUDE_DIRS}
+)
 
-add_library(proto_embeddings STATIC ${PROTO_SRCS} ${PROTO_HDRS})
-target_link_libraries(proto_embeddings PUBLIC ${Protobuf_LIBRARIES})
+target_link_libraries(diskann_s PRIVATE proto_embeddings protobuf::libprotobuf)
+target_include_directories(diskann_s PRIVATE 
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${Protobuf_INCLUDE_DIRS}
+)
 
-target_include_directories(proto_embeddings PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
-# Also add the conda environment's include directory to proto_embeddings
-target_include_directories(proto_embeddings PUBLIC /home/other_users/andy/.conda/envs/scaling/include)
-
-# For diskann target
-target_link_libraries(diskann PRIVATE proto_embeddings ${Protobuf_LIBRARIES})
-target_include_directories(diskann PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-
-# For diskann_s target (you MUST add this!)
-target_link_libraries(diskann_s PRIVATE proto_embeddings ${Protobuf_LIBRARIES})
-target_include_directories(diskann_s PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 ###############################################################################
 # ZEROMQ SECTION - REQUIRED
 ###############################################################################
+
 find_package(ZeroMQ QUIET)
 if(NOT ZeroMQ_FOUND)
     find_path(ZeroMQ_INCLUDE_DIR zmq.h)
