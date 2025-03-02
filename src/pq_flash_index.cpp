@@ -1711,7 +1711,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             auto location = (sector_scratch + i * defaults::SECTOR_LEN) + VECTOR_SECTOR_OFFSET(id);
             if (rerank_fn != nullptr)
             {
-                full_retset[i].distance = rerank_fn((std::uint8_t*)location, this->_data_dim * sizeof(T));
+                full_retset[i].distance = rerank_fn((std::uint8_t*)location, _reorder_node_size);
             }
             else
             {
