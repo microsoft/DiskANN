@@ -24,7 +24,7 @@
 #define VECTOR_SECTOR_NO(id) (((uint64_t)(id)) / _nvecs_per_sector + _reorder_data_start_sector)
 
 // sector # beyond the end of graph where data for id is present for reordering
-#define VECTOR_SECTOR_OFFSET(id) ((((uint64_t)(id)) % _nvecs_per_sector) * _data_dim * sizeof(float))
+#define VECTOR_SECTOR_OFFSET(id) ((((uint64_t)(id)) % _nvecs_per_sector) * _reorder_node_size)
 
 namespace diskann
 {
@@ -1122,6 +1122,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         READ_U64(index_metadata, this->_reorder_data_start_sector);
         READ_U64(index_metadata, this->_ndims_reorder_vecs);
         READ_U64(index_metadata, this->_nvecs_per_sector);
+        READ_U64(index_metadata, this->_reorder_node_size);
     }
 
     diskann::cout << "Disk-Index File Meta-data: ";

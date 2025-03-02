@@ -939,10 +939,11 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
                                                : npts_64 * DIV_ROUND_UP(max_node_len, defaults::SECTOR_LEN);
     uint64_t n_reorder_sectors = 0;
     uint64_t n_data_nodes_per_sector = 0;
-
+    uint64_t n_reoder_node_size = 0;
     if (append_reorder_data)
     {
-        n_data_nodes_per_sector = defaults::SECTOR_LEN / (ndims_reorder_file * sizeof(T));
+        n_reoder_node_size = ndims_reorder_file * sizeof(T);
+        n_data_nodes_per_sector = defaults::SECTOR_LEN / n_reoder_node_size;
         n_reorder_sectors = ROUND_UP(npts_64, n_data_nodes_per_sector) / n_data_nodes_per_sector;
     }
     uint64_t disk_index_file_size = (n_sectors + n_reorder_sectors + 1) * defaults::SECTOR_LEN;
@@ -961,6 +962,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
         output_file_meta.push_back(n_sectors + 1);
         output_file_meta.push_back(ndims_reorder_file);
         output_file_meta.push_back(n_data_nodes_per_sector);
+        output_file_meta.push_back(n_reoder_node_size);
     }
     output_file_meta.push_back(disk_index_file_size);
 
