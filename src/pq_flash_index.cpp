@@ -1677,8 +1677,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         std::vector<AlignedRead> vec_read_reqs;
 
-        if (full_retset.size() > k_search * FULL_PRECISION_REORDER_MULTIPLIER)
-            full_retset.erase(full_retset.begin() + k_search * FULL_PRECISION_REORDER_MULTIPLIER, full_retset.end());
+        if (full_retset.size() > defaults::MAX_N_SECTOR_READS)
+            full_retset.erase(full_retset.begin() + defaults::MAX_N_SECTOR_READS, full_retset.end());
 
         for (size_t i = 0; i < full_retset.size(); ++i)
         {
