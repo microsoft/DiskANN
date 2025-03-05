@@ -1041,8 +1041,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
     const std::vector<LabelT> &filter_labels, bool search_invocation)
 {
-    return iterate_to_fixed_point(scratch, Lsize, init_ids, use_filter, std::vector<std::vector<LabelT>>(1, filter_labels),
-                                  search_invocation);
+//    return iterate_to_fixed_point(scratch, Lsize, init_ids, use_filter, std::vector<std::vector<LabelT>>(1, filter_labels),
+//                                  search_invocation);
 }
 
 
@@ -1050,7 +1050,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
-    const std::vector<std::vector<LabelT>> &filter_labels, bool search_invocation)
+    const roaring::Roaring &valid_bitmap, bool search_invocation)
 {
 
 /*    for (auto &x : filter_labels) {
@@ -1118,7 +1118,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             if (search_invocation)
             {
-                uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
+                //uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
+                uint32_t res = valid_bitmap.contains(id) ? 0 : 1;
 //                std::cout<<id <<" has penalty " << res << std::endl;
                 if ((res) > _filter_penalty_threshold)
                     continue;
@@ -1137,8 +1138,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
             else
             {
-                if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
-                    continue;
+//                if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
+                    //continue;
             }
         }
 
@@ -1255,13 +1256,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     // TODO: CHECK ABOUT UNIVERSAL LABELS
                     if (search_invocation)
                     {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
-                            continue;
+//                        if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
+                            //continue;
                     }
                     else
                     {
-                        if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
-                            continue;
+//                        if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+//                            continue;
                     }
                 }
 
@@ -1310,7 +1311,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     uint32_t res;
                     if (search_invocation)
                     {
-                        res = detect_filter_penalty(id, search_invocation, filter_labels);
+                        //uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
+                        uint32_t res = valid_bitmap.contains(id) ? 0 : 1;
+
                         if (res > _filter_penalty_threshold)
                         {
                             id_iter++;
@@ -1333,8 +1336,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                     else
                     {
-                        if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
-                            continue;
+//                        if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
+//                            continue;
                     }
                 }
                 dist_pens.push_back(penalty);
@@ -1375,7 +1378,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
                                                         uint32_t filteredLindex)
 {
     const std::vector<uint32_t> init_ids = get_init_ids();
-    const std::vector<std::vector<LabelT>> unused_filter_label;
+    const std::vector<LabelT> unused_filter_label;
 
     if (!use_filter)
     {
@@ -2778,6 +2781,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         break;
         case 2: {
             num_graphs++;
+
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
 
             if (cand.size() > 0)
@@ -2794,6 +2798,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 init_ids.emplace_back(_start);
              }
 
+             auto &last_intersection = scratch->get_valid_bitmap();
+             for (uint32_t or_itr = 0; or_itr < filter_label[0].size(); or_itr++) {
+                 last_intersection |= _labels_to_points[filter_label[0][or_itr]];
+             }
+             for (size_t i = 1; i < filter_label.size(); i++)
+             {
+                 auto &tmp_intersection = scratch->get_tmp_bitmap();                
+                 for (uint32_t or_itr = 0; or_itr < filter_label[i].size(); or_itr++) {
+                     tmp_intersection |= _labels_to_points[filter_label[i][or_itr]];
+                 }
+                 last_intersection &= tmp_intersection;
+             }            
+ 
+
             local_print = true;
             if (print_qstats)
             {
@@ -2802,10 +2820,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 //out << "setting up init ids with id " << cand << std::endl;
                 out.close();
             }
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, last_intersection, true);
             }
             break;
             case 3: {
+    
                 uint32_t old_penalty_scale = penalty_scale;
                 penalty_scale = 0;
                 num_graphs++;
@@ -2824,7 +2843,21 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                  if (use_global_start) {
                     init_ids.emplace_back(_start);
                  }
-    
+
+                 auto &last_intersection = scratch->get_valid_bitmap();
+                 for (uint32_t or_itr = 0; or_itr < filter_label[0].size(); or_itr++) {
+                     last_intersection |= _labels_to_points[filter_label[0][or_itr]];
+                 }
+                 for (size_t i = 1; i < filter_label.size(); i++)
+                 {
+                     auto &tmp_intersection = scratch->get_tmp_bitmap();                
+                     for (uint32_t or_itr = 0; or_itr < filter_label[i].size(); or_itr++) {
+                         tmp_intersection |= _labels_to_points[filter_label[i][or_itr]];
+                     }
+                     last_intersection &= tmp_intersection;
+                 }            
+                  
+
                 local_print = true;
                 if (print_qstats)
                 {
@@ -2833,7 +2866,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                     //out << "setting up init ids with id " << cand << std::endl;
                     out.close();
                 }
-                retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
+                retval = iterate_to_fixed_point(scratch, L, init_ids, true, last_intersection, true);
                 penalty_scale = old_penalty_scale;
            }
             break;
@@ -2869,6 +2902,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         else
         {
             num_graphs++;
+            auto &last_intersection = scratch->get_valid_bitmap();
+            last_intersection = _labels_to_points[sorted_filters[0].first];
+            for (size_t i = 1; i < sorted_filters.size(); i++)
+            {
+                last_intersection &= _labels_to_points[sorted_filters[i].first];
+            }
+
             /* if (_dynamic_index) */
             /*     tl.lock(); */
             /**/
@@ -2912,7 +2952,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 out << std::endl;
                 out.close();
             }
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, last_intersection, true);
         }
     }
 
