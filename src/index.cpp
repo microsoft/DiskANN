@@ -2736,7 +2736,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     _data_store->preprocess_query(query, scratch);
     std::pair<uint32_t, uint32_t> retval;
-    if (_bruteforce_threshold < 3)
+    if (_bruteforce_threshold < 4)
     {
         switch (_bruteforce_threshold)
         {
@@ -2776,7 +2776,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             retval = closest_cluster_filters(scratch->aligned_query(), L, filter_vec, scratch);
         }
         break;
-        case 2:
+        case 2: {
             num_graphs++;
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
 
@@ -2803,7 +2803,41 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 out.close();
             }
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
+            }
             break;
+            case 3: {
+                uint32_t old_penalty_scale = penalty_scale;
+                penalty_scale = 0;
+                num_graphs++;
+                auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
+    
+                if (cand.size() > 0)
+                {
+                    init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+    //                init_ids.emplace_back(cand);
+                } /*else {
+                    if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+                    { 
+                        init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+                    } 
+                } */
+                 if (use_global_start) {
+                    init_ids.emplace_back(_start);
+                 }
+    
+                local_print = true;
+                if (print_qstats)
+                {
+                    std::ofstream out("query_stats.txt", std::ios_base::app);
+                    out << "estimated intersection size is " << inter_estim << std::endl;
+                    //out << "setting up init ids with id " << cand << std::endl;
+                    out.close();
+                }
+                retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
+                penalty_scale = old_penalty_scale;
+           }
+            break;
+    
         }
     }
     else
