@@ -1052,6 +1052,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
     const std::vector<std::vector<LabelT>> &filter_labels, bool search_invocation)
 {
+
+/*    for (auto &x : filter_labels) {
+        std::cout<<"(";
+        for (auto &y : x) {
+            std::cout<<y<<"|";
+        }
+        std::cout<<")&";
+    }*/
+
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
@@ -1110,6 +1119,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             if (search_invocation)
             {
                 uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
+//                std::cout<<id <<" has penalty " << res << std::endl;
                 if ((res) > _filter_penalty_threshold)
                     continue;
                 penalty = res * penalty_scale;
@@ -1180,7 +1190,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             auto &x = best_L_nodes[rnr];
             std::cout<<std::setw(10)<<x.distance;
         }
-        std::cout<<std::endl;
+        std::cout<<std::endl << std::endl;
 */
 
         auto nbr = best_L_nodes.closest_unexpanded();
@@ -2192,8 +2202,9 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     }
     std::stringstream stream;
     stream << "Unable to find label " << raw_label << " in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+//    diskann::cerr << stream.str() << std::endl;
+    return std::numeric_limits<LabelT>::max();
+//    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2556,10 +2567,27 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
         for (auto &y : x)
         {
             auto converted_label = this->get_converted_label(y);
-            cur_labels.push_back(converted_label);
-        }   
-        converted_labels.push_back(cur_labels);
+            if (converted_label != std::numeric_limits<LabelT>::max())
+                cur_labels.push_back(converted_label);
+        }
+        if (cur_labels.size() > 0)
+            converted_labels.push_back(cur_labels);
+        else {
+            for (uint32_t i = 0; i < K; i++) {
+                distances[i] = std::numeric_limits<float>::max();
+                if (typeid(uint64_t *) == indices.type()) {
+                    auto ptr = std::any_cast<uint64_t *>(indices);
+                    ptr[i] = std::numeric_limits<uint64_t>::max();
+                } else if (typeid(uint32_t *) == indices.type()) {
+                    auto ptr = std::any_cast<uint32_t *>(indices);
+                    ptr[i] = std::numeric_limits<uint32_t>::max();
+                }
+            }
+//            diskann::cerr << "No valid labels found for query" << std::endl;
+            return std::make_pair(0, 0);
+        }
     }
+    
     if (typeid(uint64_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint64_t *>(indices);
