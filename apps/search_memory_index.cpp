@@ -166,8 +166,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         query_result_tags.resize(recall_at * query_num);
     }
-    //query_num = 2;
-    // query_num = 1;
+    query_num = 2;
+    //query_num = 1;
     double best_recall = 0.0;
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
@@ -499,6 +499,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("use_global_start",
                                        po::value<bool>(&global_start)->default_value(false),
                                        "Whether or not to use global start or predicate-aware starting point in graph search");
+        optional_configs.add_options()("expand_two_hops",
+                                       po::value<bool>(&expand_two_hops)->default_value(false),
+                                       "Whether or not to use ACORN-like idea of two hops at search");                                       
         optional_configs.add_options()("num_local_start",
                                        po::value<uint32_t>(&num_local)->default_value(0),
                                        "How many local start points to use");
@@ -610,6 +613,13 @@ int main(int argc, char **argv)
     else if (query_filters_file != "")
     {
         query_filters = read_file_to_vector_of_vector_of_strings(query_filters_file);
+        for (auto &x : query_filters[0]) {
+            std::cout<<"(";
+            for (auto &y : x) {
+                std::cout<<y<<"|";
+            }
+            std::cout<<")&";
+        }
     }
 
     use_global_start = global_start;

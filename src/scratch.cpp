@@ -40,8 +40,8 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     _occlude_factor.reserve(maxc);
     _cluster_distances.reserve(MAX_NUM_CLUSTERS);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
-    _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
-    _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
+    _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R * _R));
+    _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R * _R));
 
     resize_for_new_L(std::max(search_l, indexing_l));
 }

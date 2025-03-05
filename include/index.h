@@ -32,7 +32,7 @@
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
-// #define INSTRUMENT true
+#define INSTRUMENT true
 
 inline double time_to_intersect = 0.;
 inline double time_to_cluster = 0.;
@@ -50,6 +50,7 @@ inline uint32_t penalty_scale = 10;
 inline uint32_t num_sp = 2;
 inline bool use_global_start = false;
 inline uint32_t num_start_points = 1;
+inline bool expand_two_hops = false;
 
 namespace diskann
 {
@@ -113,7 +114,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                      const std::vector<LabelT> &incoming_labels);
 
     DISKANN_DLLEXPORT inline uint32_t detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                            const std::vector<LabelT> &incoming_labels);
+                                                            const std::vector<std::vector<LabelT>> &incoming_labels);
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
@@ -278,8 +279,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     std::vector<std::pair<LabelT, uint32_t>> sort_filter_counts(const std::vector<LabelT> &filter_label);
 
-    std::pair<uint32_t, std::vector<uint32_t>> sample_intersection(roaring::Roaring &intersection_bitmap,
-                                                      const std::vector<LabelT> &filter_label);
+    std::pair<uint32_t, std::vector<uint32_t>> sample_intersection(roaring::Roaring &intersection_bitmap, roaring::Roaring &tmp_bitmap,
+                                                      const std::vector<std::vector<LabelT>> &filter_labels);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
@@ -298,6 +299,12 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
+
+    // The query to use is placed in scratch->aligned_query
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
+        const std::vector<uint32_t> &init_ids, bool use_filter,
+        const std::vector<std::vector<LabelT>> &filters, bool search_invocation);
+
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,

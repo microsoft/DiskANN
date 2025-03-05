@@ -857,7 +857,7 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
 // TODO: modify for handling universal label
 template <typename T, typename TagT, typename LabelT>
 inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                              const std::vector<LabelT> &incoming_labels)
+                                                              const std::vector<std::vector<LabelT>> &incoming_labels)
 {
 
     //    auto s = std::chrono::high_resolution_clock::now();
@@ -865,20 +865,11 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
     // not implemented for build-time use case, since we need to understand universal labels for multiple filters
     //    if (!search_invocation)
     //        return true;
-    uint32_t overlap = 0;
+
 
     //    if (!search_invocation) {
     //    auto &curr_node_labels = _location_to_labels[point_id];
-    for (auto &lbl : incoming_labels)
-    {
-        //        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
-        //        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
-        /* if (_labels_to_points[lbl].contains(point_id)) */
-        if (_labels_to_points_set[lbl].count(point_id))
-        {
-            overlap++;
-        }
-    }
+
     /*    } else {
         auto &curr_node_labels = _location_to_labels_bitmap[point_id];
         for (auto &lbl : incoming_labels)
@@ -901,7 +892,35 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
     //    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     //    time_to_detect_penalty += diff.count();
 
+/*
+    uint32_t overlap = 0;
+    for (auto &lbl : incoming_labels)
+    {
+        //        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
+        //        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
+
+        if (_labels_to_points_set[lbl].count(point_id))
+        {
+            overlap++;
+        }
+    }
     return incoming_labels.size() - overlap;
+*/
+
+    uint32_t cur_penalty = incoming_labels.size();
+    for (uint32_t i = 0; i < incoming_labels.size(); i++) {
+        bool or_pass = false;
+        for (uint32_t j = 0; j < incoming_labels[i].size(); j++) {
+            if (_labels_to_points_set[incoming_labels[i][j]].count(point_id)) {
+                or_pass = true;
+                break;
+            }
+        }
+        cur_penalty -= or_pass;
+    }
+
+    return cur_penalty;
+
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1016,10 +1035,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
     return std::make_pair(hops, cmps);
 }
 
+// used for index build, single vector of labels are sent to iterate to fixed point. Need to be FIXED and made consistent
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
     const std::vector<LabelT> &filter_labels, bool search_invocation)
+{
+    return iterate_to_fixed_point(scratch, Lsize, init_ids, use_filter, std::vector<std::vector<LabelT>>(1, filter_labels),
+                                  search_invocation);
+}
+
+
+
+template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
+    InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
+    const std::vector<std::vector<LabelT>> &filter_labels, bool search_invocation)
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -1096,7 +1127,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
             else
             {
-                if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
+                if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
                     continue;
             }
         }
@@ -1137,9 +1168,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     {
 /*        for (uint32_t rnr = 0; rnr < best_L_nodes.size(); rnr++) {
             auto &x = best_L_nodes[rnr];
-            std::cout<<std::setw(10)<<x.id<<":"<<x.distance<<"\t";
+            std::cout<<std::setw(10)<<x.id;
         }
-        std::cout<<std::endl;*/
+        std::cout<<std::endl;
+        for (uint32_t rnr = 0; rnr < best_L_nodes.size(); rnr++) {
+            auto &x = best_L_nodes[rnr];
+            std::cout<<std::setw(10)<<detect_filter_penalty(x.id, search_invocation, filter_labels);
+        }
+        std::cout<<std::endl;
+        for (uint32_t rnr = 0; rnr < best_L_nodes.size(); rnr++) {
+            auto &x = best_L_nodes[rnr];
+            std::cout<<std::setw(10)<<x.distance;
+        }
+        std::cout<<std::endl;
+*/
 
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
@@ -1223,6 +1265,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             if (search_invocation)
             {
                 nbrs = _graph_store->get_neighbours(n);
+                if (expand_two_hops) {
+                for (auto &x : nbrs)
+                    // add two hop neighbors
+                    nbrs.insert(nbrs.end(), _graph_store->get_neighbours(x).begin(), _graph_store->get_neighbours(x).end());
+                }
             }
             else
             {
@@ -1276,7 +1323,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                     else
                     {
-                        if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
+                        if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
                             continue;
                     }
                 }
@@ -1318,7 +1365,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
                                                         uint32_t filteredLindex)
 {
     const std::vector<uint32_t> init_ids = get_init_ids();
-    const std::vector<LabelT> unused_filter_label;
+    const std::vector<std::vector<LabelT>> unused_filter_label;
 
     if (!use_filter)
     {
@@ -2371,7 +2418,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
 
         float *pivot_data;
 
-        uint32_t num_clusters = 250;
+        uint32_t num_clusters = 2000;
         diskann::cout << "num_train, train_dim, num_clusters=" << num_train << " " << train_dim << " " << num_clusters
                       << std::endl;
 
@@ -2546,14 +2593,30 @@ std::vector<std::pair<LabelT, uint32_t>> Index<T, TagT, LabelT>::sort_filter_cou
 }
 
 template <typename T, typename TagT, typename LabelT>
-std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap,
-                                                                          const std::vector<LabelT> &filter_label)
+std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap, roaring::Roaring &tmp_bitmap,
+                                                                          const std::vector<std::vector<LabelT>> &filter_labels)
 {
-    intersection_bitmap = _labels_to_points_sample[filter_label[0]];
+
+
+    for (uint32_t or_itr = 0; or_itr < filter_labels[0].size(); or_itr++) {
+        intersection_bitmap |= _labels_to_points_sample[filter_labels[0][or_itr]];
+    }
+    for (size_t i = 1; i < filter_labels.size(); i++)
+    {
+        tmp_bitmap.removeRangeClosed(tmp_bitmap.minimum(), tmp_bitmap.maximum());
+        for (uint32_t or_itr = 0; or_itr < filter_labels[i].size(); or_itr++) {
+            tmp_bitmap |= _labels_to_points_sample[filter_labels[i][or_itr]];
+        }
+        intersection_bitmap &= tmp_bitmap;
+    }            
+
+
+
+/*    intersection_bitmap = _labels_to_points_sample[filter_label[0]];
     for (size_t i = 1; i < filter_label.size(); i++)
     {
         intersection_bitmap &= _labels_to_points_sample[filter_label[i]];
-    }
+    }*/
     uint32_t val = std::numeric_limits<uint32_t>::max();
     auto x = intersection_bitmap.begin();
     std::vector<uint32_t> results;
@@ -2656,11 +2719,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             auto s = std::chrono::high_resolution_clock::now();
 #endif
             auto &last_intersection = scratch->get_valid_bitmap();
-            last_intersection = _labels_to_points[sorted_filters[0].first];
+            for (uint32_t or_itr = 0; or_itr < filter_label[0].size(); or_itr++) {
+                last_intersection |= _labels_to_points[filter_label[0][or_itr]];
+            }
+            for (size_t i = 1; i < filter_label.size(); i++)
+            {
+                auto &tmp_intersection = scratch->get_tmp_bitmap();                
+                for (uint32_t or_itr = 0; or_itr < filter_label[i].size(); or_itr++) {
+                    tmp_intersection |= _labels_to_points[filter_label[i][or_itr]];
+                }
+                last_intersection &= tmp_intersection;
+            }            
+            /*last_intersection = _labels_to_points[sorted_filters[0].first];
             for (size_t i = 1; i < sorted_filters.size(); i++)
             {
                 last_intersection &= _labels_to_points[sorted_filters[i].first];
-            }
+            }*/
 #ifdef INSTRUMENT
             std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
             time_to_get_valid += diff.count();
@@ -2676,7 +2750,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         break;
         case 2:
             num_graphs++;
-            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_vec);
+            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
 
             if (cand.size() > 0)
             {
@@ -2700,7 +2774,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 //out << "setting up init ids with id " << cand << std::endl;
                 out.close();
             }
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
             break;
         }
     }
@@ -2709,7 +2783,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 #ifdef INSTRUMENT
         auto s = std::chrono::high_resolution_clock::now();
 #endif
-        auto [estimated_match, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_vec);
+        auto [estimated_match, cand] = sample_intersection(scratch->get_valid_bitmap(),scratch->get_tmp_bitmap(), filter_label);
 #ifdef INSTRUMENT
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
         time_to_estimate += diff.count();
@@ -2776,7 +2850,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 out << std::endl;
                 out.close();
             }
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
         }
     }
 
@@ -2796,7 +2870,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
-        if (best_L_nodes[i].id >= _max_points || (detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) != 0))
+        if (best_L_nodes[i].id >= _max_points || (detect_filter_penalty(best_L_nodes[i].id, true, filter_label) != 0))
             continue;
 
         indices[pos] = (IdType)best_L_nodes[i].id;

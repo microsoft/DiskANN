@@ -116,6 +116,13 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
         return _last_intersection;
     }
 
+    inline roaring::Roaring &get_tmp_bitmap()
+    {
+        _tmp_intersection.removeRangeClosed(_tmp_intersection.minimum(), _tmp_intersection.maximum());
+        return _tmp_intersection;
+    }
+
+
   private:
     uint32_t _L;
     uint32_t _R;
@@ -154,6 +161,8 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     tsl::robin_set<uint32_t> _expanded_nodes_set;
     std::vector<Neighbor> _expanded_nghrs_vec;
     std::vector<uint32_t> _occlude_list_output;
+
+    roaring::Roaring _tmp_intersection;
 
     roaring::Roaring _last_intersection;
     // _to calculate the closest clusters during filtered search in clustered index
