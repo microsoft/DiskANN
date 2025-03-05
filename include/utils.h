@@ -264,7 +264,7 @@ inline void alloc_aligned(void **ptr, size_t size, size_t align)
     *ptr = ::aligned_alloc(align, size);
 #else
     #ifdef EXEC_ENV_OLS
-        *ptr = static_cast<void *>(new(size, std::align_val_t(align)));
+        *ptr = operator new(size, std::align_val_t(align));
     #else
         *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
     #endif
