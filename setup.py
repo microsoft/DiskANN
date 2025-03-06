@@ -119,7 +119,9 @@ class CMakeBuild(build_ext):
         # using `python -m build`, we actually have a copy of everything made and pushed
         # into a venv isolation area
         subprocess.run(
-            ["cmake", "-DPYBIND=True", ext.sourcedir] + cmake_args, cwd=build_temp, check=True
+            ["cmake", "-DPYBIND=True", "-DCMAKE_PREFIX_PATH=" + os.environ.get("CONDA_PREFIX", ""), 
+             "-DProtobuf_DIR=" + os.path.join(os.environ.get("CONDA_PREFIX", ""), "lib/cmake/protobuf"), 
+             ext.sourcedir] + cmake_args, cwd=build_temp, check=True
         )
 
         subprocess.run(
