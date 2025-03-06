@@ -239,6 +239,8 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     if (beginning_index_size > 0)
     {
         index->build(data, beginning_index_size, tags);
+        index->save(save_path.c_str(), false);
+        return;
     }
     else
     {
