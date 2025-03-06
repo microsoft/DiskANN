@@ -230,12 +230,13 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
         location_to_labels = std::get<0>(parse_result);
     }
 
-    delete_from_beginning<T, TagT>(*index, params, 5000, 5000);
+    delete_from_beginning<T, TagT>(*index, params, 5000, 45000);
 
-  
-    load_aligned_bin_part(data_path, data, 5000, 5000);
-    insert_till_next_checkpoint<T, TagT, LabelT>(*index, 5000, 10000, (int32_t)params.num_threads, data,
-                                                aligned_dim, location_to_labels);
+    load_aligned_bin_part(data_path, data, 5000, 45000);
+    insert_till_next_checkpoint<T, TagT, LabelT>(*index, 5000, 50000, (int32_t)params.num_threads, data,
+                                                    aligned_dim, location_to_labels);
+
+
 
     index->save(save_path_inc.c_str(), true);
 
