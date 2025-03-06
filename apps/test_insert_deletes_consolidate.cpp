@@ -230,7 +230,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
     // print val
         
-    std::iota(tags.begin(), tags.end(), 1 + static_cast<TagT>(current_point_offset));
+    std::iota(tags.begin(), tags.end(), 1);
 
     load_aligned_bin_part(data_path, data, 0, num_points);
     std::cout << "load aligned bin succeeded" << std::endl;
