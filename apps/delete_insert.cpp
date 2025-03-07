@@ -236,7 +236,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     if (from_scratch)
     {
         index->build(data, beginning_index_size, tags);
-        index->save(save_path.c_str(), false);
+        index->save(save_path.c_str(), true);
         return;
     }
     else
@@ -311,8 +311,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     }
     else
     {
-        const auto save_path_inc = get_save_filename(save_path + ".after-delete-", points_to_skip,
-                                                     points_to_delete_from_beginning, last_point_threshold);
+        const auto save_path_inc = save_path;
         std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
         std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
         if (has_labels)
@@ -339,8 +338,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
             {
                 diskann::Timer save_timer;
 
-                const auto save_path_inc =
-                    get_save_filename(save_path + ".inc-", points_to_skip, points_to_delete_from_beginning, end);
+                const auto save_path_inc = save_path;
                 index->save(save_path_inc.c_str(), false);
                 const double elapsedSeconds = save_timer.elapsed() / 1000000.0;
                 const size_t points_saved = end - points_to_skip;
@@ -357,8 +355,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
         if (checkpoints_per_snapshot > 0 && last_snapshot_points_threshold != last_point_threshold)
         {
-            const auto save_path_inc = get_save_filename(save_path + ".inc-", points_to_skip,
-                                                         points_to_delete_from_beginning, last_point_threshold);
+            const auto save_path_inc = save_path;
             // index.save(save_path_inc.c_str(), false);
         }
 
