@@ -150,7 +150,8 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
                              uint32_t num_start_pts, size_t points_per_checkpoint, size_t checkpoints_per_snapshot,
                              const std::string &save_path, size_t points_to_delete_from_beginning,
                              size_t start_deletes_after, bool concurrent, const std::string &label_file,
-                             const std::string &universal_label, bool from_scratch)
+                             const std::string &universal_label, bool from_scratch,
+                            size_t start_edit_index, size_t num_edits)
 {
     size_t dim, aligned_dim;
     size_t num_points;
@@ -261,8 +262,7 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
     if (concurrent)
     {
         // handle labels
-        const auto save_path_inc = get_save_filename(save_path + ".after-concurrent-delete-", points_to_skip,
-                                                     points_to_delete_from_beginning, last_point_threshold);
+        const auto save_path_inc = save_path;
         std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
         std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
         if (has_labels)
@@ -278,33 +278,29 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
 
         diskann::Timer timer;
 
-        for (size_t start = current_point_offset; start < last_point_threshold;
-             start += points_per_checkpoint, current_point_offset += points_per_checkpoint)
-        {
-            const size_t end = std::min(start + points_per_checkpoint, last_point_threshold);
-            std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
+        size_t start = start_edit_index;
+        size_t end = start_edit_index + num_edits;
 
-            auto insert_task = std::async(std::launch::async, [&]() {
-                load_aligned_bin_part(data_path, data, start, end - start);
-                insert_till_next_checkpoint<T, TagT, LabelT>(*index, start, end, sub_threads, data, aligned_dim,
-                                                             location_to_labels);
-            });
-            insert_task.wait();
+        std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
 
-            if (!delete_launched && end >= start_deletes_after &&
-                end >= points_to_skip + points_to_delete_from_beginning)
-            {
-                delete_launched = true;
-                diskann::IndexWriteParameters delete_params =
-                    diskann::IndexWriteParametersBuilder(params).with_num_threads(sub_threads).build();
+        diskann::IndexWriteParameters delete_params =
+        diskann::IndexWriteParametersBuilder(params).with_num_threads(sub_threads).build();
 
-                delete_task = std::async(std::launch::async, [&]() {
-                    delete_from_beginning<T, TagT>(*index, delete_params, points_to_skip,
-                                                   points_to_delete_from_beginning);
-                });
-            }
-        }
+        delete_task = std::async(std::launch::async, [&]() {
+            delete_from_beginning<T, TagT>(*index, delete_params, start,
+                                            end);
+        });
+        
+
         delete_task.wait();
+
+        auto insert_task = std::async(std::launch::async, [&]() {
+            load_aligned_bin_part(data_path, data, start, end - start);
+            insert_till_next_checkpoint<T, TagT, LabelT>(*index, start, end, sub_threads, data, aligned_dim,
+                                                            location_to_labels);
+        });
+        insert_task.wait();
+
 
         std::cout << "Time Elapsed " << timer.elapsed() / 1000 << "ms\n";
         index->save(save_path_inc.c_str(), true);
@@ -324,45 +320,15 @@ void build_incremental_index(const std::string &data_path, diskann::IndexWritePa
         size_t last_snapshot_points_threshold = 0;
         size_t num_checkpoints_till_snapshot = checkpoints_per_snapshot;
 
-        for (size_t start = current_point_offset; start < last_point_threshold;
-             start += points_per_checkpoint, current_point_offset += points_per_checkpoint)
-        {
-            const size_t end = std::min(start + points_per_checkpoint, last_point_threshold);
-            std::cout << std::endl << "Inserting from " << start << " to " << end << std::endl;
+        size_t start = start_edit_index;
+        size_t end = start_edit_index + num_edits;
 
-            load_aligned_bin_part(data_path, data, start, end - start);
-            insert_till_next_checkpoint<T, TagT, LabelT>(*index, start, end, (int32_t)params.num_threads, data,
-                                                         aligned_dim, location_to_labels);
+        delete_from_beginning<T, TagT>(*index, params, start, num_edits);
 
-            if (checkpoints_per_snapshot > 0 && --num_checkpoints_till_snapshot == 0)
-            {
-                diskann::Timer save_timer;
+        load_aligned_bin_part(data_path, data, start, end - start);
+        insert_till_next_checkpoint<T, TagT, LabelT>(*index, start, end, (int32_t)params.num_threads, data,
+                                                        aligned_dim, location_to_labels);
 
-                const auto save_path_inc = save_path;
-                index->save(save_path_inc.c_str(), false);
-                const double elapsedSeconds = save_timer.elapsed() / 1000000.0;
-                const size_t points_saved = end - points_to_skip;
-
-                std::cout << "Saved " << points_saved << " points in " << elapsedSeconds << " seconds ("
-                          << points_saved / elapsedSeconds << " points/second)\n";
-
-                num_checkpoints_till_snapshot = checkpoints_per_snapshot;
-                last_snapshot_points_threshold = end;
-            }
-
-            std::cout << "Number of points in the index post insertion " << end << std::endl;
-        }
-
-        if (checkpoints_per_snapshot > 0 && last_snapshot_points_threshold != last_point_threshold)
-        {
-            const auto save_path_inc = save_path;
-            // index.save(save_path_inc.c_str(), false);
-        }
-
-        if (points_to_delete_from_beginning > 0)
-        {
-            delete_from_beginning<T, TagT>(*index, params, points_to_skip, points_to_delete_from_beginning);
-        }
 
         index->save(save_path_inc.c_str(), true);
     }
@@ -376,7 +342,7 @@ int main(int argc, char **argv)
     uint32_t num_threads, R, L, num_start_pts;
     float alpha, start_point_norm;
     size_t points_to_skip, max_points_to_insert, beginning_index_size, points_per_checkpoint, checkpoints_per_snapshot,
-        points_to_delete_from_beginning, start_deletes_after;
+        points_to_delete_from_beginning, start_deletes_after, start_edit_index, num_edits;
     bool concurrent, from_scratch;
 
     // label options
@@ -432,6 +398,11 @@ int main(int argc, char **argv)
                                        po::value<uint64_t>(&start_deletes_after)->default_value(0), "");
         optional_configs.add_options()("start_point_norm", po::value<float>(&start_point_norm)->default_value(0),
                                        "Set the start point to a random point on a sphere of this radius");
+        
+        optional_configs.add_options()("start_edit_index", po::value<uint64_t>(&start_edit_index)->default_value(0),
+                                       "Index to start performing edits from");
+        optional_configs.add_options()("num_edits", po::value<uint64_t>(&num_edits)->default_value(0),
+                                       "Number of edits to be performed");
 
         // optional params for filters
         optional_configs.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
@@ -508,19 +479,19 @@ int main(int argc, char **argv)
                 data_path, params, points_to_skip, max_points_to_insert, beginning_index_size, start_point_norm,
                 num_start_pts, points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
                 points_to_delete_from_beginning, start_deletes_after, concurrent, label_file, universal_label,
-                from_scratch);
+                from_scratch, start_edit_index, num_edits);
         else if (data_type == std::string("uint8"))
             build_incremental_index<uint8_t>(
                 data_path, params, points_to_skip, max_points_to_insert, beginning_index_size, start_point_norm,
                 num_start_pts, points_per_checkpoint, checkpoints_per_snapshot, index_path_prefix,
                 points_to_delete_from_beginning, start_deletes_after, concurrent, label_file, universal_label,
-                from_scratch);
+                from_scratch, start_edit_index, num_edits);
         else if (data_type == std::string("float"))
             build_incremental_index<float>(data_path, params, points_to_skip, max_points_to_insert,
                                            beginning_index_size, start_point_norm, num_start_pts, points_per_checkpoint,
                                            checkpoints_per_snapshot, index_path_prefix, points_to_delete_from_beginning,
                                            start_deletes_after, concurrent, label_file, universal_label,
-                                            from_scratch);
+                                            from_scratch, start_edit_index, num_edits);
         else
             std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
     }
