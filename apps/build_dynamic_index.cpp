@@ -78,65 +78,13 @@ inline void load_aligned_bin_part(const std::string &bin_file, T *data, size_t o
     std::cout << "Read " << points_to_read << " points using non-cached reads in " << elapsedSeconds << std::endl;
 }
 
-template <typename T, typename TagT, typename LabelT>
-void insert_till_next_checkpoint(diskann::AbstractIndex &index, size_t start, size_t end, int32_t thread_count, T *data,
-                                 size_t aligned_dim, std::vector<std::vector<LabelT>> &location_to_labels)
-{
-    diskann::Timer insert_timer;
-#pragma omp parallel for num_threads(thread_count) schedule(dynamic)
-    for (int64_t j = start; j < (int64_t)end; j++)
-    {
-        if (!location_to_labels.empty())
-        {
-            index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j),
-                               location_to_labels[j - start]);
-        }
-        else
-        {
-            index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j));
-        }
-    }
-    const double elapsedSeconds = insert_timer.elapsed() / 1000000.0;
-    std::cout << "Insertion time " << elapsedSeconds << " seconds (" << (end - start) / elapsedSeconds
-              << " points/second overall, " << (end - start) / elapsedSeconds / thread_count << " per thread)\n ";
-}
-
-template <typename T, typename TagT>
-void delete_from_beginning(diskann::AbstractIndex &index, diskann::IndexWriteParameters &delete_params,
-                           size_t points_to_skip, size_t points_to_delete_from_beginning)
-{
-    try
-    {
-        std::cout << std::endl
-                  << "Lazy deleting points " << points_to_skip << " to "
-                  << points_to_skip + points_to_delete_from_beginning << "... ";
-        for (size_t i = points_to_skip; i < points_to_skip + points_to_delete_from_beginning; ++i)
-            index.lazy_delete(static_cast<TagT>(i + 1)); // Since tags are data location + 1
-        std::cout << "done." << std::endl;
-
-        auto report = index.consolidate_deletes(delete_params);
-        std::cout << "#active points: " << report._active_points << std::endl
-                  << "max points: " << report._max_points << std::endl
-                  << "empty slots: " << report._empty_slots << std::endl
-                  << "deletes processed: " << report._slots_released << std::endl
-                  << "latest delete size: " << report._delete_set_size << std::endl
-                  << "rate: (" << points_to_delete_from_beginning / report._time << " points/second overall, "
-                  << points_to_delete_from_beginning / report._time / delete_params.num_threads << " per thread)"
-                  << std::endl;
-    }
-    catch (std::system_error &e)
-    {
-        std::cout << "Exception caught in deletion thread: " << e.what() << std::endl;
-    }
-}
 
 template <typename T>
-void delete_insert(const std::string &data_path, diskann::IndexWriteParameters &params,
-    size_t max_points_to_insert,
-    uint32_t num_start_pts, const std::string &save_path, 
-   const std::string &label_file,
-   const std::string &universal_label,
-   size_t start_edit_index, size_t num_edits)
+void build_dynamic_index(const std::string &data_path, diskann::IndexWriteParameters &params, size_t points_to_skip,
+                             size_t max_points_to_insert, size_t beginning_index_size, float start_point_norm,
+                             uint32_t num_start_pts, const std::string &save_path, 
+                              bool concurrent, const std::string &label_file,
+                             const std::string &universal_label)
 {
     size_t dim, aligned_dim;
     size_t num_points;
@@ -174,44 +122,57 @@ void delete_insert(const std::string &data_path, diskann::IndexWriteParameters &
         LabelT u_label = 0;
         index->set_universal_label(u_label);
     }
-       
-    index->load(save_path.c_str(), params.num_threads, params.search_list_size);
 
-    std::vector<std::vector<LabelT>> location_to_labels;
-
-    const auto save_path_inc = save_path;
-    std::string labels_file_to_use = save_path_inc + "_label_formatted.txt";
-    std::string mem_labels_int_map_file = save_path_inc + "_labels_map.txt";
-    if (has_labels)
+    if (points_to_skip > num_points)
     {
-        convert_labels_string_to_int(label_file, labels_file_to_use, mem_labels_int_map_file, universal_label);
-        auto parse_result = diskann::parse_formatted_label_file<LabelT>(labels_file_to_use);
-        location_to_labels = std::get<0>(parse_result);
+        throw diskann::ANNException("Asked to skip more points than in data file", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    size_t start = start_edit_index;
-    size_t end = start_edit_index + num_edits;
+    if (max_points_to_insert == 0)
+    {
+        max_points_to_insert = num_points;
+    }
 
-    delete_from_beginning<T, TagT>(*index, params, start, num_edits);
+    if (points_to_skip + max_points_to_insert > num_points)
+    {
+        max_points_to_insert = num_points - points_to_skip;
+        std::cerr << "WARNING: Reducing max_points_to_insert to " << max_points_to_insert
+                  << " points since the data file has only that many" << std::endl;
+    }
 
+    if (beginning_index_size > max_points_to_insert)
+    {
+        beginning_index_size = max_points_to_insert;
+        std::cerr << "WARNING: Reducing beginning index size to " << beginning_index_size
+                  << " points since the data file has only that many" << std::endl;
+    }
+    
     T *data = nullptr;
     diskann::alloc_aligned(
-        (void **)&data, (end-start) * aligned_dim * sizeof(T), 8 * sizeof(T));
+        (void **)&data, beginning_index_size * aligned_dim * sizeof(T), 8 * sizeof(T));
 
-    load_aligned_bin_part(data_path, data, start, end - start);
-    insert_till_next_checkpoint<T, TagT, LabelT>(*index, start, end, (int32_t)params.num_threads, data,
-                                                    aligned_dim, location_to_labels);
+    std::vector<TagT> tags(beginning_index_size);
+    std::iota(tags.begin(), tags.end(), 1 + static_cast<TagT>(points_to_skip));
 
-    index->save(save_path_inc.c_str(), true); 
+    load_aligned_bin_part(data_path, data, 1 + static_cast<TagT>(points_to_skip), beginning_index_size);
+    std::cout << "load aligned bin succeeded" << std::endl;
+    diskann::Timer timer;
+    index->build(data, beginning_index_size, tags);
+    index->save(save_path.c_str(), true);
     index.reset();
+    const double elapsedSeconds = timer.elapsed() / 1000000.0;
+    std::cout << "Initial non-incremental index build time for " << beginning_index_size << " points took "
+            << elapsedSeconds << " seconds (" << beginning_index_size / elapsedSeconds << " points/second)\n ";
+    diskann::aligned_free(data);
 }
 
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix;
     uint32_t num_threads, R, L, num_start_pts;
-    float alpha;
-    size_t max_points_to_insert, start_edit_index, num_edits;
+    float alpha, start_point_norm;
+    size_t points_to_skip, max_points_to_insert, beginning_index_size;
+    bool concurrent;
 
     // label options
     std::string label_file, label_type, universal_label;
@@ -233,6 +194,10 @@ int main(int argc, char **argv)
                                        program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
         required_configs.add_options()("data_path", po::value<std::string>(&data_path)->required(),
                                        program_options_utils::INPUT_DATA_PATH);
+        required_configs.add_options()("points_to_skip", po::value<uint64_t>(&points_to_skip)->required(),
+                                       "Skip these first set of points from file");
+        required_configs.add_options()("beginning_index_size", po::value<uint64_t>(&beginning_index_size)->required(),
+                                       "Batch build will be called on these set of points");
 
         // Optional parameters
         po::options_description optional_configs("Optional");
@@ -249,10 +214,9 @@ int main(int argc, char **argv)
                                        po::value<uint64_t>(&max_points_to_insert)->default_value(0),
                                        "These number of points from the file are inserted after "
                                        "points_to_skip");
-        optional_configs.add_options()("start_edit_index", po::value<uint64_t>(&start_edit_index)->default_value(0),
-                                       "Index to start performing edits from");
-        optional_configs.add_options()("num_edits", po::value<uint64_t>(&num_edits)->default_value(0),
-                                       "Number of edits to be performed");
+        optional_configs.add_options()("do_concurrent", po::value<bool>(&concurrent)->default_value(false), "");
+        optional_configs.add_options()("start_point_norm", po::value<float>(&start_point_norm)->default_value(0),
+                                       "Set the start point to a random point on a sphere of this radius");
 
         // optional params for filters
         optional_configs.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
@@ -316,19 +280,17 @@ int main(int argc, char **argv)
                                                    .build();
 
         if (data_type == std::string("int8"))
-            delete_insert<int8_t>(
-                data_path, params, max_points_to_insert,
-                num_start_pts, index_path_prefix, label_file, universal_label,
-                start_edit_index, num_edits);
+            build_dynamic_index<int8_t>(
+                data_path, params, points_to_skip, max_points_to_insert, beginning_index_size, start_point_norm,
+                num_start_pts, index_path_prefix, concurrent, label_file, universal_label);
         else if (data_type == std::string("uint8"))
-            delete_insert<uint8_t>(
-                data_path, params, max_points_to_insert,
-                num_start_pts, index_path_prefix, label_file, universal_label,
-                start_edit_index, num_edits);
+            build_dynamic_index<uint8_t>(
+                data_path, params, points_to_skip, max_points_to_insert, beginning_index_size, start_point_norm,
+                num_start_pts, index_path_prefix, concurrent, label_file, universal_label);
         else if (data_type == std::string("float"))
-            delete_insert<float>(data_path, params, max_points_to_insert,
-                num_start_pts, index_path_prefix, label_file, universal_label,
-                start_edit_index, num_edits);
+            build_dynamic_index<float>(data_path, params, points_to_skip, max_points_to_insert,
+                beginning_index_size, start_point_norm, num_start_pts,
+                index_path_prefix, concurrent, label_file, universal_label);
         else
             std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
     }
