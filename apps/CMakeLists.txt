@@ -34,6 +34,12 @@ target_link_libraries(build_dynamic_index ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALL
 add_executable(delete_insert delete_insert.cpp)
 target_link_libraries(delete_insert ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
+add_executable(delete delete.cpp)
+target_link_libraries(delete ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
+
+add_executable(insert insert.cpp)
+target_link_libraries(insert ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
+
 if (NOT MSVC)
     install(TARGETS build_memory_index
             build_stitched_index
@@ -45,6 +51,8 @@ if (NOT MSVC)
             test_insert_deletes_consolidate
             build_dynamic_index
             delete_insert
+            delete
+            insert
             RUNTIME
     )
 endif()
