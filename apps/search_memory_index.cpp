@@ -129,7 +129,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
     std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
-    std::vector<float> latency_stats(query_num, 0);
+    std::vector<std::vector<float>> latency_stats(Lvec.size(), std::vector<float>(query_num));
     std::vector<uint32_t> cmp_stats;
     if (not tags || filtered_search)
     {
@@ -143,6 +143,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
 
     double best_recall = 0.0;
+    uint32_t num_recalls = print_all_recalls ? recall_at : 1;
+    std::vector<double> recalls;
+    recalls.reserve(Lvec.size() * num_recalls);
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
@@ -206,7 +209,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
             auto qe = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> diff = qe - qs;
-            latency_stats[i] = (float)(diff.count() * 1000000);
+            latency_stats[test_id][i] = (float)(diff.count() * 1000000);
         }
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
 
@@ -215,10 +218,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         if (show_qps_per_thread)
             displayed_qps /= num_threads;
 
-        std::vector<double> recalls;
         if (calc_recall_flag)
         {
-            recalls.reserve(recalls_to_print);
             for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
             {
                 recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
@@ -226,25 +227,26 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
         }
 
-        std::sort(latency_stats.begin(), latency_stats.end());
+        std::sort(latency_stats[test_id].begin(), latency_stats[test_id].end());
         double mean_latency =
-            std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) / static_cast<float>(query_num);
+            std::accumulate(latency_stats[test_id].begin(), latency_stats[test_id].end(), 0.0) / static_cast<float>(query_num);
 
         float avg_cmps = (float)std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) / (float)query_num;
 
         if (tags && !filtered_search)
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(20) << (float)mean_latency
-                      << std::setw(15) << (float)latency_stats[(uint64_t)(0.999 * query_num)];
+                      << std::setw(15) << (float)latency_stats[test_id][(uint64_t)(0.999 * query_num)];
         }
         else
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15)
-                      << (float)latency_stats[(uint64_t)(0.999 * query_num)];
+                      << (float)latency_stats[test_id][(uint64_t)(0.999 * query_num)];
         }
-        for (double recall : recalls)
+        for (size_t i = 0; i < num_recalls; i++)
         {
+            double recall = recalls[test_id*num_recalls + i];
             std::cout << std::setw(12) << recall;
             best_recall = std::max(recall, best_recall);
         }
@@ -253,6 +255,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
     std::cout << "Done searching. Now saving results " << std::endl;
     uint64_t test_id = 0;
+
     for (auto L : Lvec)
     {
         if (L < recall_at)
@@ -267,9 +270,15 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
         cur_result_path = cur_result_path_prefix + "_dists_float.bin";
         diskann::save_bin<float>(cur_result_path, query_result_dists[test_id].data(), query_num, recall_at);
-
         test_id++;
     }
+    // Writing recalls
+    std::string recall_path = result_path_prefix + "_" + "recalls_double.bin";
+    diskann::save_vector1d<double>(recall_path, recalls);
+    // Writing latencies
+    std::string latency_path = result_path_prefix + "_" + "latencies.bin";
+    diskann::save_vector2d<float>(latency_path, latency_stats);
+    
 
     diskann::aligned_free(query);
     return best_recall >= fail_if_recall_below ? 0 : -1;
