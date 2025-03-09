@@ -3,6 +3,8 @@
 
 #include "in_mem_graph_store.h"
 #include "utils.h"
+#include <cmath>
+#include "log_utils.h"
 
 namespace diskann
 {
@@ -167,6 +169,8 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
     size_t bytes_read = vamana_metadata_size;
     size_t cc = 0;
     uint32_t nodes_read = 0;
+    double mean = 0.0;
+    double variance = 0.0;
     while (bytes_read != expected_file_size)
     {
         uint32_t k;
@@ -180,6 +184,9 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
         cc += k;
         ++nodes_read;
         std::vector<uint32_t> tmp(k);
+        double old_mean = mean;
+        mean += (k - mean) / nodes_read;
+        variance += (k - mean) * (k - old_mean);
         tmp.reserve(k);
         in.read((char *)tmp.data(), k * sizeof(uint32_t));
         _graph[nodes_read - 1].swap(tmp);
@@ -191,6 +198,14 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
             _max_range_of_graph = k;
         }
     }
+
+    // write total number of out_edges to log_file
+    get_log_file() << "num_out_edges: " << cc << std::endl;
+    get_log_file() << "mean_out_edges: " << mean << std::endl;
+    get_log_file() << "variance_out_edges: " << variance << std::endl;
+    get_log_file() << "max_observed_degree: " << _max_observed_degree << std::endl;
+    get_log_file() << "num_nodes: " << nodes_read << std::endl;
+
 
     diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to " << start
                   << std::endl;
