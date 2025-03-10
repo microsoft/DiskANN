@@ -12,7 +12,7 @@ else()
         distance.cpp index.cpp in_mem_graph_store.cpp in_mem_data_store.cpp
         linux_aligned_file_reader.cpp math_utils.cpp natural_number_map.cpp
         in_mem_data_store.cpp in_mem_graph_store.cpp
-        natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp
+        natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp log_utils.cpp
         pq_flash_index.cpp scratch.cpp logger.cpp utils.cpp filter_utils.cpp index_factory.cpp abstract_index.cpp pq_l2_distance.cpp pq_data_store.cpp)
     if (RESTAPI)
         list(APPEND CPP_SOURCES restapi/search_wrapper.cpp restapi/server.cpp)

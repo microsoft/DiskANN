@@ -736,6 +736,38 @@ inline size_t save_bin(const std::string &filename, T *data, size_t npts, size_t
     return bytes_written;
 }
 
+template <typename T>
+inline void save_vector1d(const std::string &filename, const std::vector<T> &vec) {
+    std::ofstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Error opening file: " << filename << std::endl;
+        return;
+    }
+
+    size_t size = vec.size();
+    file.write(reinterpret_cast<const char *>(&size), sizeof(size));
+    file.write(reinterpret_cast<const char *>(vec.data()), size * sizeof(T)); 
+}
+
+template <typename T>
+inline void save_vector2d(const std::string &filename, const std::vector<std::vector<T>> &vec) {
+    std::ofstream file(filename, std::ios::binary);
+    if (!file) {
+        std::cerr << "Error opening file: " << filename << std::endl;
+        return;
+    }
+
+    size_t rows = vec.size();
+    size_t cols = rows > 0 ? vec[0].size() : 0;
+
+    file.write(reinterpret_cast<const char *>(&rows), sizeof(rows));
+    file.write(reinterpret_cast<const char *>(&cols), sizeof(cols));
+
+    for (const auto &row : vec) {
+        file.write(reinterpret_cast<const char *>(row.data()), cols * sizeof(T));
+    }
+}
+
 inline void print_progress(double percentage)
 {
     int val = (int)(percentage * 100);

@@ -9,6 +9,7 @@
 #include <timer.h>
 #include <boost/program_options.hpp>
 #include <future>
+#include <log_utils.h>
 
 #include "utils.h"
 #include "filter_utils.h"
@@ -96,9 +97,13 @@ void insert_till_next_checkpoint(diskann::AbstractIndex &index, size_t start, si
             index.insert_point(&data[(j - start) * aligned_dim], 1 + static_cast<TagT>(j));
         }
     }
+
     const double elapsedSeconds = insert_timer.elapsed() / 1000000.0;
     std::cout << "Insertion time " << elapsedSeconds << " seconds (" << (end - start) / elapsedSeconds
               << " points/second overall, " << (end - start) / elapsedSeconds / thread_count << " per thread)\n ";
+    
+    get_log_file() << "insertion_time: " << elapsedSeconds << std::endl;
+    get_log_file() << "num_inserted: " << end - start << std::endl;
 }
 
 template <typename T, typename TagT>
@@ -123,6 +128,9 @@ void delete_from_beginning(diskann::AbstractIndex &index, diskann::IndexWritePar
                   << "rate: (" << points_to_delete_from_beginning / report._time << " points/second overall, "
                   << points_to_delete_from_beginning / report._time / delete_params.num_threads << " per thread)"
                   << std::endl;
+        
+        get_log_file() << "deletion_time: " << report._time << std::endl;
+        get_log_file() << "num_deleted: " << points_to_delete_from_beginning << std::endl;
     }
     catch (std::system_error &e)
     {
@@ -198,7 +206,7 @@ void delete_insert(const std::string &data_path, diskann::IndexWriteParameters &
     load_aligned_bin_part(data_path, data, start_insertion_index, num_insertions);
     insert_till_next_checkpoint<T, TagT, LabelT>(*index, start_insertion_index, start_insertion_index+num_insertions, (int32_t)params.num_threads, data,
                                                     aligned_dim, location_to_labels);
-                                               
+
     index->save(save_path_inc.c_str(), true); 
 }
 

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include <timer.h>
+#include <log_utils.h>
 #include <boost/program_options.hpp>
 #include <future>
 
@@ -158,11 +159,16 @@ void build_dynamic_index(const std::string &data_path, diskann::IndexWriteParame
     std::cout << "load aligned bin succeeded" << std::endl;
     diskann::Timer timer;
     index->build(data, beginning_index_size, tags);
-    index->save(save_path.c_str(), true);
+
 
     const double elapsedSeconds = timer.elapsed() / 1000000.0;
     std::cout << "Initial non-incremental index build time for " << beginning_index_size << " points took "
             << elapsedSeconds << " seconds (" << beginning_index_size / elapsedSeconds << " points/second)\n ";
+    
+    get_log_file() << "initial_build_time: " << elapsedSeconds << std::endl;
+    
+
+    index->save(save_path.c_str(), true);
     diskann::aligned_free(data);
 }
 
