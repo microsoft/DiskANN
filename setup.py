@@ -118,12 +118,17 @@ class CMakeBuild(build_ext):
         # this next line is problematic. we tell it to use the ext.sourcedir but, when
         # using `python -m build`, we actually have a copy of everything made and pushed
         # into a venv isolation area
-        subprocess.run(
-            ["cmake", "-DPYBIND=True", "-DCMAKE_PREFIX_PATH=" + os.environ.get("CONDA_PREFIX", ""), 
-             "-DProtobuf_DIR=" + os.path.join(os.environ.get("CONDA_PREFIX", ""), "lib/cmake/protobuf"), 
-             ext.sourcedir] + cmake_args, cwd=build_temp, check=True
-        )
-
+        if os.environ.get("USE_CONDA", "") == '1' and os.environ.get("CONDA_PREFIX", "") != "":
+            subprocess.run(
+                ["cmake", "-DPYBIND=True", "-DCMAKE_PREFIX_PATH=" + os.environ.get("CONDA_PREFIX", ""), 
+                "-DProtobuf_DIR=" + os.path.join(os.environ.get("CONDA_PREFIX", ""), "lib/cmake/protobuf"), 
+                ext.sourcedir] + cmake_args, cwd=build_temp, check=True
+            )
+        else:
+            subprocess.run(
+                ["cmake", "-DPYBIND=True", ext.sourcedir] + cmake_args, cwd=build_temp, check=True
+            )
+        
         subprocess.run(
             ["cmake", "--build", "."] + build_args, cwd=build_temp, check=True
         )

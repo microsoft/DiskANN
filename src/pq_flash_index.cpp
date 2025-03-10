@@ -763,11 +763,13 @@ template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix)
 {
 #else
-template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix)
+template <typename T, typename LabelT>int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix)
 {
 #endif
-    std::string pq_table_bin = std::string(index_prefix) + "_pq_pivots.bin";
-    std::string pq_compressed_vectors = std::string(index_prefix) + "_pq_compressed.bin";
+    // TODO: seperate PQ here
+    std::string compressed_index_prefix = "/opt/dlami/nvme/scaling_out/embeddings/facebook/contriever-msmarco/rpj_wiki/compressed_10/ann";
+    std::string pq_table_bin = std::string(compressed_index_prefix) + "_pq_pivots.bin";
+    std::string pq_compressed_vectors = std::string(compressed_index_prefix) + "_pq_compressed.bin";
     std::string _disk_index_file = std::string(index_prefix) + "_disk.index";
 #ifdef EXEC_ENV_OLS
     return load_from_separate_paths(files, num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
@@ -793,16 +795,21 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string pq_table_bin = pivots_filepath;
     std::string pq_compressed_vectors = compressed_filepath;
     std::string _disk_index_file = index_filepath;
+    // Don't have this one
     std::string medoids_file = std::string(_disk_index_file) + "_medoids.bin";
     std::string centroids_file = std::string(_disk_index_file) + "_centroids.bin";
 
+    // NO
     std::string labels_file = std ::string(_disk_index_file) + "_labels.txt";
+    // NO
     std::string labels_to_medoids = std ::string(_disk_index_file) + "_labels_to_medoids.txt";
+    // NO
     std::string dummy_map_file = std ::string(_disk_index_file) + "_dummy_map.txt";
+    // NO
     std::string labels_map_file = std ::string(_disk_index_file) + "_labels_map.txt";
     size_t num_pts_in_label_file = 0;
 
-    size_t pq_file_dim, pq_file_num_centroids;
+    size_t pq_file_dim = 0, pq_file_num_centroids = 0;
 #ifdef EXEC_ENV_OLS
     get_bin_metadata(files, pq_table_bin, pq_file_num_centroids, pq_file_dim, METADATA_SIZE);
 #else
@@ -813,6 +820,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     if (pq_file_num_centroids != 256)
     {
+        diskann::cout << "Got " << pq_file_num_centroids << " PQ centroids, loading from " << pq_table_bin << std::endl;
         diskann::cout << "Error. Number of PQ centroids is not 256. Exiting." << std::endl;
         return -1;
     }
@@ -1028,6 +1036,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     ContentBuf buf(bytes, HEADER_SIZE);
     std::basic_istream<char> index_metadata(&buf);
 #else
+    diskann::cout << "Loading index metadata from " << _disk_index_file << std::endl;
     std::ifstream index_metadata(_disk_index_file, std::ios::binary);
 #endif
 
