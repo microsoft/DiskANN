@@ -33,7 +33,7 @@ template <typename DT> class StaticDiskIndex
 {
   public:
     StaticDiskIndex(diskann::Metric metric, const std::string &index_path_prefix, uint32_t num_threads,
-                    size_t num_nodes_to_cache, uint32_t cache_mechanism);
+                    size_t num_nodes_to_cache, uint32_t cache_mechanism, const std::string &pq_prefix);
 
     void cache_bfs_levels(size_t num_nodes_to_cache);
 

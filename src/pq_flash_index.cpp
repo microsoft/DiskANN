@@ -760,16 +760,17 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_univers
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
-int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix)
+int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix, const char *pq_prefix)
 {
 #else
-template <typename T, typename LabelT>int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix)
+template <typename T, typename LabelT>int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix, const char *pq_prefix)
 {
 #endif
-    // TODO: seperate PQ here
-    std::string compressed_index_prefix = "/opt/dlami/nvme/scaling_out/embeddings/facebook/contriever-msmarco/rpj_wiki/compressed_10/ann";
-    std::string pq_table_bin = std::string(compressed_index_prefix) + "_pq_pivots.bin";
-    std::string pq_compressed_vectors = std::string(compressed_index_prefix) + "_pq_compressed.bin";
+    if (pq_prefix == nullptr || strcmp(pq_prefix, "") == 0) {
+        pq_prefix = index_prefix;
+    }
+    std::string pq_table_bin = std::string(pq_prefix) + "_pq_pivots.bin";
+    std::string pq_compressed_vectors = std::string(pq_prefix) + "_pq_compressed.bin";
     std::string _disk_index_file = std::string(index_prefix) + "_disk.index";
 #ifdef EXEC_ENV_OLS
     return load_from_separate_paths(files, num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
