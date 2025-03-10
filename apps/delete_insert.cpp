@@ -83,6 +83,7 @@ template <typename T, typename TagT, typename LabelT>
 void insert_till_next_checkpoint(diskann::AbstractIndex &index, size_t start, size_t end, int32_t thread_count, T *data,
                                  size_t aligned_dim, std::vector<std::vector<LabelT>> &location_to_labels)
 {
+    std::ofstream& logfile = get_log_file();
     diskann::Timer insert_timer;
 #pragma omp parallel for num_threads(thread_count) schedule(dynamic)
     for (int64_t j = start; j < (int64_t)end; j++)
@@ -102,8 +103,8 @@ void insert_till_next_checkpoint(diskann::AbstractIndex &index, size_t start, si
     std::cout << "Insertion time " << elapsedSeconds << " seconds (" << (end - start) / elapsedSeconds
               << " points/second overall, " << (end - start) / elapsedSeconds / thread_count << " per thread)\n ";
     
-    get_log_file() << "insertion_time: " << elapsedSeconds << std::endl;
-    get_log_file() << "num_inserted: " << end - start << std::endl;
+    log_file << "insertion_time: " << elapsedSeconds << std::endl;
+    log_file << "num_inserted: " << end - start << std::endl;
 }
 
 template <typename T, typename TagT>
@@ -112,6 +113,7 @@ void delete_from_beginning(diskann::AbstractIndex &index, diskann::IndexWritePar
 {
     try
     {
+        std::ofstream& logfile = get_log_file();
         std::cout << std::endl
                   << "Lazy deleting points " << points_to_skip << " to "
                   << points_to_skip + points_to_delete_from_beginning << "... ";
@@ -129,8 +131,8 @@ void delete_from_beginning(diskann::AbstractIndex &index, diskann::IndexWritePar
                   << points_to_delete_from_beginning / report._time / delete_params.num_threads << " per thread)"
                   << std::endl;
         
-        get_log_file() << "deletion_time: " << report._time << std::endl;
-        get_log_file() << "num_deleted: " << points_to_delete_from_beginning << std::endl;
+        log_file << "deletion_time: " << report._time << std::endl;
+        log_file << "num_deleted: " << points_to_delete_from_beginning << std::endl;
     }
     catch (std::system_error &e)
     {

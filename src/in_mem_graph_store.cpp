@@ -137,6 +137,7 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(AlignedFileRea
 std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::string &filename,
                                                                   size_t expected_num_points)
 {
+    std::ofstream& log_file = get_log_file();
     size_t expected_file_size;
     size_t file_frozen_pts;
     uint32_t start;
@@ -200,11 +201,11 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load_impl(const std::str
     }
 
     // write total number of out_edges to log_file
-    get_log_file() << "num_out_edges: " << cc << std::endl;
-    get_log_file() << "mean_out_edges: " << mean << std::endl;
-    get_log_file() << "variance_out_edges: " << variance << std::endl;
-    get_log_file() << "max_observed_degree: " << _max_observed_degree << std::endl;
-    get_log_file() << "num_nodes: " << nodes_read << std::endl;
+    log_file << "num_out_edges: " << cc << std::endl;
+    log_file << "mean_out_edges: " << mean << std::endl;
+    log_file << "variance_out_edges: " << variance << std::endl;
+    log_file << "max_observed_degree: " << _max_observed_degree << std::endl;
+    log_file << "num_nodes: " << nodes_read << std::endl;
 
 
     diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to " << start
