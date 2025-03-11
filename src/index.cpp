@@ -1127,7 +1127,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             if (search_invocation)
             {
+                #ifdef INSTRUMENT
+                auto s = std::chrono::high_resolution_clock::now();
+#endif
                 uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
+                #ifdef INSTRUMENT
+                std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+                time_to_get_valid += diff.count();
+            #endif
+            
 //                std::cout<<id <<" has penalty " << res << std::endl;
                 if ((res) > _filter_penalty_threshold)
                     continue;
@@ -1319,7 +1327,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     uint32_t res;
                     if (search_invocation)
                     {
+                        #ifdef INSTRUMENT
+                        auto s = std::chrono::high_resolution_clock::now();
+        #endif
+        
                         res = detect_filter_penalty(id, search_invocation, filter_labels);
+                        #ifdef INSTRUMENT
+                        std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+                        time_to_get_valid += diff.count();
+                    #endif
+        
                         if (res > _filter_penalty_threshold)
                         {
                             id_iter++;
@@ -2671,7 +2688,7 @@ std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_inters
 
     #ifdef INSTRUMENT
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-    time_to_get_valid += diff.count();
+//    time_to_get_valid += diff.count();
 #endif
 
     

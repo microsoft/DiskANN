@@ -197,8 +197,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 #pragma omp parallel for schedule(dynamic, 1)
         for (int64_t i = 0; i < (int64_t)query_num; i++)
         {
-                        time_to_get_valid = 0;
-            //            time_to_compare = 0;
             curr_query = i;
 /*            std::cout<<"\n\nQuery #" <<i <<"\n*******************\n";
             for (uint32_t rnr =  0; rnr < L; rnr++) {
@@ -230,7 +228,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 else
                     method_used = 0;
                 cmp_stats[i] = retval.second;
-                                filter_match_time[i] = time_to_get_valid*1000000;
+//                                filter_match_time[i] = time_to_get_valid*1000000;
                 //                dist_cmp_time[i] = time_to_compare*1000000;
             }
             else if (metric == diskann::FAST_L2)
