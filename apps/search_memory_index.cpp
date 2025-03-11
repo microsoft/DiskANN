@@ -405,7 +405,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << (float)(cluster_lat[test_id] * 1.0) / (num_clusters * 1.0) << std::setw(20)
                       << (float)(cluster_recalls[test_id] * 100.0) / (num_clusters * recall_at * 1.0) << std::setw(20)
                       << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(20)
-                      << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0)
+                      << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0) << " " << (1000000*time_to_detect_penalty) / query_num << "\t" << (1000000*time_to_get_valid) / query_num 
                       //                      << std::setw(20) << (float)(brute_lat[test_id]*1.0) << std::setw(20) <<
                       //                      (float)(brute_recalls[test_id]*100.0)
                       //                      << std::setw(20) << (float)(cluster_lat[test_id]*1.0) << std::setw(20) <<

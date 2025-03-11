@@ -606,8 +606,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     {
 
         _ivf_clusters = new InMemClusterStore<T>(0);
-        _ivf_clusters->load(filename);
-        _clusters_to_labels_to_points.resize(_ivf_clusters->get_num_clusters());
+        //_ivf_clusters->load(filename);
+        //_clusters_to_labels_to_points.resize(_ivf_clusters->get_num_clusters());
 
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
@@ -907,6 +907,10 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
     return incoming_labels.size() - overlap;
 */
 
+#ifdef INSTRUMENT
+auto s = std::chrono::high_resolution_clock::now();
+#endif
+
     uint32_t cur_penalty = incoming_labels.size();
     for (uint32_t i = 0; i < incoming_labels.size(); i++) {
         bool or_pass = false;
@@ -918,6 +922,11 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
         }
         cur_penalty -= or_pass;
     }
+
+#ifdef INSTRUMENT
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    time_to_detect_penalty += diff.count();
+#endif
 
     return cur_penalty;
 
@@ -2625,6 +2634,10 @@ std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_inters
                                                                           const std::vector<std::vector<LabelT>> &filter_labels)
 {
 
+    #ifdef INSTRUMENT
+    auto s = std::chrono::high_resolution_clock::now();
+#endif
+
 
     for (uint32_t or_itr = 0; or_itr < filter_labels[0].size(); or_itr++) {
         intersection_bitmap |= _labels_to_points_sample[filter_labels[0][or_itr]];
@@ -2655,6 +2668,13 @@ std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_inters
         results.emplace_back(val);
         x++;
     }
+
+    #ifdef INSTRUMENT
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    time_to_get_valid += diff.count();
+#endif
+
+    
     //    std::cout<<intersection_bitmap.cardinality() << " " << val << std::endl;
     return std::make_pair((uint32_t)(intersection_bitmap.cardinality() * (1.0 / (_sample_prob))), results);
 }
