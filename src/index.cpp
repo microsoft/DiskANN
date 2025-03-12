@@ -1070,7 +1070,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         scratch->clear();
 
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false, maxLperSeller);
 
         for (auto unfiltered_neighbour : scratch->pool())
         {
