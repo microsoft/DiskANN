@@ -1338,7 +1338,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     timer.reset();
     if (!use_disk_pq)
     {
-        diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path, disk_index_path, reorderDataFilePath);
+        diskann::create_disk_layout<T>(data_file_to_use.c_str(), mem_index_path, disk_index_path, reorderDataFilePath ? reorderDataFilePath : "");
     }
     else
     {
