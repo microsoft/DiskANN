@@ -282,7 +282,7 @@ inline void realloc_aligned(void **ptr, size_t size, size_t align)
         void *newptr;
         alloc_aligned(&newptr, size, align);
         std::memcpy(newptr, *ptr, size);
-        delete ptr;
+        operator delete(ptr, std::align_val_t(1));
         *ptr = newptr;
     #else
         *ptr = ::_aligned_realloc(*ptr, size, align);
@@ -315,7 +315,7 @@ inline void aligned_free(void *ptr)
     free(ptr);
 #else
     #ifdef EXEC_ENV_OLS
-        delete ptr;
+        operator delete(ptr, std::align_val_t(1));
     #else
         ::_aligned_free(ptr);
     #endif
