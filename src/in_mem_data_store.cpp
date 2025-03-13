@@ -222,7 +222,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::expand(const locat
            << this->capacity() << ")" << std::endl;
         throw diskann::ANNException(ss.str(), -1);
     }
-#ifndef _WINDOWS
+#if !defined(_WINDOWS) || defined(EXEC_ENV_OLS)
     data_t *new_data;
     alloc_aligned((void **)&new_data, new_size * _aligned_dim * sizeof(data_t), 8 * sizeof(data_t));
     memcpy(new_data, _data, this->capacity() * _aligned_dim * sizeof(data_t));
