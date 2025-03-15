@@ -760,13 +760,16 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_univers
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
-int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix, const char *pq_prefix)
+int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads, const char *index_prefix,
+                                  const char *pq_prefix)
 {
 #else
-template <typename T, typename LabelT>int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix, const char *pq_prefix)
+template <typename T, typename LabelT>
+int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix, const char *pq_prefix)
 {
 #endif
-    if (pq_prefix == nullptr || strcmp(pq_prefix, "") == 0) {
+    if (pq_prefix == nullptr || strcmp(pq_prefix, "") == 0)
+    {
         pq_prefix = index_prefix;
     }
     std::string pq_table_bin = std::string(pq_prefix) + "_pq_pivots.bin";
@@ -1803,21 +1806,111 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         // compute real-dist
         Timer compute_timer;
-        for (size_t i = 0; i < full_retset.size(); i++)
+        // Replace the problematic section in the deferred path (around line 1327)
+        if (!_use_disk_index_pq)
         {
-            size_t emb_size = real_embeddings[i].size();
-            float *aligned_emb = (float *)_mm_malloc(emb_size * sizeof(float), 32);
-            if (!aligned_emb)
+            // Non-PQ case - this is mostly correct already but with small fixes
+            T *aligned_emb_T = (T *)_mm_malloc(_aligned_dim * sizeof(T), 32);
+            if (!aligned_emb_T)
             {
                 throw ANNException("Failed to allocate aligned memory", -1, __FUNCSIG__, __FILE__, __LINE__);
             }
-            std::memcpy(aligned_emb, real_embeddings[i].data(), emb_size * sizeof(float));
-            float dist = static_cast<Distance<float> *>(_dist_cmp_float.get())
-                             ->compare(query_float, aligned_emb, (uint32_t)_aligned_dim);
+
+            // Copy and normalize exactly like in non-deferred path
+            float emb_norm = 0.0f;
+            if (metric == diskann::Metric::INNER_PRODUCT || metric == diskann::Metric::COSINE)
+            {
+                uint64_t inherent_dim =
+                    (metric == diskann::Metric::COSINE) ? this->_data_dim : (uint64_t)(this->_data_dim - 1);
+
+                // Clear the memory first to ensure all values are initialized
+                memset(aligned_emb_T, 0, _aligned_dim * sizeof(T));
+
+                // Copy values with bounds checking
+                for (size_t j = 0; j < inherent_dim && j < emb_size; j++)
+                {
+                    aligned_emb_T[j] = (T)real_embeddings[i][j];
+                    emb_norm += real_embeddings[i][j] * real_embeddings[i][j];
+                }
+
+                if (metric == diskann::Metric::INNER_PRODUCT)
+                    aligned_emb_T[this->_data_dim - 1] = 0;
+
+                emb_norm = std::sqrt(emb_norm);
+
+                for (size_t j = 0; j < inherent_dim && j < emb_size; j++)
+                {
+                    aligned_emb_T[j] = (T)(real_embeddings[i][j] / emb_norm);
+                }
+            }
+            else
+            {
+                // For L2 metric, no normalization needed
+                memset(aligned_emb_T, 0, _aligned_dim * sizeof(T));
+                for (size_t j = 0; j < std::min(emb_size, _aligned_dim); j++)
+                {
+                    aligned_emb_T[j] = (T)real_embeddings[i][j];
+                }
+            }
+
+            // Use the same distance comparator as in non-deferred
+            dist = _dist_cmp->compare(aligned_query_T, aligned_emb_T, (uint32_t)_aligned_dim);
+            _mm_free(aligned_emb_T);
+        }
+        else
+        {
+            // PQ case - we need to quantize the embeddings first
+            float *aligned_emb_float = (float *)_mm_malloc(_aligned_dim * sizeof(float), 32);
+            uint8_t *pq_encoded = (uint8_t *)_mm_malloc(_disk_pq_n_chunks * sizeof(uint8_t), 32);
+
+            if (!aligned_emb_float || !pq_encoded)
+            {
+                throw ANNException("Failed to allocate aligned memory", -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+
+            // Clear memory first
+            memset(aligned_emb_float, 0, _aligned_dim * sizeof(float));
+
+            // Copy the embedding data
+            for (size_t j = 0; j < std::min(emb_size, _aligned_dim); j++)
+            {
+                aligned_emb_float[j] = real_embeddings[i][j];
+            }
+
+            // Normalize if needed (similar to query normalization)
+            if (metric == diskann::Metric::INNER_PRODUCT || metric == diskann::Metric::COSINE)
+            {
+                uint64_t inherent_dim =
+                    (metric == diskann::Metric::COSINE) ? this->_data_dim : (uint64_t)(this->_data_dim - 1);
+                float norm = 0.0f;
+
+                for (size_t j = 0; j < inherent_dim; j++)
+                {
+                    norm += aligned_emb_float[j] * aligned_emb_float[j];
+                }
+
+                norm = std::sqrt(norm);
+
+                for (size_t j = 0; j < inherent_dim; j++)
+                {
+                    aligned_emb_float[j] /= norm;
+                }
+
+                if (metric == diskann::Metric::INNER_PRODUCT)
+                    aligned_emb_float[this->_data_dim - 1] = 0;
+            }
+
+            // Quantize the vector using the same PQ table used for disk index
+            _disk_pq_table.deflate_vector(aligned_emb_float, pq_encoded);
+
+            // Now use the PQ distance functions with properly encoded vector
             if (metric == diskann::Metric::INNER_PRODUCT)
-                dist = -dist;
-            full_retset[i].distance = dist;
-            _mm_free(aligned_emb);
+                dist = _disk_pq_table.inner_product(query_float, pq_encoded);
+            else
+                dist = _disk_pq_table.l2_distance(query_float, pq_encoded);
+
+            _mm_free(aligned_emb_float);
+            _mm_free(pq_encoded);
         }
         diskann::cout << "compute_timer.elapsed(): " << compute_timer.elapsed() << std::endl;
     }
