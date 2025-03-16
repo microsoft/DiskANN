@@ -24,7 +24,7 @@
 #define VECTOR_SECTOR_NO(id) (((uint64_t)(id)) / _nvecs_per_sector + _reorder_data_start_sector)
 
 // sector # beyond the end of graph where data for id is present for reordering
-#define VECTOR_SECTOR_OFFSET(id) ((((uint64_t)(id)) % _nvecs_per_sector) * _data_dim * sizeof(float))
+#define VECTOR_SECTOR_OFFSET(id) ((((uint64_t)(id)) % _nvecs_per_sector) * _reorder_node_size)
 
 namespace diskann
 {
@@ -1105,15 +1105,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     READ_U64(index_metadata, this->_reorder_data_exists);
     if (this->_reorder_data_exists)
     {
-        if (this->_use_disk_index_pq == false)
-        {
-            throw ANNException("Reordering is designed for used with disk PQ "
-                               "compression option",
-                               -1, __FUNCSIG__, __FILE__, __LINE__);
-        }
         READ_U64(index_metadata, this->_reorder_data_start_sector);
         READ_U64(index_metadata, this->_ndims_reorder_vecs);
         READ_U64(index_metadata, this->_nvecs_per_sector);
+        READ_U64(index_metadata, this->_reorder_node_size);
     }
 
     diskann::cout << "Disk-Index File Meta-data: ";
@@ -1274,7 +1269,9 @@ bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader, IOConte
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const bool use_reorder_data, QueryStats *stats)
+                                                 const bool use_reorder_data, 
+                                                 std::function<float(const std::uint8_t*, size_t)> rerank_fn,
+                                                 QueryStats *stats)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, std::numeric_limits<uint32_t>::max(),
                        use_reorder_data, stats);
@@ -1284,21 +1281,24 @@ template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
-                                                 const bool use_reorder_data, QueryStats *stats)
+                                                 const bool use_reorder_data,
+                                                 std::function<float(const std::uint8_t*, size_t)> rerank_fn,
+                                                 QueryStats *stats)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
-                       std::numeric_limits<uint32_t>::max(), use_reorder_data, stats);
+                       std::numeric_limits<uint32_t>::max(), use_reorder_data, rerank_fn, stats);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const uint32_t io_limit, const bool use_reorder_data,
+                                                 std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
     LabelT dummy_filter = 0;
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
-                       use_reorder_data, stats);
+                       use_reorder_data, rerank_fn, stats);
 }
 
 template <typename T, typename LabelT>
@@ -1306,6 +1306,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
                                                  const uint32_t io_limit, const bool use_reorder_data,
+                                                 std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
 
@@ -1671,8 +1672,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         std::vector<AlignedRead> vec_read_reqs;
 
-        if (full_retset.size() > k_search * FULL_PRECISION_REORDER_MULTIPLIER)
-            full_retset.erase(full_retset.begin() + k_search * FULL_PRECISION_REORDER_MULTIPLIER, full_retset.end());
+        if (full_retset.size() > defaults::MAX_N_SECTOR_READS)
+            full_retset.erase(full_retset.begin() + defaults::MAX_N_SECTOR_READS, full_retset.end());
 
         for (size_t i = 0; i < full_retset.size(); ++i)
         {
@@ -1703,7 +1704,14 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             auto id = full_retset[i].id;
             // MULTISECTORFIX
             auto location = (sector_scratch + i * defaults::SECTOR_LEN) + VECTOR_SECTOR_OFFSET(id);
-            full_retset[i].distance = _dist_cmp->compare(aligned_query_T, (T *)location, (uint32_t)this->_data_dim);
+            if (rerank_fn != nullptr)
+            {
+                full_retset[i].distance = rerank_fn((std::uint8_t*)location, _reorder_node_size);
+            }
+            else
+            {
+                full_retset[i].distance = _dist_cmp->compare(aligned_query_T, (T *)location, (uint32_t)this->_data_dim);
+            }
         }
 
         std::sort(full_retset.begin(), full_retset.end());
