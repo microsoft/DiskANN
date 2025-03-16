@@ -13,6 +13,7 @@
 #include "cosine_similarity.h"
 #include "embedding.pb.h" // from embedding.proto -> embedding.pb.h
 #include <zmq.h>
+#include <fstream>
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -1505,6 +1506,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     retset.reserve(l_search);
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
     std::vector<T *> points_to_compute; // Store points for later embedding computation
+    int cnt_ = 0;
 
     uint32_t best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();
@@ -1661,6 +1663,22 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
             full_retset.push_back(Neighbor(node_id, cur_expanded_dist));
 
+            if (cnt_ == 0)
+            {
+                std::ofstream ofs("/home/zhifei/Power-RAG/DiskANN/build/cur_expanded_dist.txt");
+                ofs << "node_id: " << node_id << std::endl;
+                ofs << "cur_expanded_dist: " << cur_expanded_dist << std::endl;
+                ofs << "aligned_dim: " << _aligned_dim << std::endl;
+                ofs << "disk_bytes_per_point: " << _disk_bytes_per_point << std::endl;
+                ofs << "aligned_query_T: ";
+                for (int i = 0; i < _aligned_dim; i++)
+                {
+                    ofs << aligned_query_T[i] << " ";
+                }
+                ofs << std::endl;
+                cnt_++;
+            }
+
             uint64_t nnbrs = cached_nhood.second.first;
             uint32_t *node_nbrs = cached_nhood.second.second;
 
@@ -1736,6 +1754,23 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 else
                     cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
             }
+            if (cnt_ == 0)
+            {
+                std::ofstream ofs("/home/zhifei/Power-RAG/DiskANN/build/cur_expanded_dist.txt");
+                ofs << "node_id: " << node_id << std::endl;
+                ofs << "cur_expanded_dist: " << cur_expanded_dist << std::endl;
+                ofs << "aligned_dim: " << _aligned_dim << std::endl;
+                ofs << "disk_bytes_per_point: " << _disk_bytes_per_point << std::endl;
+                ofs << "aligned_query_T: ";
+                for (int i = 0; i < _aligned_dim; i++)
+                {
+                    ofs << aligned_query_T[i] << " ";
+                }
+                ofs << std::endl;
+
+                cnt_++;
+            }
+
             full_retset.push_back(Neighbor(node_id, cur_expanded_dist));
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
@@ -1806,62 +1841,26 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         // compute real-dist
         Timer compute_timer;
-        for (size_t i = 0; i < full_retset.size(); i++)
-        { // Add this for loop
-            size_t emb_size = real_embeddings[i].size();
-            float dist; // Declare the distance variable
-
-            // Replace the problematic section in the deferred path (around line 1327)
-            if (!_use_disk_index_pq)
+        assert(real_embeddings.size() == full_retset.size());
+        for (size_t i = 0; i < real_embeddings.size(); i++)
+        {
+            if (cnt_ == 1)
             {
-                // Non-PQ case - this is mostly correct already but with small fixes
-                T *aligned_emb_T = (T *)_mm_malloc(_aligned_dim * sizeof(T), 32);
-                if (!aligned_emb_T)
+                std::ofstream ofs("/home/zhifei/Power-RAG/DiskANN/build/real_embeddings.txt");
+                ofs << "node_id: " << full_retset[i].id << std::endl;
+                ofs << "real_embeddings[i]: ";
+                for (int j = 0; j < real_embeddings[0].size(); j++)
                 {
-                    throw ANNException("Failed to allocate aligned memory", -1, __FUNCSIG__, __FILE__, __LINE__);
+                    ofs << real_embeddings[i][j] << " ";
                 }
-
-                // Copy and normalize exactly like in non-deferred path
-                float emb_norm = 0.0f;
-                if (metric == diskann::Metric::INNER_PRODUCT || metric == diskann::Metric::COSINE)
-                {
-                    uint64_t inherent_dim =
-                        (metric == diskann::Metric::COSINE) ? this->_data_dim : (uint64_t)(this->_data_dim - 1);
-
-                    // Clear the memory first to ensure all values are initialized
-                    memset(aligned_emb_T, 0, _aligned_dim * sizeof(T));
-
-                    // Copy values with bounds checking
-                    for (size_t j = 0; j < inherent_dim && j < emb_size; j++)
-                    {
-                        aligned_emb_T[j] = (T)real_embeddings[i][j];
-                        emb_norm += real_embeddings[i][j] * real_embeddings[i][j];
-                    }
-
-                    if (metric == diskann::Metric::INNER_PRODUCT)
-                        aligned_emb_T[this->_data_dim - 1] = 0;
-
-                    emb_norm = std::sqrt(emb_norm);
-
-                    for (size_t j = 0; j < inherent_dim && j < emb_size; j++)
-                    {
-                        aligned_emb_T[j] = (T)(real_embeddings[i][j] / emb_norm);
-                    }
-                }
-                else
-                {
-                    // For L2 metric, no normalization needed
-                    memset(aligned_emb_T, 0, _aligned_dim * sizeof(T));
-                    for (size_t j = 0; j < std::min(emb_size, _aligned_dim); j++)
-                    {
-                        aligned_emb_T[j] = (T)real_embeddings[i][j];
-                    }
-                }
-
-                // Use the same distance comparator as in non-deferred
-                dist = _dist_cmp->compare(aligned_query_T, aligned_emb_T, (uint32_t)_aligned_dim);
-                _mm_free(aligned_emb_T);
+                ofs << std::endl;
+                cnt_++;
             }
+            float dist;
+            assert(!_use_disk_index_pq);
+            memcpy(data_buf, real_embeddings[i].data(), real_embeddings[0].size() * sizeof(T));
+            dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
+
             full_retset[i].distance = dist;
         }
         diskann::cout << "compute_timer.elapsed(): " << compute_timer.elapsed() << std::endl;
