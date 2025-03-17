@@ -1405,6 +1405,63 @@ bool fetch_embeddings_http(const std::vector<uint32_t> &node_ids, std::vector<st
     return fetch_embeddings_zmq(node_ids, out_embeddings);
 }
 
+//! Should be aligned with utils.h::prepare_base_for_inner_products
+void preprocess_fetched_embeddings(std::vector<std::vector<float>> &embeddings, diskann::Metric metric,
+                                   float max_base_norm, uint32_t data_dim)
+{
+    for (auto &emb : embeddings)
+    {
+        // Ensure embedding has correct size
+        if (emb.size() < data_dim - 1)
+        {
+            // Pad with zeros if needed
+            emb.resize(data_dim - 1, 0);
+        }
+
+        if (metric == diskann::Metric::INNER_PRODUCT)
+        {
+            // For inner product, apply same preprocessing as in prepare_base_for_inner_products
+
+            // Calculate original norm
+            float norm_sq = 0;
+            for (size_t i = 0; i < data_dim - 1; i++)
+            {
+                norm_sq += emb[i] * emb[i];
+            }
+
+            // Normalize by max_base_norm (same as in index construction)
+            for (size_t i = 0; i < data_dim - 1; i++)
+            {
+                emb[i] /= max_base_norm;
+            }
+
+            // Add the extra coordinate for MIPS->L2 conversion
+            float res = 1 - (norm_sq / (max_base_norm * max_base_norm));
+            res = res <= 0 ? 0 : std::sqrt(res);
+            emb.resize(data_dim, res);
+        }
+        else if (metric == diskann::Metric::COSINE)
+        {
+            // For cosine similarity, just normalize the vector
+            float norm = 0;
+            for (auto val : emb)
+            {
+                norm += val * val;
+            }
+            norm = std::sqrt(norm);
+
+            if (norm > 0)
+            {
+                for (size_t i = 0; i < emb.size(); i++)
+                {
+                    emb[i] /= norm;
+                }
+            }
+        }
+        // For L2, no preprocessing needed
+    }
+}
+
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
@@ -1511,15 +1568,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     retset.reserve(l_search);
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
     std::vector<T *> points_to_compute; // Store points for later embedding computation
-    int cnt_ = 0;
 
-    //! Only used for calculating top3 distributions
-    // Add a copy of the result set for exact distances when skip_search_reorder is true
+#ifndef NDEBUG
     std::vector<Neighbor> exact_dist_retset;
-    if (skip_search_reorder)
-    {
-        exact_dist_retset.reserve(full_retset.capacity());
-    }
+    std::vector<std::vector<float>> exact_embeddings;
+#endif
 
     uint32_t best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();
@@ -1657,25 +1710,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
             if (skip_search_reorder)
             {
-                // For PQ-based distance (used for actual search)
                 compute_dists(&node_id, 1, dist_scratch);
                 cur_expanded_dist = dist_scratch[0];
-
-                // Also compute exact distance for comparison
-                if (!_use_disk_index_pq)
-                {
-                    exact_expanded_dist =
-                        _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
-                }
-                else
-                {
-                    if (metric == diskann::Metric::INNER_PRODUCT)
-                        exact_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
-                    else
-                        exact_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)node_fp_coords_copy);
-                }
-                // Store both results
-                exact_dist_retset.push_back(Neighbor(node_id, exact_expanded_dist));
             }
             else if (USE_DEFERRED_FETCH)
             {
@@ -1695,21 +1731,21 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
             full_retset.push_back(Neighbor(node_id, cur_expanded_dist));
 
-            if (cnt_ == 0)
+#ifndef NDEBUG
+            if (!_use_disk_index_pq)
             {
-                std::ofstream ofs("/home/zhifei/Power-RAG/DiskANN/build/cur_expanded_dist.txt");
-                ofs << "node_id: " << node_id << std::endl;
-                ofs << "cur_expanded_dist: " << cur_expanded_dist << std::endl;
-                ofs << "aligned_dim: " << _aligned_dim << std::endl;
-                ofs << "disk_bytes_per_point: " << _disk_bytes_per_point << std::endl;
-                ofs << "aligned_query_T: ";
-                for (int i = 0; i < _aligned_dim; i++)
-                {
-                    ofs << aligned_query_T[i] << " ";
-                }
-                ofs << std::endl;
-                cnt_++;
+                exact_expanded_dist = _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
             }
+            else
+            {
+                if (metric == diskann::Metric::INNER_PRODUCT)
+                    exact_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
+                else
+                    exact_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)node_fp_coords_copy);
+            }
+            exact_dist_retset.push_back(Neighbor(node_id, exact_expanded_dist));
+            exact_embeddings.push_back(std::vector<float>(node_fp_coords_copy, node_fp_coords_copy + _aligned_dim));
+#endif
 
             uint64_t nnbrs = cached_nhood.second.first;
             uint32_t *node_nbrs = cached_nhood.second.second;
@@ -1769,24 +1805,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             // If skip_reorder is true, compute both PQ distance and exact distance
             if (skip_search_reorder)
             {
-                // Use PQ-based distance for actual search results
                 compute_dists(&node_id, 1, dist_scratch);
                 cur_expanded_dist = dist_scratch[0];
-
-                // Also compute exact distance for comparison
-                if (!_use_disk_index_pq)
-                {
-                    exact_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
-                }
-                else
-                {
-                    if (metric == diskann::Metric::INNER_PRODUCT)
-                        exact_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
-                    else
-                        exact_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
-                }
-                // Store both results
-                exact_dist_retset.push_back(Neighbor(node_id, exact_expanded_dist));
             }
             else if (USE_DEFERRED_FETCH)
             {
@@ -1803,24 +1823,24 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 else
                     cur_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
             }
-            if (cnt_ == 0)
-            {
-                std::ofstream ofs("/home/zhifei/Power-RAG/DiskANN/build/cur_expanded_dist.txt");
-                ofs << "node_id: " << node_id << std::endl;
-                ofs << "cur_expanded_dist: " << cur_expanded_dist << std::endl;
-                ofs << "aligned_dim: " << _aligned_dim << std::endl;
-                ofs << "disk_bytes_per_point: " << _disk_bytes_per_point << std::endl;
-                ofs << "aligned_query_T: ";
-                for (int i = 0; i < _aligned_dim; i++)
-                {
-                    ofs << aligned_query_T[i] << " ";
-                }
-                ofs << std::endl;
-
-                cnt_++;
-            }
-
             full_retset.push_back(Neighbor(node_id, cur_expanded_dist));
+
+#ifndef NDEBUG
+            if (!_use_disk_index_pq)
+            {
+                exact_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
+            }
+            else
+            {
+                if (metric == diskann::Metric::INNER_PRODUCT)
+                    exact_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
+                else
+                    exact_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
+            }
+            exact_dist_retset.push_back(Neighbor(node_id, exact_expanded_dist));
+            exact_embeddings.push_back(std::vector<float>(data_buf, data_buf + _disk_bytes_per_point));
+#endif
+
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
             cpu_timer.reset();
@@ -1890,27 +1910,68 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         // compute real-dist
         Timer compute_timer;
+        preprocess_fetched_embeddings(real_embeddings, metric, _max_base_norm, this->_data_dim);
+
         assert(real_embeddings.size() == full_retset.size());
-        for (size_t i = 0; i < real_embeddings.size(); i++)
+        assert(real_embeddings.size() == exact_dist_retset.size());
+        assert(real_embeddings.size() == exact_embeddings.size());
+
+        for (int i = 0; i < real_embeddings.size(); i++)
         {
-            if (cnt_ == 1)
+            // padding real_embeddings[i] to _aligned_dim
+            real_embeddings[i].resize(_aligned_dim, 0);
+#ifndef NDEBUG
+            // compare real_embeddings[i] with exact_embeddings[i]
+            if (real_embeddings[0].size() != exact_embeddings[0].size())
             {
-                std::ofstream ofs("/home/zhifei/Power-RAG/DiskANN/build/real_embeddings.txt");
-                ofs << "node_id: " << full_retset[i].id << std::endl;
-                ofs << "real_embeddings[i]: ";
+                diskann::cout << "real_embeddings[0].size(): " << real_embeddings[0].size() << std::endl;
+                diskann::cout << "exact_embeddings[0].size(): " << exact_embeddings[0].size() << std::endl;
+
+                // dumping to files
+                std::ofstream diff_file("./diff_embeddings.txt");
+                diff_file << "real_embeddings[0].size(): " << real_embeddings[0].size() << std::endl;
+                diff_file << "exact_embeddings[0].size(): " << exact_embeddings[0].size() << std::endl;
                 for (int j = 0; j < real_embeddings[0].size(); j++)
                 {
-                    ofs << real_embeddings[i][j] << " ";
+                    diff_file << real_embeddings[i][j] << " ";
                 }
-                ofs << std::endl;
-                cnt_++;
+                diff_file << std::endl;
+                for (int j = 0; j < exact_embeddings[0].size(); j++)
+                {
+                    diff_file << exact_embeddings[i][j] << " ";
+                }
+                diff_file << std::endl;
+                assert(false);
             }
+            for (int j = 0; j < real_embeddings[0].size(); j++)
+            {
+                if (abs(real_embeddings[i][j] - exact_embeddings[i][j]) > 5e-4)
+                {
+                    diskann::cout << "Difference found at node_id: " << full_retset[i].id << " and dimension: " << j
+                                  << std::endl;
+                    diskann::cout << "real_embeddings[i][j]: " << real_embeddings[i][j] << std::endl;
+                    diskann::cout << "exact_embeddings[i][j]: " << exact_embeddings[i][j] << std::endl;
+                    assert(false);
+                }
+            }
+#endif
+
             float dist;
             assert(!_use_disk_index_pq);
             memcpy(data_buf, real_embeddings[i].data(), real_embeddings[0].size() * sizeof(T));
             dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
 
             full_retset[i].distance = dist;
+
+#ifndef NDEBUG
+            if (abs(dist - exact_dist_retset[i].distance) > 5e-4)
+            {
+                diskann::cout << "Difference found at node_id: " << full_retset[i].id << std::endl;
+                diskann::cout << "dist: " << dist << std::endl;
+                diskann::cout << "exact_dist_retset[i].distance: " << exact_dist_retset[i].distance << std::endl;
+                assert(false);
+            }
+#endif
         }
         diskann::cout << "compute_timer.elapsed(): " << compute_timer.elapsed() << std::endl;
     }
@@ -1918,6 +1979,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     std::sort(full_retset.begin(), full_retset.end());
 
     // Compare PQ results with exact results when skip_search_reorder is true
+#ifndef NDEBUG
     if (skip_search_reorder)
     {
         // Sort the exact distance results
@@ -1962,6 +2024,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
         log_file.close();
     }
+#endif
 
     if (use_reorder_data)
     {
