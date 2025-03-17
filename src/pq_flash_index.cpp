@@ -14,6 +14,9 @@
 #include "embedding.pb.h" // from embedding.proto -> embedding.pb.h
 #include <zmq.h>
 #include <fstream>
+#include <atomic>
+#include <mutex>
+#include <filesystem>
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -33,6 +36,8 @@
 
 namespace diskann
 {
+static std::mutex log_file_mutex;
+static std::atomic<int> search_counter(0);
 
 template <typename T, typename LabelT>
 PQFlashIndex<T, LabelT>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileReader, diskann::Metric m)
@@ -1508,6 +1513,14 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     std::vector<T *> points_to_compute; // Store points for later embedding computation
     int cnt_ = 0;
 
+    //! Only used for calculating top3 distributions
+    // Add a copy of the result set for exact distances when skip_search_reorder is true
+    std::vector<Neighbor> exact_dist_retset;
+    if (skip_search_reorder)
+    {
+        exact_dist_retset.reserve(full_retset.capacity());
+    }
+
     uint32_t best_medoid = 0;
     float best_dist = (std::numeric_limits<float>::max)();
     if (!use_filter)
@@ -1640,10 +1653,29 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             uint32_t node_id = cached_nhood.first;
             T *node_fp_coords_copy = global_cache_iter->second;
             float cur_expanded_dist;
+            float exact_expanded_dist = 0;
+
             if (skip_search_reorder)
             {
+                // For PQ-based distance (used for actual search)
                 compute_dists(&node_id, 1, dist_scratch);
-                cur_expanded_dist = dist_scratch[0]; // Store the distance in dist_scratch
+                cur_expanded_dist = dist_scratch[0];
+
+                // Also compute exact distance for comparison
+                if (!_use_disk_index_pq)
+                {
+                    exact_expanded_dist =
+                        _dist_cmp->compare(aligned_query_T, node_fp_coords_copy, (uint32_t)_aligned_dim);
+                }
+                else
+                {
+                    if (metric == diskann::Metric::INNER_PRODUCT)
+                        exact_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)node_fp_coords_copy);
+                    else
+                        exact_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)node_fp_coords_copy);
+                }
+                // Store both results
+                exact_dist_retset.push_back(Neighbor(node_id, exact_expanded_dist));
             }
             else if (USE_DEFERRED_FETCH)
             {
@@ -1732,12 +1764,29 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             T *node_fp_coords = offset_to_node_coords(node_disk_buf);
             memcpy(data_buf, node_fp_coords, _disk_bytes_per_point);
             float cur_expanded_dist;
-            // If skip_reorder is true, compute distance using PQ
+            float exact_expanded_dist = 0;
+
+            // If skip_reorder is true, compute both PQ distance and exact distance
             if (skip_search_reorder)
             {
-                // Use PQ-based distance computation, avoid using full coordinates
+                // Use PQ-based distance for actual search results
                 compute_dists(&node_id, 1, dist_scratch);
-                cur_expanded_dist = dist_scratch[0]; // Store the distance in dist_scratch
+                cur_expanded_dist = dist_scratch[0];
+
+                // Also compute exact distance for comparison
+                if (!_use_disk_index_pq)
+                {
+                    exact_expanded_dist = _dist_cmp->compare(aligned_query_T, data_buf, (uint32_t)_aligned_dim);
+                }
+                else
+                {
+                    if (metric == diskann::Metric::INNER_PRODUCT)
+                        exact_expanded_dist = _disk_pq_table.inner_product(query_float, (uint8_t *)data_buf);
+                    else
+                        exact_expanded_dist = _disk_pq_table.l2_distance(query_float, (uint8_t *)data_buf);
+                }
+                // Store both results
+                exact_dist_retset.push_back(Neighbor(node_id, exact_expanded_dist));
             }
             else if (USE_DEFERRED_FETCH)
             {
@@ -1867,6 +1916,52 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     }
 
     std::sort(full_retset.begin(), full_retset.end());
+
+    // Compare PQ results with exact results when skip_search_reorder is true
+    if (skip_search_reorder)
+    {
+        // Sort the exact distance results
+        std::sort(exact_dist_retset.begin(), exact_dist_retset.end());
+
+        // Create a map to find positions of IDs in the PQ-sorted list
+        std::unordered_map<uint32_t, size_t> pq_positions;
+        for (size_t i = 0; i < full_retset.size(); i++)
+        {
+            pq_positions[full_retset[i].id] = i;
+        }
+
+        int current_search_id = search_counter.fetch_add(1);
+        int thread_id = omp_get_thread_num();
+
+        std::lock_guard<std::mutex> lock(log_file_mutex);
+
+        std::ofstream log_file("./top3_positions_log.txt", std::ios::app);
+        // Write header if file is empty
+        log_file.seekp(0, std::ios::end);
+        if (log_file.tellp() == 0)
+        {
+            diskann::cout << "Saved top3 distributions to " << std::filesystem::canonical("./top3_positions_log.txt")
+                          << std::endl;
+            log_file << "Search#,ThreadID,FullSetSize,Rank,ID,PQ_Rank,PQ_Distance,Exact_Distance" << std::endl;
+        }
+
+        // Log the top-k results from exact distance sorting and their positions in PQ-sorted list
+        size_t top_k = std::min((size_t)k_search, exact_dist_retset.size());
+        for (size_t i = 0; i < top_k; i++)
+        {
+            uint32_t id = exact_dist_retset[i].id;
+            float exact_dist = exact_dist_retset[i].distance;
+
+            // Find this ID's position in the PQ-sorted list
+            size_t pq_pos = pq_positions.count(id) ? pq_positions[id] : full_retset.size();
+            float pq_dist = (pq_pos < full_retset.size()) ? full_retset[pq_pos].distance : -1;
+
+            log_file << current_search_id << "," << thread_id << "," << full_retset.size() << "," << i + 1 << "," << id
+                     << "," << pq_pos + 1 << "," << pq_dist << "," << exact_dist << std::endl;
+        }
+
+        log_file.close();
+    }
 
     if (use_reorder_data)
     {
