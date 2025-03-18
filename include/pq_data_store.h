@@ -34,6 +34,8 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
     // for Quantized data stores.
     virtual size_t get_aligned_dim() const override;
 
+    virtual size_t get_data_size() const override;
+
     // Populate quantized data from unaligned data using PQ functionality
     virtual void populate_data(const data_t *vectors, const location_t num_pts) override;
     virtual void populate_data(const std::string &filename, const size_t offset) override;
@@ -85,6 +87,8 @@ template <typename data_t> class PQDataStore : public AbstractDataStore<data_t>
   private:
     uint8_t *_quantized_data = nullptr;
     size_t _num_chunks = 0;
+
+    size_t _data_size = 0;
 
     // REFACTOR TODO: Doing this temporarily before refactoring OPQ into
     // its own class. Remove later.

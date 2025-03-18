@@ -66,22 +66,28 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_reorder_data = false, QueryStats *stats = nullptr);
+                                              const bool use_reorder_data = false, 
+                                              std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr,
+                                              QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_filter, const LabelT &filter_label,
-                                              const bool use_reorder_data = false, QueryStats *stats = nullptr);
+                                              const bool use_reorder_data = false,
+                                              std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr,
+                                              QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const uint32_t io_limit, const bool use_reorder_data = false,
+                                              std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr,
                                               QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_filter, const LabelT &filter_label,
                                               const uint32_t io_limit, const bool use_reorder_data = false,
+                                              std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr,
                                               QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
@@ -94,6 +100,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                             QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT uint64_t get_data_dim();
+
+    DISKANN_DLLEXPORT TableStats get_table_stats();
 
     std::shared_ptr<AlignedFileReader> &reader;
 
@@ -164,6 +172,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _ndims_reorder_vecs = 0;
     uint64_t _reorder_data_start_sector = 0;
     uint64_t _nvecs_per_sector = 0;
+    uint64_t _reorder_node_size = 0;
 
     diskann::Metric metric = diskann::Metric::L2;
 
@@ -240,6 +249,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     tsl::robin_map<uint32_t, uint32_t> _dummy_to_real_map;
     tsl::robin_map<uint32_t, std::vector<uint32_t>> _real_to_dummy_map;
     std::unordered_map<std::string, LabelT> _label_map;
+
+    TableStats _table_stats;
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate

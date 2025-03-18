@@ -98,7 +98,8 @@ DISKANN_DLLEXPORT int build_disk_index(
     bool use_filters = false,
     const std::string &label_file = std::string(""), // default is empty string for no label_file
     const std::string &universal_label = "", const uint32_t filter_threshold = 0,
-    const uint32_t Lf = 0); // default is empty string for no universal label
+    const uint32_t Lf = 0,
+    const char* reorderDataFilePath = nullptr); // default is empty string for no universal label
 
 template <typename T>
 DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file, const std::string mem_index_file,

@@ -21,6 +21,7 @@
 #include "in_mem_data_store.h"
 #include "in_mem_graph_store.h"
 #include "abstract_index.h"
+#include "percentile_stats.h"
 #include <bitset>
 
 #include "quantized_distance.h"
@@ -306,6 +307,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT void count_nodes_at_bfs_levels();
 
+    DISKANN_DLLEXPORT TableStats get_table_stats() const override;
+
     // This variable MUST be updated if the number of entries in the metadata
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
@@ -575,6 +578,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::vector<non_recursive_mutex> _locks;
 
     simple_bitmask_buf _bitmask_buf;
+
+    TableStats _table_stats;
 
     static const float INDEX_GROWTH_FACTOR;
 };

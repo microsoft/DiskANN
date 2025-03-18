@@ -35,6 +35,23 @@ struct QueryStats
     unsigned n_hops = 0;       // # search hops
 };
 
+struct TableStats
+{
+    size_t total_mem_usage = 0;
+    size_t node_mem_usage = 0;
+    size_t graph_mem_usage = 0;
+    size_t label_mem_usage = 0;
+    size_t node_count = 0;
+    size_t label_count = 0;
+    size_t label_total_count = 0;
+
+    // streaming
+    size_t tag_memory_usage = 0;
+    size_t insert_count = 0;
+    size_t delete_count = 0;
+    size_t active_nodes = 0;
+};
+
 template <typename T>
 inline T get_percentile_stats(QueryStats *stats, uint64_t len, float percentile,
                               const std::function<T(const QueryStats &)> &member_fn)

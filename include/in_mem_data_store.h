@@ -29,6 +29,8 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 
     virtual size_t get_aligned_dim() const override;
 
+    virtual size_t get_data_size() const override;
+
     // Populate internal data from unaligned data while doing alignment and any
     // normalization that is required.
     virtual void populate_data(const data_t *vectors, const location_t num_pts) override;
@@ -74,6 +76,8 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     data_t *_data = nullptr;
 
     size_t _aligned_dim;
+
+    size_t _data_size = 0;
 
     // It may seem weird to put distance metric along with the data store class,
     // but this gives us perf benefits as the datastore can do distance

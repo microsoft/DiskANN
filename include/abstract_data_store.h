@@ -41,6 +41,8 @@ template <typename data_t> class AbstractDataStore
     // align the dimension by padding zeros.
     virtual size_t get_aligned_dim() const = 0;
 
+    virtual size_t get_data_size() const = 0;
+
     // populate the store with vectors (either from a pointer or bin file),
     // potentially after pre-processing the vectors if the metric deems so
     // e.g., normalizing vectors for cosine distance over floating-point vectors

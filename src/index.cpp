@@ -420,6 +420,10 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
 #else
     load_bin<TagT>(std::string(tag_filename), tag_data, file_num_points, file_dim);
 #endif
+    this->_table_stats.tag_memory_usage = 
+        file_num_points * file_dim * sizeof(TagT)
+        + file_num_points * (sizeof(TagT) + sizeof(uint32_t))
+        + file_num_points * (sizeof(TagT) + sizeof(uint32_t));
 
     if (file_dim != 1)
     {
@@ -557,6 +561,9 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         std::string delete_set_file = std::string(filename) + ".del";
         std::string graph_file = std::string(filename);
         data_file_num_pts = load_data(data_file);
+        this->_table_stats.node_count = data_file_num_pts;
+        this->_table_stats.node_mem_usage = this->_data_store->get_data_size();
+
         if (file_exists(delete_set_file))
         {
             load_delete_set(delete_set_file);
@@ -566,6 +573,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             tags_file_num_pts = load_tags(tags_file);
         }
         graph_num_pts = load_graph(graph_file, data_file_num_pts);
+        this->_table_stats.graph_mem_usage = _graph_store->get_graph_size();
 #endif
     }
     else
@@ -589,8 +597,11 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     if (file_exists(labels_file))
     {
         _label_map = load_label_map(labels_map_file);
+        this->_table_stats.label_count = _label_map.size();
+        
         parse_label_file_in_bitset(labels_file, label_num_pts, _label_map.size());
         assert(label_num_pts == data_file_num_pts);
+        this->_table_stats.label_mem_usage = _bitmask_buf._buf.size() * sizeof(std::uint64_t);
         if (file_exists(labels_to_medoids))
         {
             std::ifstream medoid_stream(labels_to_medoids);
@@ -639,6 +650,11 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     {
         _empty_slots.insert((uint32_t)i);
     }
+
+    _table_stats.total_mem_usage = _table_stats.node_mem_usage
+        + _table_stats.graph_mem_usage
+        + _table_stats.label_mem_usage
+        + _table_stats.tag_memory_usage;
 
 //    reposition_frozen_point_to_end();
     diskann::cout << " _nd: " << _nd << " _start: " << _start
@@ -1976,7 +1992,7 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels)
 {
-    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels);
+    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels + 1);
     _bitmask_buf._buf.resize(pts_to_labels.size() * _bitmask_buf._bitmask_size, 0);
 
     for (size_t i = 0; i < pts_to_labels.size(); i++)
@@ -2023,7 +2039,8 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
         line_cnt++;
     }
 
-    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels);
+    // label is counting by 1, so additional 1 bit is needed
+    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels + 1);
     if (_dynamic_index)
     {
         _bitmask_buf._buf.resize(_max_points * _bitmask_buf._bitmask_size, 0);
@@ -2073,6 +2090,7 @@ void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label
             simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
             bm.set(token_as_num);
             _labels.insert(token_as_num);
+            _table_stats.label_total_count++;
 
             lbl_pos = next_lbl_pos + 1;
         }
@@ -3299,6 +3317,11 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
 
     inter_insert(location, pruned_list, scratch);
 
+    // only support single thread insert
+    _table_stats.insert_count++;
+    _table_stats.active_nodes++;
+    _table_stats.node_count++;
+
     return 0;
 }
 
@@ -3353,6 +3376,11 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     
     _location_to_tag.erase(location);
     _tag_to_location.erase(tag);
+
+    //only support single thread delete
+    _table_stats.delete_count++;
+    _table_stats.active_nodes--;
+
     return 0;
 }
 
@@ -3634,6 +3662,12 @@ size_t Index<T, TagT, LabelT>::search_string_range(const std::string& str, char 
     }
 
     return std::string::npos;
+}
+
+template <typename T, typename TagT, typename LabelT>
+TableStats Index<T, TagT, LabelT>::get_table_stats() const
+{
+    return _table_stats;
 }
 
 /*  Internals of the library */
