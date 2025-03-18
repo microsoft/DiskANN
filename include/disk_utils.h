@@ -82,7 +82,8 @@ DISKANN_DLLEXPORT int build_merged_vamana_index(std::string base_file, diskann::
                                                 uint32_t num_threads, bool use_filters = false,
                                                 const std::string &label_file = std::string(""),
                                                 const std::string &labels_to_medoids_file = std::string(""),
-                                                const std::string &universal_label = "", const uint32_t Lf = 0);
+                                                const std::string &universal_label = "", const uint32_t Lf = 0,
+                                                bool diverse_index = false, const std::string &seller_file = std::string(""),  size_t num_diverse_build = 0) ;
 
 template <typename T, typename LabelT>
 DISKANN_DLLEXPORT uint32_t optimize_beamwidth(std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &_pFlashIndex,
@@ -98,7 +99,8 @@ DISKANN_DLLEXPORT int build_disk_index(
     bool use_filters = false,
     const std::string &label_file = std::string(""), // default is empty string for no label_file
     const std::string &universal_label = "", const uint32_t filter_threshold = 0,
-    const uint32_t Lf = 0, const std::string &seller_file = ""); // default is empty string for no universal label
+    const uint32_t Lf = 0, // default is empty string for no universal label
+    bool diverse_index = false, const std::string &seller_file = std::string(""),  const uint32_t num_diverse_build = 0);
 
 template <typename T>
 DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file, const std::string mem_index_file,
