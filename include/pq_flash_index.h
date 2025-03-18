@@ -60,7 +60,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 //                                                                   uint64_t beamwidth, uint64_t num_nodes_to_cache,
 //                                                                   uint32_t num_threads,
 //                                                                   std::vector<uint32_t> &node_list);
-#endif
+//#endif
 
     DISKANN_DLLEXPORT void cache_bfs_levels(uint64_t num_nodes_to_cache, std::vector<uint32_t> &node_list,
                                             const bool shuffle = false);
@@ -129,9 +129,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT void set_universal_label(const LabelT &label);
 
   private:
-    DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, LabelT label_id);
     std::unordered_map<std::string, LabelT> load_label_map(std::basic_istream<char>& infile);
-    DISKANN_DLLEXPORT void parse_label_file(std::basic_istream<char>& infile, size_t &num_pts_labels);
     DISKANN_DLLEXPORT void get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
                                                    uint32_t &num_total_labels);
     //DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,

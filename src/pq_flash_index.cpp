@@ -6,6 +6,7 @@
 #include "timer.h"
 #include "pq.h"
 #include "pq_scratch.h"
+#include "label_helper.h"
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
 #include <limits>
@@ -673,110 +674,6 @@ void PQFlashIndex<T, LabelT>::get_label_file_metadata(const std::string &fileCon
                   << std::endl;
 }
 
-template <typename T, typename LabelT>
-inline bool PQFlashIndex<T, LabelT>::point_has_label(uint32_t point_id, LabelT label_id)
-{
-    uint32_t start_vec = _pts_to_label_offsets[point_id];
-    uint32_t num_lbls = _pts_to_label_counts[point_id];
-    bool ret_val = false;
-    for (uint32_t i = 0; i < num_lbls; i++)
-    {
-        if (_pts_to_labels[start_vec + i] == label_id)
-        {
-            ret_val = true;
-            break;
-        }
-    }
-    return ret_val;
-}
-
-template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char>& infile, size_t &num_points_labels)
-{
-    infile.seekg(0, std::ios::end);
-    size_t file_size = infile.tellg();
-
-    std::string buffer(file_size, ' ');
-
-    infile.seekg(0, std::ios::beg);
-    infile.read(&buffer[0], file_size);
-
-    std::string line;
-    uint32_t line_cnt = 0;
-
-    uint32_t num_pts_in_label_file;
-    uint32_t num_total_labels;
-    get_label_file_metadata(buffer, num_pts_in_label_file, num_total_labels);
-    this->_table_stats.label_total_count = num_total_labels;
-    this->_table_stats.label_mem_usage = num_pts_in_label_file * sizeof(uint32_t)
-        + num_pts_in_label_file * sizeof(uint32_t)
-        + num_total_labels * sizeof(LabelT);
-    
-    _pts_to_label_offsets = new uint32_t[num_pts_in_label_file];
-    _pts_to_label_counts = new uint32_t[num_pts_in_label_file];
-    _pts_to_labels = new LabelT[num_total_labels];
-    uint32_t labels_seen_so_far = 0;
-
-    std::string label_str;
-    size_t cur_pos = 0;
-    size_t next_pos = 0;
-    while (cur_pos < file_size && cur_pos != std::string::npos)
-    {
-        next_pos = buffer.find('\n', cur_pos);
-        if (next_pos == std::string::npos)
-        {
-            break;
-        }
-
-        _pts_to_label_offsets[line_cnt] = labels_seen_so_far;
-        uint32_t &num_lbls_in_cur_pt = _pts_to_label_counts[line_cnt];
-        num_lbls_in_cur_pt = 0;
-
-        size_t lbl_pos = cur_pos;
-        size_t next_lbl_pos = 0;
-        while (lbl_pos < next_pos && lbl_pos != std::string::npos)
-        {
-            next_lbl_pos = search_string_range(buffer, ',', lbl_pos, next_pos);
-            if (next_lbl_pos == std::string::npos) // the last label in the whole file
-            {
-                next_lbl_pos = next_pos;
-            }
-
-            if (next_lbl_pos > next_pos) // the last label in one line, just read to the end
-            {
-                next_lbl_pos = next_pos;
-            }
-
-            label_str.assign(buffer.c_str() + lbl_pos, next_lbl_pos - lbl_pos);
-            if (label_str[label_str.length() - 1] == '\t') // '\t' won't exist in label file?
-            {
-                label_str.erase(label_str.length() - 1);
-            }
-
-            LabelT token_as_num = (LabelT)std::stoul(label_str);
-            _pts_to_labels[labels_seen_so_far++] = (LabelT)token_as_num;
-            num_lbls_in_cur_pt++;
-
-            // move to next label
-            lbl_pos = next_lbl_pos + 1;
-        }
-
-        // move to next line
-        cur_pos = next_pos + 1;
-
-        if (num_lbls_in_cur_pt == 0)
-        {
-            diskann::cout << "No label found for point " << line_cnt << std::endl;
-            exit(-1);
-        }
-
-        line_cnt++;
-    }
-
-    num_points_labels = line_cnt;
-    reset_stream_for_reading(infile);
-}
-
 template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::set_universal_label(const LabelT &label)
 {
     _use_universal_label = true;
@@ -871,10 +768,15 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     this->_table_stats.node_count = npts_u64;
     this->_table_stats.node_mem_usage = npts_u64 * nchunks_u64;
 
+    
 #ifdef EXEC_ENV_OLS
+    if (files.fileExists(labels_file))
+    {
     FileContent& content_labels_map = files.getContent(labels_map_file);
     std::stringstream map_reader(std::string((const char*)content_labels_map._content, content_labels_map._size));
 #else
+    if (file_exists(labels_file))
+    {
     std::ifstream map_reader(labels_map_file);
 #endif
     _label_map = load_label_map(map_reader);
@@ -1338,6 +1240,15 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     {
         query_bitmask_buf.resize(_bitmask_buf._bitmask_size, 0);
         bitmask_full_val._mask = query_bitmask_buf.data();
+
+        auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label);
+        bitmask_full_val.merge_bitmask_val(bitmask_val);
+
+        if (_use_universal_label)
+        {
+            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_filter_label);
+            bitmask_full_val.merge_bitmask_val(bitmask_val);
+        }
     }
 
     // normalization step. for cosine, we simply normalize the query
@@ -1570,9 +1481,16 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
                         continue;
 
-                    if (use_filter && !(point_has_label(id, filter_label)) &&
-                        (!_use_universal_label || !point_has_label(id, _universal_filter_label)))
-                        continue;
+                    if (use_filter)
+                    {
+                        simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
+
+                        if (!bm.test_full_mask_val(bitmask_full_val))
+                        {
+                            continue;
+                        }
+                    }
+
                     cmps++;
                     float dist = dist_scratch[m];
                     Neighbor nn(id, dist);
@@ -1633,9 +1551,16 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     if (!use_filter && _dummy_pts.find(id) != _dummy_pts.end())
                         continue;
 
-                    if (use_filter && !(point_has_label(id, filter_label)) &&
-                        (!_use_universal_label || !point_has_label(id, _universal_filter_label)))
-                        continue;
+                    if (use_filter)
+                    {
+                        simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
+
+                        if (!bm.test_full_mask_val(bitmask_full_val))
+                        {
+                            continue;
+                        }
+                    }
+
                     cmps++;
                     float dist = dist_scratch[m];
                     if (stats != nullptr)

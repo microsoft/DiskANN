@@ -163,6 +163,11 @@ template <typename T> class SSDQueryScratch : public AbstractScratch<T>
     ~SSDQueryScratch();
 
     void reset();
+
+    inline std::vector<std::uint64_t>& query_label_bitmask()
+    {
+        return _query_label_bitmask;
+    }
 };
 
 template <typename T> class SSDThreadData
