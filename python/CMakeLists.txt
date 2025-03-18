@@ -68,3 +68,13 @@ if(NOT VERSION_INFO)
     set(VERSION_INFO "0.0.0dev")
 endif()
 target_compile_definitions(_diskannpy PRIVATE VERSION_INFO="${VERSION_INFO}")
+
+# Add a post-build command to automatically copy the compiled Python module
+add_custom_command(
+TARGET _diskannpy
+POST_BUILD
+COMMAND ${CMAKE_COMMAND} -E copy 
+        ${CMAKE_CURRENT_BINARY_DIR}/_diskannpy.cpython-*-x86_64-linux-gnu.so
+        ${CMAKE_SOURCE_DIR}/python/src/
+COMMENT "Copying Python module to python/src directory"
+)
