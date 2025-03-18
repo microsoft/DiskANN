@@ -31,7 +31,7 @@
 #define OVERHEAD_FACTOR 1.1
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
-#define INSTRUMENT true
+//#define INSTRUMENT true
 
 inline double time_to_intersect = 0.;
 inline double time_to_cluster = 0.;

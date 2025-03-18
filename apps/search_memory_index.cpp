@@ -123,10 +123,19 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     else
     {
         std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
-                  << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "Recall" << std::setw(20)
-                  << "Brute Latency (mus)" << std::setw(20) << "Brute Recall" <<  std::setw(20) << "Graph Latency (mus)" << std::setw(20)
-                  << "Graph Recall" << std::endl;
-        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20 + 20;
+                  << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "Recall" 
+                  #ifdef INSTRUMENT
+                  << std::setw(20) << "Brute Latency (mus)" << std::setw(20) << "Brute Recall" <<  std::setw(20) << "Graph Latency (mus)" << std::setw(20)
+                  << "Graph Recall" 
+                  #else
+                  << std::endl;
+                  #endif
+        table_width += 4 + 12 + 18 + 20 + 15 
+        #ifdef INSTRUMENT
+        + 20 + 20 + 20 + 20 + 20 + 20;
+        #else
+        ;
+        #endif
     }
     /*    uint32_t recalls_to_print = 0;
         const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -382,8 +391,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         else
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
-                      << std::setw(20) << (float)mean_latency << std::setw(15) << (float)recalls[0] << std::setw(20)
-                      << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
+                      << std::setw(20) << (float)mean_latency << std::setw(15) << (float)recalls[0] 
+                      #ifdef INSTRUMENT
+                      << std::setw(20) << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
                       << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) << std::setw(20)
                       << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(20)
                       << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0) << " " << (1000000*time_to_detect_penalty) / query_num << "\t" << (1000000*time_to_get_valid) / query_num 
@@ -392,6 +402,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       //                     << std::setw(20) << (float)(graph_lat[test_id]*1.0) << std::setw(20) <<
                       //                     (float)(graph_recalls[test_id]*100.0)
                       << std::endl;
+                      #else
+                      << std::endl;
+                      #endif
         }
     }
     std::cout << "num_graphs " << num_graphs << std::endl;
