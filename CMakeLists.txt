@@ -218,16 +218,22 @@ else()
         link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core iomp5 pthread m dl)
     else()
         # static linking for python so as to minimize customer dependency issues
-        link_libraries(
-                ${MKL_PATH}/libmkl_intel_ilp64.a
-                ${MKL_PATH}/libmkl_intel_thread.a
-                ${MKL_PATH}/libmkl_core.a
-                ${MKL_DEF_SO}
-                iomp5
-                pthread
-                m
-                dl
-        )
+        if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+            # In debug mode, use dynamic linking to ensure all symbols are available
+            link_libraries(mkl_intel_ilp64 mkl_intel_thread mkl_core ${MKL_DEF_SO} iomp5 pthread m dl)
+        else()
+            # In release mode, use static linking to minimize dependencies
+            link_libraries(
+                    ${MKL_PATH}/libmkl_intel_ilp64.a
+                    ${MKL_PATH}/libmkl_intel_thread.a
+                    ${MKL_PATH}/libmkl_core.a
+                    ${MKL_DEF_SO}
+                    iomp5
+                    pthread
+                    m
+                    dl
+            )
+        endif()
     endif()
 endif()
 
