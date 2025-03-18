@@ -28,15 +28,20 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     alloc_aligned(((void **)&this->_aligned_query_T), aligned_dim * sizeof(T), alignment_factor * sizeof(T));
     memset(this->_aligned_query_T, 0, aligned_dim * sizeof(T));
 
+    alloc_aligned(((void **)&this->_aligned_query_float), aligned_dim * sizeof(float),
+                  alignment_factor * sizeof(float));
+    memset(this->_aligned_query_float, 0, aligned_dim * sizeof(float));
+
     if (init_pq_scratch)
         this->_pq_scratch = new PQScratch<T>(defaults::MAX_GRAPH_DEGREE, aligned_dim);
     else
         this->_pq_scratch = nullptr;
 
     _occlude_factor.reserve(maxc);
+    _cluster_distances.reserve(MAX_NUM_CLUSTERS);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
-    _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
-    _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
+    _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R * _R));
+    _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R * _R));
 
     resize_for_new_L(std::max(search_l, indexing_l));
 }
@@ -46,9 +51,10 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _pool.clear();
     _best_l_nodes.clear();
     _occlude_factor.clear();
-
+    _closest_clusters.clear();
     _inserted_into_pool_rs.clear();
     _inserted_into_pool_bs->reset();
+    _cluster_distances.clear();
 
     _id_scratch.clear();
     _dist_scratch.clear();
@@ -65,7 +71,7 @@ template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l
         _L = new_l;
         _pool.reserve(3 * _L + _R);
         _best_l_nodes.reserve(_L);
-
+        _closest_clusters.reserve(2 * _L);
         _inserted_into_pool_rs.reserve(20 * _L);
     }
 }

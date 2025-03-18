@@ -39,6 +39,20 @@ std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters(const DataType 
                                                                  float *distances)
 {
     auto any_indices = std::any(indices);
+    std::vector<std::string> tmp_lbls;
+    tmp_lbls.push_back(raw_label);
+    std::vector<std::vector<std::string>> tmp_lbls_vec;
+    tmp_lbls_vec.push_back(tmp_lbls);
+    return _search_with_filters(query, tmp_lbls_vec, K, L, any_indices, distances);
+}
+
+template <typename IndexType>
+std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters(const DataType &query,
+                                                                 const std::vector<std::vector<std::string>> &raw_label,
+                                                                 const size_t K, const uint32_t L, IndexType *indices,
+                                                                 float *distances)
+{
+    auto any_indices = std::any(indices);
     return _search_with_filters(query, raw_label, K, L, any_indices, distances);
 }
 
@@ -162,6 +176,13 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search_w
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters<uint64_t>(
     const DataType &query, const std::string &raw_label, const size_t K, const uint32_t L, uint64_t *indices,
     float *distances);
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters<uint32_t>(
+    const DataType &query, const std::vector<std::vector<std::string>> &raw_label, const size_t K, const uint32_t L,
+    uint32_t *indices, float *distances);
+
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters<uint64_t>(
+    const DataType &query, const std::vector<std::vector<std::string>> &raw_label, const size_t K, const uint32_t L,
+    uint64_t *indices, float *distances);
 
 template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_tags<float, int32_t>(
     const float *query, const uint64_t K, const uint32_t L, int32_t *tags, float *distances,

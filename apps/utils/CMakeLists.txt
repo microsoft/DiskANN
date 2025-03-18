@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
 
+add_executable(bitmap_vs_list bitmap_vs_list.cpp)
+target_link_libraries(bitmap_vs_list ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
+
 add_executable(fvecs_to_bin fvecs_to_bin.cpp)
 
 add_executable(fvecs_to_bvecs fvecs_to_bvecs.cpp)
@@ -51,9 +54,13 @@ add_executable(compute_groundtruth compute_groundtruth.cpp)
 target_include_directories(compute_groundtruth PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
 target_link_libraries(compute_groundtruth ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
 
-add_executable(compute_groundtruth_for_filters compute_groundtruth_for_filters.cpp)
-target_include_directories(compute_groundtruth_for_filters PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
-target_link_libraries(compute_groundtruth_for_filters ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
+add_executable(compute_filtered_groundtruth compute_filtered_groundtruth.cpp)
+target_include_directories(compute_filtered_groundtruth PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
+target_link_libraries(compute_filtered_groundtruth ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
+
+add_executable(get_false_positive_rate get_false_positive_rate.cpp)
+target_include_directories(get_false_positive_rate PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
+target_link_libraries(get_false_positive_rate ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
 
 
 add_executable(generate_pq generate_pq.cpp)
@@ -97,7 +104,7 @@ if (NOT MSVC)
             simulate_aggregate_recall
             calculate_recall
             compute_groundtruth
-            compute_groundtruth_for_filters
+            compute_filtered_groundtruth
             generate_pq
             partition_data
             partition_with_ram_budget

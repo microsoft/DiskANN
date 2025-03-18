@@ -4,10 +4,12 @@
 #include <omp.h>
 
 #include <type_traits>
-
+#include <filesystem>
 #include "boost/dynamic_bitset.hpp"
+#include "id_list.h"
 #include "index_factory.h"
 #include "memory_mapper.h"
+#include "roaring.h"
 #include "timer.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
@@ -23,7 +25,7 @@
 
 #include "index.h"
 
-#define MAX_POINTS_FOR_USING_BITSET 10000000
+#define MAX_POINTS_FOR_USING_BITSET 40000000
 
 namespace diskann
 {
@@ -109,6 +111,15 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
                                      _indexingQueueSize, _indexingRange, _indexingMaxC, _data_store->get_dims());
         }
     }
+    if (index_config.index_search_params != nullptr)
+    {
+        _filter_penalty_threshold = index_config.index_search_params->filter_penalty_threshold;
+        _bruteforce_threshold = index_config.index_search_params->bruteforce_threshold;
+        diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
+        diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
+    }
+    //    if (_filtered_index) {
+    //    }
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -179,6 +190,8 @@ template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~I
         ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
         manager.destroy();
     }
+    if (_sample_map != nullptr)
+        delete[] _sample_map;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -548,6 +561,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     std::string labels_file = mem_index_file + "_labels.txt";
     std::string labels_to_medoids = mem_index_file + "_labels_to_medoids.txt";
     std::string labels_map_file = mem_index_file + "_labels_map.txt";
+    std::string sample_label_file = mem_index_file + "_sample_labels.txt";
 
     if (!_save_as_one_file)
     {
@@ -590,8 +604,21 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     if (file_exists(labels_file))
     {
+
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
+
+        if (file_exists(sample_label_file))
+        {
+            uint64_t num_samples;
+            parse_sample_label_file(sample_label_file, num_samples);
+            std::string rev_map = sample_label_file + "_map.bin";
+            uint64_t n1, n2;
+            diskann::load_bin<uint32_t>(rev_map, _sample_map, n1, n2);
+            _sample_prob = (1.0 * num_samples) / (1.0 * label_num_pts);
+            std::cout << "Loaded sample file with rate " << _sample_prob << std::endl;
+        }
+
         assert(label_num_pts == data_file_num_pts - _num_frozen_pts);
         if (file_exists(labels_to_medoids))
         {
@@ -758,19 +785,19 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 // Find common filter between a node's labels and a given set of labels, while
 // taking into account universal label
 template <typename T, typename TagT, typename LabelT>
-bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
-                                                   const std::vector<LabelT> &incoming_labels)
+uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
+                                                       const std::vector<LabelT> &incoming_labels)
 {
     auto &curr_node_labels = _location_to_labels[point_id];
     std::vector<LabelT> common_filters;
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
                           curr_node_labels.end(), std::back_inserter(common_filters));
-    if (common_filters.size() > 0)
-    {
-        // This is to reduce the repetitive calls. If common_filters size is > 0 ,
-        // we dont need to check further for universal label
-        return true;
-    }
+    /*    if (common_filters.size() > 0)
+        {
+            // This is to reduce the repetitive calls. If common_filters size is > 0 ,
+            // we dont need to check further for universal label
+            return true;
+        } */
     if (_use_universal_label)
     {
         if (!search_invocation)
@@ -785,19 +812,156 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
                 common_filters.push_back(_universal_label);
         }
     }
-    return (common_filters.size() > 0);
+    return common_filters.size();
 }
 
+// Find common filter between a node's labels and a given set of labels, while
+// taking into account universal label
+// TODO: modify for handling universal label
+template <typename T, typename TagT, typename LabelT>
+inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id, bool search_invocation,
+                                                              const std::vector<std::vector<LabelT>> &incoming_labels)
+{
+
+    //    auto s = std::chrono::high_resolution_clock::now();
+
+    // not implemented for build-time use case, since we need to understand universal labels for multiple filters
+    //    if (!search_invocation)
+    //        return true;
+
+
+    //    if (!search_invocation) {
+    //    auto &curr_node_labels = _location_to_labels[point_id];
+
+    /*    } else {
+        auto &curr_node_labels = _location_to_labels_bitmap[point_id];
+        for (auto &lbl : incoming_labels)
+        {
+            if (curr_node_labels.contains(lbl))
+            {
+                overlap++;
+            }
+        }
+        } */
+
+    // std::string tmp = "here, penalty=" + std::to_string(_filter_penalty_threshold) + ", overlap=" +
+    // std::to_string(overlap);
+    //    std::cout << tmp << std::endl;
+
+    //    if (overlap < _filter_penalty_threshold)
+    //        return true;
+
+    //    return false;
+    //    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    //    time_to_detect_penalty += diff.count();
+
+/*
+    uint32_t overlap = 0;
+    for (auto &lbl : incoming_labels)
+    {
+        //        if (std::find(curr_node_labels.begin(), curr_node_labels.end(), lbl) != curr_node_labels.end())
+        //        if (!(_location_to_labels_robin[point_id].find(lbl) == _location_to_labels_robin[point_id].end()))
+
+        if (_labels_to_points_set[lbl].count(point_id))
+        {
+            overlap++;
+        }
+    }
+    return incoming_labels.size() - overlap;
+*/
+
+#ifdef INSTRUMENT
+auto s = std::chrono::high_resolution_clock::now();
+#endif
+
+    uint32_t cur_penalty = incoming_labels.size();
+    for (uint32_t i = 0; i < incoming_labels.size(); i++) {
+        bool or_pass = false;
+        for (uint32_t j = 0; j < incoming_labels[i].size(); j++) {
+            if (_labels_to_points_set[incoming_labels[i][j]].count(point_id)) {
+                or_pass = true;
+                break;
+            }
+        }
+        cur_penalty -= or_pass;
+    }
+
+#ifdef INSTRUMENT
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    time_to_detect_penalty += diff.count();
+#endif
+
+    return cur_penalty;
+
+}
+
+
+template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const T *query, const uint32_t Lsize,
+                                                                          const roaring::Roaring &init_ids,
+                                                                          InMemQueryScratch<T> *scratch)
+{
+    T *aligned_query = scratch->aligned_query();
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    best_L_nodes.reserve(Lsize);
+
+    uint32_t cmps = 0;
+    uint32_t hops = 0;
+#ifdef INSTRUMENT
+    auto s = std::chrono::high_resolution_clock::now();
+#endif
+    roaring::Roaring::const_iterator x = init_ids.begin();
+    x++;
+    for (roaring::Roaring::const_iterator i = init_ids.begin(); i != init_ids.end(); i++)
+    {
+        float distance = _data_store->get_distance(aligned_query, *i);
+        if (x != init_ids.end())
+        {
+            _data_store->prefetch_vector(*x);
+            x++;
+        }
+        Neighbor nn = Neighbor(*i, distance);
+        best_L_nodes.insert(nn);
+        cmps++;
+    }
+#ifdef INSTRUMENT
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+    time_to_filter_check_and_compare += diff.count();
+#endif
+    return std::make_pair(hops, cmps);
+}
+
+// used for index build, single vector of labels are sent to iterate to fixed point. Need to be FIXED and made consistent
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
     const std::vector<LabelT> &filter_labels, bool search_invocation)
 {
+    return iterate_to_fixed_point(scratch, Lsize, init_ids, use_filter, std::vector<std::vector<LabelT>>(1, filter_labels),
+                                  search_invocation);
+}
+
+
+
+template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
+    InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
+    const std::vector<std::vector<LabelT>> &filter_labels, bool search_invocation)
+{
+
+/*    for (auto &x : filter_labels) {
+        std::cout<<"(";
+        for (auto &y : x) {
+            std::cout<<y<<"|";
+        }
+        std::cout<<")&";
+    }*/
+
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
     tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
-    boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
+    roaring::Roaring &inserted_into_pool_bs = scratch->get_valid_bitmap();
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
     std::vector<float> &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
@@ -805,6 +969,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     T *aligned_query = scratch->aligned_query();
 
     float *pq_dists = nullptr;
+
+    if (print_qstats)
+    {
+        std::ofstream out("query_stats.txt", std::ios_base::app);
+        out << "starting search\n" << std::endl;
+        out.close();
+    }
 
     _pq_data_store->preprocess_query(aligned_query, scratch);
 
@@ -817,20 +988,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     auto total_num_points = _max_points + _num_frozen_pts;
     bool fast_iterate = total_num_points <= MAX_POINTS_FOR_USING_BITSET;
 
-    if (fast_iterate)
-    {
-        if (inserted_into_pool_bs.size() < total_num_points)
-        {
-            // hopefully using 2X will reduce the number of allocations.
-            auto resize_size =
-                2 * total_num_points > MAX_POINTS_FOR_USING_BITSET ? MAX_POINTS_FOR_USING_BITSET : 2 * total_num_points;
-            inserted_into_pool_bs.resize(resize_size);
-        }
-    }
-
     // Lambda to determine if a node has been visited
     auto is_not_visited = [this, fast_iterate, &inserted_into_pool_bs, &inserted_into_pool_rs](const uint32_t id) {
-        return fast_iterate ? inserted_into_pool_bs[id] == 0
+        return fast_iterate ? !inserted_into_pool_bs.contains(id)
                             : inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end();
     };
 
@@ -849,17 +1009,48 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                                         __LINE__);
         }
 
+        float penalty = 0;
         if (use_filter)
         {
-            if (!detect_common_filters(id, search_invocation, filter_labels))
-                continue;
+            if (search_invocation)
+            {
+                #ifdef INSTRUMENT
+                auto s = std::chrono::high_resolution_clock::now();
+#endif
+                uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
+                #ifdef INSTRUMENT
+                std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+                time_to_get_valid += diff.count();
+            #endif
+            
+//                std::cout<<id <<" has penalty " << res << std::endl;
+                if ((res) > _filter_penalty_threshold)
+                    continue;
+                penalty = res * penalty_scale;
+                if (print_qstats)
+                {
+                    std::ofstream out("query_stats.txt", std::ios_base::app);
+                    out << "starting id " << id << " has (filter labels - overlap) size " << res << " and filters ";
+                    for (auto const &filter : _location_to_labels[id])
+                    {
+                        out << filter << " ";
+                    }
+                    out << std::endl;
+                    out.close();
+                }
+            }
+            else
+            {
+                if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
+                    continue;
+            }
         }
 
         if (is_not_visited(id))
         {
             if (fast_iterate)
             {
-                inserted_into_pool_bs[id] = 1;
+                inserted_into_pool_bs.add(id);
             }
             else
             {
@@ -870,7 +1061,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             uint32_t ids[] = {id};
             float distances[] = {std::numeric_limits<float>::max()};
             _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
-            distance = distances[0];
+            distance = distances[0] + penalty;
 
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
@@ -880,10 +1071,46 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
+    if (print_qstats)
+    {
+        std::ofstream out("query_stats.txt", std::ios_base::app);
+        out << std::endl;
+        out.close();
+    }
+
     while (best_L_nodes.has_unexpanded_node())
     {
+/*        for (uint32_t rnr = 0; rnr < best_L_nodes.size(); rnr++) {
+            auto &x = best_L_nodes[rnr];
+            std::cout<<std::setw(10)<<x.id;
+        }
+        std::cout<<std::endl;
+        for (uint32_t rnr = 0; rnr < best_L_nodes.size(); rnr++) {
+            auto &x = best_L_nodes[rnr];
+            std::cout<<std::setw(10)<<detect_filter_penalty(x.id, search_invocation, filter_labels);
+        }
+        std::cout<<std::endl;
+        for (uint32_t rnr = 0; rnr < best_L_nodes.size(); rnr++) {
+            auto &x = best_L_nodes[rnr];
+            std::cout<<std::setw(10)<<x.distance;
+        }
+        std::cout<<std::endl << std::endl;
+*/
+
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
+
+        if (print_qstats)
+        {
+            std::ofstream out("query_stats.txt", std::ios_base::app);
+            out << "looking at id " << n << " with filters ";
+            for (auto const &filter : _location_to_labels[n])
+            {
+                out << filter << " ";
+            }
+            out << std::endl;
+            out.close();
+        }
 
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
@@ -906,6 +1133,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Find which of the nodes in des have not been visited before
         id_scratch.clear();
         dist_scratch.clear();
+        std::vector<float> dist_pens;
         if (_dynamic_index)
         {
             LockGuard guard(_locks[n]);
@@ -913,63 +1141,141 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 assert(id < _max_points + _num_frozen_pts);
 
+                if (!is_not_visited(id))
+                    continue;
+
+                if (fast_iterate)
+                {
+                    inserted_into_pool_bs.add(id);
+                }
+                else
+                {
+                    inserted_into_pool_rs.insert(id);
+                }
+
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (!detect_common_filters(id, search_invocation, filter_labels))
-                        continue;
+                    // TODO: CHECK ABOUT UNIVERSAL LABELS
+                    if (search_invocation)
+                    {
+                        if (detect_filter_penalty(id, search_invocation, filter_labels) > _filter_penalty_threshold)
+                            continue;
+                    }
+                    else
+                    {
+                        if (detect_filter_penalty(id, search_invocation, filter_labels) == filter_labels.size())
+                            continue;
+                    }
                 }
 
-                if (is_not_visited(id))
-                {
-                    id_scratch.push_back(id);
-                }
+                id_scratch.push_back(id);
             }
         }
         else
         {
-            _locks[n].lock();
-            auto nbrs = _graph_store->get_neighbours(n);
-            _locks[n].unlock();
+            std::vector<location_t> nbrs;
+            size_t id_iter = 0;
+            if (search_invocation)
+            {
+                nbrs = _graph_store->get_neighbours(n);
+                if (expand_two_hops) {
+                for (auto &x : nbrs)
+                    // add two hop neighbors
+                    nbrs.insert(nbrs.end(), _graph_store->get_neighbours(x).begin(), _graph_store->get_neighbours(x).end());
+                }
+            }
+            else
+            {
+                _locks[n].lock();
+                nbrs = _graph_store->get_neighbours(n);
+                _locks[n].unlock();
+            }
             for (auto id : nbrs)
             {
                 assert(id < _max_points + _num_frozen_pts);
 
+                if (!is_not_visited(id))
+                    continue;
+
+                if (fast_iterate)
+                {
+                    inserted_into_pool_bs.add(id);
+                }
+                else
+                {
+                    inserted_into_pool_rs.insert(id);
+                }
+
+                float penalty = 0;
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    if (!detect_common_filters(id, search_invocation, filter_labels))
-                        continue;
-                }
+                    uint32_t res;
+                    if (search_invocation)
+                    {
+                        #ifdef INSTRUMENT
+                        auto s = std::chrono::high_resolution_clock::now();
+        #endif
+        
+                        res = detect_filter_penalty(id, search_invocation, filter_labels);
+                        #ifdef INSTRUMENT
+                        std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+                        time_to_get_valid += diff.count();
+                    #endif
+        
+                        if (res > _filter_penalty_threshold)
+                        {
+                            id_iter++;
+                            continue;
+                        }
+                        penalty = res * penalty_scale;
 
-                if (is_not_visited(id))
-                {
-                    id_scratch.push_back(id);
+                        if (print_qstats)
+                        {
+                            std::ofstream out("query_stats.txt", std::ios_base::app);
+                            out << id_iter << ". looking at " << res << " nbr " << id << " with filters ";
+                            for (auto const &filter : _location_to_labels[id])
+                            {
+                                out << filter << " ";
+                            }
+                            out << std::endl;
+                            out.close();
+                        }
+                        id_iter++;
+                    }
+                    else
+                    {
+                        if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
+                            continue;
+                    }
                 }
+                dist_pens.push_back(penalty);
+                id_scratch.push_back(id);
             }
+        }
+
+        if (print_qstats)
+        {
+            std::ofstream out("query_stats.txt", std::ios_base::app);
+            out << std::endl;
+            out.close();
         }
 
         // Mark nodes visited
-        for (auto id : id_scratch)
-        {
-            if (fast_iterate)
-            {
-                inserted_into_pool_bs[id] = 1;
-            }
-            else
-            {
-                inserted_into_pool_rs.insert(id);
-            }
-        }
+        /*        for (auto id : id_scratch)
+                {
+                } */
 
         assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
         cmps += (uint32_t)id_scratch.size();
+        assert(dist_pens.size() == id_scratch.size());
 
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m] + dist_pens[m]));
         }
     }
     return std::make_pair(hops, cmps);
@@ -982,7 +1288,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
                                                         uint32_t filteredLindex)
 {
     const std::vector<uint32_t> init_ids = get_init_ids();
-    const std::vector<LabelT> unused_filter_label;
+    const std::vector<std::vector<LabelT>> unused_filter_label;
 
     if (!use_filter)
     {
@@ -1002,6 +1308,15 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
             tl.unlock();
 
         _data_store->get_vector(location, scratch->aligned_query());
+        // get all combinations of common filters
+        for (auto const &lbl1 : _location_to_labels[location])
+        {
+            for (auto const &lbl2 : _location_to_labels[location])
+            {
+                if (lbl1 == lbl2)
+                    continue;
+            }
+        }
         iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
                                _location_to_labels[location], false);
 
@@ -1297,6 +1612,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         _start = calculate_entry_point();
 
     diskann::Timer link_timer;
+
+    diskann::cout << "Filtered L index: " << _filtered_index << ", " << _filterIndexingQueueSize << std::endl;
 
 #pragma omp parallel for schedule(dynamic, 2048)
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
@@ -1753,7 +2070,14 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
             this->set_universal_label(unv_label_as_num);
         }
         this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load);
+        std::string sample_label_file = filter_params.save_path_prefix + "_sample";
+        float p_val = 1000000.0/num_points_to_load;
+        p_val = (p_val > 1) ? 1 : p_val;
+        gen_random_slice<T>(data_file, sample_label_file, p_val,
+                      labels_file_to_use);
+        std::filesystem::copy(sample_label_file+"_ids.bin", sample_label_file+"_labels.txt_map.bin");
     }
+
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
 }
@@ -1790,9 +2114,10 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
         return _universal_label;
     }
     std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    stream << "Unable to find label " << raw_label << " in the Label Map";
+//    diskann::cerr << stream.str() << std::endl;
+    return std::numeric_limits<LabelT>::max();
+//    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1814,11 +2139,12 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
         line_cnt++;
     }
     _location_to_labels.resize(line_cnt, std::vector<LabelT>());
+    /* _location_to_labels_robin.resize(line_cnt, tsl::robin_set<LabelT>()); */
+    /* _location_to_labels_bitmap.resize(line_cnt, roaring::Roaring()); */
 
     infile.clear();
     infile.seekg(0, std::ios::beg);
     line_cnt = 0;
-
     while (std::getline(infile, line))
     {
         std::istringstream iss(line);
@@ -1831,15 +2157,95 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
             LabelT token_as_num = (LabelT)std::stoul(token);
             lbls.push_back(token_as_num);
+            //_location_to_labels_bitmap[line_cnt].add(token_as_num);
+            //_location_to_labels_robin[line_cnt].insert(token_as_num);
+            _labels_to_points_set[token_as_num].insert(line_cnt);
             _labels.insert(token_as_num);
+            try
+            {
+                _labels_to_points.at(token_as_num).add(line_cnt);
+            }
+            catch (const std::out_of_range &oor)
+            {
+                _labels_to_points.resize(token_as_num + 1);
+                _labels_to_points.at(token_as_num).add(line_cnt);
+            }
         }
 
         std::sort(lbls.begin(), lbls.end());
         _location_to_labels[line_cnt] = lbls;
         line_cnt++;
     }
+
+    /* _location_to_label_combos.resize(_location_to_labels.size()); */
+    /* for (size_t i = 0; i < _location_to_labels.size(); i++) */
+    /* { */
+    /*     std::vector<LabelT> curr_lbls = _location_to_labels[i]; */
+    /*     for (size_t j = 0; j < curr_lbls.size(); j++) */
+    /*     { */
+    /*         for (size_t k = j + 1; k < curr_lbls.size(); k++) */
+    /*         { */
+    /*             LabelT a = curr_lbls[j], b = curr_lbls[k]; */
+    /*             _location_to_label_combos[i].push_back(std::make_pair(a, b)); */
+    /*         } */
+    /*     } */
+    /* } */
     num_points = (size_t)line_cnt;
     diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::parse_sample_label_file(const std::string &label_file, size_t &num_samples)
+{
+    // Format of Label txt file: filters with comma separators
+
+    std::ifstream infile(label_file);
+    if (infile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+
+    std::string line, token;
+    uint32_t line_cnt = 0;
+    std::set<LabelT> sample_labels;
+
+    while (std::getline(infile, line))
+    {
+        line_cnt++;
+    }
+
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
+    while (std::getline(infile, line))
+    {
+        std::istringstream iss(line);
+        std::vector<LabelT> lbls(0);
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        while (getline(new_iss, token, ','))
+        {
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+                        LabelT token_as_num = (LabelT)std::stoul(token);
+            //LabelT token_as_num = get_converted_label(token);
+            lbls.push_back(token_as_num);
+            sample_labels.insert(token_as_num);
+            try
+            {
+                _labels_to_points_sample.at(token_as_num).add(line_cnt);
+            }
+            catch (const std::out_of_range &oor)
+            {
+                _labels_to_points_sample.resize(token_as_num + 1);
+                _labels_to_points_sample.at(token_as_num).add(line_cnt);
+            }
+        }
+        line_cnt++;
+    }
+    num_samples = (size_t)line_cnt;
+    diskann::cout << "Identified " << num_samples << " samples for estimation purposes, and it covers "
+                  << sample_labels.size() << " distinct labels." << std::endl;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1860,6 +2266,7 @@ void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const st
                                                   const size_t num_points_to_load, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
+
     _label_to_start_id.clear();
     size_t num_points_labels = 0;
 
@@ -1960,10 +2367,10 @@ template <typename IdType>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, const size_t K, const uint32_t L,
                                                              IdType *indices, float *distances)
 {
-    if (K > (uint64_t)L)
-    {
-        throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
+    /*    if (K > (uint64_t)L)
+        {
+            throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }*/
 
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
@@ -2020,20 +2427,48 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const DataType &query,
-                                                                           const std::string &raw_label, const size_t K,
-                                                                           const uint32_t L, std::any &indices,
-                                                                           float *distances)
+                                                                           const std::vector<std::vector<std::string>> &raw_label,
+                                                                           const size_t K, const uint32_t L,
+                                                                           std::any &indices, float *distances)
 {
-    auto converted_label = this->get_converted_label(raw_label);
+    std::vector<std::vector<LabelT>> converted_labels;
+    converted_labels.reserve(raw_label.size());
+    for (auto &x : raw_label)
+    {
+        std::vector<LabelT> cur_labels;
+        for (auto &y : x)
+        {
+            auto converted_label = this->get_converted_label(y);
+            if (converted_label != std::numeric_limits<LabelT>::max())
+                cur_labels.push_back(converted_label);
+        }
+        if (cur_labels.size() > 0)
+            converted_labels.push_back(cur_labels);
+        else {
+            for (uint32_t i = 0; i < K; i++) {
+                distances[i] = std::numeric_limits<float>::max();
+                if (typeid(uint64_t *) == indices.type()) {
+                    auto ptr = std::any_cast<uint64_t *>(indices);
+                    ptr[i] = std::numeric_limits<uint64_t>::max();
+                } else if (typeid(uint32_t *) == indices.type()) {
+                    auto ptr = std::any_cast<uint32_t *>(indices);
+                    ptr[i] = std::numeric_limits<uint32_t>::max();
+                }
+            }
+//            diskann::cerr << "No valid labels found for query" << std::endl;
+            return std::make_pair(0, 0);
+        }
+    }
+    
     if (typeid(uint64_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint64_t *>(indices);
-        return this->search_with_filters(std::any_cast<T *>(query), converted_label, K, L, ptr, distances);
+        return this->search_with_filters(std::any_cast<T *>(query), converted_labels, K, L, ptr, distances);
     }
     else if (typeid(uint32_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint32_t *>(indices);
-        return this->search_with_filters(std::any_cast<T *>(query), converted_label, K, L, ptr, distances);
+        return this->search_with_filters(std::any_cast<T *>(query), converted_labels, K, L, ptr, distances);
     }
     else
     {
@@ -2042,18 +2477,88 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
 }
 
 template <typename T, typename TagT, typename LabelT>
+std::vector<std::pair<LabelT, uint32_t>> Index<T, TagT, LabelT>::sort_filter_counts(
+    const std::vector<LabelT> &filter_label)
+{
+    std::vector<std::pair<LabelT, uint32_t>> label_counts;
+    for (auto const &lbl : filter_label)
+    {
+        std::pair<LabelT, uint32_t> curr_pair(lbl, _labels_to_points[lbl].cardinality());
+        label_counts.push_back(curr_pair);
+    }
+    std::sort(label_counts.begin(), label_counts.end(),
+              [](auto &left, auto &right) { return left.second < right.second; });
+
+    return label_counts;
+}
+
+template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_intersection(roaring::Roaring &intersection_bitmap, roaring::Roaring &tmp_bitmap,
+                                                                          const std::vector<std::vector<LabelT>> &filter_labels)
+{
+
+    #ifdef INSTRUMENT
+    auto s = std::chrono::high_resolution_clock::now();
+#endif
+
+
+    for (uint32_t or_itr = 0; or_itr < filter_labels[0].size(); or_itr++) {
+        intersection_bitmap |= _labels_to_points_sample[filter_labels[0][or_itr]];
+    }
+    for (size_t i = 1; i < filter_labels.size(); i++)
+    {
+        tmp_bitmap.removeRangeClosed(tmp_bitmap.minimum(), tmp_bitmap.maximum());
+        for (uint32_t or_itr = 0; or_itr < filter_labels[i].size(); or_itr++) {
+            tmp_bitmap |= _labels_to_points_sample[filter_labels[i][or_itr]];
+        }
+        intersection_bitmap &= tmp_bitmap;
+    }            
+
+
+
+/*    intersection_bitmap = _labels_to_points_sample[filter_label[0]];
+    for (size_t i = 1; i < filter_label.size(); i++)
+    {
+        intersection_bitmap &= _labels_to_points_sample[filter_label[i]];
+    }*/
+    uint32_t val = std::numeric_limits<uint32_t>::max();
+    auto x = intersection_bitmap.begin();
+    std::vector<uint32_t> results;
+    results.reserve(num_start_points);
+    while (x != intersection_bitmap.end() && results.size() < num_start_points)
+    {
+        val = _sample_map[*x];
+        results.emplace_back(val);
+        x++;
+    }
+
+    #ifdef INSTRUMENT
+    std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+//    time_to_get_valid += diff.count();
+#endif
+
+    
+    //    std::cout<<intersection_bitmap.cardinality() << " " << val << std::endl;
+    return std::make_pair((uint32_t)(intersection_bitmap.cardinality() * (1.0 / (_sample_prob))), results);
+}
+
+template <typename T, typename TagT, typename LabelT>
 template <typename IdType>
-std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query, const LabelT &filter_label,
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const T *query,
+                                                                          const std::vector<std::vector<LabelT>> &filter_label,
                                                                           const size_t K, const uint32_t L,
                                                                           IdType *indices, float *distances)
 {
-    if (K > (uint64_t)L)
-    {
-        throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
+    /*    if (K > (uint64_t)L)
+        {
+            throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }*/
 
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
     auto scratch = manager.scratch_space();
+    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
+    bool local_print = false;
 
     if (L > scratch->get_L())
     {
@@ -2064,59 +2569,266 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
 
     std::vector<LabelT> filter_vec;
-    std::vector<uint32_t> init_ids = get_init_ids();
+    /* std::vector<uint32_t> init_ids = get_init_ids(); */
+    std::vector<uint32_t> init_ids;
 
-    std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
-    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
-    if (_dynamic_index)
-        tl.lock();
+    /* if (_dynamic_index) */
+    /*     tl.lock(); */
+    /**/
+    /* if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) */
+    /* { */
+    /*     init_ids.emplace_back(_label_to_start_id[filter_label[0]]); */
+    /* } */
+    /* else */
+    /* { */
+    /*     diskann::cout << "No filtered medoid found. exitting " */
+    /*                   << std::endl; // RKNOTE: If universal label found start there */
+    /*     throw diskann::ANNException("No filtered medoid found. exitting ", -1); */
+    /* } */
+    /* if (_dynamic_index) */
+    /*     tl.unlock(); */
 
-    if (_label_to_start_id.find(filter_label) != _label_to_start_id.end())
+
+
+    /* std::ofstream out("query_sizes.txt", std::ios_base::app); */
+    /* auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label); */
+    /* for (auto const &filt : filter_label) */
+    /* { */
+    /*     out << filt << "/" << _labels_to_points[filt].cardinality() << " "; */
+    /* } */
+    /* out << "and intersection estimate " << inter_estim << std::endl; */
+    /* out << std::endl; */
+    /* out.close(); */
+    /* return std::make_pair(0, 0); */
+    /*
+        if (curr_query == 1)
+        {
+            std::ofstream out("query_stats1.txt", std::ios_base::app);
+            for (auto const &filt : filter_label)
+            {
+                out << filt << "/" << _labels_to_points[filt].cardinality() << " ";
+            }
+            out << std::endl;
+            out.close();
+        }*/
+
+    for (auto &lbl : filter_label)
+        filter_vec.push_back(lbl[0]);
+
+    std::vector<std::pair<LabelT, uint32_t>> sorted_filters = sort_filter_counts(filter_vec);
+
+    _data_store->preprocess_query(query, scratch);
+    std::pair<uint32_t, uint32_t> retval;
+    if (_bruteforce_threshold < 3)
     {
-        init_ids.emplace_back(_label_to_start_id[filter_label]);
+        switch (_bruteforce_threshold)
+        {
+        case 0: {
+            num_brutes++;
+            // last_intersection has the common elements across all filters in sorted_filters
+#ifdef INSTRUMENT
+            auto s = std::chrono::high_resolution_clock::now();
+#endif
+            auto &last_intersection = scratch->get_valid_bitmap();
+            for (uint32_t or_itr = 0; or_itr < filter_label[0].size(); or_itr++) {
+                last_intersection |= _labels_to_points[filter_label[0][or_itr]];
+            }
+            for (size_t i = 1; i < filter_label.size(); i++)
+            {
+                auto &tmp_intersection = scratch->get_tmp_bitmap();                
+                for (uint32_t or_itr = 0; or_itr < filter_label[i].size(); or_itr++) {
+                    tmp_intersection |= _labels_to_points[filter_label[i][or_itr]];
+                }
+                last_intersection &= tmp_intersection;
+            }            
+            /*last_intersection = _labels_to_points[sorted_filters[0].first];
+            for (size_t i = 1; i < sorted_filters.size(); i++)
+            {
+                last_intersection &= _labels_to_points[sorted_filters[i].first];
+            }*/
+#ifdef INSTRUMENT
+            std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+            time_to_get_valid += diff.count();
+#endif
+
+            retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
+        }
+        break;
+        case 1: {
+            num_graphs++;
+            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
+
+            if (cand.size() > 0)
+            {
+                init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+//                init_ids.emplace_back(cand);
+            } /*else {
+                if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+                { 
+                    init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+                } 
+            } */
+             if (use_global_start) {
+                init_ids.emplace_back(_start);
+             }
+
+            local_print = true;
+            if (print_qstats)
+            {
+                std::ofstream out("query_stats.txt", std::ios_base::app);
+                out << "estimated intersection size is " << inter_estim << std::endl;
+                //out << "setting up init ids with id " << cand << std::endl;
+                out.close();
+            }
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
+            }
+            break;
+            case 2: {
+                uint32_t old_penalty_scale = penalty_scale;
+                penalty_scale = 0;
+                num_graphs++;
+                auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
+    
+                if (cand.size() > 0)
+                {
+                    init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+    //                init_ids.emplace_back(cand);
+                } /*else {
+                    if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+                    { 
+                        init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+                    } 
+                } */
+                 if (use_global_start) {
+                    init_ids.emplace_back(_start);
+                 }
+    
+                local_print = true;
+                if (print_qstats)
+                {
+                    std::ofstream out("query_stats.txt", std::ios_base::app);
+                    out << "estimated intersection size is " << inter_estim << std::endl;
+                    //out << "setting up init ids with id " << cand << std::endl;
+                    out.close();
+                }
+                retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
+                penalty_scale = old_penalty_scale;
+           }
+            break;
+    
+        }
     }
     else
     {
-        diskann::cout << "No filtered medoid found. exitting "
-                      << std::endl; // RKNOTE: If universal label found start there
-        throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+#ifdef INSTRUMENT
+        auto s = std::chrono::high_resolution_clock::now();
+#endif
+        auto [estimated_match, cand] = sample_intersection(scratch->get_valid_bitmap(),scratch->get_tmp_bitmap(), filter_label);
+#ifdef INSTRUMENT
+        std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+        time_to_estimate += diff.count();
+#endif
+        if (estimated_match < _bruteforce_threshold)
+        {
+            num_brutes++;
+            auto &last_intersection = scratch->get_valid_bitmap();
+            last_intersection = _labels_to_points[sorted_filters[0].first];
+            for (size_t i = 1; i < sorted_filters.size(); i++)
+            {
+                last_intersection &= _labels_to_points[sorted_filters[i].first];
+            }
+            retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
+        }
+        else
+        {
+            num_graphs++;
+            /* if (_dynamic_index) */
+            /*     tl.lock(); */
+            /**/
+            /* if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) */
+            /* { */
+            /*     init_ids.emplace_back(_label_to_start_id[filter_label[0]]); */
+            /* } */
+            /* else */
+            /* { */
+            /*     diskann::cout << "No filtered medoid found. exitting " */
+            /*                   << std::endl; // RKNOTE: If universal label found start there */
+            /*     throw diskann::ANNException("No filtered medoid found. exitting ", -1); */
+            /* } */
+            /* if (_dynamic_index) */
+            /*     tl.unlock(); */
+
+            if (cand.size() > 0)
+            {
+                init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+//                init_ids.emplace_back(cand);
+            } /*else {
+                if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+                { 
+                    init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+                } 
+            }*/
+             if (use_global_start) {
+                init_ids.emplace_back(_start);
+             }
+
+            local_print = true;
+            if (print_qstats)
+            {
+                std::ofstream out("query_stats.txt", std::ios_base::app);
+                out << "Search path for query " << curr_query << " with filters/specificities ";
+                for (auto const &filt : filter_vec)
+                    out << filt << "/" << _labels_to_points[filt].cardinality() << " ";
+                out << std::endl;
+                out << "estimated intersection size is " << estimated_match << std::endl;
+                //out << "setting up init ids with id " << cand << std::endl;
+                out << std::endl;
+                out.close();
+            }
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
+        }
     }
-    if (_dynamic_index)
-        tl.unlock();
-
-    filter_vec.emplace_back(filter_label);
-
-    _data_store->preprocess_query(query, scratch);
-    auto retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
 
     auto best_L_nodes = scratch->best_l_nodes();
 
     size_t pos = 0;
+    if (print_qstats && local_print)
+    {
+        std::ofstream out("query_stats.txt", std::ios_base::app);
+        out << "final results for L size " << best_L_nodes.size() << ": ";
+        for (size_t i = 0; i < best_L_nodes.size(); ++i)
+        {
+            out << best_L_nodes[i].id << " ";
+        }
+        out << std::endl << std::endl;
+        out.close();
+    }
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
-        if (best_L_nodes[i].id < _max_points)
-        {
-            indices[pos] = (IdType)best_L_nodes[i].id;
+        if (best_L_nodes[i].id >= _max_points || (detect_filter_penalty(best_L_nodes[i].id, true, filter_label) != 0))
+            continue;
 
-            if (distances != nullptr)
-            {
+        indices[pos] = (IdType)best_L_nodes[i].id;
+
+        if (distances != nullptr)
+        {
 #ifdef EXEC_ENV_OLS
-                // DLVS expects negative distances
-                distances[pos] = best_L_nodes[i].distance;
+            // DLVS expects negative distances
+            distances[pos] = best_L_nodes[i].distance;
 #else
-                distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT ? -1 * best_L_nodes[i].distance
-                                                                                : best_L_nodes[i].distance;
+            distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT ? -1 * best_L_nodes[i].distance
+                                                                            : best_L_nodes[i].distance;
 #endif
-            }
-            pos++;
         }
+        pos++;
+
         if (pos == K)
             break;
     }
-    if (pos < K)
-    {
-        diskann::cerr << "Found fewer than K elements for query" << std::endl;
-    }
+    /*    if (pos < K)
+        {
+            diskann::cerr << "Found fewer than K elements for query" << std::endl;
+        } */
 
     return retval;
 }
@@ -2175,8 +2887,8 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     }
     else
     {
-        std::vector<LabelT> filter_vec;
         auto converted_label = this->get_converted_label(filter_label);
+        std::vector<LabelT> filter_vec;
         filter_vec.push_back(converted_label);
         iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
     }
@@ -3381,42 +4093,42 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
-    uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const float *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint32_t>::search_with_filters<
-    uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const float *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
-    uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const uint8_t *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint32_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const uint8_t *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
-    uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const int8_t *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint32_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const int8_t *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
-    uint64_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const float *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint32_t>::search_with_filters<
-    uint32_t>(const float *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const float *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
-    uint64_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const uint8_t *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint32_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const uint8_t *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
-    uint64_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const int8_t *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint32_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint32_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const int8_t *query, const std::vector<std::vector<uint32_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search<uint64_t>(
     const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
@@ -3445,41 +4157,41 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
     const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
-    uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const float *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint64_t, uint16_t>::search_with_filters<
-    uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const float *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
-    uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const uint8_t *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint64_t, uint16_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const uint8_t *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
-    uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const int8_t *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint64_t, uint16_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const int8_t *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 // TagT==uint32_t
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
-    uint64_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const float *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<float, uint32_t, uint16_t>::search_with_filters<
-    uint32_t>(const float *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const float *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
-    uint64_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const uint8_t *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<uint8_t, uint32_t, uint16_t>::search_with_filters<
-    uint32_t>(const uint8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const uint8_t *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
-    uint64_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint64_t *indices,
-              float *distances);
+    uint64_t>(const int8_t *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint64_t *indices, float *distances);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
-    uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const uint32_t L, uint32_t *indices,
-              float *distances);
+    uint32_t>(const int8_t *query, const std::vector<std::vector<uint16_t>> &filter_label, const size_t K, const uint32_t L,
+              uint32_t *indices, float *distances);
 
 } // namespace diskann

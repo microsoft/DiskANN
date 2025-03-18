@@ -5,17 +5,20 @@
 
 #include <vector>
 
-#include "boost_dynamic_bitset_fwd.h"
-// #include "boost/dynamic_bitset.hpp"
+//#include "boost_dynamic_bitset_fwd.h"
+#include "boost/dynamic_bitset.hpp"
 #include "tsl/robin_set.h"
 #include "tsl/robin_map.h"
 #include "tsl/sparse_map.h"
+#include "roaring.hh"
 
 #include "aligned_file_reader.h"
 #include "abstract_scratch.h"
 #include "neighbor.h"
 #include "defaults.h"
 #include "concurrent_queue.h"
+
+#define MAX_NUM_CLUSTERS 500
 
 namespace diskann
 {
@@ -36,6 +39,14 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     inline uint32_t get_L()
     {
         return _L;
+    }
+    inline float *get_query_float()
+    {
+        return _aligned_query_float;
+    }
+    inline std::vector<float> &get_cluster_distance_vector()
+    {
+        return _cluster_distances;
     }
     inline uint32_t get_R()
     {
@@ -61,6 +72,11 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _best_l_nodes;
     }
+    inline std::vector<uint32_t> &closest_clusters()
+    {
+        return _closest_clusters;
+    }
+
     inline std::vector<float> &occlude_factor()
     {
         return _occlude_factor;
@@ -93,6 +109,19 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _occlude_list_output;
     }
+
+    inline roaring::Roaring &get_valid_bitmap()
+    {
+        _last_intersection.removeRangeClosed(_last_intersection.minimum(), _last_intersection.maximum());
+        return _last_intersection;
+    }
+
+    inline roaring::Roaring &get_tmp_bitmap()
+    {
+        _tmp_intersection.removeRangeClosed(_tmp_intersection.minimum(), _tmp_intersection.maximum());
+        return _tmp_intersection;
+    }
+
 
   private:
     uint32_t _L;
@@ -132,6 +161,14 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     tsl::robin_set<uint32_t> _expanded_nodes_set;
     std::vector<Neighbor> _expanded_nghrs_vec;
     std::vector<uint32_t> _occlude_list_output;
+
+    roaring::Roaring _tmp_intersection;
+
+    roaring::Roaring _last_intersection;
+    // _to calculate the closest clusters during filtered search in clustered index
+    std::vector<uint32_t> _closest_clusters;
+    std::vector<float> _cluster_distances;
+    float *_aligned_query_float;
 };
 
 //

@@ -78,6 +78,10 @@ class AbstractIndex
     std::pair<uint32_t, uint32_t> search_with_filters(const DataType &query, const std::string &raw_label,
                                                       const size_t K, const uint32_t L, IndexType *indices,
                                                       float *distances);
+    template <typename IndexType>
+    std::pair<uint32_t, uint32_t> search_with_filters(const DataType &query, const std::vector<std::vector<std::string>> &raw_label,
+                                                      const size_t K, const uint32_t L, IndexType *indices,
+                                                      float *distances);
 
     // insert points with labels, labels should be present for filtered index
     template <typename data_type, typename tag_type, typename label_type>
@@ -110,7 +114,8 @@ class AbstractIndex
     virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) = 0;
-    virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::string &filter_label,
+    virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query,
+                                                               const std::vector<std::vector<std::string>> &filter_label,
                                                                const size_t K, const uint32_t L, std::any &indices,
                                                                float *distances) = 0;
     virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) = 0;

@@ -39,12 +39,20 @@ class IndexWriteParameters
 class IndexSearchParams
 {
   public:
-    IndexSearchParams(const uint32_t initial_search_list_size, const uint32_t num_search_threads)
-        : initial_search_list_size(initial_search_list_size), num_search_threads(num_search_threads)
+    IndexSearchParams(const uint32_t initial_search_list_size, const uint32_t num_search_threads,
+                      const uint32_t filter_penalty_threshold = 0, const uint32_t bruteforce_threshold = 0,
+                      const uint32_t clustering_threshold = 0)
+        : initial_search_list_size(initial_search_list_size), num_search_threads(num_search_threads),
+          filter_penalty_threshold(filter_penalty_threshold), bruteforce_threshold(bruteforce_threshold),
+          clustering_threshold(clustering_threshold)
     {
     }
+
     const uint32_t initial_search_list_size; // search L
     const uint32_t num_search_threads;       // search threads
+    const uint32_t filter_penalty_threshold{defaults::FILTER_PENALTY_THRESHOLD};
+    const uint32_t bruteforce_threshold{defaults::BRUTEFORCE_THRESHOLD};
+    const uint32_t clustering_threshold{defaults::BRUTEFORCE_THRESHOLD};
 };
 
 class IndexWriteParametersBuilder
