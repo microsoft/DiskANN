@@ -9,7 +9,6 @@
 #include "aligned_file_reader.h"
 #endif
 
-#include "cluster_store.h"
 #include "distance.h"
 #include "locking.h"
 #include "math_utils.h"
@@ -46,7 +45,7 @@ inline uint32_t num_graphs = 0;
 inline uint32_t min_inter_size = 2;
 inline bool print_qstats = false;
 inline int64_t curr_query = -1;
-inline uint32_t penalty_scale = 10000;
+inline uint32_t penalty_scale = 10;
 inline uint32_t num_sp = 2;
 inline bool use_global_start = false;
 inline uint32_t num_start_points = 1;
@@ -288,10 +287,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
-    std::pair<uint32_t, uint32_t> closest_cluster_filters(const T *query, const uint32_t Lsize,
-                                                          std::vector<LabelT> filter_vec,
-                                                          InMemQueryScratch<T> *scratch);
-
     std::pair<uint32_t, uint32_t> brute_force_filters(const T *query, const uint32_t Lsize,
                                                       const roaring::Roaring &init_ids, InMemQueryScratch<T> *scratch);
 
@@ -435,16 +430,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::vector<roaring::Roaring> _labels_to_points_sample;
     uint32_t *_sample_map = nullptr;
     float _sample_prob = 0;
-    std::vector<std::vector<roaring::Roaring>> _clusters_to_labels_to_points;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
-    diskann::InMemClusterStore<T> *_ivf_clusters = nullptr;
 
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
     uint32_t _filterIndexingQueueSize;
     uint32_t _filter_penalty_threshold = 0;
     uint32_t _bruteforce_threshold = 0;
-    uint32_t _clustering_threshold = 0;
     float _prob = 0.1;
     std::unordered_map<std::string, LabelT> _label_map;
 
