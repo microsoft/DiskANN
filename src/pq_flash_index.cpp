@@ -170,9 +170,11 @@ std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t
     IOContext &ctx = this_thread_data->ctx;
 
 #ifdef NDEBUG
+    // -- If not partition_read, this is the normal DiskANN approach:
     if (not partition_read)
     {
 #endif
+        // (1) read each node's 4 KB from offset = get_node_sector(node_id)*4096
         alloc_aligned((void **)&buf, node_ids.size() * num_sectors * defaults::SECTOR_LEN, defaults::SECTOR_LEN);
 
         // create read requests
@@ -220,92 +222,82 @@ std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t
         aligned_free(buf);
 
 #ifdef NDEBUG
+        // done with the normal path
         return retval;
     }
 #endif
 
-    std::map<uint32_t, std::vector<size_t>> partition_to_indices;
-    for (size_t i = 0; i < node_ids.size(); i++)
+    // (2) "Graph-only" read from `graph_reader` => 1 node per sector,
+    //     but each sector begins with 4 bytes of nodeID, then 4 bytes neighbor_count
+    // -------------------------------------------------------------------
+    // partition_read==true => we want adjacency from the new graph file
+    // skipping the 4B nodeID, read neighbor_count from offset=4
     {
-        uint32_t partition_id = _id2partition[node_ids[i]];
-        partition_to_indices[partition_id].push_back(i);
-    }
+        // read one 4KB sector per node
+        alloc_aligned((void **)&buf, node_ids.size() * defaults::SECTOR_LEN, defaults::SECTOR_LEN);
 
-    size_t partition_size = partition_to_indices.size();
-    alloc_aligned((void **)&buf, partition_size * num_sectors * defaults::SECTOR_LEN, defaults::SECTOR_LEN);
+        read_reqs.clear();
+        read_reqs.reserve(node_ids.size());
 
-    int i = 0;
-    for (const auto &[partition_id, indices] : partition_to_indices)
-    {
-        AlignedRead read;
-        read.len = defaults::SECTOR_LEN;
-        read.buf = buf + i * defaults::SECTOR_LEN;
-        read.offset = (partition_id + 1) * defaults::SECTOR_LEN; // The first sector is metadata
-        read_reqs.push_back(read);
-        i++;
-    }
-
-    graph_reader->read(read_reqs, ctx);
-
-    std::map<uint32_t, uint32_t> node_id_to_num;
-    for (auto &[partition_id, indices] : partition_to_indices)
-    {
-        // Get the node list in the partition
-        const auto &partition = _graph_partitions[partition_id];
-
-        uint32_t node_count = *header;
-
-        for (size_t idx : indices)
+        for (size_t i = 0; i < node_ids.size(); i++)
         {
-            auto node_id = node_ids[idx];
-            node_id_to_num[node_id] = idx;
+            uint32_t node_id = node_ids[i];
+            AlignedRead read;
+            read.len = defaults::SECTOR_LEN;
+            read.buf = buf + i * defaults::SECTOR_LEN;
+            // offset for "graph-only" => one node per sector
+            // we re-use get_node_sector(...) if that returns (node_id + base)
+            read.offset = get_node_sector(node_id) * defaults::SECTOR_LEN;
+            read_reqs.push_back(read);
         }
 
-        // size_t header_size = sizeof(uint32_t) * (1 + this->_C);
-        size_t header_size = 0;
+        graph_reader->read(read_reqs, ctx);
 
-        // Find the position of the node in the partition
-        for (size_t j = 0; j < partition.size(); j++)
+        // parse from offset=4 => neighbor_count,
+        // offset=8 => neighbor list
+        for (size_t i = 0; i < node_ids.size(); i++)
         {
-            auto node_idx = node_id_to_num.find(partition[j]);
-            if (node_idx == node_id_to_num.end())
-            {
-                continue;
-            }
-            auto i = node_idx->second;
+            uint32_t node_id = node_ids[i];
             if (nbr_buffers[i].second != nullptr)
             {
-                char *sector_start = buf + i * defaults::SECTOR_LEN; // i = index in partition_to_indices
-                uint32_t *header = (uint32_t *)sector_start;         // points at your per-sector data
+                // 1) skip 4 bytes: nodeID
+                // => nodeID_on_disk = *( (uint32_t*)(buf + i*4096 + 0) );
+                // 2) read neighbor_count from offset=4
+                char *sector_start = buf + i * defaults::SECTOR_LEN;
+                uint32_t *ptr32 = (uint32_t *)(sector_start);
 
-                char *node_buf = sector_start + header_size + j * _graph_node_len;
-                uint32_t *node_nhood = (uint32_t *)node_buf;
-                auto num_nbrs = *node_nhood;
+                uint32_t onDiskID = ptr32[0]; // offset=0
+                uint32_t num_nbrs = ptr32[1]; // offset=4
+
 #ifndef NDEBUG
+                // compare with what the old parse set
                 if (nbr_buffers[i].first != num_nbrs)
                 {
-                    diskann::cerr << "WARNING: Number of neighbors mismatch for node " << node_ids[i] << ". Expected "
-                                  << nbr_buffers[i].first << ", but got " << num_nbrs << "." << std::endl;
+                    diskann::cerr << "DEBUG: mismatch for node " << node_ids[i] << ". Old parse said "
+                                  << nbr_buffers[i].first << ", new parse says " << num_nbrs << std::endl;
                     assert(false);
                 }
 #endif
                 nbr_buffers[i].first = num_nbrs;
+                // copy neighbors from offset=8 => ptr32 +2
+                memcpy(nbr_buffers[i].second, ptr32 + 2, num_nbrs * sizeof(uint32_t));
+
 #ifndef NDEBUG
+                // also verify each neighbor
                 for (size_t t = 0; t < num_nbrs; t++)
                 {
-                    if (nbr_buffers[i].second[t] != node_nhood[t + 1])
+                    if (nbr_buffers[i].second[t] != ptr32[t + 2])
                     {
-                        diskann::cerr << "WARNING: Neighbor mismatch for node " << node_ids[i] << "." << std::endl;
+                        diskann::cerr << "WARNING: neighbor mismatch for node " << node_ids[i] << ", t=" << t
+                                      << std::endl;
                         assert(false);
                     }
                 }
 #endif
-                memcpy(nbr_buffers[i].second, node_nhood + 1, num_nbrs * sizeof(uint32_t));
             }
         }
+        aligned_free(buf);
     }
-
-    aligned_free(buf);
 
     return retval;
 }
@@ -902,18 +894,15 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string pq_table_bin = pivots_filepath;
     std::string pq_compressed_vectors = compressed_filepath;
     std::string _disk_index_file = index_filepath;
-    // Don't have this one
+    // medoids, etc.
     std::string medoids_file = std::string(_disk_index_file) + "_medoids.bin";
     std::string centroids_file = std::string(_disk_index_file) + "_centroids.bin";
 
-    // NO
-    std::string labels_file = std ::string(_disk_index_file) + "_labels.txt";
-    // NO
-    std::string labels_to_medoids = std ::string(_disk_index_file) + "_labels_to_medoids.txt";
-    // NO
-    std::string dummy_map_file = std ::string(_disk_index_file) + "_dummy_map.txt";
-    // NO
-    std::string labels_map_file = std ::string(_disk_index_file) + "_labels_map.txt";
+    std::string labels_file = std::string(_disk_index_file) + "_labels.txt";
+    std::string labels_to_medoids = std::string(_disk_index_file) + "_labels_to_medoids.txt";
+    std::string dummy_map_file = std::string(_disk_index_file) + "_dummy_map.txt";
+    std::string labels_map_file = std::string(_disk_index_file) + "_labels_map.txt";
+
     size_t num_pts_in_label_file = 0;
 
     size_t pq_file_dim = 0, pq_file_num_centroids = 0;
@@ -1315,8 +1304,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     this->_graph_index_file = "/starling/_M_R_L_B/GRAPH/_disk_graph.index";
     this->graph_reader->open(this->_graph_index_file);
-    // _graph_node_len = _max_node_len - _disk_bytes_per_point;
     {
+        // read sector-0 of "graph-only" index to confirm meta
         std::ifstream gf(this->_graph_index_file, std::ios::binary);
         if (!gf.is_open())
         {
@@ -1324,99 +1313,69 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             return -1; // or throw
         }
 
-        // First two ints: meta_n, meta_dim (the DiskANN "header format")
-        int meta_n, meta_dim;
-        gf.read((char *)&meta_n, sizeof(int));
-        gf.read((char *)&meta_dim, sizeof(int));
-
-        // Now read meta_n uint64_t’s
-        std::vector<uint64_t> meta_buf(meta_n);
-        gf.read((char *)meta_buf.data(), meta_n * sizeof(uint64_t));
+        int meta_n2, meta_dim2;
+        gf.read((char *)&meta_n2, sizeof(int));
+        gf.read((char *)&meta_dim2, sizeof(int));
+        std::vector<uint64_t> meta_buf2(meta_n2);
+        gf.read((char *)meta_buf2.data(), meta_n2 * sizeof(uint64_t));
         gf.close();
 
-        // Depending on old vs. new DiskANN format, parse them:
-        // new_version if meta_n == 9 or 12, old_version if meta_n == 11, etc.
-        // This is exactly how your get_disk_index_meta() logic does it.
-        bool new_version = (meta_n == 9 || meta_n == 12);
-
+        bool new_version2 = (meta_n2 == 9 || meta_n2 == 12);
         uint64_t new_nnodes, new_ndims, new_max_node_len, new_nnodes_per_sector;
-        if (new_version)
+        if (new_version2)
         {
-            // new layout -> meta_buf[0] = #points, meta_buf[1] = dim, ...
-            new_nnodes = meta_buf[0];
-            new_ndims = meta_buf[1];
-            // meta_buf[2] might be medoid or something
-            new_max_node_len = meta_buf[3];
-            new_nnodes_per_sector = meta_buf[4];
+            new_nnodes = meta_buf2[0];
+            new_ndims = meta_buf2[1];
+            new_max_node_len = meta_buf2[3];
+            new_nnodes_per_sector = meta_buf2[4];
         }
         else
         {
-            // old version -> meta_buf[0] = file_size, meta_buf[1] = #points, ...
-            // Adjust as appropriate. For example:
-            new_nnodes = meta_buf[1];
-            new_ndims = meta_buf[2];
-            new_max_node_len = meta_buf[4];
-            new_nnodes_per_sector = meta_buf[5];
+            new_nnodes = meta_buf2[1];
+            new_ndims = meta_buf2[2];
+            new_max_node_len = meta_buf2[4];
+            new_nnodes_per_sector = meta_buf2[5];
         }
-
-        // ------------------------------------------------------------------------
-        // Now we set _graph_node_len to the new value that relayout actually used
-        // (the "graph-only" node length). This is CRITICAL.
-        // ------------------------------------------------------------------------
-        this->_graph_node_len = new_max_node_len;
-
-        // If you want, also override _nnodes_per_sector from new_nnodes_per_sector.
-        // this->_nnodes_per_sector = new_nnodes_per_sector;
-
-        diskann::cout << "Set _graph_node_len to " << _graph_node_len << " for the new 'graph-only' layout."
-                      << std::endl;
+        // we keep it:
+        this->_graph_node_len = new_max_node_len; // though we won't do j*_graph_node_len parsing
+        diskann::cout << "Set _graph_node_len to " << _graph_node_len << " for 'graph-only' layout. Node per sector.\n";
     }
 
-    std::string partition_file = "/starling/_M_R_L_B/GRAPH/_partition.bin";
-    std::ifstream partition_reader(partition_file, std::ios::binary);
-
-    if (partition_reader.is_open())
+    // load partition file _partition.bin
     {
-        uint64_t C, partition_nums, nd;
-
-        // Read the header (3 uint64_t values)
-        READ_U64(partition_reader, C);
-        READ_U64(partition_reader, partition_nums);
-        READ_U64(partition_reader, nd);
-
-        this->_C = C;
-
-        diskann::cout << "Partition file: C=" << C << ", partitions=" << partition_nums << ", nodes=" << nd
-                      << std::endl;
-
-        // Check consistency with loaded index
-        if (nd != _num_points)
+        std::string partition_file = "/starling/_M_R_L_B/GRAPH/_partition.bin";
+        std::ifstream partition_reader(partition_file, std::ios::binary);
+        if (partition_reader.is_open())
         {
-            diskann::cout << "Warning: Partition file node count (" << nd << ") doesn't match index (" << _num_points
-                          << ")" << std::endl;
+            uint64_t C2, partition_nums2, nd2;
+            READ_U64(partition_reader, C2);
+            READ_U64(partition_reader, partition_nums2);
+            READ_U64(partition_reader, nd2);
+
+            this->_C = C2;
+            diskann::cout << "Partition file: C=" << C2 << ", partitions=" << partition_nums2 << ", nodes=" << nd2
+                          << std::endl;
+
+            if (nd2 != _num_points)
+            {
+                diskann::cout << "Warning: mismatch partition nodes " << nd2 << " vs index " << _num_points
+                              << std::endl;
+            }
+
+            _graph_partitions.resize(partition_nums2);
+            _id2partition.resize(nd2);
+            for (uint64_t i = 0; i < partition_nums2; i++)
+            {
+                uint32_t psize;
+                READ_U32(partition_reader, psize);
+                _graph_partitions[i].resize(psize);
+                partition_reader.read((char *)_graph_partitions[i].data(), psize * sizeof(uint32_t));
+            }
+            partition_reader.read((char *)_id2partition.data(), nd2 * sizeof(uint32_t));
+            partition_reader.close();
+
+            diskann::cout << "Successfully loaded partition data\n";
         }
-
-        // Resize data structures
-        _graph_partitions.resize(partition_nums);
-        _id2partition.resize(nd);
-
-        // Read each partition's node list
-        for (uint64_t i = 0; i < partition_nums; i++)
-        {
-            uint32_t partition_size;
-            READ_U32(partition_reader, partition_size);
-            _graph_partitions[i].resize(partition_size);
-
-            // Read all node IDs for this partition
-            partition_reader.read((char *)_graph_partitions[i].data(), sizeof(uint32_t) * partition_size);
-        }
-
-        // Read the node→partition mapping table
-        partition_reader.read((char *)_id2partition.data(), sizeof(uint32_t) * nd);
-
-        partition_reader.close();
-
-        diskann::cout << "Successfully loaded partition data" << std::endl;
     }
 
     diskann::cout << "done.." << std::endl;
