@@ -50,6 +50,7 @@ template <typename DT> class StaticDiskIndex
 
   private:
     std::shared_ptr<AlignedFileReader> _reader;
+    std::shared_ptr<AlignedFileReader> _graph_reader;
     diskann::PQFlashIndex<DT> _index;
 };
 } // namespace diskannpy

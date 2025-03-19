@@ -12,7 +12,8 @@ template <typename DT>
 StaticDiskIndex<DT>::StaticDiskIndex(const diskann::Metric metric, const std::string &index_path_prefix,
                                      const uint32_t num_threads, const size_t num_nodes_to_cache,
                                      const uint32_t cache_mechanism, const std::string &pq_prefix)
-    : _reader(std::make_shared<PlatformSpecificAlignedFileReader>()), _index(_reader, metric)
+    : _reader(std::make_shared<PlatformSpecificAlignedFileReader>()),
+      _graph_reader(std::make_shared<PlatformSpecificAlignedFileReader>()), _index(_reader, _graph_reader, metric)
 {
     std::cout << "Before index load" << std::endl;
 
@@ -20,7 +21,7 @@ StaticDiskIndex<DT>::StaticDiskIndex(const diskann::Metric metric, const std::st
     int load_success = _index.load(_num_threads, index_path_prefix.c_str(), pq_prefix.c_str());
     if (load_success != 0)
     {
-        throw std::runtime_error("index load failed.");
+        throw std::runtime_error("index load failed, " + index_path_prefix);
     }
     if (cache_mechanism == 1)
     {
