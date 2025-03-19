@@ -118,6 +118,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _clustering_threshold = index_config.index_search_params->clustering_threshold;
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
+        diskann::cout << "Inside Index, clustering_threshold is " << _clustering_threshold << std::endl;
     }
     //    if (_filtered_index) {
     //    }
@@ -606,8 +607,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     {
 
         _ivf_clusters = new InMemClusterStore<T>(0);
-        _ivf_clusters->load(filename);
-        _clusters_to_labels_to_points.resize(_ivf_clusters->get_num_clusters());
+       // _ivf_clusters->load(filename);
+       // _clusters_to_labels_to_points.resize(_ivf_clusters->get_num_clusters());
 
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
@@ -905,6 +906,106 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
 }
 
 template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const T *query, const uint32_t L, uint32_t K,
+                                                                              std::vector<LabelT> filter_vec,
+                                                                              std::vector<uint32_t> &init_ids,
+                                                                              InMemQueryScratch<T> *scratch)
+{
+    T *aligned_query = scratch->aligned_query();
+    init_ids = get_init_ids();
+    roaring::Roaring bfs_visited;
+    const std::vector<LabelT> unused_filter_label;
+    std::vector<uint32_t> &id_scratch = scratch->id_scratch();
+
+    // std::cout<<"[paged_search]init_ids size: "<<init_ids.size()<<std::endl;
+
+    auto [hops, cmps] = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
+
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    
+    tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
+    roaring::Roaring &inserted_into_pool_bs = scratch->get_valid_bitmap();
+    
+    std::vector<Neighbor> valid_nodes;
+    std::vector<Neighbor> invalid_nodes;
+
+    
+    // Apply filter criteria to separate valid and invalid nodes
+    uint32_t num_iterations = 0;
+    while (valid_nodes.size() < K && num_iterations < 2) {       
+
+        // Iterate over best_L_nodes without popping
+        for (size_t i = 0; i < best_L_nodes.size(); ++i) {
+            auto nbr = best_L_nodes[i];
+
+            // Check if this node satisfies the filter
+            if (std::any_of(filter_vec.begin(), filter_vec.end(), [&](const LabelT& f) { 
+                return std::find(_location_to_labels[nbr.id].begin(), _location_to_labels[nbr.id].end(), f) != _location_to_labels[nbr.id].end(); 
+            })) {
+                valid_nodes.push_back(nbr);  // Keep valid nodes
+            } else {
+                invalid_nodes.push_back(nbr);  // so that we don't put this back into the queue
+            }
+        }
+
+        // If we have enough valid nodes, return early
+        if (valid_nodes.size() >= K) {
+            return std::make_pair(hops, cmps);
+        }
+
+        else {
+
+            // if(num_iterations == 1) {
+            //     std::cout<<"Before cleaning: "<<std::endl;
+            //     std::cout<<"Size of best_L_nodes: "<<best_L_nodes.size()<<std::endl;
+            //     std::cout<<"Size of robing set: "<<inserted_into_pool_rs.size()<<std::endl;
+            //     std::cout<<"Size of bitmap: "<<inserted_into_pool_bs.cardinality()<<std::endl;
+            // }
+
+            inserted_into_pool_rs.clear();
+            roaring_bitmap_clear(&inserted_into_pool_bs.roaring);
+            // inserted_into_pool_bs.();
+
+            // if(num_iterations == 1) {
+            //     std::cout<<"After cleaning: "<<std::endl;
+            //     std::cout<<"Size of robing set: "<<inserted_into_pool_rs.size()<<std::endl;
+            //     std::cout<<"Size of bitmap: "<<inserted_into_pool_bs.cardinality()<<std::endl;
+            // }
+
+            num_iterations++;
+            std::vector<uint32_t> new_init_ids;
+            for (const auto &nbr : valid_nodes) {
+                new_init_ids.push_back(nbr.id);
+                if (inserted_into_pool_rs.find(nbr.id) == inserted_into_pool_rs.end() && !inserted_into_pool_bs.contains(nbr.id)) {
+                        inserted_into_pool_bs.add(nbr.id);  // Mark node as visited
+                        inserted_into_pool_rs.insert(nbr.id);  // Mark node as visited
+                }
+            }
+            
+            for (const auto &nbr : invalid_nodes) {
+                if (inserted_into_pool_rs.find(nbr.id) == inserted_into_pool_rs.end() && !inserted_into_pool_bs.contains(nbr.id)) {
+                        inserted_into_pool_bs.add(nbr.id);  // Mark node as visited
+                        inserted_into_pool_rs.insert(nbr.id);  // Mark node as visited
+                }
+            }
+
+            // if(num_iterations == 1) {
+            //     std::cout<<"After repopulating: "<<std::endl;
+            //     std::cout<<"Size of robing set: "<<inserted_into_pool_rs.size()<<std::endl;
+            //     std::cout<<"Size of bitmap: "<<inserted_into_pool_bs.cardinality()<<std::endl;
+            // }
+
+            id_scratch.clear();
+
+            auto[new_hops, new_cmps] = iterate_to_fixed_point(scratch, L, new_init_ids, false, unused_filter_label, true);
+            hops += new_hops;
+            cmps += new_cmps;
+        }
+    }
+    return std::make_pair(hops, cmps);  
+}
+
+template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::closest_cluster_filters(const T *query, const uint32_t Lsize,
                                                                               std::vector<LabelT> filter_vec,
                                                                               InMemQueryScratch<T> *scratch)
@@ -1029,6 +1130,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
     std::vector<float> &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
+
+    // std::cout<< "Is inserted_into_pool_bs empty: " << inserted_into_pool_bs.isEmpty() << std::endl;
+    // std::cout<< "Size of inserted_into_pool_rs : " << inserted_into_pool_rs.size() << std::endl;
+    // if (!inserted_into_pool_bs.isEmpty() || !inserted_into_pool_rs.size() > 0)
+    // {
+    //     // throw ANNException("ERROR: Clear scratch space before passing.", -1, __FUNCSIG__, __FILE__, __LINE__);
+    //     std::cout<<"Visited DS populated correctly"<<std::endl;
+    // }
 
     T *aligned_query = scratch->aligned_query();
 
@@ -2664,7 +2773,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         break;
         case 1: {
             num_clusters++;
-            retval = closest_cluster_filters(scratch->aligned_query(), L, filter_vec, scratch);
+            // retval = closest_cluster_filters(scratch->aligned_query(), L, filter_vec, scratch);
+            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
+            if (cand.size() > 0)
+            {
+                init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+            }          
+            retval = paged_search_filters(scratch->aligned_query(), L, K, filter_vec,init_ids, scratch);
         }
         break;
         case 2:
@@ -2721,7 +2836,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         else if (estimated_match < _clustering_threshold)
         {
             num_clusters++;
-            retval = closest_cluster_filters(scratch->aligned_query(), L, filter_vec, scratch);
+            retval = paged_search_filters(scratch->aligned_query(), L, K, filter_vec, init_ids, scratch);
         }
         else
         {

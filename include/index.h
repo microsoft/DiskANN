@@ -43,6 +43,7 @@ inline double time_to_estimate = 0;
 inline uint32_t num_brutes = 0;
 inline uint32_t num_clusters = 0;
 inline uint32_t num_graphs = 0;
+inline uint32_t num_paged = 0;
 inline uint32_t min_inter_size = 2;
 inline bool print_qstats = false;
 inline int64_t curr_query = -1;
@@ -286,6 +287,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Returns the locations of start point and frozen points suitable for use
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
+
+    std::pair<uint32_t, uint32_t> paged_search_filters(const T *query, const uint32_t Lsize, uint32_t K,
+                                                       std::vector<LabelT> filter_vec,
+                                                       std::vector<uint32_t> &init_ids,
+                                                       InMemQueryScratch<T> *scratch);
 
     std::pair<uint32_t, uint32_t> closest_cluster_filters(const T *query, const uint32_t Lsize,
                                                           std::vector<LabelT> filter_vec,
