@@ -316,6 +316,7 @@ inline void aligned_free(void *ptr)
 #else
     #ifdef EXEC_ENV_OLS
         operator delete(ptr, std::align_val_t(1));
+        ptr = nullptr;
     #else
         ::_aligned_free(ptr);
     #endif
