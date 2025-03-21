@@ -68,27 +68,27 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_reorder_data = false, QueryStats *stats = nullptr,
                                               const bool USE_DEFERRED_FETCH = false,
-                                              const bool skip_search_reorder = false);
+                                              const bool skip_search_reorder = false, const bool partition_read = true);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_filter, const LabelT &filter_label,
                                               const bool use_reorder_data = false, QueryStats *stats = nullptr,
                                               const bool USE_DEFERRED_FETCH = false,
-                                              const bool skip_search_reorder = false);
+                                              const bool skip_search_reorder = false, const bool partition_read = true);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const uint32_t io_limit, const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr, const bool USE_DEFERRED_FETCH = false,
-                                              const bool skip_search_reorder = false);
+                                              const bool skip_search_reorder = false, const bool partition_read = true);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_filter, const LabelT &filter_label,
                                               const uint32_t io_limit, const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr, const bool USE_DEFERRED_FETCH = false,
-                                              const bool skip_search_reorder = false);
+                                              const bool skip_search_reorder = false, const bool partition_read = true);
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
 
@@ -145,6 +145,12 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     // returns region of `node_buf` containing [COORD(T)]
     DISKANN_DLLEXPORT T *offset_to_node_coords(char *node_buf);
+
+    DISKANN_DLLEXPORT int load_graph_index(const std::string &graph_index_file);
+
+    DISKANN_DLLEXPORT int read_partition_info(const std::string &partition_bin);
+
+    DISKANN_DLLEXPORT int read_neighbors(const std::string &graph_index_file, uint64_t target_node_id);
 
     // index info for multi-node sectors
     // nhood of node `i` is in sector: [i / nnodes_per_sector]
@@ -248,10 +254,13 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     std::shared_ptr<AlignedFileReader> graph_reader; // 图文件读取器
     std::string _graph_index_file;                   // 图文件路径
     uint64_t _graph_node_len;                        // 图节点大小
+    uint64_t _emb_node_len;                          // 向量节点大小
 
     // 分区相关数据结构
     std::vector<std::vector<uint32_t>> _graph_partitions; // 分区信息
     std::vector<uint32_t> _id2partition;                  // ID到分区的映射
+
+    uint64_t _num_partitions; // 分区数量
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate
