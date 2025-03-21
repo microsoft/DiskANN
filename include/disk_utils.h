@@ -85,7 +85,7 @@ DISKANN_DLLEXPORT int build_merged_vamana_index(std::string base_file, diskann::
                                                 const std::string &universal_label = "", const uint32_t Lf = 0);
 
 template <typename T, typename LabelT>
-DISKANN_DLLEXPORT uint32_t optimize_beamwidth(std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &_pFlashIndex,
+DISKANN_DLLEXPORT uint32_t optimize_beamwidth(std::shared_ptr<diskann::PQFlashIndex<T, LabelT>> _pFlashIndex,
                                               T *tuning_sample, uint64_t tuning_sample_num,
                                               uint64_t tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads,
                                               uint32_t start_bw = 2);

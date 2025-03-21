@@ -16,6 +16,8 @@ namespace diskann
 
 template <typename T> class ConcurrentQueue
 {
+    static_assert(std::is_pointer<T>::value, "Type parameter of concurrent queue must be a pointer type.");
+
     typedef std::chrono::microseconds chrono_us_t;
     typedef std::unique_lock<std::mutex> mutex_locker;
 

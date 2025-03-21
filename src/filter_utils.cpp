@@ -345,8 +345,8 @@ void get_inv_index(const std::string& label_file, const location_t filter_bf_thr
     split_string(line, FILTERS_LABEL_DELIMITER, line_labels);
     for (auto& label : line_labels) {
       if (inv_index.find(label) == inv_index.end()) {
-        inv_index.insert(std::pair<std::string, std::unordered_set<location_t>>(
-                                      label, std::unordered_set<location_t>()));
+        inv_index.insert(std::pair<std::string, fast_set>(
+                                      label, fast_set()));
       }
       inv_index[label].insert(line_num);
     }

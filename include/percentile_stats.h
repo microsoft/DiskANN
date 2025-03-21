@@ -23,6 +23,7 @@ struct QueryStats
     float total_us = 0; // total time to process query in micros
     float io_us = 0;    // total time spent in IO
     float cpu_us = 0;   // total time spent in CPU
+    float cpu_preprocessing_us = 0; //time spent in preprocessing actions (subset of cpu_us)
 
     unsigned n_4k = 0;         // # of 4kB reads
     unsigned n_8k = 0;         // # of 8kB reads
@@ -33,10 +34,12 @@ struct QueryStats
     unsigned n_cmps = 0;       // # cmps
     unsigned n_cache_hits = 0; // # cache_hits
     unsigned n_hops = 0;       // # search hops
+
+    bool is_bf = false;   //whether the search used bruteforce
 };
 
 template <typename T>
-inline T get_percentile_stats(QueryStats *stats, uint64_t len, float percentile,
+inline T get_percentile_stats(const QueryStats *stats, uint64_t len, float percentile,
                               const std::function<T(const QueryStats &)> &member_fn)
 {
     std::vector<T> vals(len);
@@ -53,7 +56,7 @@ inline T get_percentile_stats(QueryStats *stats, uint64_t len, float percentile,
 }
 
 template <typename T>
-inline double get_mean_stats(QueryStats *stats, uint64_t len, const std::function<T(const QueryStats &)> &member_fn)
+inline double get_mean_stats(const QueryStats *stats, uint64_t len, const std::function<T(const QueryStats &)> &member_fn)
 {
     double avg = 0;
     for (uint64_t i = 0; i < len; i++)

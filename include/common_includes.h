@@ -16,6 +16,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <omp.h>
 #include <queue>
 #include <random>
@@ -25,4 +26,4 @@
 #include <sys/stat.h>
 #include <unordered_map>
 #include <vector>
-#include <map>
+

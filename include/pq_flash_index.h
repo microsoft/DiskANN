@@ -88,6 +88,23 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                             std::vector<float> &distances, const uint64_t min_beam_width,
                                             QueryStats *stats = nullptr);
 
+    //Function to compute PQ distance of a given set of points to a query. Returns the top k closest candidates
+    //sorted by their PQ distance to the query. 
+    //REFACTOR TODO: Ideally, this function should be in PQDataStore. However, the current implementation does
+    //not share compressed vectors, which will double our memory consumption when we use PQFlashIndex and that
+    //class to do a combination of brute force and diskann search. Therefore, we are utilizing the fact that the 
+    //PQFlashIndex instance has already loaded PQ coordinates. 
+    //REFACTOR TODO: Even more ideally, PQFlashIndex should be refactored to use PQDataStore. 
+    //REFACTOR TODO: We are taking a pointer to the list of candidate ids instead of a vector because of some
+    //complicated logic in the brute force filter index. That should be fixed and this function should simply 
+    //take a pair of iterators. 
+    DISKANN_DLLEXPORT uint32_t pq_search(const T *query, const uint64_t k_search, const location_t *candidates,
+                                         const uint64_t candidate_count, const uint64_t pq_short_list_size,
+                                         uint8_t *coord_scratch,
+                                         float *scores_scratch,
+                                         uint64_t *res_ids,
+                                         float *res_dists, QueryStats *stats);
+
     DISKANN_DLLEXPORT uint64_t get_data_dim();
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
@@ -114,7 +131,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
   protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
-    DISKANN_DLLEXPORT void setup_thread_data(uint64_t nthreads, uint64_t visited_reserve = 4096);
+    DISKANN_DLLEXPORT void setup_thread_data(uint64_t nthreads, uint64_t visited_reserve = 4096, uint64_t sectors_per_node = 1);
 
   private:
     // sector # on disk where node_id is present with in the graph part

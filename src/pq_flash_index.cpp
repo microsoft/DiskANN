@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <utility>
 #include "common_includes.h"
 
 #include "cosine_similarity.h"
@@ -116,7 +117,7 @@ template <typename T, typename LabelT> inline T *PQFlashIndex<T, LabelT>::offset
 }
 
 template <typename T, typename LabelT>
-void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve)
+void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visited_reserve, uint64_t sectors_per_node)
 {
     diskann::cout << "Setting up thread-specific contexts for nthreads: " << nthreads << std::endl;
 // omp parallel for to generate unique thread IDs
@@ -125,7 +126,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
     {
 #pragma omp critical
         {
-            SSDThreadData<T> *data = new SSDThreadData<T>(this->_aligned_dim, visited_reserve);
+            SSDThreadData<T> *data = new SSDThreadData<T>(this->_aligned_dim, visited_reserve, sectors_per_node);
             this->reader->register_thread();
             data->ctx = this->reader->get_ctx();
             this->_thread_data.push(data);
@@ -671,7 +672,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     // bytes are needed to store the header and read in that many using our
     // 'standard' aligned file reader approach.
     reader->open(_disk_index_file);
-    this->setup_thread_data(num_threads);
+    this->setup_thread_data(num_threads, 4096);
     this->_max_nthreads = num_threads;
 
     char *bytes = getHeaderBytes();
@@ -755,7 +756,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     // open AlignedFileReader handle to index_file
     std::string index_fname(_disk_index_file);
     reader->open(index_fname);
-    this->setup_thread_data(num_threads);
+    auto sectors_per_node = _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
+    this->setup_thread_data(num_threads, 4096, sectors_per_node);
     this->_max_nthreads = num_threads;
 
 #endif
@@ -1406,6 +1408,175 @@ uint32_t PQFlashIndex<T, LabelT>::range_search(const T *query1, const double ran
     indices.resize(res_count);
     distances.resize(res_count);
     return res_count;
+}
+
+
+//REFACTOR TODO: Must get rid of this duplicate code and ideally move PQFlashIndex
+//to use the PQDataStore.
+template <typename T, typename LabelT>
+uint32_t PQFlashIndex<T, LabelT>::pq_search(const T *query,
+                                            const uint64_t k_search,
+                                            const location_t* candidates,
+                                            const uint64_t candidate_count,
+                                            const uint64_t pq_shortlist_size, 
+                                            uint8_t *coord_scratch,
+                                            float *pq_dists_scratch,
+                                            uint64_t *res_ids,
+                                            float *res_dists, 
+                                            QueryStats* stats)
+{
+    stats->is_bf = true;
+    Timer query_timer, io_timer, cpu_timer, preprocessing_timer;
+
+    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    auto data = manager.scratch_space();
+    IOContext &ctx = data->ctx;
+    auto query_scratch = &(data->scratch);
+    auto pq_query_scratch = query_scratch->pq_scratch();
+
+    // reset query scratch
+    query_scratch->reset();
+
+    // copy query to thread specific aligned and allocated memory (for distance
+    // calculations we need aligned data)
+    float query_norm = 0;
+    T *aligned_query_T = query_scratch->aligned_query_T();
+    float *query_float = pq_query_scratch->aligned_query_float;
+    float *query_rotated = pq_query_scratch->rotated_query;
+
+    // normalization step. for cosine, we simply normalize the query
+    // for mips, we normalize the first d-1 dims, and add a 0 for last dim,
+    // since an extra coordinate was used to convert MIPS to L2 search
+    if (metric == diskann::Metric::INNER_PRODUCT || metric == diskann::Metric::COSINE)
+    {
+        uint64_t inherent_dim = (metric == diskann::Metric::COSINE) ? this->_data_dim : (uint64_t)(this->_data_dim - 1);
+        for (size_t i = 0; i < inherent_dim; i++)
+        {
+            aligned_query_T[i] = query[i];
+            query_norm += query[i] * query[i];
+        }
+        if (metric == diskann::Metric::INNER_PRODUCT)
+            aligned_query_T[this->_data_dim - 1] = 0;
+
+        query_norm = std::sqrt(query_norm);
+
+        for (size_t i = 0; i < inherent_dim; i++)
+        {
+            aligned_query_T[i] = (T)(aligned_query_T[i] / query_norm);
+        }
+        pq_query_scratch->initialize(this->_data_dim, aligned_query_T);
+    }
+    else
+    {
+        for (size_t i = 0; i < this->_data_dim; i++)
+        {
+            aligned_query_T[i] = query[i];
+        }
+        pq_query_scratch->initialize(this->_data_dim, aligned_query_T);
+    }
+
+    // pointers to buffers for data
+    T *data_buf = query_scratch->coord_scratch;
+    _mm_prefetch((char *)data_buf, _MM_HINT_T1);
+
+    // sector scratch
+    char *sector_scratch = query_scratch->sector_scratch;
+    uint64_t &sector_scratch_idx = query_scratch->sector_idx;
+    const uint64_t num_sectors_per_node =
+        _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
+
+    // query <-> PQ chunk centers distances
+    _pq_table.preprocess_query(query_rotated); // center the query and rotate
+                                               // if we have a rotation matrix
+    float *pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
+    _pq_table.populate_chunk_distances(query_rotated, pq_dists);
+
+    // query <-> neighbor list
+    //float *dist_scratch = pq_query_scratch->aligned_dist_scratch;
+    //uint8_t *pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+
+    // lambda to batch compute query<-> node distances in PQ space
+    auto compute_dists = [this, coord_scratch, pq_dists](const uint32_t *ids, const uint64_t n_ids,
+                                                            float *dists_out) {
+        diskann::aggregate_coords(ids, n_ids, this->data, this->_n_chunks, coord_scratch);
+        diskann::pq_dist_lookup(coord_scratch, n_ids, this->_n_chunks, pq_dists, dists_out);
+    };
+    stats->cpu_preprocessing_us += preprocessing_timer.elapsed();
+
+    NeighborPriorityQueue sorted_results;
+    sorted_results.reserve(pq_shortlist_size);
+    compute_dists((const uint32_t *)candidates, candidate_count, pq_dists_scratch);
+    for (auto i = 0; i < candidate_count; i++)
+    {
+        sorted_results.insert(Neighbor(candidates[i], pq_dists_scratch[i]));
+    }
+
+    NeighborPriorityQueue final_results;
+    final_results.reserve(k_search);
+    std::vector<AlignedRead> read_requests;
+    auto num_read_reqs_per_batch =
+        query_scratch->sector_scratch_size_in_bytes() / (defaults::SECTOR_LEN * num_sectors_per_node);
+    read_requests.reserve(num_read_reqs_per_batch);
+    unordered_map<uint32_t, char*> id_ptr_map;
+    id_ptr_map.reserve(num_read_reqs_per_batch);
+    sector_scratch_idx = 0;
+
+    size_t total_read_size = (sorted_results.size() * defaults::SECTOR_LEN * num_sectors_per_node);
+    auto num_batches =  DIV_ROUND_UP(total_read_size, query_scratch->sector_scratch_size_in_bytes());
+    auto requests_per_batch = total_read_size / (num_batches * defaults::SECTOR_LEN * num_sectors_per_node);
+
+    stats->cpu_us += cpu_timer.elapsed();
+
+    auto running_count = 0;
+    while (running_count < sorted_results.size())
+    {
+        for (auto i = 0; i < requests_per_batch && running_count < sorted_results.size(); i++)
+        {
+            AlignedRead read;
+            auto node_id = sorted_results[running_count].id;
+            read.buf = sector_scratch + num_sectors_per_node * sector_scratch_idx * defaults::SECTOR_LEN;
+            read.len = num_sectors_per_node * defaults::SECTOR_LEN;
+            read.offset = get_node_sector(node_id) * defaults::SECTOR_LEN;
+            read_requests.emplace_back(read);
+            //auto pair = std::pair<uint32_t, char *>(sorted_results[running_count].id, read.buf);
+            id_ptr_map.insert(std::make_pair<uint32_t, char*>((uint32_t)node_id, (char*)read.buf));
+
+            running_count++;
+            sector_scratch_idx++;
+            stats->n_4k += (uint32_t) read_requests.size();
+            stats->n_ios += (uint32_t)read_requests.size();
+        }
+
+        io_timer.reset();
+        reader->read(read_requests, ctx);
+        stats->io_us += io_timer.elapsed();
+
+        for (auto &id_ptr : id_ptr_map)
+        {
+            auto node_ptr = offset_to_node(id_ptr.second, id_ptr.first);
+            auto coord_ptr = offset_to_node_coords(node_ptr);
+            final_results.insert(Neighbor(id_ptr.first, _dist_cmp->compare(query, coord_ptr, (uint32_t)this->_data_dim)));
+        }
+        sector_scratch_idx = 0;
+        id_ptr_map.clear();
+        read_requests.clear();
+    }
+
+    auto num_results_obtained = std::min(final_results.size(), k_search);
+    float prev_dist = std::numeric_limits<float>::max();
+
+    for (auto i = 0; i < final_results.size(); i++)
+    {
+        float dist = final_results[i].distance;
+        res_ids[i] = final_results[i].id;
+        res_dists[i] = dist;
+        assert(dist < prev_dist);
+        prev_dist = dist;
+    }
+
+    stats->total_us = (float) query_timer.elapsed();
+
+    return (uint32_t)num_results_obtained;
 }
 
 template <typename T, typename LabelT> uint64_t PQFlashIndex<T, LabelT>::get_data_dim()

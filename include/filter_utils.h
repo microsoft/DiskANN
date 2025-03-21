@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
@@ -14,6 +15,7 @@
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <vector>
 #include <tsl/robin_map.h>
 #include <tsl/robin_set.h>
 #include <tuple>
@@ -49,13 +51,119 @@ typedef std::tuple<std::vector<label_set>, tsl::robin_map<std::string, uint32_t>
     parse_label_file_return_values;
 typedef std::tuple<std::vector<std::vector<uint32_t>>, uint64_t> load_label_index_return_values;
 
-
 namespace diskann {
+
+  const float VECTOR_BASED_SET_RESIZE_FACTOR = 1.5f;
+
+  template<typename T>
+  class vector_based_set
+  {
+    public:
+      vector_based_set()
+      {
+          _element_count = 0;
+      }
+      void insert(const T &value)
+      {
+          if (_element_count == 0) {
+              _set_data.resize(1);
+          }
+          else if (_set_data.size() < _element_count + 1) {
+              auto new_size = (size_t)(round(_element_count * VECTOR_BASED_SET_RESIZE_FACTOR));
+              _set_data.resize(new_size);
+          }
+          _insert(value);
+      }
+
+      const std::vector<T> &data() const
+      {
+          return _set_data;
+      }
+
+      const size_t size() const
+      {
+          return _element_count;
+      }
+
+      typename std::vector<T>::const_iterator find(const T& value) const
+      {
+          location_t position;
+          if (_find(value, position))
+          {
+              return _set_data.begin() + position;
+          }
+          else
+          {
+              return _set_data.begin() + _element_count;
+          }
+      }
+
+      typename std::vector<T>::const_iterator begin() const
+      {
+          return _set_data.begin();
+      }
+      typename std::vector<T>::const_iterator end() const
+      {
+          return _set_data.begin() + _element_count;
+      }
+
+      void clear()
+      {
+          _set_data.clear();
+          _element_count = 0;
+      }
+
+    private:
+
+      //Returns true if found, and position is the location of the value
+      //Returns false if not found and position is where the element should be inserted.
+      bool _find(const T &value, location_t& position) const
+      {
+          uint32_t left = 0, right = _element_count;
+          bool found = false;
+          while (left < right)
+          {
+              auto mid = ((left / 2) + (right / 2));
+              if (_set_data[mid] == value)
+              {
+                  found = true;
+                  position = mid;
+                  break;
+              }
+              else if (_set_data[mid] < value)
+              {
+                  left = mid + 1; // look beyond mid
+              }
+              else if (_set_data[mid] > value)
+              {
+                  right = mid; // look before mid
+              }
+          }
+          if (!found)
+          {
+              position = left;
+          }
+          return found;
+      }
+      void _insert(const T &value)
+      {
+          location_t insert_at = 0;
+          if ( false == _find(value, insert_at)){
+              _set_data.insert(_set_data.begin() + insert_at, value);
+              _element_count++;
+          }
+      }
+
+      uint32_t _element_count;
+      std::vector<T> _set_data;
+  };
+
+  typedef vector_based_set<location_t> fast_set;
 
   //CONSTANTS
   DISKANN_DLLEXPORT extern const char* NO_LABEL_FOR_POINT;
   DISKANN_DLLEXPORT extern const char FILTERS_LABEL_DELIMITER;
-  typedef std::map<std::string, std::unordered_set<location_t>> inverted_index_t;
+  typedef std::map<std::string, fast_set> inverted_index_t;
 
 
 template <typename T>

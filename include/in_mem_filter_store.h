@@ -91,7 +91,8 @@ template <typename LabelT> class InMemFilterStore : public AbstractFilterStore<L
             return _universal_filter_label;
         }
         std::stringstream stream;
-        stream << "Unable to find label in the Label Map";
+        stream << "Unable to find label " << filter_label
+               << " in the Label Map ";
         diskann::cerr << stream.str() << std::endl;
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }

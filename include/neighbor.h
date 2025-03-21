@@ -13,13 +13,13 @@ namespace diskann
 
 struct Neighbor
 {
-    unsigned id;
+    uint32_t id;
     float distance;
     bool expanded;
 
     Neighbor() = default;
 
-    Neighbor(unsigned id, float distance) : id{id}, distance{distance}, expanded(false)
+    Neighbor(uint32_t id, float distance) : id{id}, distance{distance}, expanded(false)
     {
     }
 

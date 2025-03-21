@@ -117,13 +117,12 @@ template <typename LabelT> void InMemFilterStore<LabelT>::load_label_file(const 
     std::string line;
     uint32_t line_cnt = 0;
 
-  //TODO: This code is very inefficient because it reads the label file twice -
-  //once for computing stats and then for loading the labels. Must merge the 
-  //two reads.
-  uint32_t num_pts_in_label_file;
-  uint32_t num_total_labels;
-  get_label_file_metadata(label_file_content, num_pts_in_label_file,
-                          num_total_labels);
+    // TODO: This code is very inefficient because it reads the label file twice -
+    // once for computing stats and then for loading the labels. Must merge the
+    // two reads.
+    uint32_t num_pts_in_label_file;
+    uint32_t num_total_labels;
+    get_label_file_metadata(label_file_content, num_pts_in_label_file, num_total_labels);
 
     _num_points = num_pts_in_label_file;
 
@@ -189,6 +188,10 @@ template <typename LabelT> void InMemFilterStore<LabelT>::load_label_file(const 
         }
 
         line_cnt++;
+        if (line_cnt % 1000000 == 0)
+        {
+            diskann::cout << "Processed " << line_cnt << " lines." << std::endl;
+        }
     }
 
     // TODO: We need to check if the number of labels and the number of points

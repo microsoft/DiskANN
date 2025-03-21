@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #include "common_includes.h"
+#include <xutility>
 #include <boost/program_options.hpp>
 
 #include "disk_utils.h"
@@ -11,6 +12,7 @@
 #include "partition.h"
 #include "percentile_stats.h"
 #include "pq_flash_index.h"
+#include "filter_brute_force_index.h"
 #include "program_options_utils.hpp"
 #include "timer.h"
 
@@ -31,21 +33,253 @@
 
 namespace po = boost::program_options;
 
-void print_stats(std::string category, std::vector<float> percentiles, std::vector<float> results)
+//REFACTOR TODO: This file needs massive cleanup.
+
+//void print_stats(std::string category, std::vector<float> percentiles, std::vector<float> results)
+//{
+//    diskann::cout << std::setw(20) << category << ": " << std::flush;
+//    for (uint32_t s = 0; s < percentiles.size(); s++)
+//    {
+//        diskann::cout << std::setw(8) << percentiles[s] << "%";
+//    }
+//    diskann::cout << std::endl;
+//    diskann::cout << std::setw(22) << " " << std::flush;
+//    for (uint32_t s = 0; s < percentiles.size(); s++)
+//    {
+//        diskann::cout << std::setw(9) << results[s];
+//    }
+//    diskann::cout << std::endl;
+//}
+
+void get_stats(const diskann::QueryStats *stats, uint32_t count, double &mean_latency, double &latency_999, double &mean_ios, double &mean_cpuus)
 {
-    diskann::cout << std::setw(20) << category << ": " << std::flush;
-    for (uint32_t s = 0; s < percentiles.size(); s++)
-    {
-        diskann::cout << std::setw(8) << percentiles[s] << "%";
-    }
-    diskann::cout << std::endl;
-    diskann::cout << std::setw(22) << " " << std::flush;
-    for (uint32_t s = 0; s < percentiles.size(); s++)
-    {
-        diskann::cout << std::setw(9) << results[s];
-    }
-    diskann::cout << std::endl;
+    mean_latency = diskann::get_mean_stats<double>(stats, count,
+                                                       [](const diskann::QueryStats &stats) { return stats.total_us; });
+
+    latency_999 =
+        diskann::get_percentile_stats<double>(stats, count, 0.999,
+                                             [](const diskann::QueryStats &stats) { return stats.total_us; });
+
+    mean_ios = diskann::get_mean_stats<uint32_t>(stats, count,
+                                                      [](const diskann::QueryStats &stats) { return stats.n_ios; });
+
+    mean_cpuus = diskann::get_mean_stats<double>(stats, count,
+                                                     [](const diskann::QueryStats &stats) { return stats.cpu_us; });
 }
+
+
+//REFACTOR TODO: More surgery required here. 
+//Returns the best recall 
+double calculate_and_print_stats(bool bf_index, bool calc_recall_flag, uint32_t recall_at, uint32_t L, uint32_t bw,
+                                 diskann::QueryStats *stats, uint32_t query_num, uint32_t *gt_ids, float *gt_dists,
+                                 size_t gt_dim, uint32_t *our_results, double qps)
+{
+    double best_recall = 0;
+    diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
+    diskann::cout.precision(2);
+
+    std::string recall_string = "Recall@" + std::to_string(recall_at);
+    diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth" << std::setw(16) << "QPS" << std::setw(16)
+                  << "Mean Latency" << std::setw(16) << "99.9 Latency" << std::setw(16) << "Mean IOs" << std::setw(16)
+                  << "CPU (us)";
+    if (bf_index)
+    {
+        diskann::cout << std::setw(16) << "BF count" << std::setw(16) << "Mean BF latency(us)" << std::setw(16)
+                      << "Mean BF IOs" << std::setw(16) << "BF CPU(us)";
+    }
+    if (calc_recall_flag)
+    {
+        diskann::cout << std::setw(16) << recall_string;
+        if (bf_index)
+        {
+            diskann::cout << std::setw(16) << std::string("BF ") + recall_string;
+        }
+        diskann::cout << std::endl;
+    }
+    else
+    {
+        diskann::cout << std::endl;
+    }
+    diskann::cout << "==============================================================="
+                     "======================================================="
+                     "======================================================="
+                  << std::endl;
+
+    double mean_latency, latency_999, mean_ios, mean_cpuus = 0;
+    double bf_mean_latency, bf_999_latency, bf_mean_ios, bf_mean_cpuus = 0;
+    double bf_recall = 0;
+
+    std::vector<diskann::QueryStats> bf_stats;
+    std::vector<diskann::QueryStats> non_bf_stats;
+    uint32_t *bf_results = nullptr, *bf_gt_ids = nullptr;
+    float *bf_gt_dists = nullptr;
+    if (bf_index)
+    {
+        std::copy_if(stats, stats + query_num, std::back_inserter(bf_stats),
+                     [](const diskann::QueryStats &stat) { return stat.is_bf; });
+
+        std::copy_if(stats, stats + query_num, std::back_inserter(non_bf_stats),
+                     [](const diskann::QueryStats &stat) { return !stat.is_bf; });
+        assert(bf_stats.size() + non_bf_stats.size() == query_num);
+
+        bf_results = new uint32_t[bf_stats.size() * recall_at];
+        bf_gt_ids = new uint32_t[ bf_stats.size() * gt_dim];
+        bf_gt_dists = new float[bf_stats.size() * gt_dim];
+
+        uint32_t bf_counter = 0;
+        for (int i = 0; i < query_num; i++)
+        {
+            if (stats[i].is_bf)
+            {
+                memcpy(bf_results + (bf_counter * recall_at), our_results + (i * recall_at), sizeof(uint32_t) * recall_at);
+                memcpy(bf_gt_ids + (bf_counter * gt_dim), gt_ids + (i * gt_dim), sizeof(uint32_t) * gt_dim);
+                memcpy(bf_gt_dists + (bf_counter * gt_dim), gt_dists + (i * gt_dim), sizeof(uint32_t) * gt_dim);
+                bf_counter++;
+            }
+        }
+        assert(bf_counter == bf_stats.size());
+
+        if (bf_stats.size() == 0)
+        {
+            bf_mean_latency = bf_mean_ios = bf_mean_cpuus = 0;
+            bf_recall = 0;
+        }
+        else
+        {
+            get_stats(bf_stats.data(), bf_stats.size(), bf_mean_latency, bf_999_latency, bf_mean_ios, bf_mean_cpuus);
+        }
+    }
+    get_stats(stats, query_num, mean_latency, latency_999, mean_ios, mean_cpuus);
+
+    double recall = 0;
+    if (calc_recall_flag)
+    {
+        recall = diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim, our_results,
+                                           recall_at, recall_at);
+        best_recall = std::max(recall, best_recall);
+        if (bf_index)
+        {
+            bf_recall = diskann::calculate_recall(bf_stats.size(), bf_gt_ids, bf_gt_dists, (uint32_t)gt_dim, bf_results,
+                                                  recall_at, recall_at);
+        
+        }
+    }
+
+    diskann::cout << std::setw(6) << L << std::setw(12) << bw << std::setw(16) << qps << std::setw(16)
+                  << mean_latency << std::setw(16) << latency_999 << std::setw(16) << mean_ios << std::setw(16)
+                  << mean_cpuus;
+    if (bf_index)
+    {
+        diskann::cout << std::setw(16) << bf_stats.size() << std::setw(16) << bf_mean_latency << std::setw(16)
+                      << bf_mean_ios << std::setw(16) << bf_mean_cpuus;
+    }
+
+    if (calc_recall_flag)
+    {
+        diskann::cout << std::setw(16) << recall;
+        if (bf_index)
+        {
+            diskann::cout << std::setw(16) << bf_recall;
+        }
+        diskann::cout << std::endl;
+    }
+    else
+        diskann::cout << std::endl;
+
+    return best_recall;
+}
+
+
+
+#ifdef DISKANN_DEBUG_INDIVIDUAL_RESULTS
+void dump_individual_results(uint64_t test_id, uint64_t query_num, uint32_t *gt_ids, float *gt_dists, uint64_t gt_dim,
+                             const std::vector<uint32_t> &query_result_ids,
+                             const std::vector<float> &query_result_dists, uint64_t recall_at,
+                             const std::string &result_output_prefix)
+{
+    uint32_t cumulative_dist_matches = 0;
+    uint32_t cumulative_id_matches = 0;
+    std::stringstream results_stream;
+    std::stringstream per_query_stats_stream;
+
+    per_query_stats_stream << "query_id\tid_matches\tdist_matches\ttotal_matches\trecall" << std::endl;
+    for (int qid = 0; qid < query_num; qid++)
+    {
+        results_stream << qid << "\t";
+        uint32_t per_query_dist_matches = 0;
+        uint32_t per_query_id_matches = 0;
+
+        for (uint64_t i = 0; i < recall_at; i++)
+        {
+            auto rindex = qid * recall_at + i;
+            results_stream << "(" << query_result_ids[rindex] << "," << query_result_dists[rindex] << ",";
+
+            bool id_match = false;
+            bool dist_match = false;
+            for (uint64_t j = 0; j < recall_at; j++)
+            {
+                auto gindex = qid * gt_dim + j;
+                if (query_result_ids[rindex] == gt_ids[gindex])
+                {
+                    per_query_id_matches++;
+                    id_match = true;
+                    break;
+                }
+                else if (query_result_dists[rindex] / gt_dists[gindex] <= 1.0f)
+                {
+                    per_query_dist_matches++;
+                    dist_match = true;
+                    break;
+                }
+            }
+            std::string code = "X";
+            if (id_match)
+            {
+                code = "I";
+            }
+            else if (dist_match)
+            {
+                code = "D";
+            }
+            results_stream << code << "),";
+        }
+
+        results_stream << std::endl;
+
+        cumulative_id_matches += per_query_id_matches;
+        cumulative_dist_matches += per_query_dist_matches;
+        per_query_stats_stream << qid << "\t" << per_query_id_matches << "\t" << per_query_dist_matches << "\t"
+                               << per_query_id_matches + per_query_dist_matches << "\t"
+                               << (per_query_id_matches + per_query_dist_matches) * 1.0f / recall_at << std::endl;
+    }
+    {
+
+        std::string results_file = result_output_prefix + "_L" + std::to_string(test_id) + "_results.tsv";
+        std::ofstream out(results_file);
+        out << results_stream.str() << std::endl;
+    }
+    {
+        std::string per_query_stats_file = result_output_prefix + "_L" + std::to_string(test_id) + "_query_stats.tsv";
+        std::ofstream out(per_query_stats_file);
+        out << per_query_stats_stream.str() << std::endl;
+    }
+}
+
+void write_gt_to_tsv(const std::string &cur_result_path, uint64_t query_num, uint32_t *gt_ids, float *gt_dists,
+                     uint64_t gt_dim)
+{
+    std::ofstream gt_out(cur_result_path + "_gt.tsv");
+    for (int i = 0; i < query_num; i++)
+    {
+        gt_out << i << "\t";
+        for (int j = 0; j < gt_dim; j++)
+        {
+            gt_out << "(" << gt_ids[i * gt_dim + j] << "," << gt_dists[i * gt_dim + j] << "),";
+        }
+        gt_out << std::endl;
+    }
+}
+#endif
 
 template <typename T, typename LabelT = uint32_t>
 int search_disk_index(diskann::Metric &metric, const std::string &index_path_prefix,
@@ -109,7 +343,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     reader.reset(new LinuxAlignedFileReader());
 #endif
 
-    std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> _pFlashIndex(
+    std::shared_ptr<diskann::PQFlashIndex<T, LabelT>> _pFlashIndex(
         new diskann::PQFlashIndex<T, LabelT>(reader, metric));
 
     int res = _pFlashIndex->load(num_threads, index_path_prefix.c_str());
@@ -117,6 +351,20 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     if (res != 0)
     {
         return res;
+    }
+
+    //REFACTOR TODO:There should be a centralized place to identify different 
+    //index file names. This is clunky. 
+    std::unique_ptr<diskann::FilterBruteForceIndex<T, LabelT>> _pFBFIndex =
+        std::make_unique<diskann::FilterBruteForceIndex<T, LabelT>>(index_path_prefix + "_disk.index", _pFlashIndex);
+    res = _pFBFIndex->load(num_threads);
+    if (res != 0)
+    {
+        diskann::cout << "Index does not have support for brute force search of sparse filters." << std::endl;
+    }
+    else
+    {
+        diskann::cout << "Loaded data for brute force search of sparse filters" << std::endl;
     }
 
     std::vector<uint32_t> node_list;
@@ -173,29 +421,12 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         diskann::cout << "..done" << std::endl;
     }
 
-    diskann::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
-    diskann::cout.precision(2);
-
-    std::string recall_string = "Recall@" + std::to_string(recall_at);
-    diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth" << std::setw(16) << "QPS" << std::setw(16)
-                  << "Mean Latency" << std::setw(16) << "99.9 Latency" << std::setw(16) << "Mean IOs" << std::setw(16)
-                  << "CPU (s)";
-    if (calc_recall_flag)
-    {
-        diskann::cout << std::setw(16) << recall_string << std::endl;
-    }
-    else
-        diskann::cout << std::endl;
-    diskann::cout << "==============================================================="
-                     "======================================================="
-                  << std::endl;
+    double best_recall = 0;
 
     std::vector<std::vector<uint32_t>> query_result_ids(Lvec.size());
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
 
     uint32_t optimized_beamwidth = 2;
-
-    double best_recall = 0.0;
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
@@ -236,19 +467,30 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             }
             else
             {
-                LabelT label_for_search;
-                if (query_filters.size() == 1)
-                { // one label for all queries
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[0]);
+                // We are assuming that brute force queries have their own filter unlike
+                // normal filter search where one filter can apply to every query.
+                if (_pFBFIndex->brute_forceable_filter(query_filters[i]))
+                {
+                    _pFBFIndex->search(query + (i * query_aligned_dim), query_filters[i], recall_at,
+                                       query_result_ids_64.data() + (i * recall_at),
+                                       query_result_dists[test_id].data() + (i * recall_at), stats + i);
                 }
                 else
-                { // one label for each query
-                    label_for_search = _pFlashIndex->get_converted_label(query_filters[i]);
+                {
+                    LabelT label_for_search;
+                    if (query_filters.size() == 1)
+                    { // one label for all queries
+                        label_for_search = _pFlashIndex->get_converted_label(query_filters[0]);
+                    }
+                    else
+                    { // one label for each query
+                        label_for_search = _pFlashIndex->get_converted_label(query_filters[i]);
+                    }
+                    _pFlashIndex->cached_beam_search(
+                        query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),
+                        query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true,
+                        label_for_search, use_reorder_data, stats + i);
                 }
-                _pFlashIndex->cached_beam_search(
-                    query + (i * query_aligned_dim), recall_at, L, query_result_ids_64.data() + (i * recall_at),
-                    query_result_dists[test_id].data() + (i * recall_at), optimized_beamwidth, true, label_for_search,
-                    use_reorder_data, stats + i);
             }
         }
         auto e = std::chrono::high_resolution_clock::now();
@@ -258,37 +500,21 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
         diskann::convert_types<uint64_t, uint32_t>(query_result_ids_64.data(), query_result_ids[test_id].data(),
                                                    query_num, recall_at);
 
-        auto mean_latency = diskann::get_mean_stats<float>(
-            stats, query_num, [](const diskann::QueryStats &stats) { return stats.total_us; });
+        best_recall = calculate_and_print_stats(
+            _pFBFIndex != nullptr && _pFBFIndex->index_available(), calc_recall_flag, recall_at, L, optimized_beamwidth,
+            stats, query_num, gt_ids, gt_dists, gt_dim, query_result_ids[test_id].data(), qps);
 
-        auto latency_999 = diskann::get_percentile_stats<float>(
-            stats, query_num, 0.999, [](const diskann::QueryStats &stats) { return stats.total_us; });
+#ifdef DISKANN_DEBUG_INDIVIDUAL_RESULTS
+        dump_individual_results(test_id, query_num, gt_ids, gt_dists, gt_dim, query_result_ids[test_id],
+                                query_result_dists[test_id], recall_at, result_output_prefix);
+#endif
 
-        auto mean_ios = diskann::get_mean_stats<uint32_t>(stats, query_num,
-                                                          [](const diskann::QueryStats &stats) { return stats.n_ios; });
 
-        auto mean_cpuus = diskann::get_mean_stats<float>(stats, query_num,
-                                                         [](const diskann::QueryStats &stats) { return stats.cpu_us; });
-
-        double recall = 0;
-        if (calc_recall_flag)
-        {
-            recall = diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
-                                               query_result_ids[test_id].data(), recall_at, recall_at);
-            best_recall = std::max(recall, best_recall);
-        }
-
-        diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth << std::setw(16) << qps
-                      << std::setw(16) << mean_latency << std::setw(16) << latency_999 << std::setw(16) << mean_ios
-                      << std::setw(16) << mean_cpuus;
-        if (calc_recall_flag)
-        {
-            diskann::cout << std::setw(16) << recall << std::endl;
-        }
-        else
-            diskann::cout << std::endl;
         delete[] stats;
     }
+#ifdef DISKANN_DEBUG_INDIVIDUAL_RESULTS
+    write_gt_to_tsv(result_output_prefix, query_num, gt_ids, gt_dists, gt_dim);
+#endif
 
     diskann::cout << "Done searching. Now saving results " << std::endl;
     uint64_t test_id = 0;
