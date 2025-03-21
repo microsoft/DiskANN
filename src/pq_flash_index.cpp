@@ -971,8 +971,9 @@ int PQFlashIndex<T, LabelT>::load_graph_index(const std::string &graph_index_fil
               << ", entire_file_size= " << entire_file_sz << "\n";
 
     uint64_t dim_size = dim_in_meta * sizeof(float);
-    uint64_t graph_node_len = max_node_len - dim_size;
-    std::cout << " => graph_node_len= " << graph_node_len << "\n\n";
+
+    _graph_node_len = max_node_len - dim_size;
+    std::cout << " => graph_node_len= " << _graph_node_len << "\n\n";
 
     return 0;
 }
