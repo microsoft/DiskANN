@@ -104,6 +104,8 @@ bool label_helper::parse_label_file_in_bitset(
 
     num_points = (size_t)line_cnt;
     diskann::cout << "Identified " << labels.size() << " distinct label(s)" << std::endl;
+    
+    return true;
 }
 
 size_t label_helper::search_string_range(const std::string& str, char ch, size_t start, size_t end)
