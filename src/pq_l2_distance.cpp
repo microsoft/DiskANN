@@ -70,7 +70,7 @@ template <typename data_t>
 void PQL2Distance<data_t>::load_pivot_data(const std::string &pq_table_file, size_t num_chunks)
 {
 #endif
-    uint64_t nr, nc;
+    size_t nr, nc;
     // std::string rotmat_file = get_opq_rot_matrix_filename(pq_table_file,
     // false);
 

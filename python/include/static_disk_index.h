@@ -11,6 +11,8 @@
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
+#elif __APPLE__
+#include "apple_aligned_file_reader.h"
 #else
 #include "linux_aligned_file_reader.h"
 #endif
@@ -25,6 +27,8 @@ namespace diskannpy
 
 #ifdef _WINDOWS
 typedef WindowsAlignedFileReader PlatformSpecificAlignedFileReader;
+#elif __APPLE__
+typedef AppleAlignedFileReader PlatformSpecificAlignedFileReader;
 #else
 typedef LinuxAlignedFileReader PlatformSpecificAlignedFileReader;
 #endif

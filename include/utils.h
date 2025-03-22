@@ -57,7 +57,11 @@ static inline __attribute__((always_inline)) void _mm_prefetch(char const *p, in
 
 #define LAPACK_COL_MAJOR 1
 #define LAPACK_ROW_MAJOR 0
+#ifdef __APPLE__
+typedef int clp_int;
+#else
 typedef __CLPK_integer clp_int;
+#endif
 
 inline void _sge_trans(int matrix_layout, clp_int m, clp_int n, const float *in, clp_int ldin, float *out,
                        clp_int ldout)

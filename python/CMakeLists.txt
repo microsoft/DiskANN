@@ -74,7 +74,7 @@ add_custom_command(
 TARGET _diskannpy
 POST_BUILD
 COMMAND ${CMAKE_COMMAND} -E copy 
-        ${CMAKE_CURRENT_BINARY_DIR}/_diskannpy.cpython-*-x86_64-linux-gnu.so
+        ${CMAKE_CURRENT_BINARY_DIR}/_diskannpy.cpython-*.so
         ${CMAKE_SOURCE_DIR}/python/src/
 COMMENT "Copying Python module to python/src directory"
 )

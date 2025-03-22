@@ -62,7 +62,7 @@ template <typename data_t> void PQDataStore<data_t>::populate_data(const std::st
         aligned_free(_quantized_data);
     }
 
-    uint64_t file_num_points = 0, file_dim = 0;
+    size_t file_num_points = 0, file_dim = 0;
     get_bin_metadata(filename, file_num_points, file_dim, offset);
     this->_capacity = (location_t)file_num_points;
     this->_dim = file_dim;

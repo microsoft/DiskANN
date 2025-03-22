@@ -202,7 +202,7 @@ float DistanceL2Float::compare(const float *a, const float *b, uint32_t size) co
         }
         __m256 a_vec = _mm256_load_ps(a + 8 * j);
         // load b_vec
-    __m256 b_vec = _mm256_load_ps(b + 8 * j);
+        __m256 b_vec = _mm256_load_ps(b + 8 * j);
         // a_vec - b_vec
         __m256 tmp_vec = _mm256_sub_ps(a_vec, b_vec);
 
@@ -736,8 +736,8 @@ template DISKANN_DLLEXPORT class SlowDistanceL2<float>;
 template DISKANN_DLLEXPORT class SlowDistanceL2<int8_t>;
 template DISKANN_DLLEXPORT class SlowDistanceL2<uint8_t>;
 
-template DISKANN_DLLEXPORT Distance<float> *get_distance_function(Metric m);
-template DISKANN_DLLEXPORT Distance<int8_t> *get_distance_function(Metric m);
-template DISKANN_DLLEXPORT Distance<uint8_t> *get_distance_function(Metric m);
+// template DISKANN_DLLEXPORT Distance<float> *get_distance_function(Metric m);
+// template DISKANN_DLLEXPORT Distance<int8_t> *get_distance_function(Metric m);
+// template DISKANN_DLLEXPORT Distance<uint8_t> *get_distance_function(Metric m);
 
 } // namespace diskann
