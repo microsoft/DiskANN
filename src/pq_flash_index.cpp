@@ -1939,35 +1939,108 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
         }
 
+        std::vector<AlignedRead> graph_read_reqs;
+        std::map<uint32_t, int> node_offsets; // id -> offset
+        std::map<uint32_t, std::vector<uint32_t>> node_nbrs_ori;
+
         // read nhoods of frontier ids
         if (!frontier.empty())
         {
             if (stats != nullptr)
                 stats->n_hops++;
-            for (uint64_t i = 0; i < frontier.size(); i++)
+
+#ifdef NDEBUG
+            if (!partition_read)
             {
-                auto id = frontier[i];
-                std::pair<uint32_t, char *> fnhood;
-                fnhood.first = id;
-                fnhood.second = sector_scratch + num_sectors_per_node * sector_scratch_idx * defaults::SECTOR_LEN;
-                sector_scratch_idx++;
-                frontier_nhoods.push_back(fnhood);
-                frontier_read_reqs.emplace_back(get_node_sector((size_t)id) * defaults::SECTOR_LEN,
-                                                num_sectors_per_node * defaults::SECTOR_LEN, fnhood.second);
-                if (stats != nullptr)
+#endif
+                for (uint64_t i = 0; i < frontier.size(); i++)
                 {
-                    stats->n_4k++;
-                    stats->n_ios++;
+                    auto id = frontier[i];
+                    std::pair<uint32_t, char *> fnhood;
+                    fnhood.first = id;
+                    fnhood.second = sector_scratch + num_sectors_per_node * sector_scratch_idx * defaults::SECTOR_LEN;
+                    sector_scratch_idx++;
+                    frontier_nhoods.push_back(fnhood);
+                    frontier_read_reqs.emplace_back(get_node_sector((size_t)id) * defaults::SECTOR_LEN,
+                                                    num_sectors_per_node * defaults::SECTOR_LEN, fnhood.second);
+                    if (stats != nullptr)
+                    {
+                        stats->n_4k++;
+                        stats->n_ios++;
+                    }
+                    num_ios++;
                 }
-                num_ios++;
+#ifdef NDEBUG
             }
+#endif
+
+            if (partition_read)
+            {
+                sector_scratch_idx = 0;
+                for (auto &frontier_nhood : frontier_nhoods)
+                {
+                    uint32_t node_id = frontier_nhood.first;
+                    uint32_t partition_id = _id2partition[node_id];
+                    if (partition_id >= _num_partitions)
+                    {
+                        diskann::cout << "Warning: partition_id is invalid: " << partition_id << std::endl;
+                        assert(false);
+                    }
+
+                    std::vector<uint32_t> part_list = _graph_partitions[partition_id];
+                    auto it = std::find(part_list.begin(), part_list.end(), node_id);
+                    if (it == part_list.end())
+                    {
+                        diskann::cerr << "Error: node " << node_id << " not found in partition " << partition_id
+                                      << std::endl;
+                        assert(false);
+                    }
+                    size_t j = std::distance(part_list.begin(), it);
+                    node_offsets[node_id] = j;
+
+                    uint64_t sector_offset = (partition_id + 1) * defaults::SECTOR_LEN;
+                    // ! Keep it same with frontier_nhood.second
+                    char *sector_buffer = sector_scratch + sector_scratch_idx * defaults::SECTOR_LEN;
+                    sector_scratch_idx++;
+
+                    AlignedRead partition_read;
+                    partition_read.len = defaults::SECTOR_LEN;
+                    partition_read.buf = sector_buffer;
+                    partition_read.offset = sector_offset;
+
+                    graph_read_reqs.emplace_back(partition_read);
+                }
+            }
+
             io_timer.reset();
+#ifdef NDEBUG
+            if (partition_read)
+            {
+#endif
 #ifdef USE_BING_INFRA
-            reader->read(frontier_read_reqs, ctx,
-                         true); // asynhronous reader for Bing.
+                reader->read(frontier_read_reqs, ctx,
+                             true); // asynhronous reader for Bing.
 #else
             reader->read(frontier_read_reqs, ctx); // synchronous IO linux
 #endif
+#ifdef NDEBUG
+            }
+#endif
+
+#ifndef NDEBUG
+            for (auto &[node_id, disk_buf] : frontier_nhoods)
+            {
+                char *node_disk_buf = offset_to_node(disk_buf, node_id);
+                uint32_t *nhood_buf = offset_to_node_nhood(node_disk_buf);
+                uint32_t neighbor_count = *nhood_buf;
+                node_nbrs_ori[node_id] = std::vector<uint32_t>(nhood_buf + 1, nhood_buf + 1 + neighbor_count);
+            }
+#endif
+            if (partition_read)
+            {
+                graph_reader->read(graph_read_reqs, ctx);
+            }
+
             if (stats != nullptr)
             {
                 stats->io_us += (float)io_timer.elapsed();
@@ -2065,11 +2138,13 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             auto &frontier_nhood = frontier_nhoods[completedIndex];
             (*ctx.m_pRequestsStatus)[completedIndex] = IOContext::PROCESS_COMPLETE;
 #else
+
         for (auto &frontier_nhood : frontier_nhoods)
         {
 #endif
             uint32_t node_id = frontier_nhood.first;
-            char *node_disk_buf = offset_to_node(frontier_nhood.second, node_id);
+            char *disk_buf = frontier_nhood.second;
+            char *node_disk_buf = offset_to_node(disk_buf, node_id);
 
             float cur_expanded_dist;
 
@@ -2120,79 +2195,51 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             exact_embeddings.push_back(std::vector<float>(data_buf, data_buf + _disk_bytes_per_point));
 #endif
 
-#ifdef NDEBUG
+            uint32_t *node_nbrs;
+            uint64_t nnbrs;
+
             if (!partition_read)
             {
-#endif
-                uint32_t *node_buf = offset_to_node_nhood(node_disk_buf);
-                uint64_t nnbrs = (uint64_t)(*node_buf);
-
-                uint32_t *node_nbrs = (node_buf + 1);
-#ifdef NDEBUG
+                auto node_buf = offset_to_node_nhood(node_disk_buf);
+                nnbrs = (uint64_t)(*node_buf);
+                node_nbrs = (node_buf + 1);
             }
-#endif
 
+#ifndef NDEBUG
+            auto node_nbrs_vec = node_nbrs_ori[node_id];
+            nnbrs = node_nbrs_vec.size();
+            node_nbrs = node_nbrs_vec.data();
+#endif
             if (partition_read)
             {
-                uint32_t partition_id = _id2partition[node_id];
-                if (partition_id >= _num_partitions)
-                {
-                    diskann::cout << "Warning: partition_id is invalid: " << partition_id << std::endl;
-                    assert(false);
-                }
-
-                // 获取分区扇区偏移（与普通节点扇区读取不同）
-                uint64_t sector_offset = (partition_id + 1) * defaults::SECTOR_LEN;
-
-                // 为分区扇区分配内存
-                char *partition_sector_buf = sector_scratch + sector_scratch_idx * defaults::SECTOR_LEN;
-                sector_scratch_idx++;
-
-                // 读取分区扇区
-                AlignedRead partition_read;
-                partition_read.len = defaults::SECTOR_LEN;
-                partition_read.buf = partition_sector_buf;
-                partition_read.offset = sector_offset;
-
-                std::vector<AlignedRead> partition_read_reqs = {partition_read};
-                reader->read(partition_read_reqs, ctx);
-
-                // 查找节点在分区内的位置
-                auto &part_list = _graph_partitions[partition_id];
-                auto it = std::find(part_list.begin(), part_list.end(), node_id);
-                if (it == part_list.end())
-                {
-                    diskann::cout << "Warning: node_id not found in partition_id: " << partition_id << std::endl;
-                    assert(false);
-                }
-
-                // 计算节点在分区内的索引位置
-                size_t j = std::distance(part_list.begin(), it);
-
-                // 计算节点在扇区内的偏移量
+                char *sector_buffer = frontier_nhood.second;
+                int j = node_offsets[node_id];
                 uint64_t node_offset = j * _graph_node_len;
                 if (node_offset + 4 > defaults::SECTOR_LEN)
                 {
-                    diskann::cout << "Warning: node_offset is out of range: " << node_offset << std::endl;
+                    diskann::cerr << "Error: node offset out of range: " << node_offset << " (+4) > "
+                                  << defaults::SECTOR_LEN << " for node " << node_id << std::endl;
                     assert(false);
                 }
 
-                // 获取节点邻接表数据指针
-                char *adjacency_ptr = partition_sector_buf + node_offset;
-
-                // 读取邻居数量
+                char *adjacency_ptr = sector_buffer + node_offset;
                 uint32_t neighbor_count = *reinterpret_cast<uint32_t *>(adjacency_ptr);
 
-                // 检查邻居数据是否超出扇区范围
-                size_t needed = neighbor_count * sizeof(uint32_t);
-                if (node_offset + 4 + needed > defaults::SECTOR_LEN)
+                if (neighbor_count > 10000)
                 {
-                    diskann::cout << "Warning: neighbor data is out of range: " << node_offset + 4 + needed
+                    diskann::cerr << "Error: suspicious neighbor count: " << neighbor_count << " for node " << node_id
                                   << std::endl;
                     assert(false);
                 }
 
-                // 设置邻居数量和邻居数组
+                size_t needed = neighbor_count * sizeof(uint32_t);
+                if (node_offset + 4 + needed > defaults::SECTOR_LEN)
+                {
+                    diskann::cerr << "Error: neighbor data out of range: " << (node_offset + 4 + needed) << " > "
+                                  << defaults::SECTOR_LEN << " for node " << node_id << std::endl;
+                    assert(false);
+                }
+
 #ifndef NDEBUG
                 if (neighbor_count != nnbrs)
                 {
