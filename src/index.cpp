@@ -14,6 +14,7 @@
 #include "tsl/robin_set.h"
 #include "windows_customizations.h"
 #include "tag_uint128.h"
+#include "label_helper.h"
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
@@ -599,7 +600,13 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         _label_map = load_label_map(labels_map_file);
         this->_table_stats.label_count = _label_map.size();
         
-        parse_label_file_in_bitset(labels_file, label_num_pts, _label_map.size());
+        label_helper().parse_label_file_in_bitset(
+            labels_file, 
+            label_num_pts, 
+            _label_map.size(),
+            _bitmask_buf,
+            _table_stats);
+        
         assert(label_num_pts == data_file_num_pts);
         this->_table_stats.label_mem_usage = _bitmask_buf._buf.size() * sizeof(std::uint64_t);
         if (file_exists(labels_to_medoids))
@@ -2003,122 +2010,6 @@ void Index<T, TagT, LabelT>::convert_pts_label_to_bitmask(std::vector<std::vecto
             bm.set(pts_to_labels[i][j]);
         }
     }
-}
-
-template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::parse_label_file_in_bitset(const std::string& label_file, size_t& num_points, size_t num_labels)
-{
-    std::ifstream infile(label_file, std::ios::binary);
-    if (infile.fail())
-    {
-        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
-    }
-    infile.seekg(0, std::ios::end);
-    size_t file_size = infile.tellg();
-
-    std::string buffer(file_size, ' ');
-
-    infile.seekg(0, std::ios::beg);
-    infile.read(&buffer[0], file_size);
-    infile.close();
-
-    unsigned line_cnt = 0;
-
-    size_t cur_pos = 0;
-    size_t next_pos = 0;
-    while (cur_pos < file_size && cur_pos != std::string::npos)
-    {
-        next_pos = buffer.find('\n', cur_pos);
-        if (next_pos == std::string::npos)
-        {
-            break;
-        }
-
-        cur_pos = next_pos + 1;
-
-        line_cnt++;
-    }
-
-    // label is counting by 1, so additional 1 bit is needed
-    _bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels + 1);
-    if (_dynamic_index)
-    {
-        _bitmask_buf._buf.resize(_max_points * _bitmask_buf._bitmask_size, 0);
-    }
-    else
-    {
-        _bitmask_buf._buf.resize(line_cnt * _bitmask_buf._bitmask_size, 0);
-    }
-    
-    infile.clear();
-    infile.seekg(0, std::ios::beg);
-    line_cnt = 0;
-
-    std::string label_str;
-    cur_pos = 0;
-    next_pos = 0;
-    while (cur_pos < file_size && cur_pos != std::string::npos)
-    {
-        next_pos = buffer.find('\n', cur_pos);
-        if (next_pos == std::string::npos)
-        {
-            break;
-        }
-
-        size_t lbl_pos = cur_pos;
-        size_t next_lbl_pos = 0;
-        while (lbl_pos < next_pos && lbl_pos != std::string::npos)
-        {
-            next_lbl_pos = search_string_range(buffer, ',', lbl_pos, next_pos);
-            if (next_lbl_pos == std::string::npos) // the last label in the whole file
-            {
-                next_lbl_pos = next_pos;
-            }
-
-            if (next_lbl_pos > next_pos) // the last label in one line
-            {
-                next_lbl_pos = next_pos;
-            }
-
-            label_str.assign(buffer.c_str() + lbl_pos, next_lbl_pos - lbl_pos);
-            if (label_str[label_str.length() - 1] == '\t')
-            {
-                label_str.erase(label_str.length() - 1);
-            }
-
-            LabelT token_as_num = (LabelT)std::stoul(label_str);
-            simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
-            bm.set(token_as_num);
-            _labels.insert(token_as_num);
-            _table_stats.label_total_count++;
-
-            lbl_pos = next_lbl_pos + 1;
-        }
-
-        cur_pos = next_pos + 1;
-
-        line_cnt++;
-    }
-
-    //while (std::getline(infile, line))
-    //{
-    //    std::istringstream iss(line);
-    //    std::vector<LabelT> lbls(0);
-    //    getline(iss, token, '\t');
-    //    std::istringstream new_iss(token);
-    //    while (getline(new_iss, token, ','))
-    //    {
-    //        token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-    //        token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-    //        LabelT token_as_num = std::stoul(token);
-    //        simple_bitmask bm(_bitmask_buf.get_bitmask(line_cnt), _bitmask_buf._bitmask_size);
-    //        bm.set(token_as_num);
-    //        _labels.insert(token_as_num);
-    //    }
-    //    line_cnt++;
-    //}
-    num_points = (size_t)line_cnt;
-    diskann::cout << "Identified " << _labels.size() << " distinct label(s)" << std::endl;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -3648,20 +3539,6 @@ void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t
     {
         indices[i] = retset[i].id;
     }
-}
-
-template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::search_string_range(const std::string& str, char ch, size_t start, size_t end)
-{
-    for (; start != end; start++)
-    {
-        if (str[start] == ch)
-        {
-            return start;
-        }
-    }
-
-    return std::string::npos;
 }
 
 template <typename T, typename TagT, typename LabelT>
