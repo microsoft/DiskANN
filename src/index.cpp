@@ -600,6 +600,11 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         _label_map = load_label_map(labels_map_file);
         this->_table_stats.label_count = _label_map.size();
         
+        if (_enable_tags)
+        {
+            // resize bitmask buffer to max points
+            label_num_pts = _max_points;
+        }
         label_helper().parse_label_file_in_bitset(
             labels_file, 
             label_num_pts, 
