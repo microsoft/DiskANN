@@ -351,10 +351,10 @@ int main(int argc, char **argv)
                                        program_options_utils::INDEX_PATH_PREFIX_DESCRIPTION);
         required_configs.add_options()("data_path", po::value<std::string>(&data_path)->required(),
                                        program_options_utils::INPUT_DATA_PATH);
-        required_configs.add_options()("active_window", po::value<uint64_t>(&active_window)->required(),
+        required_configs.add_options()("active_window", po::value<size_t>(&active_window)->required(),
                                        "Program maintains an index over an active window of "
                                        "this size that slides through the data");
-        required_configs.add_options()("consolidate_interval", po::value<uint64_t>(&consolidate_interval)->required(),
+        required_configs.add_options()("consolidate_interval", po::value<size_t>(&consolidate_interval)->required(),
                                        "The program simultaneously adds this number of points to the "
                                        "right of "
                                        "the window while deleting the same number from the left");
@@ -378,7 +378,7 @@ int main(int argc, char **argv)
             "Number of threads used for consolidating deletes to "
             "the index (defaults to omp_get_num_procs()/2)");
         optional_configs.add_options()("max_points_to_insert",
-                                       po::value<uint64_t>(&max_points_to_insert)->default_value(0),
+                                       po::value<size_t>(&max_points_to_insert)->default_value(0),
                                        "The number of points from the file that the program streams "
                                        "over ");
         optional_configs.add_options()(

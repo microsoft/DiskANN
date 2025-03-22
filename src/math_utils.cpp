@@ -2,14 +2,21 @@
 // Licensed under the MIT license.
 
 #include <limits>
-#include <malloc.h>
 #include <math_utils.h>
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
+#else
 #include <mkl.h>
+#endif
 #include "logger.h"
 #include "utils.h"
 
 namespace math_utils
 {
+
+#ifdef __APPLE__
+typedef int MKL_INT;
+#endif
 
 float calc_distance(float *vec_1, float *vec_2, size_t dim)
 {

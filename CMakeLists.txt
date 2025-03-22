@@ -106,6 +106,23 @@ if (MSVC)
     set(OPENMP_WINDOWS_RUNTIME_FILES
         "${DISKANN_MSVC_PACKAGES}/intelopenmp.redist.win/runtimes/win-x64/native/libiomp5md.dll"
         "${DISKANN_MSVC_PACKAGES}/intelopenmp.redist.win/runtimes/win-x64/native/libiomp5md.pdb")
+elseif(APPLE)
+    execute_process(
+        COMMAND brew --prefix libomp
+        OUTPUT_VARIABLE LIBOMP_ROOT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+
+    set(OpenMP_ROOT "${LIBOMP_ROOT}")
+    find_package(OpenMP)
+
+    if (OPENMP_FOUND)
+        set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+        link_libraries(OpenMP::OpenMP_CXX)
+    else()
+        message(FATAL_ERROR "No OpenMP support")
+    endif()
 else()
     find_package(OpenMP)
 
@@ -170,6 +187,13 @@ if (MSVC)
         "${DISKANN_MKL_LIB_PATH}/mkl_intel_ilp64.lib"
         "${DISKANN_MKL_LIB_PATH}/mkl_core.lib"
         "${DISKANN_MKL_LIB_PATH}/mkl_intel_thread.lib")
+    add_definitions(-DMKL_ILP64)
+elseif(APPLE)
+    # no mkl on non-intel devices
+    find_library(ACCELERATE_LIBRARY Accelerate)
+    message(STATUS "Found Accelerate (${ACCELERATE_LIBRARY})")
+    set(DISKANN_ACCEL_LINK_OPTIONS ${ACCELERATE_LIBRARY})
+    add_compile_definitions(ACCELERATE_NEW_LAPACK)
 else()
     # expected path for manual intel mkl installs
     set(POSSIBLE_OMP_PATHS "/opt/intel/oneapi/compiler/2025.0/lib/libiomp5.so;/opt/intel/oneapi/compiler/latest/linux/compiler/lib/intel64_lin/libiomp5.so;/usr/lib/x86_64-linux-gnu/libiomp5.so;/opt/intel/lib/intel64_lin/libiomp5.so")
@@ -235,9 +259,10 @@ else()
             )
         endif()
     endif()
+
+    add_definitions(-DMKL_ILP64)
 endif()
 
-add_definitions(-DMKL_ILP64)
 
 # Section for tcmalloc. The DiskANN tools are always linked to tcmalloc. For Windows, they also need to
 # force-include the _tcmalloc symbol for enabling tcmalloc.
@@ -280,7 +305,14 @@ if (MSVC)
     add_dependencies(libtcmalloc_minimal_for_exe build_libtcmalloc_minimal)
 
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS libtcmalloc_minimal_for_exe)
-elseif(NOT PYBIND)
+elseif(APPLE)
+    execute_process(
+        COMMAND brew --prefix gperftools
+        OUTPUT_VARIABLE GPERFTOOLS_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-L${GPERFTOOLS_PREFIX}/lib -ltcmalloc")
+elseif(NOT PYBIND AND NOT APPLE)
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-ltcmalloc")
 endif()
 
@@ -292,7 +324,7 @@ if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
     endif()
 endif()
 
-if (NOT MSVC)
+if (NOT MSVC AND NOT APPLE)
     set(DISKANN_ASYNC_LIB aio)
 endif()
 
@@ -317,6 +349,20 @@ if(MSVC)
 	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
 	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
 	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE ${PROJECT_SOURCE_DIR}/x64/Release)
+elseif(APPLE)
+    set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftree-vectorize -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -Xclang -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -Wno-inconsistent-missing-override -Wno-return-type")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Ofast -DNDEBUG -ftree-vectorize")
+    if (NOT PYBIND)
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG -Ofast")
+        if (NOT PORTABLE)
+            set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mtune=native")
+        endif()
+    else()
+        # -Ofast is not supported in a python extension module
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG -fPIC")
+    endif()
 else()
     set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -msse2 -ftree-vectorize -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2 -fPIC")

@@ -3,9 +3,6 @@
 
 #pragma once
 
-#include <immintrin.h>
-#include <smmintrin.h>
-#include <tmmintrin.h>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -14,7 +11,12 @@
 #include <algorithm>
 #include <stdexcept>
 
+#ifndef __APPLE__
+#include <immintrin.h>
+#include <smmintrin.h>
+#include <tmmintrin.h>
 #include "simd_utils.h"
+#endif
 
 extern bool Avx2SupportedCPU;
 

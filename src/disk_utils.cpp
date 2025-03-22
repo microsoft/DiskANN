@@ -7,11 +7,16 @@
 #include "gperftools/malloc_extension.h"
 #endif
 
+#ifdef __APPLE__
+#include <Accelerate/Accelerate.h>
+#else
+#include "mkl.h"
+#endif
+
 #include "logger.h"
 #include "disk_utils.h"
 #include "cached_io.h"
 #include "index.h"
-#include "mkl.h"
 #include "omp.h"
 #include "percentile_stats.h"
 #include "partition.h"
@@ -25,7 +30,7 @@ namespace diskann
 void add_new_file_to_single_index(std::string index_file, std::string new_file)
 {
     std::unique_ptr<uint64_t[]> metadata;
-    uint64_t nr, nc;
+    size_t nr, nc;
     diskann::load_bin<uint64_t>(index_file, metadata, nr, nc);
     if (nc != 1)
     {
@@ -192,11 +197,11 @@ T *load_warmup(const std::string &cache_warmup_file, uint64_t &warmup_num, uint6
                uint64_t warmup_aligned_dim)
 {
     T *warmup = nullptr;
-    uint64_t file_dim, file_aligned_dim;
+    size_t file_dim, file_aligned_dim;
 
     if (file_exists(cache_warmup_file))
     {
-        diskann::load_aligned_bin<T>(cache_warmup_file, warmup, warmup_num, file_dim, file_aligned_dim);
+        diskann::load_aligned_bin<T>(cache_warmup_file, warmup, (size_t &)warmup_num, file_dim, file_aligned_dim);
         if (file_dim != warmup_dim || file_aligned_dim != warmup_aligned_dim)
         {
             std::stringstream stream;
@@ -419,7 +424,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
         {
             // Gopal. random_shuffle() is deprecated.
             std::shuffle(final_nhood.begin(), final_nhood.end(), urng);
-            nnbrs = (uint32_t)(std::min)(final_nhood.size(), (uint64_t)max_degree);
+            nnbrs = (uint32_t)(std::min)(final_nhood.size(), (size_t)max_degree);
             // write into merged ofstream
             merged_vamana_writer.write((char *)&nnbrs, sizeof(uint32_t));
             merged_vamana_writer.write((char *)final_nhood.data(), nnbrs * sizeof(uint32_t));
@@ -458,7 +463,7 @@ int merge_shards(const std::string &vamana_prefix, const std::string &vamana_suf
 
     // Gopal. random_shuffle() is deprecated.
     std::shuffle(final_nhood.begin(), final_nhood.end(), urng);
-    nnbrs = (uint32_t)(std::min)(final_nhood.size(), (uint64_t)max_degree);
+    nnbrs = (uint32_t)(std::min)(final_nhood.size(), (size_t)max_degree);
     // write into merged ofstream
     merged_vamana_writer.write((char *)&nnbrs, sizeof(uint32_t));
     if (nnbrs > 0)
@@ -495,7 +500,7 @@ void breakup_dense_points(const std::string data_file, const std::string labels_
     std::string token, line;
     std::ifstream labels_stream(labels_file);
     T *data;
-    uint64_t npts, ndims;
+    size_t npts, ndims;
     diskann::load_bin<T>(data_file, data, npts, ndims);
 
     std::unordered_map<uint32_t, uint32_t> dummy_pt_ids;
@@ -594,7 +599,7 @@ void extract_shard_labels(const std::string &in_label_file, const std::string &s
     diskann::cout << "Extracting labels for shard" << std::endl;
 
     uint32_t *ids = nullptr;
-    uint64_t num_ids, tmp_dim;
+    size_t num_ids, tmp_dim;
     diskann::load_bin(shard_ids_bin, ids, num_ids, tmp_dim);
 
     uint32_t counter = 0, shard_counter = 0;
@@ -719,7 +724,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                                                               .with_num_threads(num_threads)
                                                               .build();
 
-        uint64_t shard_base_dim, shard_base_pts;
+        size_t shard_base_dim, shard_base_pts;
         get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
 
         diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts,
@@ -1256,7 +1261,9 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     if (num_threads != 0)
     {
         omp_set_num_threads(num_threads);
+#ifdef __x86_64__
         mkl_set_num_threads(num_threads);
+#endif
     }
 
     diskann::cout << "Starting index build: R=" << R << " L=" << L << " Query RAM budget: " << final_index_ram_limit
