@@ -19,6 +19,9 @@
 cmake_minimum_required(VERSION 3.20)
 project(diskann)
 
+#Set option to use tcmalloc
+option(USE_TCMALLOC "Use tcmalloc from gperftools" ON)
+
 option(PYBIND "Build with Python bindings" ON)
 
 if(PYBIND)
@@ -80,16 +83,27 @@ endif()
 
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
+include(FetchContent)
+
+if(USE_TCMALLOC)
+    FetchContent_Declare(
+        tcmalloc
+        GIT_REPOSITORY https://github.com/google/tcmalloc.git
+        GIT_TAG        origin/master  # or specify a particular version or commit
+    )
+
+    FetchContent_MakeAvailable(tcmalloc)
+endif()
+
 if(NOT PYBIND)
     set(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS ON)
 endif()
 # It's necessary to include tcmalloc headers only if calling into MallocExtension interface.
 # For using tcmalloc in DiskANN tools, it's enough to just link with tcmalloc.
 if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
-    include_directories(${PROJECT_SOURCE_DIR}/gperftools/src)
-
+     include_directories(${tcmalloc_SOURCE_DIR}/src)
     if (MSVC)
-        include_directories(${PROJECT_SOURCE_DIR}/gperftools/src/windows)
+        include_directories(${tcmalloc_SOURCE_DIR}/src/windows)
     endif()
 endif()
 
@@ -269,17 +283,27 @@ endif()
 #
 # The DLL itself needs to be linked to tcmalloc only if DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS
 # is enabled.
-if (MSVC)
-    if (NOT EXISTS "${PROJECT_SOURCE_DIR}/gperftools/gperftools.sln")
-        message(FATAL_ERROR "The gperftools submodule was not found. "
-                "Please check-out git submodules by doing 'git submodule init' followed by 'git submodule update'")
-    endif()
+if(USE_TCMALLOC)
+    if (MSVC)
+        # Adjust the paths to point to the fetched tcmalloc content
 
-    set(TCMALLOC_LINK_LIBRARY "${PROJECT_SOURCE_DIR}/gperftools/x64/Release-Patch/libtcmalloc_minimal.lib")
-    set(TCMALLOC_WINDOWS_RUNTIME_FILES
-        "${PROJECT_SOURCE_DIR}/gperftools/x64/Release-Patch/libtcmalloc_minimal.dll"
-        "${PROJECT_SOURCE_DIR}/gperftools/x64/Release-Patch/libtcmalloc_minimal.pdb")
+        set(TCMALLOC_LINK_LIBRARY "${tcmalloc_BINARY_DIR}/x64/Release-Patch/libtcmalloc_minimal.lib")
+        set(TCMALLOC_WINDOWS_RUNTIME_FILES
+            "${tcmalloc_BINARY_DIR}/x64/Release-Patch/libtcmalloc_minimal.dll"
+            "${tcmalloc_BINARY_DIR}/x64/Release-Patch/libtcmalloc_minimal.pdb")
 
+        # Tell CMake how to build the tcmalloc linker library.
+        add_custom_target(build_libtcmalloc_minimal DEPENDS ${TCMALLOC_LINK_LIBRARY})
+        add_custom_command(OUTPUT ${TCMALLOC_LINK_LIBRARY}
+                           COMMAND ${CMAKE_VS_MSBUILD_COMMAND} gperftools.sln /m /nologo
+                               /t:libtcmalloc_minimal /p:Configuration="Release-Patch"
+                               /property:Platform="x64"
+                               /p:PlatformToolset=v${MSVC_TOOLSET_VERSION}
+                               /p:WindowsTargetPlatformVersion=${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}
+                           WORKING_DIRECTORY ${tcmalloc_SOURCE_DIR})
+
+        add_library(libtcmalloc_minimal_for_exe STATIC IMPORTED)
+        add_library(libtcmalloc_minimal_for_dll STATIC IMPORTED)
     # Tell CMake how to build the tcmalloc linker library from the submodule.
     add_custom_target(build_libtcmalloc_minimal DEPENDS ${TCMALLOC_LINK_LIBRARY})
     add_custom_command(OUTPUT ${TCMALLOC_LINK_LIBRARY}
@@ -293,18 +317,18 @@ if (MSVC)
     add_library(libtcmalloc_minimal_for_exe STATIC IMPORTED)
     add_library(libtcmalloc_minimal_for_dll STATIC IMPORTED)
 
-    set_target_properties(libtcmalloc_minimal_for_dll PROPERTIES
-                          IMPORTED_LOCATION "${TCMALLOC_LINK_LIBRARY}")
+        set_target_properties(libtcmalloc_minimal_for_dll PROPERTIES
+                              IMPORTED_LOCATION "${TCMALLOC_LINK_LIBRARY}")
 
-    set_target_properties(libtcmalloc_minimal_for_exe PROPERTIES
-                          IMPORTED_LOCATION "${TCMALLOC_LINK_LIBRARY}"
-                          INTERFACE_LINK_OPTIONS /INCLUDE:_tcmalloc)
+        set_target_properties(libtcmalloc_minimal_for_exe PROPERTIES
+                              IMPORTED_LOCATION "${TCMALLOC_LINK_LIBRARY}"
+                              INTERFACE_LINK_OPTIONS /INCLUDE:_tcmalloc)
 
-    # Ensure libtcmalloc_minimal is built before it's being used.
-    add_dependencies(libtcmalloc_minimal_for_dll build_libtcmalloc_minimal)
-    add_dependencies(libtcmalloc_minimal_for_exe build_libtcmalloc_minimal)
+        # Ensure libtcmalloc_minimal is built before it's being used.
+        add_dependencies(libtcmalloc_minimal_for_dll build_libtcmalloc_minimal)
+        add_dependencies(libtcmalloc_minimal_for_exe build_libtcmalloc_minimal)
 
-    set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS libtcmalloc_minimal_for_exe)
+        set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS libtcmalloc_minimal_for_exe)
 elseif(APPLE)
     execute_process(
         COMMAND brew --prefix gperftools
@@ -316,11 +340,12 @@ elseif(NOT PYBIND AND NOT APPLE)
     set(DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS "-ltcmalloc")
 endif()
 
-if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
-    add_definitions(-DRELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
+    if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
+        add_definitions(-DRELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
 
-    if (MSVC)
-        set(DISKANN_DLL_TCMALLOC_LINK_OPTIONS libtcmalloc_minimal_for_dll)
+        if (MSVC)
+            set(DISKANN_DLL_TCMALLOC_LINK_OPTIONS libtcmalloc_minimal_for_dll)
+        endif()
     endif()
 endif()
 
@@ -365,7 +390,10 @@ elseif(APPLE)
     endif()
 else()
     set(ENV{TCMALLOC_LARGE_ALLOC_REPORT_THRESHOLD} 500000000000)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -msse2 -ftree-vectorize -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2 -fPIC")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -msse2 -ftree-vectorize -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2 -fPIC")
+    if(USE_TCMALLOC)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free")
+    endif()
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -DDEBUG")
     if (NOT PYBIND)
         set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DNDEBUG -Ofast")
