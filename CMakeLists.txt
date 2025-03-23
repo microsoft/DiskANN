@@ -20,7 +20,7 @@ cmake_minimum_required(VERSION 3.20)
 project(diskann)
 
 #Set option to use tcmalloc
-option(USE_TCMALLOC "Use tcmalloc from gperftools" ON)
+option(USE_TCMALLOC "Use tcmalloc from gperftools" OFF)
 
 option(PYBIND "Build with Python bindings" ON)
 

@@ -157,8 +157,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
 template <typename T, typename LabelT>
 std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t> &node_ids,
                                                       std::vector<T *> &coord_buffers,
-                                                      std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers,
-                                                      const bool partition_read)
+                                                      std::vector<std::pair<uint32_t, uint32_t *>> &nbr_buffers)
 {
     std::vector<AlignedRead> read_reqs;
     std::vector<bool> retval(node_ids.size(), true);
@@ -173,7 +172,7 @@ std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t
 
 #ifdef NDEBUG
     // -- If not partition_read, this is the normal DiskANN approach:
-    if (not partition_read)
+    if (!_use_partition)
     {
 #endif
         // (1) read each node's 4 KB from offset = get_node_sector(node_id)*4096
@@ -880,23 +879,29 @@ int PQFlashIndex<T, LabelT>::load(MemoryMappedFiles &files, uint32_t num_threads
 {
 #else
 template <typename T, typename LabelT>
-int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix, const char *pq_prefix)
+int PQFlashIndex<T, LabelT>::load(uint32_t num_threads, const char *index_prefix, const char *pq_prefix,
+                                  const char *partition_prefix)
 {
 #endif
     if (pq_prefix == nullptr || strcmp(pq_prefix, "") == 0)
     {
         pq_prefix = index_prefix;
     }
+    if (partition_prefix == nullptr || strcmp(partition_prefix, "") == 0)
+    {
+        _use_partition = true;
+    }
     std::string pq_table_bin = std::string(pq_prefix) + "_pq_pivots.bin";
     std::string pq_compressed_vectors = std::string(pq_prefix) + "_pq_compressed.bin";
     std::string _disk_index_file = std::string(index_prefix) + "_disk.index";
-    std::string graph_file = std::string(_disk_index_file) + "_disk_graph.index";
+    std::string graph_file = std::string(partition_prefix) + "_disk_graph.index";
+    std::string partition_file = std::string(partition_prefix) + "_partition.bin";
 #ifdef EXEC_ENV_OLS
     return load_from_separate_paths(files, num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
-                                    pq_compressed_vectors.c_str(), graph_file.c_str());
+                                    pq_compressed_vectors.c_str(), graph_file.c_str(), partition_file.c_str());
 #else
     return load_from_separate_paths(num_threads, _disk_index_file.c_str(), pq_table_bin.c_str(),
-                                    pq_compressed_vectors.c_str(), graph_file.c_str());
+                                    pq_compressed_vectors.c_str(), graph_file.c_str(), partition_file.c_str());
 #endif
 }
 
@@ -1058,7 +1063,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(diskann::MemoryMappedFiles
 template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
                                                       const char *pivots_filepath, const char *compressed_filepath,
-                                                      const char *graph_file)
+                                                      const char *graph_file, const char *partition_file)
 {
 #endif
     std::string pq_table_bin = pivots_filepath;
@@ -1476,12 +1481,14 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         delete[] norm_val;
     }
 
-    std::string partition_file = "/starling/_M_R_L_B/GRAPH/_partition.bin";
-    read_partition_info(partition_file);
+    if (_use_partition)
+    {
+        read_partition_info(partition_file);
 
-    this->_graph_index_file = "/starling/_M_R_L_B/GRAPH/_disk_graph.index";
-    graph_reader->open(this->_graph_index_file);
-    load_graph_index(this->_graph_index_file);
+        this->_graph_index_file = partition_file;
+        graph_reader->open(this->_graph_index_file);
+        load_graph_index(this->_graph_index_file);
+    }
 
     diskann::cout << "load_from_separate_paths done." << std::endl;
     return 0;
@@ -1535,11 +1542,10 @@ template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_reorder_data, QueryStats *stats,
-                                                 bool USE_DEFERRED_FETCH, bool skip_search_reorder,
-                                                 const bool partition_read)
+                                                 bool USE_DEFERRED_FETCH, bool skip_search_reorder)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, std::numeric_limits<uint32_t>::max(),
-                       use_reorder_data, stats, USE_DEFERRED_FETCH, skip_search_reorder, partition_read);
+                       use_reorder_data, stats, USE_DEFERRED_FETCH, skip_search_reorder);
 }
 
 template <typename T, typename LabelT>
@@ -1547,24 +1553,22 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
                                                  const bool use_reorder_data, QueryStats *stats,
-                                                 bool USE_DEFERRED_FETCH, bool skip_search_reorder,
-                                                 const bool partition_read)
+                                                 bool USE_DEFERRED_FETCH, bool skip_search_reorder)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
                        std::numeric_limits<uint32_t>::max(), use_reorder_data, stats, USE_DEFERRED_FETCH,
-                       skip_search_reorder, partition_read);
+                       skip_search_reorder);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const uint32_t io_limit, const bool use_reorder_data,
-                                                 QueryStats *stats, bool USE_DEFERRED_FETCH, bool skip_search_reorder,
-                                                 const bool partition_read)
+                                                 QueryStats *stats, bool USE_DEFERRED_FETCH, bool skip_search_reorder)
 {
     LabelT dummy_filter = 0;
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
-                       use_reorder_data, stats, USE_DEFERRED_FETCH, skip_search_reorder, partition_read);
+                       use_reorder_data, stats, USE_DEFERRED_FETCH, skip_search_reorder);
 }
 
 // A helper callback for cURL
@@ -1743,8 +1747,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
                                                  const uint32_t io_limit, const bool use_reorder_data,
-                                                 QueryStats *stats, bool USE_DEFERRED_FETCH, bool skip_search_reorder,
-                                                 const bool partition_read)
+                                                 QueryStats *stats, bool USE_DEFERRED_FETCH, bool skip_search_reorder)
 {
     // assert(USE_DEFERRED_FETCH);
 
@@ -1952,7 +1955,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 stats->n_hops++;
 
 #ifdef NDEBUG
-            if (!partition_read)
+            if (!_use_partition)
             {
 #endif
                 for (uint64_t i = 0; i < frontier.size(); i++)
@@ -1976,7 +1979,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             }
 #endif
 
-            if (partition_read)
+            if (_use_partition)
             {
                 sector_scratch_idx = 0;
                 for (auto &frontier_nhood : frontier_nhoods)
@@ -2016,7 +2019,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
             io_timer.reset();
 #ifdef NDEBUG
-            if (partition_read)
+            if (_use_partition)
             {
 #endif
 #ifdef USE_BING_INFRA
@@ -2038,7 +2041,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 node_nbrs_ori[node_id] = std::vector<uint32_t>(nhood_buf + 1, nhood_buf + 1 + neighbor_count);
             }
 #endif
-            if (partition_read)
+            if (_use_partition)
             {
                 graph_reader->read(graph_read_reqs, ctx);
             }
@@ -2200,7 +2203,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             uint32_t *node_nbrs;
             uint64_t nnbrs;
 
-            if (!partition_read)
+            if (!_use_partition)
             {
                 auto node_buf = offset_to_node_nhood(node_disk_buf);
                 nnbrs = (uint64_t)(*node_buf);
@@ -2212,7 +2215,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             nnbrs = node_nbrs_vec.size();
             node_nbrs = node_nbrs_vec.data();
 #endif
-            if (partition_read)
+            if (_use_partition)
             {
                 char *sector_buffer = frontier_nhood.second;
                 int j = node_offsets[node_id];

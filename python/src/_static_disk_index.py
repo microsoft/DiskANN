@@ -46,6 +46,7 @@ class StaticDiskIndex:
         dimensions: Optional[int] = None,
         index_prefix: str = "ann",
         pq_prefix: str = "",
+        partition_prefix: str = "",
     ):
         """
         ### Parameters
@@ -107,6 +108,7 @@ class StaticDiskIndex:
             num_nodes_to_cache=num_nodes_to_cache,
             cache_mechanism=cache_mechanism,
             pq_prefix=pq_prefix,
+            partition_prefix=partition_prefix,
         )
         print("After index init")
 
