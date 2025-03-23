@@ -354,6 +354,21 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
                     raw_label_writer.close();
                 }
             }
+
+            if (_bitmask_buf._buf.size() > 0)
+            {
+                std::string bitmask_label_file = std::string(filename) + "_bitmask_labels.bin";
+                label_helper label_helper;
+                if (label_helper.write_bitmask_to_file(bitmask_label_file, _bitmask_buf, static_cast<std::uint32_t>(_nd)))
+                {
+                    diskann::cout << "Bitmask labels saved to " << bitmask_label_file << std::endl;
+                }
+                else
+                {
+                    diskann::cerr << "Failed to save bitmask labels to " << bitmask_label_file << std::endl;
+                    throw diskann::ANNException(std::string("Failed to save bitmask labels to ") + bitmask_label_file, -1);
+                }
+            }
         }
 
         std::string graph_file = std::string(filename);
@@ -526,7 +541,7 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l)
 {
 #else
-void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, uint32_t search_l)
+void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, uint32_t search_l, bool loadBitmaskLabelFile)
 {
 #endif
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
@@ -596,12 +611,30 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             // resize bitmask buffer to max points
             label_num_pts = _max_points;
         }
-        label_helper().parse_label_file_in_bitset(
-            labels_file, 
-            label_num_pts, 
-            _label_map.size(),
-            _bitmask_buf,
-            _table_stats);
+        if (!loadBitmaskLabelFile)
+        {
+            label_helper().parse_label_file_in_bitset(
+                labels_file,
+                label_num_pts,
+                _label_map.size(),
+                _bitmask_buf,
+                _table_stats);
+        }
+        else
+        {
+            // load bitmask labels from file
+            std::string bitmask_label_file = std::string(filename) + "_bitmask_labels.bin";
+            if (label_helper().read_bitmask_from_file(bitmask_label_file, _bitmask_buf, label_num_pts))
+            {
+                diskann::cout << "Bitmask labels loaded from " << bitmask_label_file << std::endl;
+            }
+            else
+            {
+                diskann::cerr << "Failed to load bitmask labels from " << bitmask_label_file << std::endl;
+                throw diskann::ANNException(std::string("Failed to load bitmask labels from ") + bitmask_label_file,
+                                            -1);
+            }
+        }
         
         assert(label_num_pts == data_file_num_pts);
         this->_table_stats.label_mem_usage = _bitmask_buf._buf.size() * sizeof(std::uint64_t);

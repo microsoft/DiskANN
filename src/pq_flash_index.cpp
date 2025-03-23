@@ -586,7 +586,7 @@ template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
                                                       const char *pivots_filepath, const char *compressed_filepath,
                                                       const char* labels_filepath, const char* labels_to_medoids_filepath,
-                                                      const char* labels_map_filepath, const char* unv_label_filepath)
+                                                      const char* labels_map_filepath, const char* unv_label_filepath, bool load_bitmask_label)
 {
 #endif
     std::string pq_table_bin = pivots_filepath;
@@ -652,12 +652,28 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     map_reader.close();
 #endif
 
-    label_helper().parse_label_file_in_bitset(
-        labels_file,
-        num_pts_in_label_file,
-        _label_map.size(),
-        _bitmask_buf,
-        _table_stats);
+    if (!load_bitmask_label)
+    {
+        label_helper().parse_label_file_in_bitset(
+            labels_file,
+            num_pts_in_label_file,
+            _label_map.size(),
+            _bitmask_buf,
+            _table_stats);
+    }
+    else
+    {
+        if (label_helper().read_bitmask_from_file(labels_file, _bitmask_buf, num_pts_in_label_file))
+        {
+            diskann::cout << "Bitmask labels loaded from " << labels_file << std::endl;
+        }
+        else
+        {
+            diskann::cerr << "Failed to load bitmask labels from " << labels_file << std::endl;
+            throw diskann::ANNException(std::string("Failed to load bitmask labels from ") + labels_file,
+                -1);
+        }
+    }
 
 #ifdef EXEC_ENV_OLS
         if (files.fileExists(labels_to_medoids))

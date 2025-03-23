@@ -45,7 +45,8 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT int load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
                                                     const char* pivots_filepath, const char* compressed_filepath,
                                                     const char* labels_filepath, const char* labels_to_medoids_filepath,
-                                                    const char* labels_map_filepath, const char* unv_label_filepath);
+                                                    const char* labels_map_filepath, const char* unv_label_filepath,
+                                                    bool load_bitmask_label = false);
 #endif
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);

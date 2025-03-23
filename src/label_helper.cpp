@@ -115,6 +115,73 @@ bool label_helper::parse_label_file_in_bitset(
     return true;
 }
 
+bool label_helper::write_bitmask_to_file(const std::string& bitmask_label_file, simple_bitmask_buf& bitmask_buf, std::uint32_t num_points)
+{
+    // format: num_points, bitmask_size, bitmask content
+    std::ofstream outfile(bitmask_label_file, std::ios::binary);
+    if (outfile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + bitmask_label_file, -1);
+    }
+
+    if (bitmask_buf._buf.size() != bitmask_buf._bitmask_size * num_points)
+    {
+        throw diskann::ANNException(std::string("Bitmask buffer is empty"), -1);
+    }
+
+    std::uint32_t bitmask_size = static_cast<std::uint32_t>(bitmask_buf._bitmask_size);
+    outfile.write((char*)(&num_points), sizeof(std::uint32_t));
+    outfile.write((char*)(&bitmask_size), sizeof(std::uint32_t));
+    outfile.write((char *)bitmask_buf._buf.data(), bitmask_buf._buf.size() * sizeof(std::uint64_t));
+    outfile.close();
+
+    return true;
+}
+
+bool label_helper::read_bitmask_from_file(const std::string& bitmask_label_file, simple_bitmask_buf& bitmask_buf,
+    size_t& num_points)
+{
+    std::ifstream infile(bitmask_label_file, std::ios::binary);
+    if (infile.fail())
+    {
+        return false;
+    }
+
+    infile.seekg(0, std::ios::end);
+    size_t file_size = infile.tellg();
+
+    infile.seekg(0, std::ios::beg);
+
+    std::uint32_t num_points_in_file = 0;
+    std::uint32_t bitmask_size = 0;
+    infile.read((char *)(&num_points_in_file), sizeof(std::uint32_t));
+    infile.read((char *)(&bitmask_size), sizeof(std::uint32_t));
+
+    size_t bitmask_data_size = num_points_in_file * bitmask_size * sizeof(std::uint64_t);
+    if (file_size != (sizeof(std::uint32_t) * 2 + bitmask_data_size))
+    {
+        return false;
+    }
+
+    bitmask_buf._bitmask_size = bitmask_size;
+    // num_points > num_points_in_file in dynamic index 
+    if (num_points > static_cast<size_t>(num_points_in_file))
+    {
+        bitmask_buf._buf.resize(num_points * bitmask_buf._bitmask_size, 0);
+    }
+    else
+    {
+        bitmask_buf._buf.resize(num_points_in_file * bitmask_buf._bitmask_size, 0);
+    }
+    
+    num_points = num_points_in_file;
+
+    infile.read((char *)bitmask_buf._buf.data(), bitmask_data_size);
+    infile.close();
+
+    return true;
+}
+
 size_t label_helper::search_string_range(const std::string& str, char ch, size_t start, size_t end)
 {
     for (; start != end; start++)
