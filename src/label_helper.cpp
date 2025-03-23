@@ -48,7 +48,14 @@ bool label_helper::parse_label_file_in_bitset(
 
     // label is counting by 1, so additional 1 bit is needed
     bitmask_buf._bitmask_size = simple_bitmask::get_bitmask_size(num_labels + 1);
-    bitmask_buf._buf.resize(line_cnt * bitmask_buf._bitmask_size, 0);
+    if (num_points > line_cnt)
+    {
+        bitmask_buf._buf.resize(num_points * bitmask_buf._bitmask_size, 0);
+    }
+    else
+    {
+        bitmask_buf._buf.resize(line_cnt * bitmask_buf._bitmask_size, 0);
+    }
 
     tsl::robin_set<size_t> labels;
 

@@ -80,9 +80,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l);
 #else
-    // Reads the number of frozen points from graph's metadata file section.
-    DISKANN_DLLEXPORT static size_t get_graph_num_frozen_points(const std::string &graph_file);
-
     DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads, uint32_t search_l);
 #endif
 
@@ -180,9 +177,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT bool is_index_saved();
 
-    // repositions frozen points to the end of _data - if they have been moved
-    // during deletion
-    DISKANN_DLLEXPORT void reposition_frozen_point_to_end();
     DISKANN_DLLEXPORT void reposition_points(uint32_t old_location_start, uint32_t new_location_start,
                                              uint32_t num_locations);
 
@@ -221,7 +215,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                float *distances) override;
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
-    virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;
+    virtual int _insert_point(const DataType &data_point, const TagType tag, const std::vector<std::string> &labels) override;
 
     virtual int _lazy_delete(const TagType &tag) override;
 
@@ -249,10 +243,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Acquire exclusive _update_lock before calling
     void build_with_data_populated(const std::vector<TagT> &tags);
 
-    // generates 1 frozen point that will never be deleted from the graph
-    // This is not visible to the user
-    void generate_frozen_point();
-
     // determines navigating node of the graph by calculating medoid of datafopt
     uint32_t calculate_entry_point();
 
@@ -274,6 +264,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
                                     uint32_t filteredLindex = 0);
+
+    void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t>& pruned_list,
+        const std::vector<LabelT>& labels,
+        InMemQueryScratch<T>* scratch,
+        uint32_t filteredLindex);
+
+    void prune_search_result(int location, std::vector<uint32_t>& pruned_list, InMemQueryScratch<T>* scratch);
 
     void prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, std::vector<uint32_t> &pruned_list,
                          InMemQueryScratch<T> *scratch);
@@ -304,6 +301,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t release_location(int location);
     size_t release_locations(const tsl::robin_set<uint32_t> &locations);
 
+    bool is_frozen_point(uint32_t location) const;
+
     // Resize the index when no slots are left for insertion.
     // Acquire exclusive _update_lock and _tag_lock before calling.
     void resize(size_t new_max_points);
@@ -314,7 +313,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // graph, mode = _consolidated_order in case of lazy deletion and
     // _compacted_order in case of eager deletion
     DISKANN_DLLEXPORT void compact_data();
-    DISKANN_DLLEXPORT void compact_frozen_point();
 
     // Remove deleted nodes from adjacency list of node loc
     // Replace removed neighbors with second order neighbors.
@@ -360,13 +358,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     size_t _nd = 0;         // number of active points i.e. existing in the graph
     size_t _max_points = 0; // total number of points in given data set
 
-    // _num_frozen_pts is the number of points which are used as initial
-    // candidates when iterating to closest point(s). These are not visible
-    // externally and won't be returned by search. At least 1 frozen point is
-    // needed for a dynamic index. The frozen points have consecutive locations.
-    // See also _start below.
-    size_t _num_frozen_pts = 0;
-    size_t _frozen_pts_used = 0;
     size_t _node_size;
     size_t _data_len;
     size_t _neighbor_len;

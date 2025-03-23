@@ -122,7 +122,7 @@ std::shared_ptr<PQDataStore<T>> IndexFactory::construct_pq_datastore(DataStoreSt
 template <typename data_type, typename tag_type, typename label_type>
 std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
 {
-    size_t num_points = _config->max_points + _config->num_frozen_pts;
+    size_t num_points = _config->max_points;
     size_t dim = _config->dimension;
     // auto graph_store = construct_graphstore(_config->graph_strategy, num_points);
     auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
