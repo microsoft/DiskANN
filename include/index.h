@@ -35,13 +35,13 @@
 // #define INSTRUMENT true
 
 inline double time_to_intersect = 0.;
-inline double time_to_cluster = 0.;
+inline double time_to_page_search = 0.;
 inline double time_to_filter_check_and_compare = 0.;
 inline double time_to_get_valid = 0.;
 inline double time_to_detect_penalty = 0.;
 inline double time_to_estimate = 0;
 inline uint32_t num_brutes = 0;
-inline uint32_t num_clusters = 0;
+inline uint32_t num_paged_search = 0;
 inline uint32_t num_graphs = 0;
 inline uint32_t num_paged = 0;
 inline uint32_t min_inter_size = 2;
