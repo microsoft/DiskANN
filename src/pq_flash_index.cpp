@@ -945,26 +945,25 @@ int PQFlashIndex<T, LabelT>::load_graph_index(const std::string &graph_index_fil
     std::ifstream gf(graph_index_file, std::ios::binary);
     if (!gf.is_open())
     {
-        std::cerr << "Cannot open disk_graph.index: " << graph_index_file << std::endl;
+        diskann::cout << "Cannot open disk_graph.index: " << graph_index_file << std::endl;
         return 1;
     }
-    // (a) sector0 => 先读 2个 int
+    // (a) sector0 => read 2 ints for meta_n and meta_dim
     int meta_n, meta_dim;
     gf.read((char *)&meta_n, sizeof(int));
     gf.read((char *)&meta_dim, sizeof(int));
-    std::cout << "[debug] meta_n=" << meta_n << ", meta_dim=" << meta_dim << "\n";
+    diskann::cout << "[debug] meta_n=" << meta_n << ", meta_dim=" << meta_dim << "\n";
 
-    // (b) 读 meta_n个 uint64_t
+    // (b) Read uint64_t meta_n times
     std::vector<uint64_t> meta_info(meta_n);
     gf.read(reinterpret_cast<char *>(meta_info.data()), meta_n * sizeof(uint64_t));
-    // 打印
     for (int i = 0; i < meta_n; i++)
     {
-        std::cout << " meta_info[" << i << "]= " << meta_info[i] << "\n";
+        diskann::cout << " meta_info[" << i << "]= " << meta_info[i] << "\n";
     }
 
     size_t file_size = get_file_size(graph_index_file);
-    std::cout << "[disk_graph.index size] " << file_size << " bytes\n";
+    diskann::cout << "[disk_graph.index size] " << file_size << " bytes\n";
 
     uint64_t nd_in_meta = meta_info[0];
     uint64_t dim_in_meta = meta_info[1];
@@ -972,86 +971,30 @@ int PQFlashIndex<T, LabelT>::load_graph_index(const std::string &graph_index_fil
     uint64_t c_in_meta = meta_info[4];
     uint64_t entire_file_sz = meta_info[8];
 
-    std::cout << "Based on meta_info:\n"
-              << "  nd_in_meta= " << nd_in_meta << ", dim_in_meta= " << dim_in_meta
-              << ", max_node_len= " << max_node_len << ", c_in_meta= " << c_in_meta
-              << ", entire_file_size= " << entire_file_sz << "\n";
+    diskann::cout << "Based on meta_info:\n"
+                  << "  nd_in_meta= " << nd_in_meta << ", dim_in_meta= " << dim_in_meta
+                  << ", max_node_len= " << max_node_len << ", c_in_meta= " << c_in_meta
+                  << ", entire_file_size= " << entire_file_sz << "\n";
 
     uint64_t dim_size = dim_in_meta * sizeof(float);
 
     _graph_node_len = max_node_len - dim_size;
-    std::cout << " => graph_node_len= " << _graph_node_len << "\n\n";
+
+#ifndef NDEBUG
+    assert(max_node_len == _max_node_len);
+    assert(dim_size * sizeof(float) == _disk_bytes_per_point); // ! Assume float here
+    assert(_graph_node_len == _max_degree + 1);
+#endif
+
+    // Compensate the losting info from old meta_info
+    _max_degree = _graph_node_len - 1;
+    _disk_bytes_per_point = dim_size * sizeof(float);
+    _max_node_len = max_node_len;
+
+    diskann::cout << " => graph_node_len= " << _graph_node_len << "\n\n";
 
     return 0;
 }
-
-// template <typename T, typename LabelT>
-// int PQFlashIndex<T, LabelT>::read_neighbors(const std::string &graph_index_file, uint64_t target_node_id)
-// {
-//     // target_node_id => partition_id => subIndex
-//     uint32_t partition_id = _id2partition[target_node_id];
-//     if (partition_id >= _num_partitions)
-//     {
-//         std::cerr << "Partition ID out-of-range.\n";
-//         return 1;
-//     }
-//     auto &part_list = _graph_partitions[partition_id];
-//     auto it = std::find(part_list.begin(), part_list.end(), (uint32_t)target_node_id);
-//     if (it == part_list.end())
-//     {
-//         std::cerr << "Cannot find node " << target_node_id << " in partition " << partition_id << std::endl;
-//         return 1;
-//     }
-//     size_t j = std::distance(part_list.begin(), it);
-
-//     // sector => (partition_id+1)* 4096
-//     uint64_t sector_offset = (partition_id + 1) * defaults::SECTOR_LEN;
-//     gf.seekg(sector_offset, std::ios::beg);
-//     std::vector<char> sectorBuf(defaults::SECTOR_LEN);
-//     gf.read(sectorBuf.data(), defaults::SECTOR_LEN);
-
-//     std::cout << "Partition #" << partition_id << ", nodeCount= " << part_list.size() << ", offset= " <<
-//     sector_offset
-//               << "\n"
-//               << " first64 hex:\n   ";
-//     print_hex(sectorBuf.data(), defaults::SECTOR_LEN, 64);
-
-//     // adjacency_offset= j* graph_node_len
-//     uint64_t node_offset = j * graph_node_len;
-//     if (node_offset + 4 > defaults::SECTOR_LEN)
-//     {
-//         std::cerr << "Out-of-range. j=" << j << ", node_offset=" << node_offset
-//                   << ", node_offset+4=" << (node_offset + 4) << "> 4096\n";
-//         return 1;
-//     }
-
-//     char *adjacency_ptr = sectorBuf.data() + node_offset;
-//     uint32_t neighbor_count = *reinterpret_cast<uint32_t *>(adjacency_ptr);
-//     std::cout << "[Node " << target_node_id << "] partition=" << partition_id << ", subIndex=" << j
-//               << ", adjacency_offset=" << node_offset << ", neighbor_count=" << neighbor_count << "\n";
-
-//     size_t needed = neighbor_count * sizeof(uint32_t);
-//     if (node_offset + 4 + needed > SECTOR_SIZE)
-//     {
-//         std::cerr << "Neighbors partly out-of-range => neighbor_count=" << neighbor_count << "\n";
-//         return 1;
-//     }
-//     std::vector<uint32_t> neighbors(neighbor_count);
-//     memcpy(neighbors.data(), adjacency_ptr + 4, needed);
-
-//     std::cout << "  neighbors=[";
-//     for (size_t kk = 0; kk < std::min<size_t>(10, neighbor_count); kk++)
-//     {
-//         std::cout << neighbors[kk];
-//         if (kk + 1 < std::min<size_t>(10, neighbor_count))
-//             std::cout << ", ";
-//     }
-//     if (neighbor_count > 10)
-//         std::cout << " ... (total " << neighbor_count << ")";
-//     std::cout << "]\n";
-
-//     gf.close();
-// }
 
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
@@ -1316,69 +1259,76 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     }
 #endif
 
-    uint32_t nr, nc; // metadata itself is stored as bin format (nr is number of
-                     // metadata, nc should be 1)
-    READ_U32(index_metadata, nr);
-    READ_U32(index_metadata, nc);
-
-    uint64_t disk_nnodes;
-    uint64_t disk_ndims; // can be disk PQ dim if disk_PQ is set to true
-    READ_U64(index_metadata, disk_nnodes);
-    READ_U64(index_metadata, disk_ndims);
-
-    if (disk_nnodes != _num_points)
-    {
-        diskann::cout << "Mismatch in #points for compressed data file and disk "
-                         "index file: "
-                      << disk_nnodes << " vs " << _num_points << std::endl;
-        return -1;
-    }
-
     size_t medoid_id_on_file;
-    READ_U64(index_metadata, medoid_id_on_file);
-    READ_U64(index_metadata, _max_node_len);
-    READ_U64(index_metadata, _nnodes_per_sector);
-    _max_degree = ((_max_node_len - _disk_bytes_per_point) / sizeof(uint32_t)) - 1;
-
-    if (_max_degree > defaults::MAX_GRAPH_DEGREE)
+#ifdef NDEBUG
+    if (!_use_partition)
+#endif
     {
-        std::stringstream stream;
-        stream << "Error loading index. Ensure that max graph degree (R) does "
-                  "not exceed "
-               << defaults::MAX_GRAPH_DEGREE << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
+        uint32_t nr, nc; // metadata itself is stored as bin format (nr is number of
+                         // metadata, nc should be 1)
+        READ_U32(index_metadata, nr);
+        READ_U32(index_metadata, nc);
 
-    // setting up concept of frozen points in disk index for streaming-DiskANN
-    READ_U64(index_metadata, this->_num_frozen_points);
-    uint64_t file_frozen_id;
-    READ_U64(index_metadata, file_frozen_id);
-    if (this->_num_frozen_points == 1)
-        this->_frozen_location = file_frozen_id;
-    if (this->_num_frozen_points == 1)
-    {
-        diskann::cout << " Detected frozen point in index at location " << this->_frozen_location
-                      << ". Will not output it at search time." << std::endl;
-    }
+        uint64_t disk_nnodes;
+        uint64_t disk_ndims; // can be disk PQ dim if disk_PQ is set to true
+        READ_U64(index_metadata, disk_nnodes);
+        READ_U64(index_metadata, disk_ndims);
 
-    READ_U64(index_metadata, this->_reorder_data_exists);
-    if (this->_reorder_data_exists)
-    {
-        if (this->_use_disk_index_pq == false)
+        if (disk_nnodes != _num_points)
         {
-            throw ANNException("Reordering is designed for used with disk PQ "
-                               "compression option",
-                               -1, __FUNCSIG__, __FILE__, __LINE__);
+            diskann::cout << "Mismatch in #points for compressed data file and disk "
+                             "index file: "
+                          << disk_nnodes << " vs " << _num_points << std::endl;
+            return -1;
         }
-        READ_U64(index_metadata, this->_reorder_data_start_sector);
-        READ_U64(index_metadata, this->_ndims_reorder_vecs);
-        READ_U64(index_metadata, this->_nvecs_per_sector);
-    }
 
-    diskann::cout << "Disk-Index File Meta-data: ";
-    diskann::cout << "# nodes per sector: " << _nnodes_per_sector;
-    diskann::cout << ", max node len (bytes): " << _max_node_len;
-    diskann::cout << ", max node degree: " << _max_degree << std::endl;
+        READ_U64(index_metadata, medoid_id_on_file);
+        READ_U64(index_metadata, _max_node_len);
+        READ_U64(index_metadata, _nnodes_per_sector);
+        _max_degree = ((_max_node_len - _disk_bytes_per_point) / sizeof(uint32_t)) - 1;
+
+        if (_max_degree > defaults::MAX_GRAPH_DEGREE)
+        {
+            std::stringstream stream;
+            stream << "Error loading index. Ensure that max graph degree (R) does "
+                      "not exceed "
+                   << defaults::MAX_GRAPH_DEGREE << std::endl;
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        // setting up concept of frozen points in disk index for streaming-DiskANN
+        READ_U64(index_metadata, this->_num_frozen_points);
+        uint64_t file_frozen_id;
+        READ_U64(index_metadata, file_frozen_id);
+        if (this->_num_frozen_points == 1)
+            this->_frozen_location = file_frozen_id;
+        if (this->_num_frozen_points == 1)
+        {
+            diskann::cout << " Detected frozen point in index at location " << this->_frozen_location
+                          << ". Will not output it at search time." << std::endl;
+        }
+
+        READ_U64(index_metadata, this->_reorder_data_exists);
+        if (this->_reorder_data_exists)
+        {
+            if (this->_use_disk_index_pq == false)
+            {
+                throw ANNException("Reordering is designed for used with disk PQ "
+                                   "compression option",
+                                   -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+            READ_U64(index_metadata, this->_reorder_data_start_sector);
+            READ_U64(index_metadata, this->_ndims_reorder_vecs);
+            READ_U64(index_metadata, this->_nvecs_per_sector);
+        }
+
+        diskann::cout << "Disk-Index File Meta-data: ";
+        diskann::cout << "# nodes per sector: " << _nnodes_per_sector;
+        diskann::cout << ", max node len (bytes): " << _max_node_len;
+        diskann::cout << ", max node degree: " << _max_degree << std::endl;
+#ifdef NDEBUG
+    }
+#endif
 
 #ifdef EXEC_ENV_OLS
     delete[] bytes;
@@ -1455,6 +1405,10 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     }
     else
     {
+        if (_use_partition)
+        {
+            assert(false); // We do not have a valid medoid id in the partition file.
+        }
         _num_medoids = 1;
         _medoids = new uint32_t[1];
         _medoids[0] = (uint32_t)(medoid_id_on_file);
