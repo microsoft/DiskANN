@@ -843,6 +843,23 @@ void PQFlashIndex<T, LabelT>::load_dummy_map(const std::string &dummy_map_filepa
         throw FileException (dummy_map_filepath, e, __FUNCSIG__, __FILE__, __LINE__);
     }
 }
+
+
+template <typename T, typename LabelT>
+#ifdef EXEC_ENV_OLS
+bool PQFlashIndex<T, LabelT>::use_filter_support(MemoryMappedFiles &files)
+#else
+bool PQFlashIndex<T, LabelT>::use_filter_support()
+#endif
+{
+    std::string labels_file = _disk_index_file + "_labels.txt";
+#ifdef EXEC_ENV_OLS
+    return files.fileExists(labels_file);
+#else
+    return file_exists(labels_file);
+#endif
+}
+
 #ifdef EXEC_ENV_OLS
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::load_labels(MemoryMappedFiles &files, const std::string &disk_index_file)
@@ -1090,7 +1107,11 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     // bytes are needed to store the header and read in that many using our
     // 'standard' aligned file reader approach.
     reader->open(_disk_index_file);
-    this->setup_thread_data(num_threads);
+    this->setup_thread_data(
+        num_threads,
+        defaults::VISITED_RESERVE,
+        defaults::MAX_GRAPH_DEGREE,
+        (use_filter_support(files)? defaults::MAX_FILTERS_PER_QUERY, 0));
     this->_max_nthreads = num_threads;
 
     char *bytes = getHeaderBytes();
@@ -1180,7 +1201,11 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     // open AlignedFileReader handle to index_file
     std::string index_fname(_disk_index_file);
     reader->open(index_fname);
-    this->setup_thread_data(num_threads);
+    this->setup_thread_data(
+        num_threads,
+        defaults::VISITED_RESERVE,
+        defaults::MAX_GRAPH_DEGREE,
+        (use_filter_support()? defaults::MAX_FILTERS_PER_QUERY, 0));
     this->_max_nthreads = num_threads;
 
 #endif
