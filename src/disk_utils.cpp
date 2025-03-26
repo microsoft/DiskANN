@@ -1370,7 +1370,9 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         if (file_exists(bitmask_label_file))
         {
             copy_file(bitmask_label_file, disk_bitmask_labels_file);
+            std::remove(bitmask_label_file.c_str());
         }
+        
         std::remove(augmented_data_file.c_str());
         std::remove(augmented_labels_file.c_str());
         std::remove(labels_file_to_use.c_str());
