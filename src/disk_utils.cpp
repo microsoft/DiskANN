@@ -1190,6 +1190,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string labels_to_medoids_path = disk_index_path + "_labels_to_medoids.txt";
     std::string mem_labels_file = mem_index_path + "_labels.txt";
     std::string disk_labels_file = disk_index_path + "_labels.txt";
+    std::string disk_bitmask_labels_file = disk_index_path + "_bitmask_labels.bin";
     std::string mem_univ_label_file = mem_index_path + "_universal_label.txt";
     std::string disk_univ_label_file = disk_index_path + "_universal_label.txt";
     std::string disk_labels_int_map_file = disk_index_path + "_labels_map.txt";
@@ -1364,6 +1365,14 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
             copy_file(mem_univ_label_file, disk_univ_label_file);
             std::remove(mem_univ_label_file.c_str());
         }
+        // rename bimask label file
+        std::string bitmask_label_file = std::string(mem_index_path) + "_bitmask_labels.bin";
+        if (file_exists(bitmask_label_file))
+        {
+            copy_file(bitmask_label_file, disk_bitmask_labels_file);
+            std::remove(bitmask_label_file.c_str());
+        }
+        
         std::remove(augmented_data_file.c_str());
         std::remove(augmented_labels_file.c_str());
         std::remove(labels_file_to_use.c_str());
