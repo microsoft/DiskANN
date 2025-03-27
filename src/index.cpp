@@ -2388,13 +2388,21 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
 
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
 
+    // adhoc fix for tag == 0, previous format treat frozen point as tag 0
+    //  In the new format, there is no frozen point, the original frozen point will treat as normal point
+    //  To make backward compatible, we need to filter the tag is 0
+    //  This is a temporary fix, will be removed in the future
+    TagT previous_frozen_point_tag;
+    memset(&previous_frozen_point_tag, 0, sizeof(TagT));
+
     size_t pos = 0;
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
         auto node = best_L_nodes[i];
 
         TagT tag;
-        if (_location_to_tag.try_get(node.id, tag))
+        if (_location_to_tag.try_get(node.id, tag)
+            && memcmp(&tag, &previous_frozen_point_tag, sizeof(TagT)) != 0)
         {
             tags[pos] = tag;
 
