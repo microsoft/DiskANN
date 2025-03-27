@@ -906,6 +906,59 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
 }
 
 template <typename T, typename TagT, typename LabelT>
+std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(std::set<Neighbor> valid_nodes, const uint32_t L, std::vector<LabelT> filter_vec) {
+    std::queue<uint32_t> bfs_queue;
+    roaring::Roaring visited;
+    std::vector<uint32_t> final_ids;
+
+    std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
+
+    for (auto &nbr : valid_nodes) {
+        bfs_queue.push(nbr.id);
+        visited.add(nbr.id);
+        final_ids.push_back(nbr.id);
+        std::cout << "[bfs_filtered] Adding initial node to queue: " << nbr.id << std::endl;
+    }
+
+    while (!bfs_queue.empty() && final_ids.size() < L) {
+        std::uint32_t curr = bfs_queue.front();
+        bfs_queue.pop();
+        std::cout << "[bfs_filtered] Processing node: " << curr << std::endl;
+        if(curr >= _max_points + _num_frozen_pts) {
+            std::cout << "[bfs_filtered] Skipping out of index point: " << curr << std::endl;
+            continue;
+        }
+
+        for (auto &nbr : _graph_store->get_neighbours(curr)) {
+            // std::cout << "[bfs_filtered] Checking neighbor: " << nbr << std::endl;
+            if(nbr >= _max_points + _num_frozen_pts) {
+                std::cout << "[bfs_filtered] Skipping out of index point: " << nbr << std::endl;
+                continue;
+            }
+
+            if (!visited.contains(nbr)) {
+                bfs_queue.push(nbr);
+                visited.add(nbr);
+                if (detect_filter_penalty(nbr, true, filter_vec) == 0 && nbr != 0) {
+                    final_ids.push_back(nbr);
+                    std::cout << "[bfs_filtered] Adding neighbor to queue: " << nbr << std::endl;
+                }
+                
+            }
+        }
+    }
+
+    std::cout << "[bfs_filtered] Final valid_nodes size: " << valid_nodes.size() << std::endl;
+    std::cout << "[bfs_filtered] Final ids: ";
+    for (auto &id : final_ids) {
+        std::cout << id << " ";
+    }
+    std::cout << std::endl;
+
+    return final_ids;
+}
+
+template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const T *query, const uint32_t L, uint32_t K,
                                                                               std::vector<LabelT> filter_vec,
                                                                               std::vector<uint32_t> &init_ids,
@@ -942,7 +995,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     
     // Apply filter criteria to separate valid and invalid nodes
     uint32_t num_iterations = 0;
-    while (valid_nodes.size() < K && num_iterations < 200) {       
+    while (valid_nodes.size() == 0 && num_iterations < 10) {       
 
         // Iterate over best_L_nodes without popping
         // std::cout<<"[paged_search]best_L_nodes: "<<std::endl;
@@ -964,7 +1017,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
             //     // new_init_ids.push_back(nbr.id);
             // }
             if((detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) == 0)){
-                if (valid_nodes.find(nbr) == valid_nodes.end() && valid_nodes.size() < K) {
+                if (valid_nodes.size() < K) {
                     valid_nodes.insert(nbr);  // Keep valid nodes
                     new_init_ids.push_back(nbr.id);
                 }
@@ -1053,18 +1106,38 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
             new_init_ids.clear();
         }
     }
-    // std::cout<<("Final ids:");
-    // for (auto &nbr : valid_nodes) {
-    //     std::cout<<nbr.id<<", ";    
-    // }
-    // std::cout<<std::endl;
 
     best_L_nodes.clear();
-    for (const auto &nbr : valid_nodes) {
-        best_L_nodes.insert(nbr);
-    }
-    if (valid_nodes.size() < K) {
+
+    
+
+    if (valid_nodes.size() == 0) {
         // std::cout<<"[paged_search]Could not find enough valid nodes"<<std::endl;
+        return std::make_pair(hops, cmps);
+    }
+
+    std::vector<uint32_t> final_ids = bfs_filtered(valid_nodes, L, filter_vec);
+
+    std::cout<<("[paged_search]Final ids:");
+
+    //compute distance to query
+    for (auto &nbr : final_ids) {
+        std::cout<<nbr<<", ";
+        float distance = _data_store->get_distance(aligned_query, nbr);
+        Neighbor nn = Neighbor(nbr, distance);
+        best_L_nodes.insert(nn);
+    }
+    std::cout<<std::endl;
+
+    
+    // for (const auto &nbr : valid_nodes) {
+    //     best_L_nodes.insert(nbr);
+    // }
+    // if (valid_nodes.size() < K) {
+    //     // std::cout<<"[paged_search]Could not find enough valid nodes"<<std::endl;
+    // }
+    if(best_L_nodes.size() < K) {
+        std::cout<<"[paged_search]Could not find enough valid nodes"<<std::endl;
     }
     return std::make_pair(hops, cmps);  
 }
@@ -2989,17 +3062,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 
     auto best_L_nodes = scratch->best_l_nodes();
 
-    // std::cout<<"[search_with_filters] best_L_nodes: "<<std::endl;
+    std::cout<<"[search_with_filters] best_L_nodes: "<<std::endl;
 
-    // for (size_t i = 0; i < best_L_nodes.size(); ++i) {
-    //     std::cout<<best_L_nodes[i].id<<" ";
-    //     if(best_L_nodes[i].id >= _max_points)
-    //         std::cout<<"[search_with_filters] best_L_nodes[i].id >= _max_points"<<std::endl;
-    //     if(detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) != 0)
-    //         std::cout<<"[search_with_filters] detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) != 0"<<std::endl;
-    // }
+    for (size_t i = 0; i < best_L_nodes.size(); ++i) {
+        std::cout<<best_L_nodes[i].id<<" ";
+        if(best_L_nodes[i].id >= _max_points)
+            std::cout<<"[search_with_filters] best_L_nodes[i].id >= _max_points"<<std::endl;
+        if(detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) != 0)
+            std::cout<<"[search_with_filters] detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) != 0"<<std::endl;
+    }
 
-    // std::cout<<std::endl;
+    std::cout<<std::endl;
 
     size_t pos = 0;
     if (print_qstats && local_print)
