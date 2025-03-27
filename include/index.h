@@ -288,6 +288,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // with iterate_to_fixed_point.
     std::vector<uint32_t> get_init_ids();
 
+    std::vector<uint32_t> bfs_filtered(std::set<Neighbor> valid_nodes, const uint32_t L, std::vector<LabelT> filter_vec);
+
     std::pair<uint32_t, uint32_t> paged_search_filters(const T *query, const uint32_t Lsize, uint32_t K,
                                                        std::vector<LabelT> filter_vec,
                                                        std::vector<uint32_t> &init_ids,
