@@ -37,6 +37,12 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 #endif
 
 #ifdef EXEC_ENV_OLS
+    DISKANN_DLLEXPORT bool use_filter_support(MemoryMappedFiles &files);
+#else
+    DISKANN_DLLEXPORT bool use_filter_support();
+#endif
+
+#ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void load_labels(MemoryMappedFiles &files, const std::string &disk_index_file);
 #else
     DISKANN_DLLEXPORT void load_labels(const std::string& disk_index_filepath);
