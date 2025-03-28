@@ -1111,7 +1111,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         num_threads,
         defaults::VISITED_RESERVE,
         defaults::MAX_GRAPH_DEGREE,
-        (use_filter_support(files)? defaults::MAX_FILTERS_PER_QUERY, 0));
+        (use_filter_support(files)? defaults::MAX_FILTERS_PER_QUERY : 0));
     this->_max_nthreads = num_threads;
 
     char *bytes = getHeaderBytes();
@@ -1205,7 +1205,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         num_threads,
         defaults::VISITED_RESERVE,
         defaults::MAX_GRAPH_DEGREE,
-        (use_filter_support()? defaults::MAX_FILTERS_PER_QUERY, 0));
+        (use_filter_support()? defaults::MAX_FILTERS_PER_QUERY : 0));
     this->_max_nthreads = num_threads;
 
 #endif
