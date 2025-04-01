@@ -907,24 +907,36 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
 }
 
 template <typename T, typename TagT, typename LabelT>
-std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(std::set<Neighbor> valid_nodes, const uint32_t L, std::vector<LabelT> filter_vec) {
+std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue &best_L_nodes, const uint32_t L, std::vector<LabelT> filter_vec) {
     std::queue<uint32_t> bfs_queue;
     roaring::Roaring visited;
     std::vector<uint32_t> final_ids;
 
     // std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
+    uint32_t bfs_level = 0;
 
-    for (auto &nbr : valid_nodes) {
+    for (size_t i = 0; i < best_L_nodes.size(); ++i)
+    {
+        auto nbr = best_L_nodes[i];
         bfs_queue.push(nbr.id);
         visited.add(nbr.id);
-        final_ids.push_back(nbr.id);
-        // std::cout << "[bfs_filtered] Adding initial node to queue: " << nbr.id << std::endl;
-    }
+        if (detect_filter_penalty(nbr.id, true, filter_vec) == 0 ) {
+            final_ids.push_back(nbr.id);
+        }
+    }  
+    
+    bfs_queue.push(UINT32_MAX);
+    
 
     while (!bfs_queue.empty() && final_ids.size() < L) {
         std::uint32_t curr = bfs_queue.front();
         bfs_queue.pop();
         // std::cout << "[bfs_filtered] Processing node: " << curr << std::endl;
+        if(curr == UINT32_MAX) {
+            bfs_level++;
+            bfs_queue.push(UINT32_MAX);
+            continue;
+        }
         if(curr >= _max_points + _num_frozen_pts) {
             // std::cout << "[bfs_filtered] Skipping out of index point: " << curr << std::endl;
             continue;
@@ -937,7 +949,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(std::set<Neighbor> va
                 continue;
             }
 
-            if (!visited.contains(nbr)) {
+            if (!visited.contains(nbr) ) {
                 bfs_queue.push(nbr);
                 visited.add(nbr);
                 if (detect_filter_penalty(nbr, true, filter_vec) == 0 && nbr != 0) {
@@ -946,8 +958,14 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(std::set<Neighbor> va
                 }
                 
             }
+
+            if (final_ids.size() >= L) {
+                break;
+            }
         }
     }
+
+    std::cout<<"[bfs_filtered] BFS levels travered: " << bfs_level << std::endl;
 
     // std::cout << "[bfs_filtered] Final valid_nodes size: " << valid_nodes.size() << std::endl;
     // std::cout << "[bfs_filtered] Final ids: ";
@@ -988,74 +1006,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     // }
     // std::cout<<std::endl;
     
-    uint32_t greedy_searches = 0; //how many greedy search to allow if no valid ids found
-    while (valid_nodes.size() == 0 && greedy_searches < 100000) {       
+    
 
-        for (size_t i = 0; i < best_L_nodes.size(); ++i) {
-            auto nbr = best_L_nodes[i];
-
-            if((detect_filter_penalty(best_L_nodes[i].id, true, filter_vec) == 0)){
-                if (valid_nodes.size() < K) {
-                    valid_nodes.insert(nbr);  // Keep valid nodes
-                    new_init_ids.push_back(nbr.id); // initial ids for the next greedy search
-                }
-            } else {
-                invalid_nodes.insert(nbr);  // so that we don't put this back into the queue
-            }
-        }
-
-        // If we have enough valid nodes, return early
-        if (valid_nodes.size() >= K) {
-            // std::cout<<("Final ids:");
-            // for (auto &nbr : valid_nodes) {
-            //     std::cout<<nbr.id<<", ";
-            // }
-            // std::cout<<std::endl;
-            best_L_nodes.clear();
-            for (const auto &nbr : valid_nodes) {
-                best_L_nodes.insert(nbr);
-            }
-            return std::make_pair(hops, cmps);
-        }
-
-        else {
-            inserted_into_pool_rs.clear();
-            roaring_bitmap_clear(&inserted_into_pool_bs.roaring);
-
-            greedy_searches++;
-
-            if(new_init_ids.size() == 0) {
-                new_init_ids = init_ids;
-            }
-            
-            for (const auto &nbr : invalid_nodes) {
-                if (inserted_into_pool_rs.find(nbr.id) == inserted_into_pool_rs.end() && !inserted_into_pool_bs.contains(nbr.id) && new_init_ids[0] != nbr.id) {
-                        inserted_into_pool_bs.add(nbr.id);  // Mark node as visited
-                        inserted_into_pool_rs.insert(nbr.id);  // Mark node as visited
-                }
-            }
-
-            id_scratch.clear();
-            best_L_nodes.clear(); //so that we allow new points to enter the candidate list
-
-            auto[new_hops, new_cmps] = iterate_to_fixed_point(scratch, L, new_init_ids, false, unused_filter_label, true);
-            hops += new_hops;
-            cmps += new_cmps;
-            new_init_ids.clear();
-        }
-    }
-
-    // std::cout<<"[paged_search] Total greedy searches: "<<greedy_searches<<std::endl;
+    std::vector<uint32_t> final_ids = bfs_filtered(best_L_nodes, L, filter_vec);
 
     best_L_nodes.clear();
-
-    if (valid_nodes.size() == 0) {
-        // std::cout<<"[paged_search]Could not find valid nodes"<<std::endl;
-        return std::make_pair(hops, cmps);
+    std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
+    std::cout << "[paged_search] Final ids: ";
+    for (auto &id : final_ids) {
+        std::cout << id << " ";
     }
 
-    std::vector<uint32_t> final_ids = bfs_filtered(valid_nodes, L, filter_vec);
-
+    std::cout << std::endl;
 
     //compute distance to query
     for (auto &nbr : final_ids) {
