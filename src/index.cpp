@@ -2678,10 +2678,20 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         }
     }
 
-    // If start node is removed, throw an exception
-    if (_start < _max_points && !_location_to_tag.contains(_start))
+    if (_start >= _max_points)
     {
-        throw diskann::ANNException("ERROR: Start node deleted.", -1, __FUNCSIG__, __FILE__, __LINE__);
+        throw diskann::ANNException("ERROR: Start node error.", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    // if start node is deleted, set it to the last point
+    if (!_location_to_tag.contains(_start))
+    {
+        _start = static_cast<uint32_t>(_nd - 1);
+        diskann::cout << "Start node deleted. Setting start node to last point: " << _start << std::endl;
+    }
+    else
+    {
+        _start = new_location[_start];
     }
 
     size_t num_dangling = 0;
