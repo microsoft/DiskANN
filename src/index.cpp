@@ -450,6 +450,16 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
         TagT tag = *(tag_data + i);
         if (_delete_set->find(i) == _delete_set->end())
         {
+            if (_tag_to_location.find(tag) != _tag_to_location.end())
+            {
+                std::stringstream stream;
+                stream << "ERROR: Duplicate tag " << tag << " found at location " << i << " and at location "
+                       << _tag_to_location[tag] << std::endl;
+                diskann::cerr << stream.str() << std::endl;
+                delete[] tag_data;
+                throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+
             _location_to_tag.set(i, tag);
             _tag_to_location[tag] = i;
         }
