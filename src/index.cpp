@@ -450,6 +450,16 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
         TagT tag = *(tag_data + i);
         if (_delete_set->find(i) == _delete_set->end())
         {
+            if (_tag_to_location.find(tag) != _tag_to_location.end())
+            {
+                std::stringstream stream;
+                stream << "ERROR: Duplicate tag found at location " << i << " and at location "
+                       << _tag_to_location[tag] << std::endl;
+                diskann::cerr << stream.str() << std::endl;
+                delete[] tag_data;
+                throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+
             _location_to_tag.set(i, tag);
             _tag_to_location[tag] = i;
         }
@@ -2388,13 +2398,21 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
 
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
 
+    // adhoc fix for tag == 0, previous format treat frozen point as tag 0
+    //  In the new format, there is no frozen point, the original frozen point will treat as normal point
+    //  To make backward compatible, we need to filter the tag is 0
+    //  This is a temporary fix, will be removed in the future
+    TagT previous_frozen_point_tag;
+    memset(&previous_frozen_point_tag, 0, sizeof(TagT));
+
     size_t pos = 0;
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
         auto node = best_L_nodes[i];
 
         TagT tag;
-        if (_location_to_tag.try_get(node.id, tag))
+        if (_location_to_tag.try_get(node.id, tag)
+            && memcmp(&tag, &previous_frozen_point_tag, sizeof(TagT)) != 0)
         {
             tags[pos] = tag;
 
@@ -2660,10 +2678,20 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
         }
     }
 
-    // If start node is removed, throw an exception
-    if (_start < _max_points && !_location_to_tag.contains(_start))
+    if (_start >= _max_points)
     {
-        throw diskann::ANNException("ERROR: Start node deleted.", -1, __FUNCSIG__, __FILE__, __LINE__);
+        throw diskann::ANNException("ERROR: Start node error.", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    // if start node is deleted, set it to the last point
+    if (!_location_to_tag.contains(_start))
+    {
+        _start = static_cast<uint32_t>(_nd - 1);
+        diskann::cout << "Start node deleted. Setting start node to last point: " << _start << std::endl;
+    }
+    else
+    {
+        _start = new_location[_start];
     }
 
     size_t num_dangling = 0;
