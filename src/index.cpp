@@ -965,7 +965,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
         }
     }
 
-    std::cout<<"[bfs_filtered] BFS levels travered: " << bfs_level << std::endl;
+    // std::cout<<"[bfs_filtered] BFS levels travered: " << bfs_level << std::endl;
 
     // std::cout << "[bfs_filtered] Final valid_nodes size: " << valid_nodes.size() << std::endl;
     // std::cout << "[bfs_filtered] Final ids: ";
@@ -1011,13 +1011,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     std::vector<uint32_t> final_ids = bfs_filtered(best_L_nodes, L, filter_vec);
 
     best_L_nodes.clear();
-    std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
-    std::cout << "[paged_search] Final ids: ";
-    for (auto &id : final_ids) {
-        std::cout << id << " ";
-    }
+    // std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
+    // std::cout << "[paged_search] Final ids: ";
+    // for (auto &id : final_ids) {
+    //     std::cout << id << " ";
+    // }
 
-    std::cout << std::endl;
+    // std::cout << std::endl;
 
     //compute distance to query
     for (auto &nbr : final_ids) {

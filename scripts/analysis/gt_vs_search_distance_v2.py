@@ -133,12 +133,12 @@ def calculate_gt_res_distances(gt_indices, search_indices, vectors, gt_distances
             threshold = 1e-10
             distances[i, j] = np.where(distances[i, j] < threshold, 0, distances[i, j])
         
-        if (i == 0):
-            print("GT and result distances for first query:", distances[i])
-            # print("GT and query distances for first query:", gt_distances[i])
-            # print("Search and query distances for first query:", search_distances[i])
-            print("GT ids for first query:", gt_indices[i])
-            print("Search ids for first query:", search_indices[i])
+        # if (i == 0):
+        #     print("GT and result distances for first query:", distances[i])
+        #     # print("GT and query distances for first query:", gt_distances[i])
+        #     # print("Search and query distances for first query:", search_distances[i])
+        #     print("GT ids for first query:", gt_indices[i])
+        #     print("Search ids for first query:", search_indices[i])
             
         
     print(f"Distances shape: {distances.shape}")
@@ -199,88 +199,89 @@ gt_file = '/data/wikipedia/gt/wiki_35m_reduced_double_100_cosine_ps100000_gt'
 # gt_file = '/data/wikipedia/gt/wiki_35m_reduced_double_100_cosine_gt'
 # result_file = "/data/wikipedia/result/result_1m_double_page_283_10_dists_float.bin"
 # result_file = "/data/wikipedia/result/result_35m_double_313_l2_k5_l10_10_idx_uint32.bin"
-result_file = '/data/wikipedia/result/result_35m_double_313_cosine_ps_k10_l20_20_idx_uint32.bin'
-result_file_dist = '/data/wikipedia/result/result_35m_double_313_cosine_ps_k10_l20_20_dists_float.bin'
-output_file = "/data/wikipedia/analysis/analysis_014_35m"
+result_file_prefix = '/data/wikipedia/result/result_35m_double_cosine_ps500000_k'
+result_file_dist_prefix = '/data/wikipedia/result/result_35m_double_cosine_ps500000_k'
+output_file = "/data/wikipedia/analysis/analysis_014_35m_k"
 vectors_file = "/data/wikipedia/wiki_vector.bin"
-
-# Read indices
-gt_indices = read_gt_file_idx(gt_file, npts, lbuild)
-k, search_indices = read_search_result_file_idx(result_file)
-
-# Read GT distances
-gt_distances = read_gt_file_dist(gt_file, npts, lbuild)
-# Read search distances
-search_distances = read_search_result_file(result_file_dist, npts, k)
-print("GT Distances shape:", gt_distances.shape)
-print("Search Distances shape:", search_distances.shape)
-
-# take the first k indices
-gt_indices = gt_indices[:, :k]
-print("GT Indices shape:", gt_indices.shape)
-print("Search Indices shape:", search_indices.shape)
-print("GT Indices:", gt_indices[:10])
-print("Search Indices :", search_indices[:10])
 
 # get vectors by indices
 vectors = readBin(vectors_file, 1000000000)
 print("Vectors shape:", vectors.shape)
 print(vectors[0][:10])
 
-# norms = np.linalg.norm(vectors, axis=1)
-# print("Vector norms (first 10):", norms[:10])
-# print("Are all vectors normalized?", np.allclose(norms, 1.0))
+list_of_k = [4, 5, 10, 15, 20]
 
-# vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-# print("Are all vectors normalized after normalization?", np.allclose(np.linalg.norm(vectors, axis=1), 1.0))
+for (i, k) in enumerate(list_of_k):
+    result_file = result_file_prefix + str(k) + "_l20_20_idx_uint32.bin"
+    result_file_dist = result_file_dist_prefix + str(k) + "_l20_20_dists_float.bin"
+    print(f"Processing k={k}...")
 
-distances = calculate_gt_res_distances(gt_indices, search_indices, vectors)
-print("Distances shape:", distances.shape)
-print(distances[0][:10])
+    # Read indices
+    gt_indices = read_gt_file_idx(gt_file, npts, lbuild)
+    k, search_indices = read_search_result_file_idx(result_file)
 
-#save distances
-np.save(output_file + 'distances.npy', distances)
-# load distances
-distances = np.load(output_file + 'distances.npy')
-print("loaded Distances shape:", distances.shape)
-print(distances[0][:10])
+    # Read GT distances
+    gt_distances = read_gt_file_dist(gt_file, npts, lbuild)
+    # Read search distances
+    search_distances = read_search_result_file(result_file_dist, npts, k)
+    print("GT Distances shape:", gt_distances.shape)
+    print("Search Distances shape:", search_distances.shape)
 
-# mean for each query
-mean_distances = np.mean(distances, axis=1)
-print("Mean Distances shape:", mean_distances.shape)
-print(mean_distances[:10])
-
-#max of mean distances
-max_mean_distance = np.max(mean_distances)
-
-#min of mean distances
-min_mean_distance = np.min(mean_distances)
-
-#std of mean distances
-std_mean_distance = np.std(mean_distances)
-
-print("Max Mean Distance:", max_mean_distance)
-print("Min Mean Distance:", min_mean_distance)
-print("Std Mean Distance:", std_mean_distance)
-
-with open(output_file + 'mean_dist.txt', "w") as f:
-    f.write("Mean Distances:\n")
-    for i, distance in enumerate(mean_distances):
-        line = f"Query {i}: Mean Distance = {distance:.4f}\n"
-        # print(line.strip())
-        f.write(line)
-    
-    f.write(f"\nMax Mean Distance: {max_mean_distance:.4f}\n")
-    f.write(f"Min Mean Distance: {min_mean_distance:.4f}\n")
-    f.write(f"Std Mean Distance: {std_mean_distance:.4f}\n")
+    # take the first k indices
+    gt_indices = gt_indices[:, :k]
+    print("GT Indices shape:", gt_indices.shape)
+    print("Search Indices shape:", search_indices.shape)
+    # print("GT Indices:", gt_indices[:10])
+    # print("Search Indices :", search_indices[:10])
 
 
-# percentile analysis
-percentile_analysis(distances, output_file)
-# # Plot histogram
-# plt.hist(mean_distances, bins=50, alpha=0.75)
-# plt.xlabel('Mean Distance')
-# plt.ylabel('Frequency')
-# plt.title('Histogram of Mean Distances')
-# plt.grid()
-# plt.savefig(output_file + "mean_dist_hist.png", dpi=300)
+    distances = calculate_gt_res_distances(gt_indices, search_indices, vectors)
+    print("Distances shape:", distances.shape)
+    print(distances[0][:10])
+
+    #save distances
+    np.save(output_file + 'distances.npy', distances)
+    # load distances
+    distances = np.load(output_file + 'distances.npy')
+    print("loaded Distances shape:", distances.shape)
+    print(distances[0][:10])
+
+    # mean for each query
+    # distances = np.mean(distances, axis=1)
+    print("Mean Distances shape:", distances.shape)
+    print(distances[:10])
+
+    #max of mean distances
+    max_distance = np.max(distances)
+
+    #min of mean distances
+    min_distance = np.min(distances)
+
+    #std of mean distances
+    std_distance = np.std(distances)
+
+    print("Max Mean Distance:", max_distance)
+    print("Min Mean Distance:", min_distance)
+    print("Std Mean Distance:", std_distance)
+
+    with open(output_file + f'{k}_dist_stats.txt', "w") as f:
+        # f.write("Mean Distances:\n")
+        # for i, distance in enumerate(distances):
+        #     line = f"Query {i}: Mean Distance = {distance:.4f}\n"
+        #     # print(line.strip())
+        #     f.write(line)
+        
+        f.write(f"\nMax Distance: {max_distance:.4f}\n")
+        f.write(f"Min Distance: {min_distance:.4f}\n")
+        f.write(f"Std Distance: {std_distance:.4f}\n")
+
+
+    # percentile analysis
+    percentile_analysis(distances, output_file + f'{k}')
+    # # Plot histogram
+    # plt.hist(mean_distances, bins=50, alpha=0.75)
+    # plt.xlabel('Mean Distance')
+    # plt.ylabel('Frequency')
+    # plt.title('Histogram of Mean Distances')
+    # plt.grid()
+    # plt.savefig(output_file + "mean_dist_hist.png", dpi=300)
