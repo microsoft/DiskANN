@@ -911,6 +911,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     std::queue<uint32_t> bfs_queue;
     roaring::Roaring visited;
     std::vector<uint32_t> final_ids;
+    uint32_t final_list_size = 100;
 
     // std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
     uint32_t bfs_level = 0;
@@ -928,7 +929,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     bfs_queue.push(UINT32_MAX);
     
 
-    while (!bfs_queue.empty() && final_ids.size() < L) {
+    while (!bfs_queue.empty() && final_ids.size() < final_list_size * L) {
         std::uint32_t curr = bfs_queue.front();
         bfs_queue.pop();
         // std::cout << "[bfs_filtered] Processing node: " << curr << std::endl;
@@ -959,7 +960,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
                 
             }
 
-            if (final_ids.size() >= L) {
+            if (final_ids.size() >= final_list_size * L) {
                 break;
             }
         }
@@ -1021,6 +1022,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
 
     //compute distance to query
     for (auto &nbr : final_ids) {
+        cmps++;
         float distance = _data_store->get_distance(aligned_query, nbr);
         Neighbor nn = Neighbor(nbr, distance);
         best_L_nodes.insert(nn);
