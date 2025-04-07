@@ -911,7 +911,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     std::queue<uint32_t> bfs_queue;
     roaring::Roaring visited;
     std::vector<uint32_t> final_ids;
-    uint32_t final_list_size = 100;
+    uint32_t final_list_size = 2;
 
     // std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
     uint32_t bfs_level = 0;
@@ -985,7 +985,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
                                                                               InMemQueryScratch<T> *scratch)
 {
     T *aligned_query = scratch->aligned_query();
-    init_ids = get_init_ids();
+    // init_ids = get_init_ids();
     roaring::Roaring bfs_visited;
     const std::vector<LabelT> unused_filter_label;
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
@@ -1013,12 +1013,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
 
     best_L_nodes.clear();
     std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
-    std::cout << "[paged_search] Final ids: ";
-    for (auto &id : final_ids) {
-        std::cout << id << " ";
-    }
+    // std::cout << "[paged_search] Final ids: ";
+    // for (auto &id : final_ids) {
+    //     std::cout << id << " ";
+    // }
 
-    std::cout << std::endl;
+    // std::cout << std::endl;
 
     //compute distance to query
     for (auto &nbr : final_ids) {
@@ -2894,6 +2894,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
         time_to_estimate += diff.count();
 #endif
+        if (cand.size() > 0)
+        {
+            init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+        //                init_ids.emplace_back(cand);
+        } /*else {
+            if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+            { 
+                init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+            } 
+        }*/
+        if (use_global_start) {
+            init_ids.emplace_back(_start);
+        }
+
         if (estimated_match < _bruteforce_threshold)
         {
             num_brutes++;
@@ -2929,20 +2943,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             /* } */
             /* if (_dynamic_index) */
             /*     tl.unlock(); */
-
-            if (cand.size() > 0)
-            {
-                init_ids.insert(init_ids.end(), cand.begin(), cand.end());
-//                init_ids.emplace_back(cand);
-            } /*else {
-                if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
-                { 
-                    init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
-                } 
-            }*/
-             if (use_global_start) {
-                init_ids.emplace_back(_start);
-             }
 
             local_print = true;
             if (print_qstats)
