@@ -39,11 +39,15 @@ struct Neighbor
 class NeighborPriorityQueue
 {
   public:
-    NeighborPriorityQueue() : _size(0), _capacity(0), _cur(0)
+    NeighborPriorityQueue() : _size(0), _capacity(0), _cur(0), _auto_resizable(false)
     {
     }
 
     explicit NeighborPriorityQueue(size_t capacity) : _size(0), _capacity(capacity), _cur(0), _data(capacity + 1)
+    {
+    }
+
+    explicit NeighborPriorityQueue(bool auto_resizable) : _size(0), _capacity(0), _cur(0), _auto_resizable(auto_resizable)
     {
     }
 
@@ -54,7 +58,7 @@ class NeighborPriorityQueue
     // next item will be set to the lowest index of an uncheck item
     void insert(const Neighbor &nbr)
     {
-        if (_size == _capacity && _data[_size - 1] < nbr)
+        if (!_auto_resizable && _size == _capacity && _data[_size - 1] < nbr)
         {
             return;
         }
@@ -78,18 +82,25 @@ class NeighborPriorityQueue
             }
         }
 
-        if (lo < _capacity)
+        if (!_auto_resizable && lo < _capacity)
         {
             std::memmove(&_data[lo + 1], &_data[lo], (_size - lo) * sizeof(Neighbor));
         }
         _data[lo] = {nbr.id, nbr.distance};
-        if (_size < _capacity)
+        if (_size < _capacity || _auto_resizable)
         {
             _size++;
         }
         if (lo < _cur)
         {
             _cur = lo;
+        }
+
+        if (_auto_resizable && _size == _capacity)
+        {
+            // double the size of the array if queue is full and auto-resizable
+            _capacity = _capacity * 2;
+            _data.resize(_capacity + 1);
         }
     }
 
@@ -104,8 +115,12 @@ class NeighborPriorityQueue
         return _data[pre];
     }
 
-    bool has_unexpanded_node() const
+
+    bool has_unexpanded_node(size_t search_param_l = 0) const
     {
+        if (_auto_resizable){
+            return _cur < std::min(_size, search_param_l);
+        }
         return _cur < _size;
     }
 
@@ -144,8 +159,19 @@ class NeighborPriorityQueue
         _cur = 0;
     }
 
+    void convert_to_auto_resizable()
+    {
+        _auto_resizable = true;
+    }
+
+    bool is_auto_resizable() const
+    {
+        return _auto_resizable;
+    }
+
   private:
     size_t _size, _capacity, _cur;
+    bool _auto_resizable;
     std::vector<Neighbor> _data;
 };
 

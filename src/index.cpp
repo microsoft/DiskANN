@@ -997,9 +997,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     std::set<Neighbor> valid_nodes;
     std::set<Neighbor> invalid_nodes;
 
-    auto [hops, cmps] = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
+    auto [hops, cmps] = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, true);
 
-    // std::cout<<"[paged_search]best_L_nodes: "<<best_L_nodes.size()<<std::endl;
+    std::cout<<"[paged_search]best_L_node size: "<<best_L_nodes.size()<<std::endl;
     // for (size_t i = 0; i < best_L_nodes.size(); ++i)
     // {
     //     auto nbr = best_L_nodes[i];
@@ -1158,7 +1158,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
-    const std::vector<LabelT> &filter_labels, bool search_invocation)
+    const std::vector<LabelT> &filter_labels, bool search_invocation, bool paged_search) 
 {
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
@@ -1168,6 +1168,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
     std::vector<float> &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
+
+    if (paged_search) {
+        scratch->best_l_nodes().convert_to_auto_resizable();
+    }
+
+    assert(scratch->best_l_nodes().is_auto_resizable() == true);
 
     // std::cout<< "Is inserted_into_pool_bs empty: " << inserted_into_pool_bs.isEmpty() << std::endl;
     // std::cout<< "Size of inserted_into_pool_rs : " << inserted_into_pool_rs.size() << std::endl;
@@ -1312,7 +1318,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         out.close();
     }
 
-    while (best_L_nodes.has_unexpanded_node())
+    while (best_L_nodes.has_unexpanded_node(Lsize))
     {
 /*        for (uint32_t rnr = 0; rnr < best_L_nodes.size(); rnr++) {
             auto &x = best_L_nodes[rnr];
