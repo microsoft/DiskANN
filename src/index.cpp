@@ -907,7 +907,7 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
 }
 
 template <typename T, typename TagT, typename LabelT>
-std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue &best_L_nodes, const uint32_t L, std::vector<LabelT> filter_vec) {
+std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered( std::vector<uint32_t> start_nodes, const uint32_t L, std::vector<LabelT> filter_vec) {
     std::queue<uint32_t> bfs_queue;
     roaring::Roaring visited;
     std::vector<uint32_t> final_ids;
@@ -916,15 +916,14 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     // std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
     uint32_t bfs_level = 0;
 
-    for (size_t i = 0; i < best_L_nodes.size(); ++i)
+    for (const auto &nbr : start_nodes)
     {
-        auto nbr = best_L_nodes[i];
-        bfs_queue.push(nbr.id);
-        visited.add(nbr.id);
-        if (detect_filter_penalty(nbr.id, true, filter_vec) == 0 ) {
-            final_ids.push_back(nbr.id);
+        bfs_queue.push(nbr);
+        visited.add(nbr);
+        if (detect_filter_penalty(nbr, true, filter_vec) == 0) {
+            final_ids.push_back(nbr);
         }
-    }  
+    }
     
     bfs_queue.push(UINT32_MAX);
     
@@ -994,12 +993,27 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     roaring::Roaring &inserted_into_pool_bs = scratch->get_valid_bitmap();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
-    std::set<Neighbor> valid_nodes;
-    std::set<Neighbor> invalid_nodes;
+    std::vector<uint32_t> valid_nodes;
+    std::vector<uint32_t> invalid_nodes;
+    std::vector<uint32_t> final_ids;
 
     auto [hops, cmps] = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, true);
 
     std::cout<<"[paged_search]best_L_node size: "<<best_L_nodes.size()<<std::endl;
+    for (size_t i = 0; i < best_L_nodes.size(); ++i)
+    {
+        auto nbr = best_L_nodes[i];
+        // std::cout<<nbr.id<<", ";
+        if (detect_filter_penalty(nbr.id, true, filter_vec) == 0)
+        {
+            valid_nodes.push_back(nbr.id);
+        }
+        else
+        {
+            invalid_nodes.push_back(nbr.id);
+        }
+    }
+    std:cout<< "[paged_serach]After filter, valid_nodes size: " << valid_nodes.size() << std::endl;
     // for (size_t i = 0; i < best_L_nodes.size(); ++i)
     // {
     //     auto nbr = best_L_nodes[i];
@@ -1007,9 +1021,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     // }
     // std::cout<<std::endl;
     
-    
+    if(valid_nodes.size() == 0) {
+        init_ids = get_init_ids();
+        final_ids = bfs_filtered(init_ids, L, filter_vec);
+    }
 
-    std::vector<uint32_t> final_ids = bfs_filtered(best_L_nodes, L, filter_vec);
+    else {
+        final_ids = bfs_filtered(valid_nodes, L, filter_vec);
+    }
 
     best_L_nodes.clear();
     std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
@@ -1171,6 +1190,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     if (paged_search) {
         scratch->best_l_nodes().convert_to_auto_resizable();
+    }
+
+    if (paged_search) {
+        std::cout<< "[iterate_to_fixed_point] scratch->best_l_nodes().is_auto_resizable(): " << scratch->best_l_nodes().is_auto_resizable() << std::endl;
+        std::cout<< "[iterate_to_fixed_point] init_ids.size(): " << init_ids.size() << std::endl;
     }
 
     assert(scratch->best_l_nodes().is_auto_resizable() == true);
@@ -2856,6 +2880,21 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         break;
         case 1: {
             num_paged_search++;
+            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), filter_label);
+
+            if (cand.size() > 0)
+            {
+                init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+//                init_ids.emplace_back(cand);
+            } /*else {
+                if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+                { 
+                    init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+                } 
+            } */
+             if (use_global_start) {
+                init_ids.emplace_back(_start);
+             }
             // retval = closest_cluster_filters(scratch->aligned_query(), L, filter_vec, scratch);       
             retval = paged_search_filters(scratch->aligned_query(), L, K, filter_vec,init_ids, scratch);
         }
