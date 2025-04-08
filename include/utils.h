@@ -263,7 +263,11 @@ inline void alloc_aligned(void **ptr, size_t size, size_t align)
 #ifndef _WINDOWS
     *ptr = ::aligned_alloc(align, size);
 #else
-    *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
+    #ifdef EXEC_ENV_OLS
+        *ptr = operator new(size, std::align_val_t(align));
+    #else
+        *ptr = ::_aligned_malloc(size, align); // note the swapped arguments!
+    #endif
 #endif
     if (*ptr == nullptr)
         report_memory_allocation_failure();
@@ -274,7 +278,15 @@ inline void realloc_aligned(void **ptr, size_t size, size_t align)
     if (IS_ALIGNED(size, align) == 0)
         report_misalignment_of_requested_size(align);
 #ifdef _WINDOWS
-    *ptr = ::_aligned_realloc(*ptr, size, align);
+    #ifdef EXEC_ENV_OLS
+        void *newptr;
+        alloc_aligned(&newptr, size, align);
+        std::memcpy(newptr, *ptr, size);
+        operator delete(*ptr, std::align_val_t(1));
+        *ptr = newptr;
+    #else
+        *ptr = ::_aligned_realloc(*ptr, size, align);
+    #endif
 #else
     diskann::cerr << "No aligned realloc on GCC. Must malloc and mem_align, "
                      "left it out for now."
@@ -302,7 +314,12 @@ inline void aligned_free(void *ptr)
 #ifndef _WINDOWS
     free(ptr);
 #else
-    ::_aligned_free(ptr);
+    #ifdef EXEC_ENV_OLS
+        operator delete(ptr, std::align_val_t(1));
+        ptr = nullptr;
+    #else
+        ::_aligned_free(ptr);
+    #endif
 #endif
 }
 
