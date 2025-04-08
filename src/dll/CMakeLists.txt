@@ -33,25 +33,25 @@ endif()
 target_compile_options(${PROJECT_NAME} PRIVATE /GL)
 target_include_directories(${PROJECT_NAME} PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
 
-target_compile_options(${PROJECT_NAME}_build PRIVATE /GL)
-target_include_directories(${PROJECT_NAME}_build PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
-
-
 if (NOT DEFINED DISKANN_USE_STATIC_LIB)
+    target_compile_options(${PROJECT_NAME}_build PRIVATE /GL)
+    target_include_directories(${PROJECT_NAME}_build PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
+
     target_link_options(${PROJECT_NAME} PRIVATE /DLL /IMPLIB:${DISKANN_DLL_IMPLIB} /LTCG)
     target_link_options(${PROJECT_NAME}_build PRIVATE /DLL /IMPLIB:${DISKANN_DLL_IMPLIB_BUILD} /LTCG)
 endif()
 
 target_link_libraries(${PROJECT_NAME} PRIVATE ${DISKANN_MKL_LINK_LIBRARIES})
 target_link_libraries(${PROJECT_NAME} PRIVATE synchronization.lib)
-target_link_libraries(${PROJECT_NAME}_build PRIVATE ${DISKANN_MKL_LINK_LIBRARIES})
-target_link_libraries(${PROJECT_NAME}_build PRIVATE synchronization.lib)
 
-#This is the crux of the build dll
-target_link_libraries(${PROJECT_NAME}_build PUBLIC ${DISKANN_DLL_TCMALLOC_LINK_OPTIONS})
-set_target_properties(${PROJECT_NAME}_build PROPERTIES LINK_FLAGS /INCLUDE:_tcmalloc)
-
-
+if (NOT DEFINED DISKANN_USE_STATIC_LIB)
+    target_link_libraries(${PROJECT_NAME}_build PRIVATE ${DISKANN_MKL_LINK_LIBRARIES})
+    target_link_libraries(${PROJECT_NAME}_build PRIVATE synchronization.lib)
+    
+    #This is the crux of the build dll
+    target_link_libraries(${PROJECT_NAME}_build PUBLIC ${DISKANN_DLL_TCMALLOC_LINK_OPTIONS})
+    set_target_properties(${PROJECT_NAME}_build PROPERTIES LINK_FLAGS /INCLUDE:_tcmalloc)
+endif()
 
 if (DISKANN_DLL_TCMALLOC_LINK_OPTIONS)
     target_link_libraries(${PROJECT_NAME} PUBLIC ${DISKANN_DLL_TCMALLOC_LINK_OPTIONS})
@@ -64,8 +64,10 @@ foreach(RUNTIME_FILE ${RUNTIME_FILES_TO_COPY})
     add_custom_command(TARGET ${PROJECT_NAME}
                        POST_BUILD
                        COMMAND ${CMAKE_COMMAND} -E copy "${RUNTIME_FILE}" "${TARGET_DIR}")
+if (NOT DEFINED DISKANN_USE_STATIC_LIB)
     add_custom_command(TARGET ${PROJECT_NAME}_build
                        POST_BUILD
                        COMMAND ${CMAKE_COMMAND} -E copy "${RUNTIME_FILE}" "${TARGET_DIR}")
+endif()
 
 endforeach()
