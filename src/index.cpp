@@ -2501,13 +2501,17 @@ std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_inters
 
 
     for (uint32_t or_itr = 0; or_itr < filter_labels[0].size(); or_itr++) {
-        intersection_bitmap |= _labels_to_points_sample[filter_labels[0][or_itr]];
+        if (filter_labels[0][or_itr] < _labels_to_points_sample.size()) {
+            intersection_bitmap |= _labels_to_points_sample[filter_labels[0][or_itr]];
+        }
     }
     for (size_t i = 1; i < filter_labels.size(); i++)
     {
         tmp_bitmap.removeRangeClosed(tmp_bitmap.minimum(), tmp_bitmap.maximum());
         for (uint32_t or_itr = 0; or_itr < filter_labels[i].size(); or_itr++) {
-            tmp_bitmap |= _labels_to_points_sample[filter_labels[i][or_itr]];
+            if (filter_labels[i][or_itr] < _labels_to_points_sample.size()) { // not sure
+                tmp_bitmap |= _labels_to_points_sample[filter_labels[i][or_itr]];
+            }
         }
         intersection_bitmap &= tmp_bitmap;
     }            
