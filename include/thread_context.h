@@ -1,3 +1,5 @@
+#pragma once
+
 #ifndef _THREAD_CONTEXT_H_
 #define _THREAD_CONTEXT_H_
 
