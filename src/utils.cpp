@@ -151,8 +151,7 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
 
         gt.insert(gt_vec, gt_vec + tie_breaker);
         res.insert(res_vec,
-                   res_vec + r2); // change to recall_at for recall k@k
-                                  // or dim_or for k@dim_or
+                   res_vec + r2);
         uint32_t cur_recall = 0;
         for (auto &v : gt)
         {
