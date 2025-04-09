@@ -421,7 +421,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // default as a location can only be released at end of consolidate deletes
     std::vector<std::vector<LabelT>> _location_to_labels;
     std::vector<tsl::robin_set<LabelT>> _location_to_labels_robin;
-    std::vector<roaring::Roaring> _location_to_labels_bitmap;
+    //std::vector<roaring::Roaring> _location_to_labels_bitmap;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
