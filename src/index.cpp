@@ -1789,10 +1789,11 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     {
         return _universal_label;
     }
-    std::stringstream stream;
-    stream << "Unable to find label in the Label Map";
-    diskann::cerr << stream.str() << std::endl;
-    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    //std::stringstream stream;
+    //stream << "Unable to find label " << raw_label << " in the Label Map";
+    //diskann::cerr << stream.str() << std::endl;
+    //throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    return std::numeric_limits<LabelT>::max();
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2025,6 +2026,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
                                                                            float *distances)
 {
     auto converted_label = this->get_converted_label(raw_label);
+    if (converted_label == std::numeric_limits<LabelT>::max())
+    {
+        //diskann::cerr << "Error: Unable to find label " << raw_label << " in the Label Map" << std::endl;
+        //throw diskann::ANNException("Error: Unable to find label in the Label Map", -1);
+        for (uint32_t i = 0; i < K; i++) {
+            distances[i] = std::numeric_limits<float>::max();
+            if (typeid(uint64_t *) == indices.type()) {
+                auto ptr = std::any_cast<uint64_t *>(indices);
+                ptr[i] = std::numeric_limits<uint64_t>::max();
+            } else if (typeid(uint32_t *) == indices.type()) {
+                auto ptr = std::any_cast<uint32_t *>(indices);
+                ptr[i] = std::numeric_limits<uint32_t>::max();
+            }
+        }
+        return std::make_pair(0, 0);
+    }
     if (typeid(uint64_t *) == indices.type())
     {
         auto ptr = std::any_cast<uint64_t *>(indices);
@@ -2115,7 +2132,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     }
     if (pos < K)
     {
-        diskann::cerr << "Found fewer than K elements for query" << std::endl;
+        //diskann::cerr << "Found fewer than K elements for query" << std::endl;
     }
 
     return retval;
