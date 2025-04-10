@@ -105,7 +105,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     auto index = index_factory.create_instance();
     index->load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
     std::cout << "Index loaded" << std::endl;
-    std::cout << "[test] using paged search approach" << std::endl;
+    // std::cout << "[test] using paged search approach" << std::endl;
     
     if (metric == diskann::FAST_L2)
         index->optimize_index_layout();
@@ -123,12 +123,24 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
     else
     {
-        std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
-                  << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "Recall" << std::setw(20)
-                  << "Brute Latency (mus)" << std::setw(20) << "Brute Recall" << std::setw(20) << "Page. Latency (mus)"
-                  << std::setw(20) << "Page. Recall" << std::setw(20) << "Graph Latency (mus)" << std::setw(20)
-                  << "Graph Recall" << std::endl;
-        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20 + 20;
+        std::cout << std::setw(4) << "Ls" 
+        << std::setw(4) << "K"
+          << std::setw(8) << qps_title 
+          << std::setw(18) << "Avg dist cmps"
+          << std::setw(20) << "Mean Latency(mus)" 
+          << std::setw(20) << "99.9 Latency(mus)" 
+          << std::setw(20) << "99 Latency(mus)" 
+          << std::setw(20) << "95 Latency(mus)" 
+          << std::setw(10) << "Recall" 
+          << std::setw(22) << "Brute Latency(mus)" 
+          << std::setw(20) << "Brute Recall" 
+          << std::setw(22) << "Page. Latency(mus)" 
+          << std::setw(20) << "Page. Recall" 
+          << std::setw(22) << "Graph Latency(mus)" 
+          << std::setw(20) << "Graph Recall" 
+          << std::endl;
+
+    table_width += 4 + 4 + 8 + 18 + 20 + 20 + 20 + 20 + 10 + 22 + 20 + 22 + 20 + 22 + 20;
     }
     /*    uint32_t recalls_to_print = 0;
         const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -387,6 +399,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
 
         std::sort(latency_stats.begin(), latency_stats.end());
+        double latency_999 = latency_stats[(uint64_t)(0.999 * query_num)];
+        double latency_99 = latency_stats[(uint64_t)(0.99 * query_num)];
+        double latency_95 = latency_stats[(uint64_t)(0.95 * query_num)];
         double mean_latency =
             std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) / static_cast<float>(query_num);
 
@@ -399,8 +414,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
         else
         {
-            std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
-                      << std::setw(20) << (float)mean_latency << std::setw(15) << (float)recalls[0] << std::setw(20)
+            std::cout << std::setw(4) << L << std::setw(4) << recall_at << std::setw(8) << displayed_qps << std::setw(15) << avg_cmps
+                      << std::setw(20) << (float)mean_latency << std::setw(15) 
+                      << std::setw(20) << (float)latency_999 << std::setw(15)
+                      << std::setw(20) << (float)latency_99 << std::setw(15)
+                      << std::setw(20) << (float)latency_95 << std::setw(15)
+                      << (float)recalls[0] << std::setw(20)
                       << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
                       << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) << std::setw(20)
                       << (float)(paged_search_lat[test_id] * 1.0) / (num_paged_search * 1.0) << std::setw(20)

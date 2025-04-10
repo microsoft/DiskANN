@@ -911,7 +911,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     std::queue<uint32_t> bfs_queue;
     roaring::Roaring visited;
     std::vector<uint32_t> final_ids;
-    uint32_t final_list_size = 2;
+    uint32_t final_list_size = 1;
 
     // std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
     uint32_t bfs_level = 0;
@@ -1008,15 +1008,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     // std::cout<<std::endl;
     
     
-
+    // for (int i = 0; i < init_ids.size(); ++i)
+    // {
+    //     best_L_nodes.insert(Neighbor(init_ids[i], 0));
+    // }
     std::vector<uint32_t> final_ids = bfs_filtered(best_L_nodes, L, filter_vec);
 
     best_L_nodes.clear();
-<<<<<<< HEAD
-    // std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
-=======
     std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
->>>>>>> cd17123 (modified init_id population for paged search)
     // std::cout << "[paged_search] Final ids: ";
     // for (auto &id : final_ids) {
     //     std::cout << id << " ";
