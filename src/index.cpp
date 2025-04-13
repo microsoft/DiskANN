@@ -914,11 +914,15 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     uint32_t final_list_size = 1;
 
     // std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
-    uint32_t bfs_level = 0;
+    // uint32_t bfs_level = 0;
 
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
         auto nbr = best_L_nodes[i];
+        if(nbr >= _max_points + _num_frozen_pts) {
+            // std::cout << "[bfs_filtered] Skipping out of index point: " << curr << std::endl;
+            continue;
+        }
         bfs_queue.push(nbr.id);
         visited.add(nbr.id);
         if (detect_filter_penalty(nbr.id, true, filter_vec) == 0 ) {
@@ -926,22 +930,19 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
         }
     }  
     
-    bfs_queue.push(UINT32_MAX);
+    // bfs_queue.push(UINT32_MAX);
     
 
     while (!bfs_queue.empty() && final_ids.size() < final_list_size * L) {
         std::uint32_t curr = bfs_queue.front();
         bfs_queue.pop();
         // std::cout << "[bfs_filtered] Processing node: " << curr << std::endl;
-        if(curr == UINT32_MAX) {
-            bfs_level++;
-            bfs_queue.push(UINT32_MAX);
-            continue;
-        }
-        if(curr >= _max_points + _num_frozen_pts) {
-            // std::cout << "[bfs_filtered] Skipping out of index point: " << curr << std::endl;
-            continue;
-        }
+        // if(curr == UINT32_MAX) {
+        //     // bfs_level++;
+        //     bfs_queue.push(UINT32_MAX);
+        //     continue;
+        // }
+    
 
         for (auto &nbr : _graph_store->get_neighbours(curr)) {
             // std::cout << "[bfs_filtered] Checking neighbor: " << nbr << std::endl;
@@ -986,12 +987,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
 {
     T *aligned_query = scratch->aligned_query();
     // init_ids = get_init_ids();
-    roaring::Roaring bfs_visited;
     const std::vector<LabelT> unused_filter_label;
-    std::vector<uint32_t> &id_scratch = scratch->id_scratch();
-    std::vector<uint32_t> new_init_ids;
-    tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
-    roaring::Roaring &inserted_into_pool_bs = scratch->get_valid_bitmap();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
     std::set<Neighbor> valid_nodes;
