@@ -919,7 +919,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     for (size_t i = 0; i < best_L_nodes.size(); ++i)
     {
         auto nbr = best_L_nodes[i];
-        if(nbr >= _max_points + _num_frozen_pts) {
+        if(nbr.id >= _max_points + _num_frozen_pts) {
             // std::cout << "[bfs_filtered] Skipping out of index point: " << curr << std::endl;
             continue;
         }

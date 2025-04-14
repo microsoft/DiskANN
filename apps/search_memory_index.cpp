@@ -311,42 +311,42 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         {
             if (L == L_for_print)
             {
-                std::ofstream query_stats_file;
-                query_stats_file.open(result_path_prefix + "_query_stats.txt");
-                query_stats_file << "cmps\tnum correct\tfilt time\tcmp time\tlatency" << std::endl;
-                for (size_t i = 0; i < query_num; i++)
+            std::ofstream query_stats_file;
+            query_stats_file.open(result_path_prefix + "_query_stats.csv");
+            query_stats_file << "query_id,cmps,num_correct,filt_time,cmp_time,latency,results" << std::endl;
+            for (size_t i = 0; i < query_num; i++)
+            {
+                std::set<uint32_t> gt, res;
+                uint32_t *gt_vec = gt_ids + gt_dim * i;
+                uint32_t *res_vec = query_result_ids[test_id].data() + recall_at * i;
+                size_t tie_breaker = recall_at;
+                if (gt_dists != nullptr)
                 {
-                    std::set<uint32_t> gt, res;
-                    uint32_t *gt_vec = gt_ids + gt_dim * i;
-                    uint32_t *res_vec = query_result_ids[test_id].data() + recall_at * i;
-                    size_t tie_breaker = recall_at;
-                    if (gt_dists != nullptr)
-                    {
-                        tie_breaker = recall_at - 1;
-                        float *gt_dist_vec = gt_dists + gt_dim * i;
-                        while (tie_breaker < gt_dim && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
-                            tie_breaker++;
-                    }
-
-                    gt.insert(gt_vec, gt_vec + tie_breaker);
-                    res.insert(res_vec,
-                               res_vec + recall_at); // change to recall_at for recall k@k
-                                                     // or dim_or for k@dim_or
-                    uint32_t cur_recall = 0;
-                    for (auto &v : gt)
-                    {
-                        if (res.find(v) != res.end())
-                        {
-                            cur_recall++;
-                        }
-                    }
-                    query_stats_file << cmp_stats[i] << "\t" << cur_recall << "\t" << filter_match_time[i] << "\t"
-                                     << dist_cmp_time[i] << "\t" << latency_stats[i] << "\t";
-                    for (auto const &r : res)
-                        query_stats_file << r << " ";
-                    query_stats_file << std::endl;
+                tie_breaker = recall_at - 1;
+                float *gt_dist_vec = gt_dists + gt_dim * i;
+                while (tie_breaker < gt_dim && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
+                    tie_breaker++;
                 }
-                query_stats_file.close();
+
+                gt.insert(gt_vec, gt_vec + tie_breaker);
+                res.insert(res_vec,
+                       res_vec + recall_at); // change to recall_at for recall k@k
+                                 // or dim_or for k@dim_or
+                uint32_t cur_recall = 0;
+                for (auto &v : gt)
+                {
+                if (res.find(v) != res.end())
+                {
+                    cur_recall++;
+                }
+                }
+                query_stats_file << i << "," << cmp_stats[i] << "," << cur_recall << "," << filter_match_time[i] << ","
+                         << dist_cmp_time[i] << "," << latency_stats[i] << ",";
+                for (auto const &r : res)
+                query_stats_file << r << " ";
+                query_stats_file << std::endl;
+            }
+            query_stats_file.close();
             }
 
             recalls.reserve(1);
