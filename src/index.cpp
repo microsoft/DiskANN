@@ -907,6 +907,73 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
 }
 
 template <typename T, typename TagT, typename LabelT>
+std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered_hops( std::vector<uint32_t> start_nodes, roaring::Roaring visited, const uint32_t L, std::vector<LabelT> filter_vec) {
+    std::queue<uint32_t> bfs_queue;
+    std::vector<uint32_t> final_ids;
+    uint32_t num_hops = 100000;
+    uint32_t final_list_size = 1;
+
+    // std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
+    uint32_t hops = 0;
+
+    for (const auto &nbr : start_nodes)
+    {
+        if(nbr >= _max_points + _num_frozen_pts) {
+            // std::cout << "[bfs_filtered] Skipping out of index point: " << curr << std::endl;
+            continue;
+        }
+        bfs_queue.push(nbr);
+        visited.add(nbr);
+        if (detect_filter_penalty(nbr, true, filter_vec) == 0) {
+            final_ids.push_back(nbr);
+        }
+    }
+       
+
+    while (!bfs_queue.empty() && ( hops < num_hops)) {
+        std::uint32_t curr = bfs_queue.front();
+        bfs_queue.pop();
+        hops++;
+        // std::cout << "[bfs_filtered] Processing node: " << curr << std::endl;
+        
+
+        for (auto &nbr : _graph_store->get_neighbours(curr)) {
+            // std::cout << "[bfs_filtered] Checking neighbor: " << nbr << std::endl;
+
+            if(nbr >= _max_points + _num_frozen_pts) {
+                // std::cout << "[bfs_filtered] Skipping out of index point: " << nbr << std::endl;
+                continue;
+            }
+
+            if (!visited.contains(nbr) ) {
+                bfs_queue.push(nbr);
+                visited.add(nbr);
+                if (detect_filter_penalty(nbr, true, filter_vec) == 0 && nbr != 0) {
+                    final_ids.push_back(nbr);
+                    // std::cout << "[bfs_filtered] Adding neighbor to queue: " << nbr << std::endl;
+                }
+                
+            }
+
+            // if (final_ids.size() >= final_list_size * L) {
+            //     break;
+            // }
+        }
+    }
+
+    // std::cout<<"[bfs_filtered] BFS levels travered: " << bfs_level << std::endl;
+
+    std::cout << "[bfs_filtered] Final ids size: " << final_ids.size() << std::endl;
+    // std::cout << "[bfs_filtered] Final ids: ";
+    // for (auto &id : final_ids) {
+    //     std::cout << id << " ";
+    // }
+    // std::cout << std::endl;
+
+    return final_ids;
+}
+
+template <typename T, typename TagT, typename LabelT>
 std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered( std::vector<uint32_t> start_nodes, const uint32_t L, std::vector<LabelT> filter_vec) {
     std::queue<uint32_t> bfs_queue;
     roaring::Roaring visited;
@@ -988,8 +1055,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     const std::vector<LabelT> unused_filter_label;
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     std::vector<uint32_t> valid_nodes;
-    std::vector<uint32_t> invalid_nodes;
     std::vector<uint32_t> final_ids;
+    roaring::Roaring visited;
 
     auto [hops, cmps] = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, true);
 
@@ -1004,10 +1071,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
         }
         else
         {
-            invalid_nodes.push_back(nbr.id);
+            visited.add(nbr.id);
         }
     }
-    // std:cout<< "[paged_serach]After filter, valid_nodes size: " << valid_nodes.size() << std::endl;
+    std:cout<< "[paged_serach]After filter, valid_nodes size: " << valid_nodes.size() << std::endl;
     // for (size_t i = 0; i < best_L_nodes.size(); ++i)
     // {
     //     auto nbr = best_L_nodes[i];
@@ -1016,12 +1083,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     // std::cout<<std::endl;
     
     if(valid_nodes.size() == 0) {
+        std::cout << "[paged_search] No valid nodes found, using init_ids" << std::endl;
         init_ids = get_init_ids();
-        final_ids = bfs_filtered(init_ids, L, filter_vec);
+        final_ids = bfs_filtered_hops(init_ids, visited, L, filter_vec);
     }
 
     else {
-        final_ids = bfs_filtered(valid_nodes, L, filter_vec);
+        final_ids = bfs_filtered_hops(valid_nodes, visited, L, filter_vec);
     }
 
     best_L_nodes.clear();
@@ -1041,13 +1109,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
         best_L_nodes.insert(nn);
     }
 
-    std::cout<<"[paged_search]best_l_nodes: (size :" <<best_L_nodes.size()<<") :";
-    for (size_t i = 0; i < best_L_nodes.size(); ++i)
-    {
-        auto nbr = best_L_nodes[i];
-        std::cout<<nbr.id<<", ";
-    }
-    std::cout<<std::endl;
+    // std::cout<<"[paged_search]best_l_nodes: (size :" <<best_L_nodes.size()<<") :";
+    // for (size_t i = 0; i < best_L_nodes.size(); ++i)
+    // {
+    //     auto nbr = best_L_nodes[i];
+    //     std::cout<<nbr.id<<", ";
+    // }
+    // std::cout<<std::endl;
     // std::cout<<"[paged_search]best_L_nodes: "<<best_L_nodes.size()<<std::endl;
 
     // if(best_L_nodes.size() < K) {
@@ -1187,8 +1255,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     }
 
     if (paged_search) {
-        std::cout<< "[iterate_to_fixed_point] scratch->best_l_nodes().is_auto_resizable(): " << scratch->best_l_nodes().is_auto_resizable() << std::endl;
-        std::cout<< "[iterate_to_fixed_point] init_ids.size(): " << init_ids.size() << std::endl;
+        // std::cout<< "[iterate_to_fixed_point] scratch->best_l_nodes().is_auto_resizable(): " << scratch->best_l_nodes().is_auto_resizable() << std::endl;
+        // std::cout<< "[iterate_to_fixed_point] init_ids.size(): " << init_ids.size() << std::endl;
     }
 
     assert(scratch->best_l_nodes().is_auto_resizable() == true);
