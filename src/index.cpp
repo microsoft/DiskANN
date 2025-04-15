@@ -116,10 +116,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     {
         _filter_penalty_threshold = index_config.index_search_params->filter_penalty_threshold;
         _bruteforce_threshold = index_config.index_search_params->bruteforce_threshold;
-        _clustering_threshold = index_config.index_search_params->paged_search_threshold;
+        _paged_search_threshold = index_config.index_search_params->paged_search_threshold;
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
-        diskann::cout << "Inside Index, paged_search_threshold is " << _clustering_threshold << std::endl;
+        diskann::cout << "Inside Index, paged_search_threshold is " << _paged_search_threshold << std::endl;
     }
     //    if (_filtered_index) {
     //    }
@@ -910,11 +910,11 @@ template <typename T, typename TagT, typename LabelT>
 std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered_hops( std::vector<uint32_t> start_nodes, roaring::Roaring visited, const uint32_t L, std::vector<LabelT> filter_vec) {
     std::queue<uint32_t> bfs_queue;
     std::vector<uint32_t> final_ids;
-    uint32_t num_hops = 100000;
+    uint32_t hops = 100;
     uint32_t final_list_size = 1;
 
     // std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
-    uint32_t hops = 0;
+    uint32_t num_hops = 0;
 
     for (const auto &nbr : start_nodes)
     {
@@ -930,10 +930,10 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered_hops( std::vector<uin
     }
        
 
-    while (!bfs_queue.empty() && ( hops < num_hops)) {
+    while (!bfs_queue.empty() && ( num_hops < hops)) {
         std::uint32_t curr = bfs_queue.front();
         bfs_queue.pop();
-        hops++;
+        num_hops++;
         // std::cout << "[bfs_filtered] Processing node: " << curr << std::endl;
         
 
@@ -963,7 +963,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered_hops( std::vector<uin
 
     // std::cout<<"[bfs_filtered] BFS levels travered: " << bfs_level << std::endl;
 
-    std::cout << "[bfs_filtered] Final ids size: " << final_ids.size() << std::endl;
+    // std::cout << "[bfs_filtered] Final ids size: " << final_ids.size() << std::endl;
     // std::cout << "[bfs_filtered] Final ids: ";
     // for (auto &id : final_ids) {
     //     std::cout << id << " ";
@@ -1075,7 +1075,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
             visited.add(nbr.id);
         }
     }
-    std:cout<< "[paged_serach]After filter, valid_nodes size: " << valid_nodes.size() << std::endl;
+    // std:cout<< "[paged_serach]After filter, valid_nodes size: " << valid_nodes.size() << std::endl;
     // for (size_t i = 0; i < best_L_nodes.size(); ++i)
     // {
     //     auto nbr = best_L_nodes[i];
@@ -3027,7 +3027,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             }
             retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
         }
-        else if (estimated_match < _clustering_threshold)
+        else if (estimated_match < _paged_search_threshold)
         {
             num_paged_search++;
             // std::cout<<"[search_with_filters] search with paged_search_filters"<<std::endl;
