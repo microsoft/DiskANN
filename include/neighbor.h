@@ -86,6 +86,19 @@ class NeighborPriorityQueue
         {
             std::memmove(&_data[lo + 1], &_data[lo], (_size - lo) * sizeof(Neighbor));
         }
+        else
+        {
+            // Resize the queue if it's full in auto-resizable mode
+            if (_size == _capacity)
+            {
+                _capacity = _capacity * 2;
+                _data.resize(_capacity + 1);
+            }
+
+            // Shift elements to make space for the new neighbor
+            std::memmove(&_data[lo + 1], &_data[lo], (_size - lo) * sizeof(Neighbor));
+        }
+        
         _data[lo] = {nbr.id, nbr.distance};
         if (_size < _capacity || _auto_resizable)
         {
