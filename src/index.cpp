@@ -1057,11 +1057,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     std::vector<uint32_t> valid_nodes;
     std::vector<uint32_t> final_ids;
     roaring::Roaring visited;
+    uint16_t dist_threshold = 0.5;
 
     auto [hops, cmps] = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, true);
 
     // std::cout<<"[paged_search]best_L_node size: "<<best_L_nodes.size()<<std::endl;
-    for (size_t i = 0; i < best_L_nodes.size(); ++i)
+    for (size_t i = 0; i < best_L_nodes.size() && (valid_nodes.size() < L || best_L_nodes[i].distance < dist_threshold)   ; ++i)
     {
         auto nbr = best_L_nodes[i];
         // std::cout<<nbr.id<<", ";
