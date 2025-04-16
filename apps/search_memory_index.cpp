@@ -79,6 +79,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
     std::cout << filter_penalty_threshold << " is value of filter_penalty_threshold at driver file" << std::endl;
+    std::cout << beta_value << " is value of beta_value at driver file" << std::endl;
     auto search_params =
         diskann::IndexSearchParams(*(std::max_element(Lvec.begin(), Lvec.end())), num_threads, filter_penalty_threshold,
                                    bruteforce_threshold, paged_search_threshold);
@@ -103,9 +104,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
     auto index_factory = diskann::IndexFactory(config);
     auto index = index_factory.create_instance();
-    index->load(index_path.c_str(), 24, *(std::max_element(Lvec.begin(), Lvec.end())));
+    index->load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
     std::cout << "Index loaded" << std::endl;
-    std::cout << "[test] using paged search approach" << std::endl;
     
     // std::cout << "[test] using paged search approach" << std::endl;
     

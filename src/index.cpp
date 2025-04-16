@@ -914,13 +914,15 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     uint32_t final_list_size = 1;
     uint32_t max_hops = 1000;
 
-    // std::cout << "[bfs_filtered] Initial valid_nodes size: " << valid_nodes.size() << std::endl;
-    uint32_t bfs_level = 0;
-    uint32_t hops = 0;
+    // uint32_t bfs_level = 0;
+    // uint32_t hops = 0;
 
     for (size_t i = 0; i < best_L_nodes.size() ; ++i)
     {
         auto nbr = best_L_nodes[i];
+        if(nbr.id >= _max_points + _num_frozen_pts) {
+            continue;
+        }
         bfs_queue.push(nbr.id);
         visited.add(nbr.id);
         if (detect_filter_penalty(nbr.id, true, filter_vec) == 0 ) {
@@ -928,29 +930,22 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
         }
     }  
     
-    bfs_queue.push(UINT32_MAX);
+    // bfs_queue.push(UINT32_MAX);
     
 
-    while (!bfs_queue.empty() && hops < max_hops) {
+    while (!bfs_queue.empty() && final_ids.size() < final_list_size * L) {
         std::uint32_t curr = bfs_queue.front();
         bfs_queue.pop();
-        // std::cout << "[bfs_filtered] Processing node: " << curr << std::endl;
-        if(curr == UINT32_MAX) {
-            bfs_level++;
-            bfs_queue.push(UINT32_MAX);
-            continue;
-        }
-        if(curr >= _max_points + _num_frozen_pts) {
-            // std::cout << "[bfs_filtered] Skipping out of index point: " << curr << std::endl;
-            continue;
-        }
-
-        hops++;
+        // if(curr == UINT32_MAX) {
+        //     bfs_level++;
+        //     bfs_queue.push(UINT32_MAX);
+        //     continue;
+        // }
+    
+        // hops++;
 
         for (auto &nbr : _graph_store->get_neighbours(curr)) {
-            // std::cout << "[bfs_filtered] Checking neighbor: " << nbr << std::endl;
             if(nbr >= _max_points + _num_frozen_pts) {
-                // std::cout << "[bfs_filtered] Skipping out of index point: " << nbr << std::endl;
                 continue;
             }
 
@@ -959,27 +954,15 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
                 visited.add(nbr);
                 if (detect_filter_penalty(nbr, true, filter_vec) == 0 && nbr != 0) {
                     final_ids.push_back(nbr);
-                    // std::cout << "[bfs_filtered] Adding neighbor to queue: " << nbr << std::endl;
                 }
                 
             }
 
-            // if (final_ids.size() >= final_list_size * L) {
-            //     break;
-            // }
+            if (final_ids.size() >= final_list_size * L) {
+                break;
+            }
         }
     }
-
-    std::cout << "[bfs_filtered] BFS hops: " << hops << std::endl;
-
-    // std::cout<<"[bfs_filtered] BFS levels travered: " << bfs_level << std::endl;
-
-    std::cout << "[bfs_filtered] Final ids size: " << final_ids.size() << std::endl;
-    // std::cout << "[bfs_filtered] Final ids: ";
-    // for (auto &id : final_ids) {
-    //     std::cout << id << " ";
-    // }
-    // std::cout << std::endl;
 
     return final_ids;
 }
@@ -992,40 +975,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
 {
     T *aligned_query = scratch->aligned_query();
     // init_ids = get_init_ids();
-    roaring::Roaring bfs_visited;
     const std::vector<LabelT> unused_filter_label;
-    std::vector<uint32_t> &id_scratch = scratch->id_scratch();
-    std::vector<uint32_t> new_init_ids;
-    tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
-    roaring::Roaring &inserted_into_pool_bs = scratch->get_valid_bitmap();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
 
-    std::set<Neighbor> valid_nodes;
-    std::set<Neighbor> invalid_nodes;
-
-    // auto [hops, cmps] = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, false, true);
-    auto [hops, cmps] = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, false, false);
-
-    // std::cout<<"[paged_search]best_L_nodes: "<<best_L_nodes.size()<<std::endl;
-    // for (size_t i = 0; i < best_L_nodes.size(); ++i)
-    // {
-    //     auto nbr = best_L_nodes[i];
-    //     std::cout<<nbr.id<<", ";
-    // }
-    // std::cout<<std::endl;
-    
-    
+    auto [hops, cmps] = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, false, true);
 
     std::vector<uint32_t> final_ids = bfs_filtered(best_L_nodes, L, filter_vec);
 
     best_L_nodes.clear();
-    // std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
-    // std::cout << "[paged_search] Final ids: ";
-    // for (auto &id : final_ids) {
-    //     std::cout << id << " ";
-    // }
-
-    // std::cout << std::endl;
 
     //compute distance to query
     for (auto &nbr : final_ids) {
@@ -1035,18 +992,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
         best_L_nodes.insert(nn);
     }
 
-    // std::cout<<"[paged_search]best_l_nodes: ";
-    // for (size_t i = 0; i < best_L_nodes.size(); ++i)
-    // {
-    //     auto nbr = best_L_nodes[i];
-    //     std::cout<<nbr.id<<", ";
-    // }
-    // std::cout<<std::endl;
-    // std::cout<<"[paged_search]best_L_nodes: "<<best_L_nodes.size()<<std::endl;
-
-    // if(best_L_nodes.size() < K) {
-    //     std::cout<<"[paged_search]Could not find enough valid nodes"<<std::endl;
-    // }
     return std::make_pair(hops, cmps);  
 }
 
@@ -3060,7 +3005,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 out << std::endl;
                 out.close();
             }
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true, true, false);
         }
     }
 
