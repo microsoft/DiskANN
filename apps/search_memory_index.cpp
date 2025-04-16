@@ -105,6 +105,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     auto index = index_factory.create_instance();
     index->load(index_path.c_str(), 24, *(std::max_element(Lvec.begin(), Lvec.end())));
     std::cout << "Index loaded" << std::endl;
+    std::cout << "[test] using paged search approach" << std::endl;
+    
     // std::cout << "[test] using paged search approach" << std::endl;
     
     if (metric == diskann::FAST_L2)
@@ -430,6 +432,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       //                      (float)(brute_recalls[test_id]*100.0)
                       //                      << std::setw(20) << (float)(paged_search_lat[test_id]*1.0) << std::setw(20) <<
                       //                      (float)(paged_search_recalls[test_id]*100.0)
+                      //                      << std::setw(20) << (float)(paged_search_lat[test_id]*1.0) << std::setw(20) <<
+                      //                      (float)(paged_search_recalls[test_id]*100.0)
                       //                     << std::setw(20) << (float)(graph_lat[test_id]*1.0) << std::setw(20) <<
                       //                     (float)(graph_recalls[test_id]*100.0)
                       << std::endl;
@@ -467,11 +471,7 @@ int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path, query_file, gt_file, filter_label, label_type,
         query_filters_file;
-<<<<<<< HEAD
-    uint32_t num_threads, K, filter_penalty_threshold, bruteforce_threshold, clustering_threshold, L_for_print, num_local;
-=======
     uint32_t num_threads, K, filter_penalty_threshold, bruteforce_threshold, paged_search_threshold, L_for_print, num_local;
->>>>>>> t-asutradhar/paged_search_bfs_v2
     std::vector<uint32_t> Lvec;
     bool print_all_recalls, dynamic, tags, show_qps_per_thread, global_start;
     float fail_if_recall_below = 0.0f;

@@ -51,6 +51,7 @@ inline uint32_t penalty_scale = 10;
 inline uint32_t num_sp = 2;
 inline bool use_global_start = false;
 inline uint32_t num_start_points = 1;
+inline float beta_value = 0.5;
 
 namespace diskann
 {
@@ -305,7 +306,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool search_invocation);
+                                                         const std::vector<LabelT> &filters, bool search_invocation, bool penalty_approach = false,  bool beta_approach = false);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
@@ -445,7 +446,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _filterIndexingQueueSize;
     uint32_t _filter_penalty_threshold = 0;
     uint32_t _bruteforce_threshold = 0;
-    uint32_t _clustering_threshold = 0;
+    uint32_t _paged_search_threshold = 0;
     float _prob = 0.1;
     std::unordered_map<std::string, LabelT> _label_map;
 
