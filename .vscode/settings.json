@@ -67,6 +67,10 @@
         "typeinfo": "cpp",
         "variant": "cpp",
         "compare": "cpp",
-        "concepts": "cpp"
+        "concepts": "cpp",
+        "future": "cpp",
+        "numbers": "cpp",
+        "semaphore": "cpp",
+        "stop_token": "cpp"
     }
 }
