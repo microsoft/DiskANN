@@ -1083,14 +1083,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
                 if (penalty_approach) {
                     if(res > _filter_penalty_threshold)
-                        // continue;
+                        continue;
                     penalty = res * penalty_scale;
                 }
 
                 if (beta_approach)
                 {
-                    // if(res > _filter_penalty_threshold)
-                    //             continue;
                     if (res == 0)
                         beta = beta_value;
                 }
@@ -1288,14 +1286,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         res = detect_filter_penalty(id, search_invocation, filter_labels);
                         if (penalty_approach) {
                             if(res > _filter_penalty_threshold)
-                                // continue;
+                                continue;
                             penalty = res * penalty_scale;
                         }
         
                         if (beta_approach)
                         {
-                            if(res > _filter_penalty_threshold)
-                                continue;
                             if (res == 0)
                                 beta = beta_value;
                         }
