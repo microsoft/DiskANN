@@ -415,7 +415,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
         else
         {
-            std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
+            std::cout << std::setw(4) << L << std::setw(12) << std::setw(4) << recall_at << std::setw(12) 
+                      << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15) 
                       << std::setw(20) << (float)latency_999 << std::setw(15)
                       << std::setw(20) << (float)latency_99 << std::setw(15)
