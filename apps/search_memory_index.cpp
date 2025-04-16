@@ -34,7 +34,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
                         const std::vector<std::vector<std::string>> &query_filters,
                         const uint32_t filter_penalty_threshold, const uint32_t bruteforce_threshold,
-                        const uint32_t clustering_threshold, uint32_t L_for_print, const float fail_if_recall_below,
+                        const uint32_t beta_threshold, uint32_t L_for_print, const float fail_if_recall_below,
                         uint32_t maxN = 10000000, float p1 = 0.1, float p2 = 0.1)
 {
     using TagT = uint32_t;
@@ -79,9 +79,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
     std::cout << filter_penalty_threshold << " is value of filter_penalty_threshold at driver file" << std::endl;
+    std::cout << beta_value << " is value of beta_value at driver file" << std::endl;
+    std::cout << penalty_scale << " is value of penalty_scale at driver file" << std::endl;
     auto search_params =
         diskann::IndexSearchParams(*(std::max_element(Lvec.begin(), Lvec.end())), num_threads, filter_penalty_threshold,
-                                   bruteforce_threshold, clustering_threshold);
+                                   bruteforce_threshold, beta_threshold);
     auto config = diskann::IndexConfigBuilder()
                       .with_metric(metric)
                       .with_dimension(query_dim)
@@ -122,12 +124,24 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
     else
     {
-        std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
-                  << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "Recall" << std::setw(20)
-                  << "Brute Latency (mus)" << std::setw(20) << "Brute Recall" << std::setw(20) << "Clus. Latency (mus)"
-                  << std::setw(20) << "Clus. Recall" << std::setw(20) << "Graph Latency (mus)" << std::setw(20)
-                  << "Graph Recall" << std::endl;
-        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20 + 20;
+        std::cout << std::setw(4) << "Ls" 
+        << std::setw(4) << "K"
+          << std::setw(8) << qps_title 
+          << std::setw(18) << "Avg dist cmps"
+          << std::setw(20) << "Mean Latency(mus)" 
+          << std::setw(20) << "99.9 Latency(mus)" 
+          << std::setw(20) << "99 Latency(mus)" 
+          << std::setw(20) << "95 Latency(mus)" 
+          << std::setw(10) << "Recall" 
+          << std::setw(22) << "Brute Latency(mus)" 
+          << std::setw(20) << "Brute Recall" 
+          << std::setw(22) << "Beta Latency(mus)" 
+          << std::setw(20) << "Beta Recall" 
+          << std::setw(22) << "Graph Latency(mus)" 
+          << std::setw(20) << "Graph Recall" 
+          << std::endl;
+
+    table_width += 4 + 4 + 8 + 18 + 20 + 20 + 20 + 20 + 10 + 22 + 20 + 22 + 20 + 22 + 20;
     }
     /*    uint32_t recalls_to_print = 0;
         const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -147,10 +161,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
     std::vector<std::vector<uint32_t>> query_result_class(Lvec.size());
     std::vector<float> brute_recalls(Lvec.size(), 0);
-    std::vector<float> cluster_recalls(Lvec.size(), 0);
+    std::vector<float> beta_recalls(Lvec.size(), 0);
     std::vector<float> graph_recalls(Lvec.size(), 0);
     std::vector<float> brute_lat(Lvec.size(), 0);
-    std::vector<float> cluster_lat(Lvec.size(), 0);
+    std::vector<float> beta_lat(Lvec.size(), 0);
     std::vector<float> graph_lat(Lvec.size(), 0);
     for (auto &x : query_result_class)
         x.resize(query_num, 0);
@@ -179,7 +193,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         time_to_filter_check_and_compare = 0;
         time_to_detect_penalty = 0;
         num_brutes = 0;
-        num_clusters = 0;
+        num_beta = 0;
         num_graphs = 0;
         uint32_t L = Lvec[test_id];
         /*        if (L < recall_at)
@@ -216,14 +230,14 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 uint32_t old_b, old_g, old_c;
                 old_b = num_brutes;
                 old_g = num_graphs;
-                old_c = num_clusters;
+                old_c = num_beta;
                 method_used = 0;
                 std::vector<std::string> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
 
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
                                                          query_result_ids[test_id].data() + i * recall_at,
                                                          query_result_dists[test_id].data() + i * recall_at);
-                if (num_clusters > old_c)
+                if (num_beta > old_c)
                     method_used = 1;
                 else if (num_graphs > old_g)
                     method_used = 2;
@@ -278,7 +292,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 break;
             case 1:
                 query_result_class[test_id][i] = 1;
-                cluster_lat[test_id] += latency_stats[i];
+                beta_lat[test_id] += latency_stats[i];
                 break;
             case 2:
                 query_result_class[test_id][i] = 2;
@@ -370,7 +384,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                     brute_recalls[test_id] += cur_recall;
                     break;
                 case 1:
-                    cluster_recalls[test_id] += cur_recall;
+                    beta_recalls[test_id] += cur_recall;
                     break;
                 case 2:
                     graph_recalls[test_id] += cur_recall;
@@ -386,6 +400,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
 
         std::sort(latency_stats.begin(), latency_stats.end());
+        double latency_999 = latency_stats[(uint64_t)(0.999 * query_num)];
+        double latency_99 = latency_stats[(uint64_t)(0.99 * query_num)];
+        double latency_95 = latency_stats[(uint64_t)(0.95 * query_num)];
         double mean_latency =
             std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) / static_cast<float>(query_num);
 
@@ -399,24 +416,28 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         else
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
-                      << std::setw(20) << (float)mean_latency << std::setw(15) << (float)recalls[0] << std::setw(20)
+                      << std::setw(20) << (float)mean_latency << std::setw(15) 
+                      << std::setw(20) << (float)latency_999 << std::setw(15)
+                      << std::setw(20) << (float)latency_99 << std::setw(15)
+                      << std::setw(20) << (float)latency_95 << std::setw(15)
+                      << (float)recalls[0] << std::setw(20)
                       << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
                       << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) << std::setw(20)
-                      << (float)(cluster_lat[test_id] * 1.0) / (num_clusters * 1.0) << std::setw(20)
-                      << (float)(cluster_recalls[test_id] * 100.0) / (num_clusters * recall_at * 1.0) << std::setw(20)
+                      << (float)(beta_lat[test_id] * 1.0) / (num_beta * 1.0) << std::setw(20)
+                      << (float)(beta_recalls[test_id] * 100.0) / (num_beta * recall_at * 1.0) << std::setw(20)
                       << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(20)
                       << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0)
                       //                      << std::setw(20) << (float)(brute_lat[test_id]*1.0) << std::setw(20) <<
                       //                      (float)(brute_recalls[test_id]*100.0)
-                      //                      << std::setw(20) << (float)(cluster_lat[test_id]*1.0) << std::setw(20) <<
-                      //                      (float)(cluster_recalls[test_id]*100.0)
+                      //                      << std::setw(20) << (float)(beta_lat[test_id]*1.0) << std::setw(20) <<
+                      //                      (float)(beta_recalls[test_id]*100.0)
                       //                     << std::setw(20) << (float)(graph_lat[test_id]*1.0) << std::setw(20) <<
                       //                     (float)(graph_recalls[test_id]*100.0)
                       << std::endl;
         }
     }
     std::cout << "num_graphs " << num_graphs << std::endl;
-    std::cout << "num_clusters " << num_clusters << std::endl;
+    std::cout << "num_beta " << num_beta << std::endl;
     std::cout << "num_brutes " << num_brutes << std::endl;
 
     std::cout << "Done searching. Now saving results " << std::endl;
@@ -447,7 +468,7 @@ int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, index_path_prefix, result_path, query_file, gt_file, filter_label, label_type,
         query_filters_file;
-    uint32_t num_threads, K, filter_penalty_threshold, bruteforce_threshold, clustering_threshold, L_for_print, num_local;
+    uint32_t num_threads, K, filter_penalty_threshold, bruteforce_threshold, beta_threshold, L_for_print, num_local;
     std::vector<uint32_t> Lvec;
     bool print_all_recalls, dynamic, tags, show_qps_per_thread, global_start;
     float fail_if_recall_below = 0.0f;
@@ -493,8 +514,8 @@ int main(int argc, char **argv)
         optional_configs.add_options()("bruteforce_threshold",
                                        po::value<uint32_t>(&bruteforce_threshold)->default_value(0),
                                        "Threshold under which we bruteforce the filtered search");
-        optional_configs.add_options()("clustering_threshold",
-                                       po::value<uint32_t>(&clustering_threshold)->default_value(0),
+        optional_configs.add_options()("beta_threshold",
+                                       po::value<uint32_t>(&beta_threshold)->default_value(0),
                                        "Threshold under which we use clustering for the filtered search");
         optional_configs.add_options()("use_global_start",
                                        po::value<bool>(&global_start)->default_value(false),
@@ -624,21 +645,21 @@ int main(int argc, char **argv)
                 return search_memory_index<int8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
                     Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                    bruteforce_threshold, beta_threshold, L_for_print, fail_if_recall_below);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
                     Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                    bruteforce_threshold, beta_threshold, L_for_print, fail_if_recall_below);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
                     Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                    bruteforce_threshold, beta_threshold, L_for_print, fail_if_recall_below);
             }
             else
             {
@@ -653,21 +674,21 @@ int main(int argc, char **argv)
                 return search_memory_index<int8_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
                     Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below, maxN, p1, p2);
+                    bruteforce_threshold, beta_threshold, L_for_print, fail_if_recall_below, maxN, p1, p2);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
                     Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                    bruteforce_threshold, beta_threshold, L_for_print, fail_if_recall_below);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
                     Lvec, dynamic, tags, show_qps_per_thread, query_filters, filter_penalty_threshold,
-                    bruteforce_threshold, clustering_threshold, L_for_print, fail_if_recall_below);
+                    bruteforce_threshold, beta_threshold, L_for_print, fail_if_recall_below);
             }
             else
             {
