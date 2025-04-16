@@ -1011,7 +1011,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::paged_search_filters(const
     std::vector<uint32_t> final_ids = bfs_filtered(best_L_nodes, L, filter_vec);
 
     best_L_nodes.clear();
-    std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
+    // std::cout << "[paged_search] Final ids size: " << final_ids.size() << std::endl;
     // std::cout << "[paged_search] Final ids: ";
     // for (auto &id : final_ids) {
     //     std::cout << id << " ";
