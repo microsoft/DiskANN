@@ -817,13 +817,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         diverse_search = true;
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes_ref = scratch->best_l_nodes();
-    bestCandidates &best_diverse_nodes_ref = scratch->best_diverse_nodes();
+    NeighborPriorityQueueExtendColor&best_diverse_nodes_ref = scratch->best_diverse_nodes();
     best_L_nodes_ref.reserve(Lsize);
     best_diverse_nodes_ref.setup(Lsize, maxLperSeller);
 
-    NeighborPriorityQueue* best_L_nodes;
+    NeighborPriorityQueueBase* best_L_nodes;
     if(diverse_search) {
-        best_L_nodes = &(best_diverse_nodes_ref.best_L_nodes);
+        best_L_nodes = &(best_diverse_nodes_ref);
     } else {
         best_L_nodes = &(best_L_nodes_ref);
     }
@@ -905,11 +905,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             distance = distances[0];
 
             Neighbor nn = Neighbor(id, distance);
-            if (diverse_search) {
-                best_diverse_nodes_ref.insert(id, distance);
-            } else {
-                best_L_nodes->insert(nn);
-            }
+            best_L_nodes->insert(nn);
         }
     }
 
@@ -1014,11 +1010,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
         std::cout<<" == " <<best_L_nodes.size()<<std::endl; */
             int32_t run_flag = 0;
-            if (diverse_search) {
-                best_diverse_nodes_ref.insert(id_scratch[m], dist_scratch[m]);
-            } else {
             best_L_nodes->insert(Neighbor(id_scratch[m], dist_scratch[m]));
-            }
+            
         }
     }
     return std::make_pair(hops, cmps);
@@ -2255,11 +2248,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
 
     auto retval = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, maxLperSeller);
 
-    NeighborPriorityQueue *best_L_nodes;
+    NeighborPriorityQueueBase*best_L_nodes;
     if (maxLperSeller == 0) {
         best_L_nodes = &(scratch->best_l_nodes());
     } else {
-        best_L_nodes = &(scratch->best_diverse_nodes().best_L_nodes);
+        best_L_nodes = &(scratch->best_diverse_nodes());
     }
 
     size_t pos = 0;

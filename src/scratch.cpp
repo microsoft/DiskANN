@@ -67,6 +67,7 @@ template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l
         _L = new_l;
         _pool.reserve(3 * _L + _R);
         _best_l_nodes.reserve(_L);
+//        _best_diverse_nodes.reserve(_L);
 
         _inserted_into_pool_rs.reserve(20 * _L);
     }

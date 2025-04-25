@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <mutex>
 #include <vector>
+#include <assert.h>
 #include <tsl/robin_map.h>
 #include "utils.h"
 
@@ -39,6 +40,7 @@ struct NeighborExtendColor : public Neighbor
 {
     uint32_t color;
     int previous = -1;
+    bool max_flag = false;
 
     NeighborExtendColor() = default;
 
@@ -64,9 +66,11 @@ public:
 
     virtual Neighbor operator[](size_t i) const = 0;
 
-    virtual void insert(const Neighbor& nbr, size_t loc, size_t size) = 0;
+    virtual void insert(const Neighbor& nbr, int insert_loc, int kick_lo, int quene_len) = 0;
 
-    virtual size_t current_size(const Neighbor& nbr) const = 0;
+    virtual size_t get_kick_quene_len(const Neighbor& nbr, size_t quene_len) const = 0;
+
+    virtual void clear() = 0;
 };
 
 class NeighborVector : public NeighborVectorBase
@@ -90,18 +94,10 @@ public:
         return _data[i];
     }
 
-    virtual void insert(const Neighbor& nbr, size_t lo, size_t size) override
+    virtual void insert(const Neighbor& nbr, int lo, int /*kick_loc*/, int size) override
     {
-        if (lo < _capacity)
-        {
-            std::memmove(&_data[lo + 1], &_data[lo], (size - lo) * sizeof(Neighbor));
-        }
+        std::memmove(&_data[lo + 1], &_data[lo], (size - lo) * sizeof(Neighbor));
         _data[lo] = { nbr.id, nbr.distance };
-
-        if (_size < _capacity)
-        {
-            _size++;
-        }
     }
 
     void resize(size_t capacity)
@@ -110,20 +106,32 @@ public:
         _capacity = capacity;
     }
 
-    virtual size_t current_size(const Neighbor&) const override
+    virtual size_t get_kick_quene_len(const Neighbor&, size_t quene_len) const override
     {
-        return _size;
+        return quene_len;
+    }
+
+    virtual void clear() override
+    {
+        // no need additional clear up
     }
 
   private:
     std::vector<Neighbor> _data;
     size_t _capacity = 0;
-    size_t _size = 0;
 };
 
 class NeighborExtendColorVector : public NeighborVectorBase
 {
   public:
+
+    NeighborExtendColorVector(std::vector<uint32_t>& location_to_seller)
+        : _location_to_seller(location_to_seller)
+    {
+        _color_to_max_node.reserve(1000);
+        _color_to_len.reserve(1000);
+    }
+
     NeighborExtendColorVector(size_t capacity, uint32_t maxLperSeller, std::vector<uint32_t>& location_to_seller)
         : _capacity(capacity)
         , _data(capacity + 1, NeighborExtendColor(std::numeric_limits<uint32_t>::max(),
@@ -131,6 +139,8 @@ class NeighborExtendColorVector : public NeighborVectorBase
         , _location_to_seller(location_to_seller), _maxLperSeller(maxLperSeller)
 
     {
+        _color_to_max_node.reserve(1000);
+        _color_to_len.reserve(1000);
     }
 
     virtual Neighbor &operator[](size_t i) override
@@ -144,50 +154,99 @@ class NeighborExtendColorVector : public NeighborVectorBase
         return nbr;
     }
 
-    virtual void insert(const Neighbor &nbr, size_t lo, size_t size) override
+    virtual void insert(const Neighbor &nbr, int insert_lo, int kick_lo, int quene_len) override
     {
+        // keep the kick out node to further process
+        NeighborExtendColor last = _data[kick_lo];
+
         uint32_t color = _location_to_seller[nbr.id];
-        auto max_iter = _color_to_max_node.find(color);
         NeighborExtendColor nbr_extend(nbr.id, nbr.distance, color);
 
-        if (lo < _capacity)
+        for (int i = kick_lo - 1; i >= insert_lo; i--)
         {
-            for (size_t i = size - 1; i >= lo; i--)
+            // if the color is the same and previous node < insert_lo,
+            // insert node and update location
+            if (_data[i].color == color && _data[i].previous < insert_lo)
             {
-                // if the color is the same and previous node < lo,
-                // insert node and update location
-                if (_data[i].color == color && _data[i].previous < lo)
-                {
-                    nbr_extend.previous = _data[i].previous;
-                    _data[i].previous = lo;
-                }
-
+                nbr_extend.previous = _data[i].previous;
+                _data[i].previous = insert_lo;
+            }
+            else if (_data[i].previous >= insert_lo)
+            {
                 // previous node > lo means the node will move one slot to the right
-                if (_data[i].previous >= lo) 
-                {
-                    _data[i].previous++;
-                }
+                _data[i].previous++;
+            }
                 
-                _data[i + 1] = _data[i];
+            // update max node location
+            if (_data[i].max_flag)
+            {
+                _color_to_max_node[_data[i].color] = i + 1;
             }
 
-            // current node is the max dist node
-            if (nbr_extend.previous == -1 && max_iter != _color_to_max_node.end())
-            {
-                nbr_extend.previous = max_iter.value();
-                _color_to_max_node[color] = lo;
-            }
+            _data[i + 1] = _data[i];
+        }
 
-            if (max_iter == _color_to_max_node.end())
+        // update the node from kick_lo to the end of the queue,
+        // there are two possible cases:
+        // 1. the queue isn't full and queue_len point to next empty slot
+        // 2. the queue isn full and queue_len point to the tail slot
+        // if the node at queue_len is empty slot, the previous == -1,
+        // so it's no impact in the loop, to make the access safty, we have to allocate (capacity + 1) slots
+        for (int i = kick_lo + 1; i < quene_len; i++)
+        {
+            if (_data[i].previous == kick_lo)
             {
-                _color_to_max_node[color] = lo;
-                _color_to_len[color] = 1;
+                // the node is removed, link to previous node
+                _data[i].previous = last.previous;
+            }
+            else if (_data[i].previous >= insert_lo && _data[i].previous < kick_lo)
+            {
+                // previous node is in the moving range
+                _data[i].previous++;
             }
         }
-        _data[lo] = nbr_extend;
+
+        // it's not insert to empty slot, process kick out node
+        if (kick_lo != quene_len - 1)
+        {
+            uint32_t last_node_color = last.color;
+            _color_to_max_node[last_node_color] = last.previous;
+            if (last.previous != -1)
+            {
+                _data[last.previous].max_flag = true;
+            }
+            _color_to_len[last_node_color]--;
+        }
+
+        // process the new node
+        auto max_iter = _color_to_max_node.find(color);
+        // current node is the max dist node
+        if (nbr_extend.previous == -1
+            && max_iter != _color_to_max_node.end()
+            && max_iter.value() != -1
+            && insert_lo > max_iter.value())
+        {
+            nbr_extend.previous = max_iter.value();
+            _data[max_iter.value()].max_flag = false;
+            _color_to_max_node[color] = insert_lo;
+            nbr_extend.max_flag = true;
+        }
+        else if (max_iter == _color_to_max_node.end()
+            || max_iter.value() == -1)
+        {
+            // new color insert to queue
+            _color_to_max_node[color] = insert_lo;
+            _color_to_len[color] = 0;
+            nbr_extend.max_flag = true;
+        }
+            
+        // update the length of the color
+        _color_to_len[color]++;
+
+        _data[insert_lo] = nbr_extend;
     }
 
-    virtual size_t current_size(const Neighbor& nbr) const override
+    virtual size_t get_kick_quene_len(const Neighbor& nbr, size_t queue_len) const override
     {
         uint32_t color = _location_to_seller[nbr.id];
 
@@ -195,30 +254,40 @@ class NeighborExtendColorVector : public NeighborVectorBase
         if (len_iter == _color_to_len.end()
             || len_iter.value() < _maxLperSeller)
         {
-            return _size;
+            return queue_len;
         }
 
         auto max_iter = _color_to_max_node.find(color);
         
-        return max_iter.value();
+        assert(max_iter.value() >= 0);
+
+        return max_iter.value() + 1;
     }
 
-    void resize(size_t capacity)
+    void resize(size_t capacity, uint32_t maxLperSeller)
     {
         _data.resize(capacity + 1, NeighborExtendColor(std::numeric_limits<uint32_t>::max(),
             std::numeric_limits<float>::max(), 0));
         _capacity = capacity;
+        _maxLperSeller = maxLperSeller;
     }
 
+    virtual void clear() override
+    {
+        // no need additional clear up
+        _color_to_max_node.clear();
+        _color_to_max_node.clear();
+    }
+
+    
   private:
     std::vector<NeighborExtendColor> _data;
     std::vector<uint32_t>& _location_to_seller;
-    tsl::robin_map<uint32_t, uint32_t> _color_to_max_node;
+    tsl::robin_map<uint32_t, int> _color_to_max_node;
     tsl::robin_map<uint32_t, uint32_t> _color_to_len;
 
     uint32_t _maxLperSeller = 0;
     size_t _capacity = 0;
-    size_t _size = 0;
 };
 
 class NeighborPriorityQueueBase
@@ -232,6 +301,11 @@ public:
     {
     }
 
+    virtual void insert(const Neighbor& nbr) = 0;
+    virtual Neighbor closest_unexpanded() = 0;
+    virtual Neighbor& operator[](size_t i) = 0;
+    virtual Neighbor operator[](size_t i) const = 0;
+
     // Inserts the item ordered into the set up to the sets capacity.
     // The item will be dropped if it is the same id as an exiting
     // set item or it has a greated distance than the final
@@ -239,12 +313,15 @@ public:
     // next item will be set to the lowest index of an uncheck item
     void insert(const Neighbor& nbr, NeighborVectorBase& neighborVector)
     {
-        if (_size == _capacity && neighborVector[_size - 1] < nbr)
+        auto kick_queue_len = neighborVector.get_kick_quene_len(nbr, _size);
+        // if the kick location isn't empty slot, then check the dist 
+        if ((kick_queue_len < _size || _size == _capacity)
+            && neighborVector[kick_queue_len - 1] < nbr)
         {
             return;
         }
 
-        size_t lo = 0, hi = _size;
+        size_t lo = 0, hi = kick_queue_len;
         while (lo < hi)
         {
             size_t mid = (lo + hi) >> 1;
@@ -263,11 +340,13 @@ public:
             }
         }
 
+        // for the case kick_queue_len < size, it should be always find location to insert
+        // because neighborVector[kick_queue_len - 1] < nbr already make sure it should be insert.
         if (lo < _capacity)
         {
-            neighborVector.insert(nbr, lo, _size);
+            neighborVector.insert(nbr, static_cast<int>(lo), static_cast<int>(kick_queue_len - 1), static_cast<int>(_size));
         }
-        if (_size < _capacity)
+        if (kick_queue_len == _size && _size < _capacity)
         {
             _size++;
         }
@@ -303,7 +382,7 @@ public:
         return _capacity;
     }
 
-    void clear()
+    virtual void clear()
     {
         _size = 0;
         _cur = 0;
@@ -314,15 +393,15 @@ public:
 //    std::vector<Neighbor> _data;
 };
 
-class NeighborPriorityQueueNormal : public NeighborPriorityQueueBase
+class NeighborPriorityQueue : public NeighborPriorityQueueBase
 {
 public:
-    NeighborPriorityQueueNormal()
+    NeighborPriorityQueue()
         : NeighborPriorityQueueBase()
     {
     }
 
-    explicit NeighborPriorityQueueNormal(size_t capacity)
+    explicit NeighborPriorityQueue(size_t capacity)
         : NeighborPriorityQueueBase(capacity)
         , _data(capacity)
     {
@@ -333,12 +412,12 @@ public:
         _capacity = capacity;
     }
 
-    void insert(const Neighbor& nbr)
+    virtual void insert(const Neighbor& nbr) override
     {
         NeighborPriorityQueueBase::insert(nbr, _data);
     }
 
-    Neighbor closest_unexpanded()
+    virtual Neighbor closest_unexpanded() override
     {
         return NeighborPriorityQueueBase::closest_unexpanded(_data);
     }
@@ -352,12 +431,12 @@ public:
         _capacity = capacity;
     }
 
-    Neighbor& operator[](size_t i)
+    virtual Neighbor& operator[](size_t i) override
     {
         return _data[i];
     }
 
-    Neighbor operator[](size_t i) const
+    virtual Neighbor operator[](size_t i) const override
     {
         return _data[i];
     }
@@ -369,42 +448,61 @@ public:
 class NeighborPriorityQueueExtendColor : public NeighborPriorityQueueBase
 {
 public:
+    NeighborPriorityQueueExtendColor(std::vector<uint32_t>& location_to_seller)
+        : NeighborPriorityQueueBase(), _data(location_to_seller)
+    {
+    }
+
     NeighborPriorityQueueExtendColor(size_t capacity, uint32_t maxLperSeller, std::vector<uint32_t>& location_to_seller)
         : NeighborPriorityQueueBase()
         , _data(capacity, maxLperSeller, location_to_seller)
     {
     }
 
-    void setup(uint32_t capacity) {
-        _data.resize(capacity);
+    void setup(uint32_t capacity, uint32_t maxLperSeller) {
+        _data.resize(capacity, maxLperSeller);
         _capacity = capacity;
     }
 
-    void insert(const Neighbor& nbr)
+    void get_data(std::vector<Neighbor>& data) const
+    {
+        for (size_t i = 0; i < _size; i++)
+        {
+            data.push_back(_data[i]);
+        }
+    }
+
+    virtual void insert(const Neighbor& nbr) override
     {
         NeighborPriorityQueueBase::insert(nbr, _data);
     }
 
-    Neighbor closest_unexpanded()
+    virtual Neighbor closest_unexpanded() override
     {
         return NeighborPriorityQueueBase::closest_unexpanded(_data);
     }
 
-    void reserve(size_t capacity)
+    //void reserve(size_t capacity)
+    //{
+    //    if (capacity > _capacity)
+    //    {
+    //        _data.resize(capacity + 1);
+    //    }
+    //    _capacity = capacity;
+    //}
+
+    virtual void clear() override
     {
-        if (capacity > _capacity)
-        {
-            _data.resize(capacity + 1);
-        }
-        _capacity = capacity;
+        NeighborPriorityQueueBase::clear();
+        _data.clear();
     }
 
-    Neighbor& operator[](size_t i)
+    virtual Neighbor& operator[](size_t i) override
     {
         return _data[i];
     }
 
-    Neighbor operator[](size_t i) const
+    virtual Neighbor operator[](size_t i) const override
     {
         return _data[i];
     }
@@ -412,244 +510,5 @@ public:
 private:
     NeighborExtendColorVector _data;
 };
-
-// Invariant: after every `insert` and `closest_unexpanded()`, `_cur` points to
-//            the first Neighbor which is unexpanded.
-class NeighborPriorityQueue
-{
-  public:
-    NeighborPriorityQueue() : _size(0), _capacity(0), _cur(0)
-    {
-    }
-
-    explicit NeighborPriorityQueue(size_t capacity) : _size(0), _capacity(capacity), _cur(0), _data(capacity + 1, Neighbor(std::numeric_limits<uint32_t>::max(), std::numeric_limits<float>::max()))
-    {
-    }
-
-    void setup(uint32_t capacity) {
-        _data.resize(capacity+1,Neighbor(std::numeric_limits<uint32_t>::max(), std::numeric_limits<float>::max()));
-        _capacity = capacity;
-    }
-    // Inserts the item ordered into the set up to the sets capacity.
-    // The item will be dropped if it is the same id as an exiting
-    // set item or it has a greated distance than the final
-    // item in the set. The set cursor that is used to pop() the
-    // next item will be set to the lowest index of an uncheck item
-    void insert(const Neighbor &nbr)
-    {
-        if (_size == _capacity && _data[_size - 1] < nbr)
-        {
-            return;
-        }
-
-        size_t lo = 0, hi = _size;
-        while (lo < hi)
-        {
-            size_t mid = (lo + hi) >> 1;
-            if (nbr < _data[mid])
-            {
-                hi = mid;
-                // Make sure the same id isn't inserted into the set
-            }
-            else if (_data[mid].id == nbr.id)
-            {
-                return;
-            }
-            else
-            {
-                lo = mid + 1;
-                }
-        }
-
-        if (lo < _capacity)
-        {
-            std::memmove(&_data[lo + 1], &_data[lo], (_size - lo) * sizeof(Neighbor));
-        }
-        _data[lo] = {nbr.id, nbr.distance};
-        if (_size < _capacity)
-        {
-            _size++;
-        }
-        if (lo < _cur)
-        {
-            _cur = lo;
-        }
-    }
-
-
-    // Deletes the item if found.
-    void delete_id(const Neighbor &nbr)
-    {
-        size_t lo = 0, hi = _size;
-        size_t loc = std::numeric_limits<uint64_t>::max();
-        while ((lo < hi) && loc == std::numeric_limits<uint64_t>::max())
-        {
-            size_t mid = (lo + hi) >> 1;
-            if (nbr.distance < _data[mid].distance)
-            {
-                hi = mid;
-            }
-            else if (nbr.distance > _data[mid].distance)
-            {
-                lo = mid+1;
-            }
-            else
-            {
-                uint32_t itr = 0;
-                for (;; itr++) {
-                    if (mid + itr < hi) {
-                    if (_data[mid+itr].id == nbr.id) {
-                    loc = mid+itr;
-                    break;
-                    }
-                    }
-                    if(mid - itr >= lo) {
-                    if (_data[mid-itr].id == nbr.id) {
-                    loc = mid-itr;
-                    break;
-                    }                    
-                    }
-                }
-            }
-        }
-
-        if (loc != std::numeric_limits<uint64_t>::max())
-        {
-            std::memmove(&_data[loc], &_data[loc+1], (_size - loc - 1) * sizeof(Neighbor));
-            _size--;
-            _cur = 0;
-            while (_cur < _size && _data[_cur].expanded) // RK: inefficient!
-            {
-                _cur++;
-            }
-        } else {
-            std::cout<<"Found a problem! " << lo <<" " << hi <<" " <<nbr.id << "," << nbr.distance << " " <<_size << std::endl;
-            uint32_t pos = 0;
-            for (auto &x : this->_data) {
-                std::cout<<pos<<":" <<x.id<<"," << x.distance <<" " << std::flush;
-                pos++;
-            }
-            std::cout<<std::endl;
-        }
-    }
-
-
-    Neighbor closest_unexpanded()
-    {
-        _data[_cur].expanded = true;
-        size_t pre = _cur;
-        while (_cur < _size && _data[_cur].expanded)
-        {
-            _cur++;
-        }
-        return _data[pre];
-    }
-
-    bool has_unexpanded_node() const
-    {
-        return _cur < _size;
-    }
-
-    size_t size() const
-    {
-        return _size;
-    }
-
-    size_t capacity() const
-    {
-        return _capacity;
-    }
-
-    void reserve(size_t capacity)
-    {
-        if (capacity + 1 > _data.size())
-        {
-            _data.resize(capacity + 1);
-        }
-        _capacity = capacity;
-    }
-
-    Neighbor &operator[](size_t i)
-    {
-        return _data[i];
-    }
-
-    Neighbor operator[](size_t i) const
-    {
-        return _data[i];
-    }
-
-    void clear()
-    {
-        _size = 0;
-        _cur = 0;
-    }
-
-  public:
-    size_t _size, _capacity, _cur;
-    std::vector<Neighbor> _data;
-};
-
-
-struct bestCandidates {
-    NeighborPriorityQueue best_L_nodes;
-    tsl::robin_map<uint32_t, NeighborPriorityQueue> color_to_nodes;
-    uint32_t _Lsize = 0;
-    uint32_t _maxLperSeller = 0;
-    std::vector<uint32_t> &_location_to_seller;
-
-    bestCandidates(std::vector<uint32_t> &location_to_seller) : _location_to_seller(location_to_seller) {
-    }
-
-    bestCandidates(uint32_t Lsize, uint32_t maxLperSeller, std::vector<uint32_t> &location_to_seller) : _location_to_seller(location_to_seller) {
-        _Lsize = Lsize;
-        _maxLperSeller = maxLperSeller;
-        best_L_nodes = NeighborPriorityQueue(_Lsize);
-    }
-
-    void clear() {
-        best_L_nodes.clear();
-        color_to_nodes.clear();
-    }
-
-    void setup(uint32_t Lsize, uint32_t maxLperSeller) {
-        _Lsize = Lsize;
-        _maxLperSeller = maxLperSeller;
-        best_L_nodes = NeighborPriorityQueue(_Lsize);
-    }
-
-    void insert(uint32_t cur_id, float cur_dist) {
-            //std::cout<<cur_id << _location_to_seller[cur_id] << " : " << std::flush;
-            if (color_to_nodes.find(_location_to_seller[cur_id]) == color_to_nodes.end()) {
-                    color_to_nodes[_location_to_seller[cur_id]] = NeighborPriorityQueue(_maxLperSeller);
-            }
-                auto &cur_list = color_to_nodes[_location_to_seller[cur_id]];
-                if (cur_list.size() < _maxLperSeller && best_L_nodes.size() < _Lsize) {
-                    cur_list.insert(Neighbor(cur_id, cur_dist));
-                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));
-                    
-                } else if (cur_list.size() == _maxLperSeller) {
-                    if (cur_dist < cur_list[_maxLperSeller-1].distance) {
-                     best_L_nodes.delete_id(cur_list[_maxLperSeller-1]);   
-                    cur_list.insert(Neighbor(cur_id, cur_dist));
-                    best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
-                    
-                    }
-                } else if (cur_list.size() < _maxLperSeller && best_L_nodes.size() == _Lsize) {
-                    if (cur_dist < best_L_nodes[_Lsize-1].distance) {
-/*                        if (color_to_nodes[_location_to_seller[best_L_nodes[Lsize-1].id]].size() == 0) {
-                            std::cout<<"Trying to delete from empty Q. " << best_L_nodes[Lsize-1].id <<" of color " << _location_to_seller[best_L_nodes[Lsize-1].id] << std::endl;
-                        }*/
-                     color_to_nodes[_location_to_seller[best_L_nodes[_Lsize-1].id]].delete_id(best_L_nodes[_Lsize-1]);
-                     cur_list.insert(Neighbor(cur_id, cur_dist));
-                     best_L_nodes.insert(Neighbor(cur_id, cur_dist));                    
-                    
-                    }
-                }
-    }
-};
-
-
-
 
 } // namespace diskann

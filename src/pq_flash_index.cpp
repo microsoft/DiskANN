@@ -1342,7 +1342,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (max_k_per_seller != std::numeric_limits<uint32_t>::max())
     {
         diverse_search = true;
-        max_l_per_seller = max_k_per_seller * (l_search / k_search);
+        max_l_per_seller = max_k_per_seller * static_cast<uint32_t>(l_search / k_search);
     }
 
     uint64_t num_sector_per_nodes = DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
@@ -1427,15 +1427,16 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     tsl::robin_set<uint64_t> &visited = query_scratch->visited;
     //NeighborPriorityQueue &retset = query_scratch->retset;
-    bestCandidates &best_diverse_nodes_ref = query_scratch->best_diverse_nodes;
+    NeighborPriorityQueueExtendColor&best_diverse_nodes_ref = query_scratch->best_diverse_nodes;
 
-    NeighborPriorityQueue* retset;
+    NeighborPriorityQueueBase* retset;
     if(diverse_search) {
-        best_diverse_nodes_ref.setup(l_search, max_l_per_seller);
-        retset = &(best_diverse_nodes_ref.best_L_nodes);
+        best_diverse_nodes_ref.setup(static_cast<uint32_t>(l_search), max_l_per_seller);
+        retset = &(best_diverse_nodes_ref);
     } else {
+        query_scratch->retset.reserve(l_search);
         retset = &(query_scratch->retset);
-        retset->reserve(l_search);
+    //    retset->reserve(l_search);
     }
 
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
@@ -1480,11 +1481,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
-            if (diverse_search) {
-                best_diverse_nodes_ref.insert(best_medoid, dist_scratch[0]);
-            } else {
-                retset->insert(Neighbor(best_medoid, dist_scratch[0]));
-            }
+    retset->insert(Neighbor(best_medoid, dist_scratch[0]));
 
     //retset->insert(Neighbor(best_medoid, dist_scratch[0]));
     visited.insert(best_medoid);
@@ -1619,11 +1616,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     float dist = dist_scratch[m];
 
 //                    retset->insert(nn);
-            if (diverse_search) {
-                best_diverse_nodes_ref.insert(id, dist);
-            } else {
-            retset->insert(Neighbor(id, dist));
-            }
+                    retset->insert(Neighbor(id, dist));
+            
                 }
             }
         }
@@ -1692,11 +1686,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
                     Neighbor nn(id, dist);
 //                    retset->insert(nn);
-            if (diverse_search) {
-                best_diverse_nodes_ref.insert(id, dist);
-            } else {
-            retset->insert(Neighbor(id, dist));
-            }
+                    retset->insert(Neighbor(id, dist));
+            
                 }
             }
 
@@ -1766,12 +1757,13 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     if (diverse_search) {
         best_diverse_nodes_ref.clear();
-        best_diverse_nodes_ref.setup(k_search, max_k_per_seller);
+        best_diverse_nodes_ref.setup(static_cast<uint32_t>(k_search), max_k_per_seller);
 
         for (auto &x : full_retset) {
-            best_diverse_nodes_ref.insert(x.id, x.distance);
+            best_diverse_nodes_ref.insert(Neighbor(x.id, x.distance));
         }
-        full_retset = best_diverse_nodes_ref.best_L_nodes._data;
+        full_retset.clear();
+        best_diverse_nodes_ref.get_data(full_retset);
     }
 
     // copy k_search values

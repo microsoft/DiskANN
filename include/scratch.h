@@ -61,7 +61,7 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _best_l_nodes;
     }
-    inline bestCandidates &best_diverse_nodes()
+    inline NeighborPriorityQueueExtendColor&best_diverse_nodes()
     {
         return _best_diverse_nodes;
     }
@@ -111,7 +111,8 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     // _best_l_nodes is reserved for storing best L entries
     // Underlying storage is L+1 to support inserts
     NeighborPriorityQueue _best_l_nodes;
-    bestCandidates _best_diverse_nodes;
+    NeighborPriorityQueueExtendColor _best_diverse_nodes;
+//    bestCandidates _best_diverse_nodes;
 
     // _occlude_factor.size() >= pool.size() in occlude_list function
     // _pool is clipped to maxc in occlude_list before affecting _occlude_factor
@@ -154,7 +155,7 @@ template <typename T> class SSDQueryScratch : public AbstractScratch<T>
     tsl::robin_set<size_t> visited;
     NeighborPriorityQueue retset;
     std::vector<Neighbor> full_retset;
-    bestCandidates best_diverse_nodes;    
+    NeighborPriorityQueueExtendColor best_diverse_nodes;
 
     SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, std::vector<uint32_t> &location_to_sellers);
     ~SSDQueryScratch();
