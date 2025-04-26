@@ -141,7 +141,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Filter support search
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const std::vector<LabelT> &filter_labels,
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
 
