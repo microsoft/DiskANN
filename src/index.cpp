@@ -912,6 +912,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     roaring::Roaring visited;
     std::vector<uint32_t> final_ids;
     uint32_t final_list_size = 1;
+    uint32_t max_hops = 2000;
 
     // uint32_t bfs_level = 0;
 
@@ -930,8 +931,9 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
     
     // bfs_queue.push(UINT32_MAX);
     
+    uint32_t hops = 0;
 
-    while (!bfs_queue.empty() && final_ids.size() < final_list_size * L) {
+    while (!bfs_queue.empty() && final_ids.size() < final_list_size * L && hops < max_hops) {
         std::uint32_t curr = bfs_queue.front();
         bfs_queue.pop();
         // if(curr == UINT32_MAX) {
@@ -947,6 +949,7 @@ std::vector<uint32_t> Index<T, TagT, LabelT>::bfs_filtered(NeighborPriorityQueue
             }
 
             if (!visited.contains(nbr) ) {
+                hops++;
                 bfs_queue.push(nbr);
                 visited.add(nbr);
                 if (detect_filter_penalty(nbr, true, filter_vec) == 0) {
