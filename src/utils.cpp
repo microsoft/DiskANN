@@ -129,46 +129,112 @@ void normalize_data_file(const std::string &inFileName, const std::string &outFi
 double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist, uint32_t dim_gs,
                         uint32_t *our_results, uint32_t dim_or, uint32_t recall_at, unsigned r2)
 {
+    if (recall_at > dim_gs)
+    {
+        diskann::cerr << "Error: recall_at is larger than the size of the ground truth." << std::endl;
+        throw diskann::ANNException("Invalid recall_at", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
     if (r2 == 0)
         r2 = recall_at;
+
+    if (r2 > dim_or)
+    {
+        diskann::cerr << "Error: r2 is larger than the size of the results." << std::endl;
+        throw diskann::ANNException("Invalid r2", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+        
     double total_recall = 0;
     std::set<uint32_t> gt, res;
 
     for (size_t i = 0; i < num_queries; i++)
     {
-        gt.clear();
-        res.clear();
         uint32_t *gt_vec = gold_std + dim_gs * i;
         uint32_t *res_vec = our_results + dim_or * i;
-        size_t tie_breaker = recall_at;
-        if (gs_dist != nullptr)
+        size_t num_pts_in_gt = 0;
+        while (num_pts_in_gt < recall_at && gt_vec[num_pts_in_gt] != std::numeric_limits<uint32_t>::max())
+            num_pts_in_gt++;
+        
+        // sanity check
+        for (size_t pos = num_pts_in_gt; pos < recall_at; pos++)
         {
-            tie_breaker = recall_at - 1;
-            float *gt_dist_vec = gs_dist + dim_gs * i;
-            while (tie_breaker < dim_gs && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
-                tie_breaker++;
-        }
-
-        gt.insert(gt_vec, gt_vec + tie_breaker);
-        res.insert(res_vec,
-                   res_vec + r2);
-        uint32_t cur_recall = 0;
-        for (auto &v : gt)
-        {
-            if (res.find(v) != res.end())
+            if (gt_vec[pos] != std::numeric_limits<uint32_t>::max())
             {
-                cur_recall++;
+                diskann::cerr << "Error: GT vector contains uint32_t::max and then something else. "
+                              << "Query id: " << i << ", pos: " << pos << std::endl;
+                throw diskann::ANNException("Invalid GT vector", -1, __FUNCSIG__, __FILE__, __LINE__);
             }
         }
-        total_recall += cur_recall;
+        // second sanity check
+        gt.clear();
+        gt.insert(gt_vec, gt_vec + num_pts_in_gt);
+        if (gt.size() != num_pts_in_gt)
+        {
+            diskann::cerr << "Error: GT vector contains duplicates (before any uint32_t::max-es). "
+                          << "Query id: " << i << std::endl;
+            throw diskann::ANNException("Invalid GT vector", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+        // one could also check whether gt_vec contains duplicates beyond recall_at
+        // (but before dim_gs), which could be used for tiebreaking, but we don't check this
+
+        if (num_pts_in_gt == 0) {
+            // case 1: num_pts_in_gt == 0
+            // 0/0 = 100%, right? :) any solution gets 100% recall if no feasible basepoint exists
+            total_recall += 1.0;
+        } else {
+            res.clear();
+            res.insert(res_vec, res_vec + r2);
+            size_t cur_recall = 0;
+            if (num_pts_in_gt < recall_at || gs_dist == nullptr) {
+                // case 2: 0 < num_pts_in_gt < recall_at, or (num_pts_in_gt == recall_at and no tiebreaking)
+                for (size_t j = 0; j < num_pts_in_gt; j++)
+                {
+                    if (res.count(gt_vec[j]))
+                    {
+                        cur_recall += 1;
+                    }
+                }
+            } else {
+                // case 3: num_pts_in_gt == recall_at, and there is tiebreaking
+                // first part: [0, tiebreaker_start): points at distance < gt_dist[recall_at - 1]
+                // tiebreaking part: [tiebreaker_start, tiebreaker_end): points at distance == gt_dist[recall_at - 1]
+                size_t tiebreaker_end = recall_at - 1;
+                float *gt_dist_vec = gs_dist + dim_gs * i;
+                while (tiebreaker_end < dim_gs && gt_dist_vec[tiebreaker_end] == gt_dist_vec[recall_at - 1])
+                    tiebreaker_end++;
+                size_t tiebreaker_start = recall_at - 1;
+                while (tiebreaker_start >= 1 && gt_dist_vec[tiebreaker_start - 1] == gt_dist_vec[recall_at - 1])
+                    tiebreaker_start--;
+                // first part: treated normally
+                for (size_t j = 0; j < tiebreaker_start; j++)
+                {
+                    if (res.count(gt_vec[j]))
+                    {
+                        cur_recall += 1;
+                    }
+                }
+                // tiebreaking part: only possible to get at most recall_at - tiebreaker_start points for those!
+                size_t tiebreaking_recall = 0;
+                for (size_t j = tiebreaker_start; j < tiebreaker_end; j++)
+                {
+                    if (res.count(gt_vec[j]))
+                    {
+                        tiebreaking_recall += 1;
+                    }
+                }
+                cur_recall += std::min(tiebreaking_recall, recall_at - tiebreaker_start);
+            }
+            total_recall += (double)cur_recall / num_pts_in_gt;
+        }
     }
-    return total_recall / (num_queries) * (100.0 / recall_at);
+    return 100.0 * total_recall / num_queries;
 }
 
 double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist, uint32_t dim_gs,
                         uint32_t *our_results, uint32_t dim_or, uint32_t recall_at,
                         const tsl::robin_set<uint32_t> &active_tags)
 {
+    // note: this version of calculate_recall was not updated like the first one
     double total_recall = 0;
     std::set<uint32_t> gt, res;
     bool printed = false;
@@ -227,6 +293,7 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
 double calculate_range_search_recall(uint32_t num_queries, std::vector<std::vector<uint32_t>> &groundtruth,
                                      std::vector<std::vector<uint32_t>> &our_results)
 {
+    // note: this version of calculate_recall was not updated like the first one
     double total_recall = 0;
     std::set<uint32_t> gt, res;
 
