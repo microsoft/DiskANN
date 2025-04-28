@@ -18,6 +18,7 @@
 #include <mkl.h>
 #include <boost/program_options.hpp>
 #include <boost/dynamic_bitset.hpp>
+#include <unordered_set>
 #include <unordered_map>
 #include <tsl/robin_map.h>
 #include <tsl/robin_set.h>
@@ -29,6 +30,8 @@
 #endif
 #include "filter_utils.h"
 #include "utils.h"
+
+bool dont_actually_compute_groundtruth = false;
 
 // WORKS FOR UPTO 2 BILLION POINTS (as we use INT INSTEAD OF UNSIGNED)
 
@@ -548,6 +551,7 @@ processUnfilteredParts(
         std::vector<boost::dynamic_bitset<>> matching_points;
         identify_matching_points(base_labels, start_id, query_labels, unv_label, matching_points, query_stats);
 
+        if (!dont_actually_compute_groundtruth) {
         size_t *closest_points_part = new size_t[nqueries * k];
         float *dist_closest_points_part = new float[nqueries * k];
 
@@ -570,6 +574,7 @@ processUnfilteredParts(
 
         delete[] closest_points_part;
         delete[] dist_closest_points_part;
+        }
 
         diskann::aligned_free(base_data);
     }
@@ -582,15 +587,13 @@ processUnfilteredParts(
 template <typename T>
 int aux_main(const std::string &base_file, const std::string &query_file, const std::string &gt_file, size_t k,
              const diskann::Metric &metric, const std::string &base_labels, const std::string &query_labels,
-             const std::string &unv_label, const std::string &tags_file, uint64_t subset_size, const std::string &subset_query_file,
-             const std::string &subset_gt_file, const std::string &subset_query_labels_file)
+             const std::string &unv_label, const std::string &tags_file, uint64_t subset_size,
+             const std::string &subset_input_file, const std::string &subset_output_file)
 {
     size_t npoints, nqueries, dim;
 
     float *query_data;
-    T *query_data_T;
     load_bin_as_float<T>(query_file.c_str(), query_data, nqueries, dim, 0);
-    diskann::load_bin<T>(query_file, query_data_T, nqueries, dim); // Load original type
     if (nqueries > PARTSIZE)
         std::cerr << "WARNING: #Queries provided (" << nqueries << ") is greater than " << PARTSIZE
                   << ". Computing GT only for the first " << PARTSIZE << " queries." << std::endl;
@@ -605,9 +608,10 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     auto process_result =
         processUnfilteredParts<T>(base_file, base_labels, query_labels, unv_label, nqueries, npoints, dim, k,
                                   query_data, metric, location_to_tag);
-    std::vector<std::vector<std::pair<uint32_t, float>>> results = process_result.first;
     std::vector<std::pair<uint32_t, uint32_t>> query_stats = process_result.second;
 
+    if (!dont_actually_compute_groundtruth) {
+    std::vector<std::vector<std::pair<uint32_t, float>>> results = process_result.first;
     for (size_t i = 0; i < nqueries; i++)
     {
         std::vector<std::pair<uint32_t, float>> &cur_res = results[i];
@@ -640,6 +644,7 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
 
     // Save the full ground truth first
     save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, nqueries, k);
+    }
 
     // Handle subset selection and saving if requested
     if (subset_size > 0)
@@ -651,65 +656,55 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
                       return a.second < b.second;
                   });
 
-        // Read all original query labels
-        std::vector<std::string> all_query_labels;
-        std::ifstream query_labels_in(query_labels);
-        if (!query_labels_in.is_open()) {
-             std::cerr << "Error: Could not open original query labels file: " << query_labels << std::endl;
-             exit(1);
+        // Create a set of the indices of the selected queries
+        std::unordered_set<uint32_t> selected_query_indices;
+        for (size_t i = 0; i < subset_size; ++i)
+        {
+            selected_query_indices.insert(query_stats[i].first);
         }
+
+        std::cout << "Writing selected query lines from " << subset_input_file << " to " << subset_output_file << std::endl;
+        std::ifstream input_file(subset_input_file);
+        std::ofstream output_file(subset_output_file);
+        if (!input_file.is_open()) {
+            std::cerr << "Error opening subset input file: " << subset_input_file << std::endl;
+            return -1;
+        }
+        if (!output_file.is_open()) {
+            std::cerr << "Error opening subset output file: " << subset_output_file << std::endl;
+            return -1;
+        }
+
         std::string line;
-        while (std::getline(query_labels_in, line)) {
-            all_query_labels.push_back(line);
-        }
-        query_labels_in.close();
-
-        T *subset_query_data_T = new T[subset_size * dim];
-        int *subset_closest_points = new int[subset_size * k];
-        float *subset_dist_closest_points = new float[subset_size * k];
-
-        for (uint64_t i = 0; i < subset_size; ++i)
+        uint32_t line_number = 0;
+        while (std::getline(input_file, line))
         {
-            uint32_t original_query_index = query_stats[i].first;
-            // Copy query data
-            memcpy(subset_query_data_T + i * dim, query_data_T + original_query_index * dim, dim * sizeof(T));
-            // Copy ground truth data
-            memcpy(subset_closest_points + i * k, closest_points + original_query_index * k, k * sizeof(int));
-            memcpy(subset_dist_closest_points + i * k, dist_closest_points + original_query_index * k,
-                   k * sizeof(float));
+            if (selected_query_indices.count(line_number))
+            {
+                output_file << line << std::endl;
+            }
+            line_number++;
         }
 
-        // Save subset query file
-        diskann::save_bin<T>(subset_query_file, subset_query_data_T, subset_size, dim);
-
-        // Save subset ground truth file if path provided
-        if (!subset_gt_file.empty())
-        {
-            save_groundtruth_as_one_file(subset_gt_file, subset_closest_points, subset_dist_closest_points, subset_size,
-                                         k);
-        }
-
-        // Save subset query labels file
-        std::ofstream subset_labels_out(subset_query_labels_file);
-        if (!subset_labels_out.is_open()) {
-            std::cerr << "Error: Could not open subset query labels file for writing: " << subset_query_labels_file << std::endl;
+        // Check if number of lines matches the expected number of queries
+        if (line_number != nqueries && !(line_number == nqueries + 1 && line.empty())) {
+            std::cerr << "Error: Number of lines in subset_input_file (" << line_number;
+            if (line.empty() && line_number > 0)
+                std::cerr << " including final empty line";
+            std::cerr << ") does not match the number of queries (" << nqueries << ")." << std::endl;
+            output_file.close();
+            std::remove(subset_output_file.c_str());
             exit(1);
         }
-        for (uint64_t i = 0; i < subset_size; ++i) {
-            uint32_t original_query_index = query_stats[i].first;
-            subset_labels_out << all_query_labels[original_query_index] << std::endl;
-        }
-        subset_labels_out.close();
 
-        delete[] subset_query_data_T;
-        delete[] subset_closest_points;
-        delete[] subset_dist_closest_points;
+        input_file.close();
+        output_file.close();
+        std::cout << "Finished writing subset file." << std::endl;
     }
 
     delete[] closest_points;
     delete[] dist_closest_points;
     diskann::aligned_free(query_data);
-    delete[] query_data_T;
 
     return 0;
 }
@@ -765,8 +760,8 @@ void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, s
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file, base_labels, query_labels, unv_label, subset_query_labels_file;
-    std::string subset_query_file, subset_gt_file;
+    std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file, base_labels, query_labels, unv_label;
+    std::string subset_input_file, subset_output_file;
     uint64_t K, subset_size;
 
     try
@@ -786,26 +781,24 @@ int main(int argc, char **argv)
                            "File containing the base labels");
         desc.add_options()("query_labels", po::value<std::string>(&query_labels)->required(),
                            "File containing the query labels");
-        desc.add_options()("gt_file", po::value<std::string>(&gt_file)->required(),
+        desc.add_options()("gt_file", po::value<std::string>(&gt_file)->default_value(std::string()),
                            "File name for the writing ground truth in binary "
                            "format, please don' append .bin at end if "
                            "no filter_label or filter_label_file is provided it "
                            "will save the file with '.bin' at end."
                            "else it will save the file as filename_label.bin");
-        desc.add_options()("K", po::value<uint64_t>(&K)->required(),
+        desc.add_options()("K", po::value<uint64_t>(&K)->default_value(0),
                            "Number of ground truth nearest neighbors to compute");
         desc.add_options()("tags_file", po::value<std::string>(&tags_file)->default_value(std::string()),
                            "File containing the tags in binary format");
         desc.add_options()("universal_label", po::value<std::string>(&unv_label)->default_value(std::string()),
                            "universal_label value");
         desc.add_options()("subset_size", po::value<uint64_t>(&subset_size)->default_value(0),
-                           "Number of queries with lowest pass-rate to select (0 means select all)");
-        desc.add_options()("subset_query_file", po::value<std::string>(&subset_query_file)->default_value(""),
-                           "Output file for the selected subset of queries");
-        desc.add_options()("subset_gt_file", po::value<std::string>(&subset_gt_file)->default_value(""),
-                           "Output file for the ground truth of the selected subset of queries");
-        desc.add_options()("subset_query_labels_file", po::value<std::string>(&subset_query_labels_file)->default_value(""),
-                           "Output file for the labels of the selected subset of queries");
+                           "Number of queries with lowest pass-rate to select. If >0, no GT will actually be computed");
+        desc.add_options()("subset_input_file", po::value<std::string>(&subset_input_file)->default_value(""),
+                           "Input file (e.g., query labels) to read lines from for subset selection");
+        desc.add_options()("subset_output_file", po::value<std::string>(&subset_output_file)->default_value(""),
+                           "Output file to write selected lines to");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -830,25 +823,42 @@ int main(int argc, char **argv)
         std::cerr << "Error loading query file metadata: " << ex.what() << std::endl;
         return -1;
     }
+    
+    if (subset_size == 0) {
+        if (K == 0 || gt_file.empty())
+        {
+            std::cerr << "Error: Both --K and --gt_file must be provided when computing ground truth." << std::endl;
+            return -1;
+        }
+    } else {
+        dont_actually_compute_groundtruth = true;
+        std::cout << "Subset size is set to " << subset_size << ". No ground truth will be computed." << std::endl;
+        if (K != 0 || !gt_file.empty())
+        {
+            std::cerr << "Error: Both --K and --gt_file must be absent when subset_size is given." << std::endl;
+            return -1;
+        }
 
-    // Validate subset options
-    if (subset_size > 0 && subset_query_file.empty())
-    {
-        std::cerr << "Error: --subset_query_file must be provided when --subset_size > 0" << std::endl;
-        return -1;
-    }
+        // Validate subset options
+        if (subset_input_file.empty())
+        {
+            std::cerr << "Error: --subset_input_file must be provided when --subset_size > 0" << std::endl;
+            return -1;
+        }
 
-    if (subset_size > 0 && subset_query_labels_file.empty())
-    {
-        std::cerr << "Error: --subset_query_labels_file must be provided when --subset_size > 0" << std::endl;
-        return -1;
-    }
+        // Validate subset options
+        if (subset_output_file.empty())
+        {
+            std::cerr << "Error: --subset_output_file must be provided when --subset_size > 0" << std::endl;
+            return -1;
+        }
 
-    if (subset_size > 0 && subset_size >= nqueries_main)
-    {
-        std::cerr << "Error: subset_size (" << subset_size << ") must be smaller than the number of queries ("
-                  << nqueries_main << ")." << std::endl;
-        return -1;
+        if (subset_size >= nqueries_main)
+        {
+            std::cerr << "Error: subset_size (" << subset_size << ") must be smaller than the number of queries ("
+                    << nqueries_main << ")." << std::endl;
+            return -1;
+        }
     }
 
     if (data_type != std::string("float") && data_type != std::string("int8") && data_type != std::string("uint8"))
@@ -880,13 +890,13 @@ int main(int argc, char **argv)
     {
         if (data_type == std::string("float"))
             aux_main<float>(base_file, query_file, gt_file, K, metric, base_labels, query_labels, unv_label,
-                            tags_file, subset_size, subset_query_file, subset_gt_file, subset_query_labels_file);
+                            tags_file, subset_size, subset_input_file, subset_output_file);
         if (data_type == std::string("int8"))
             aux_main<int8_t>(base_file, query_file, gt_file, K, metric, base_labels, query_labels, unv_label,
-                             tags_file, subset_size, subset_query_file, subset_gt_file, subset_query_labels_file);
+                             tags_file, subset_size, subset_input_file, subset_output_file);
         if (data_type == std::string("uint8"))
             aux_main<uint8_t>(base_file, query_file, gt_file, K, metric, base_labels, query_labels, unv_label,
-                              tags_file, subset_size, subset_query_file, subset_gt_file, subset_query_labels_file);
+                              tags_file, subset_size, subset_input_file, subset_output_file);
     }
     catch (const std::exception &e)
     {
