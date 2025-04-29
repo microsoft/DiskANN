@@ -756,36 +756,51 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
 }
 
 // Find common filter between a node's labels and a given set of labels, while
-// taking into account universal label
+// taking into account universal label.
+// Note: incoming_labels should be sorted.
 template <typename T, typename TagT, typename LabelT>
 bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
                                                    const std::vector<LabelT> &incoming_labels)
 {
     auto &curr_node_labels = _location_to_labels[point_id];
-    std::vector<LabelT> common_filters;
-    std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
-                          curr_node_labels.end(), std::back_inserter(common_filters));
-    if (common_filters.size() > 0)
+    // Check for intersection between incoming_labels and curr_node_labels
+    // using two-pointer approach (both vectors are sorted)
+    auto it_inc = incoming_labels.begin();
+    auto it_curr = curr_node_labels.begin();
+
+    while (it_inc != incoming_labels.end() && it_curr != curr_node_labels.end())
     {
-        // This is to reduce the repetitive calls. If common_filters size is > 0 ,
-        // we dont need to check further for universal label
-        return true;
+        if (*it_inc < *it_curr)
+        {
+            ++it_inc;
+        }
+        else if (*it_curr < *it_inc)
+        {
+            ++it_curr;
+        }
+        else
+        {
+            // common label found
+            return true;
+        }
     }
+    // intersection empty; proceed to check the universal label logic
+    
     if (_use_universal_label)
     {
         if (!search_invocation)
         {
             if (std::find(incoming_labels.begin(), incoming_labels.end(), _universal_label) != incoming_labels.end() ||
                 std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
-                common_filters.push_back(_universal_label);
+                return true;
         }
         else
         {
             if (std::find(curr_node_labels.begin(), curr_node_labels.end(), _universal_label) != curr_node_labels.end())
-                common_filters.push_back(_universal_label);
+                return true;
         }
     }
-    return (common_filters.size() > 0);
+    return false;
 }
 
 template <typename T, typename TagT, typename LabelT>
