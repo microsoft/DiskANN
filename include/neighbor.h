@@ -68,7 +68,7 @@ public:
 
     virtual void insert(const Neighbor& nbr, int insert_loc, int kick_lo, int quene_len) = 0;
 
-    virtual size_t get_kick_quene_len(const Neighbor& nbr, size_t quene_len) const = 0;
+    virtual size_t get_kick_location(const Neighbor& nbr, size_t quene_len) const = 0;
 
     virtual void clear() = 0;
 };
@@ -106,7 +106,7 @@ public:
         _capacity = capacity;
     }
 
-    virtual size_t get_kick_quene_len(const Neighbor&, size_t quene_len) const override
+    virtual size_t get_kick_location(const Neighbor&, size_t quene_len) const override
     {
         return quene_len;
     }
@@ -154,15 +154,15 @@ class NeighborExtendColorVector : public NeighborVectorBase
         return nbr;
     }
 
-    virtual void insert(const Neighbor &nbr, int insert_lo, int kick_lo, int quene_len) override
+    virtual void insert(const Neighbor &nbr, int insert_lo, int kick_loc, int quene_len) override
     {
-        // keep the kick out node to further process
-        NeighborExtendColor last = _data[kick_lo];
-
         uint32_t color = _location_to_seller[nbr.id];
         NeighborExtendColor nbr_extend(nbr.id, nbr.distance, color);
 
-        for (int i = kick_lo - 1; i >= insert_lo; i--)
+        // keep the kick out node to further process
+        NeighborExtendColor last = _data[kick_loc];
+
+        for (int i = kick_loc - 1; i >= insert_lo; i--)
         {
             // if the color is the same and previous node < insert_lo,
             // insert node and update location
@@ -192,14 +192,14 @@ class NeighborExtendColorVector : public NeighborVectorBase
         // 2. the queue isn full and queue_len point to the tail slot
         // if the node at queue_len is empty slot, the previous == -1,
         // so it's no impact in the loop, to make the access safty, we have to allocate (capacity + 1) slots
-        for (int i = kick_lo + 1; i < quene_len; i++)
+        for (int i = kick_loc + 1; i < quene_len; i++)
         {
-            if (_data[i].previous == kick_lo)
+            if (_data[i].previous == kick_loc)
             {
                 // the node is removed, link to previous node
                 _data[i].previous = last.previous;
             }
-            else if (_data[i].previous >= insert_lo && _data[i].previous < kick_lo)
+            else if (_data[i].previous >= insert_lo && _data[i].previous < kick_loc)
             {
                 // previous node is in the moving range
                 _data[i].previous++;
@@ -207,9 +207,13 @@ class NeighborExtendColorVector : public NeighborVectorBase
         }
 
         // it's not insert to empty slot, process kick out node
-        if (kick_lo != quene_len - 1)
+        if (kick_loc != quene_len)
         {
             uint32_t last_node_color = last.color;
+            if (last.previous >= insert_lo)
+            {
+                last.previous++;
+            }
             _color_to_max_node[last_node_color] = last.previous;
             if (last.previous != -1)
             {
@@ -246,7 +250,7 @@ class NeighborExtendColorVector : public NeighborVectorBase
         _data[insert_lo] = nbr_extend;
     }
 
-    virtual size_t get_kick_quene_len(const Neighbor& nbr, size_t queue_len) const override
+    virtual size_t get_kick_location(const Neighbor& nbr, size_t queue_len) const override
     {
         uint32_t color = _location_to_seller[nbr.id];
 
@@ -261,7 +265,7 @@ class NeighborExtendColorVector : public NeighborVectorBase
         
         assert(max_iter.value() >= 0);
 
-        return max_iter.value() + 1;
+        return max_iter.value();
     }
 
     void resize(size_t capacity, uint32_t maxLperSeller)
@@ -313,15 +317,23 @@ public:
     // next item will be set to the lowest index of an uncheck item
     void insert(const Neighbor& nbr, NeighborVectorBase& neighborVector)
     {
-        auto kick_queue_len = neighborVector.get_kick_quene_len(nbr, _size);
+        auto kick_loc = neighborVector.get_kick_location(nbr, _size);
+        // if the kick location is out of the max size,
+        // that means it should be kick the last node
+        if (kick_loc == _capacity)
+        {
+            kick_loc--;
+        }
+
         // if the kick location isn't empty slot, then check the dist 
-        if ((kick_queue_len < _size || _size == _capacity)
-            && neighborVector[kick_queue_len - 1] < nbr)
+        if ((kick_loc < _size)
+            && neighborVector[kick_loc] < nbr)
         {
             return;
         }
 
-        size_t lo = 0, hi = kick_queue_len;
+        
+        size_t lo = 0, hi = kick_loc;
         while (lo < hi)
         {
             size_t mid = (lo + hi) >> 1;
@@ -340,13 +352,13 @@ public:
             }
         }
 
-        // for the case kick_queue_len < size, it should be always find location to insert
-        // because neighborVector[kick_queue_len - 1] < nbr already make sure it should be insert.
+        // for the case kick_loc < size, it should be always find location to insert
+        // because neighborVector[kick_loc - 1] < nbr already make sure it should be insert.
         if (lo < _capacity)
         {
-            neighborVector.insert(nbr, static_cast<int>(lo), static_cast<int>(kick_queue_len - 1), static_cast<int>(_size));
+            neighborVector.insert(nbr, static_cast<int>(lo), static_cast<int>(kick_loc), static_cast<int>(_size));
         }
-        if (kick_queue_len == _size && _size < _capacity)
+        if (kick_loc == _size && _size < _capacity)
         {
             _size++;
         }
