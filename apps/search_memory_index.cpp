@@ -219,7 +219,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         //maxLperSeller = (maxLperSeller == 0)? 1 : maxLperSeller;
         uint32_t maxLperSeller = max_K_per_seller;
         if (diverse_search && scale_seller_limits) {
-            maxLperSeller = (1.0*L* max_K_per_seller)/(1.0*recall_at);
+            maxLperSeller = (uint32_t)((1.0*L* max_K_per_seller)/(1.0*recall_at));
    //         std::cout<<maxLperSeller<<std::endl;
         }
 
@@ -283,14 +283,16 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                                    .second;
             }
             if (post_process) {
-                    diskann::bestCandidates final_results(recall_at, max_K_per_seller, location_to_sellers);
+                    diskann::NeighborPriorityQueueExtendColor final_results(recall_at, max_K_per_seller, location_to_sellers);
                     for (uint32_t rr = 0; rr < L; rr++) {
-                        final_results.insert(results[rr], dists[rr]);
+                        final_results.insert(diskann::Neighbor(results[rr], dists[rr]));
                     }
-                                        
-                    for (uint32_t ctr = 0; ctr < std::min(final_results.best_L_nodes.size(), (uint64_t)recall_at); ctr++) {
-                        query_result_ids[test_id][recall_at * i + ctr] = final_results.best_L_nodes._data[ctr].id;                        
-                        query_result_dists[test_id][recall_at * i + ctr] = final_results.best_L_nodes._data[ctr].distance;                        
+                    
+                    std::vector<diskann::Neighbor> final_results_vec;
+                    final_results.get_data(final_results_vec);
+                    for (uint32_t ctr = 0; ctr < std::min(final_results_vec.size(), (uint64_t)recall_at); ctr++) {
+                        query_result_ids[test_id][recall_at * i + ctr] = final_results_vec[ctr].id;
+                        query_result_dists[test_id][recall_at * i + ctr] = final_results_vec[ctr].distance;
                     }
             } else {
                     for (uint32_t ctr = 0; ctr < std::min(results.size(),(uint64_t)recall_at); ctr++) {
@@ -316,10 +318,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             recalls.reserve(recalls_to_print);
             for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
             {
+                //recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
+                //                                            query_result_ids[test_id].data(), recall_at, curr_recall, query_result_dists[test_id].data()));
                 recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
-                                                            query_result_ids[test_id].data(), recall_at, curr_recall, query_result_dists[test_id].data()));
-//                recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
-//                                                            query_result_ids[test_id].data(), recall_at, curr_recall));
+                                                            query_result_ids[test_id].data(), recall_at, curr_recall));
 
             }
         }
