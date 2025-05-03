@@ -31,10 +31,6 @@ def output_vectors(
         str(dimensions),
         str(number_of_points)
     ]
-    completed = subprocess.run(args, timeout=timeout)
-    if completed.returncode != 0:
-        raise Exception(f"Unable to convert tsv to binary using tsv_to_bin, completed_process: {completed}")
-    return vectors_as_bin_path
 
 
 def build_ssd_index(
