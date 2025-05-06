@@ -279,8 +279,9 @@ class NeighborExtendColorVector : public NeighborVectorBase
     virtual void clear() override
     {
         // no need additional clear up
+        _color_to_len.clear();
         _color_to_max_node.clear();
-        _color_to_max_node.clear();
+        _data.clear();
     }
 
     
