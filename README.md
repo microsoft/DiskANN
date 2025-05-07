@@ -1,3 +1,5 @@
+# temporal message
+
 # DiskANN
 
 [![DiskANN Main](https://github.com/microsoft/DiskANN/actions/workflows/push-test.yml/badge.svg?branch=main)](https://github.com/microsoft/DiskANN/actions/workflows/push-test.yml)
@@ -11,7 +13,7 @@
 
 
 DiskANN is a suite of scalable, accurate and cost-effective approximate nearest neighbor search algorithms for large-scale vector search that support real-time changes and simple filters.
-This code is based on ideas from the [DiskANN](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf), [Fresh-DiskANN](https://arxiv.org/abs/2105.09613) and the [Filtered-DiskANN](https://harsha-simhadri.org/pubs/Filtered-DiskANN23.pdf) papers with further improvements. 
+This code is based on ideas from the [DiskANN](https://papers.nips.cc/paper/9527-rand-nsg-fast-accurate-billion-point-nearest-neighbor-search-on-a-single-node.pdf), [Fresh-DiskANN](https://arxiv.org/abs/2105.09613) and the [Filtered-DiskANN](https://harsha-simhadri.org/pubs/Filtered-DiskANN23.pdf) papers with further improvements.
 This code forked off from [code for NSG](https://github.com/ZJULearning/nsg) algorithm.
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
@@ -45,12 +47,12 @@ sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel -
 
 ### Build
 ```bash
-mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j 
+mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j
 ```
 
 ## Windows build:
 
-The Windows version has been tested with Enterprise editions of Visual Studio 2022, 2019 and 2017. It should work with the Community and Professional editions as well without any changes. 
+The Windows version has been tested with Enterprise editions of Visual Studio 2022, 2019 and 2017. It should work with the Community and Professional editions as well without any changes.
 
 **Prerequisites:**
 
@@ -63,7 +65,7 @@ git submodule init
 git submodule update
 ```
 
-* Environment variables: 
+* Environment variables:
     * [optional] If you would like to override the Boost library listed in windows/packages.config.in, set BOOST_ROOT to your Boost folder.
 
 **Build steps:**
@@ -93,8 +95,8 @@ msbuild.exe diskann.sln /m /nologo /t:Build /p:Configuration="Release" /property
 
 Please see the following pages on using the compiled code:
 
-- [Commandline interface for building and search SSD based indices](workflows/SSD_index.md)  
-- [Commandline interface for building and search in memory indices](workflows/in_memory_index.md) 
+- [Commandline interface for building and search SSD based indices](workflows/SSD_index.md)
+- [Commandline interface for building and search in memory indices](workflows/in_memory_index.md)
 - [Commandline examples for using in-memory streaming indices](workflows/dynamic_index.md)
 - [Commandline interface for building and search in memory indices with label data and filters](workflows/filtered_in_memory.md)
 - [Commandline interface for building and search SSD based indices with label data and filters](workflows/filtered_ssd_index.md)
