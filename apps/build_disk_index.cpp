@@ -16,11 +16,13 @@ namespace po = boost::program_options;
 int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix, codebook_prefix, label_file, universal_label,
-        label_type;
-    uint32_t num_threads, R, L, disk_PQ, build_PQ, QD, Lf, filter_threshold;
+        label_type, seller_file;
+    uint32_t num_threads, R, L, disk_PQ, build_PQ, QD, Lf, filter_threshold, num_diverse_build;
     float B, M;
     bool append_reorder_data = false;
     bool use_opq = false;
+    bool diverse_index = false;
+    
 
     po::options_description desc{
         program_options_utils::make_program_description("build_disk_index", "Build a disk-based index.")};
@@ -78,6 +80,11 @@ int main(int argc, char **argv)
                                        "internally where each node has a maximum F labels.");
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
                                        program_options_utils::LABEL_TYPE_DESCRIPTION);
+        optional_configs.add_options()("seller_file", po::value<std::string>(&seller_file)->default_value(""),
+                                       "In case of diverse index, need the seller file");
+        optional_configs.add_options()("NumDiverse", po::value<uint32_t>(&num_diverse_build)->default_value(0),
+                                       program_options_utils::NUM_DIVERSE);
+        
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
@@ -138,23 +145,24 @@ int main(int argc, char **argv)
                          std::string(std::to_string(num_threads)) + " " + std::string(std::to_string(disk_PQ)) + " " +
                          std::string(std::to_string(append_reorder_data)) + " " +
                          std::string(std::to_string(build_PQ)) + " " + std::string(std::to_string(QD));
-
+    if(seller_file != "")
+        diverse_index = true;
     try
     {
         if (label_file != "" && label_type == "ushort")
         {
             if (data_type == std::string("int8"))
-                return diskann::build_disk_index<int8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
-                                                         metric, use_opq, codebook_prefix, use_filters, label_file,
-                                                         universal_label, filter_threshold, Lf);
+            return diskann::build_disk_index<int8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
+            metric, use_opq, codebook_prefix, use_filters, label_file,
+            universal_label, filter_threshold, Lf, diverse_index, seller_file, num_diverse_build);
             else if (data_type == std::string("uint8"))
                 return diskann::build_disk_index<uint8_t, uint16_t>(
                     data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric, use_opq, codebook_prefix,
-                    use_filters, label_file, universal_label, filter_threshold, Lf);
+                    use_filters, label_file, universal_label, filter_threshold, Lf, diverse_index, seller_file, num_diverse_build);
             else if (data_type == std::string("float"))
                 return diskann::build_disk_index<float, uint16_t>(
                     data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric, use_opq, codebook_prefix,
-                    use_filters, label_file, universal_label, filter_threshold, Lf);
+                    use_filters, label_file, universal_label, filter_threshold, Lf, diverse_index, seller_file, num_diverse_build);
             else
             {
                 diskann::cerr << "Error. Unsupported data type" << std::endl;
@@ -166,15 +174,15 @@ int main(int argc, char **argv)
             if (data_type == std::string("int8"))
                 return diskann::build_disk_index<int8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
                                                          metric, use_opq, codebook_prefix, use_filters, label_file,
-                                                         universal_label, filter_threshold, Lf);
+                                                         universal_label, filter_threshold, Lf, diverse_index, seller_file, num_diverse_build);
             else if (data_type == std::string("uint8"))
                 return diskann::build_disk_index<uint8_t>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
                                                           metric, use_opq, codebook_prefix, use_filters, label_file,
-                                                          universal_label, filter_threshold, Lf);
+                                                          universal_label, filter_threshold, Lf, diverse_index, seller_file, num_diverse_build);
             else if (data_type == std::string("float"))
                 return diskann::build_disk_index<float>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
                                                         metric, use_opq, codebook_prefix, use_filters, label_file,
-                                                        universal_label, filter_threshold, Lf);
+                                                        universal_label, filter_threshold, Lf, diverse_index, seller_file, num_diverse_build);
             else
             {
                 diskann::cerr << "Error. Unsupported data type" << std::endl;
