@@ -2983,8 +2983,15 @@ int Index<T, TagT, LabelT>::_insert_point(const DataType &point, const TagType t
         converted_labels.reserve(labels.size());
         for (const auto& label : labels)
         {
-            auto converted_label = this->get_converted_label(label);
-            converted_labels.push_back(converted_label);
+            auto iter = _label_map.find(label);
+            if (iter != _label_map.end())
+            {
+                converted_labels.push_back(iter->second);
+            }
+            else
+            {
+                return -1;
+            }
         }
         return this->insert_point(std::any_cast<const T *>(point), std::any_cast<const TagT>(tag), converted_labels);
     }
@@ -3026,15 +3033,6 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                 " . there are no labels for the point."
                 << std::endl;
             return -1;
-        }
-
-        // don't support new label
-        for (LabelT label : labels)
-        {
-            if (_labels.find(label) == _labels.end())
-            {
-                return -1;
-            }
         }
     }
 
