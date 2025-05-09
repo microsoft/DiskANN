@@ -107,6 +107,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT std::vector<std::uint8_t> get_pq_vector(std::uint64_t vid);
     DISKANN_DLLEXPORT uint64_t get_num_points();
+    DISKANN_DLLEXPORT uint64_t get_max_degree();
 
   protected:
     DISKANN_DLLEXPORT void use_medoids_data_as_centroids();
