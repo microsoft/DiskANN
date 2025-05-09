@@ -378,3 +378,5 @@ gperftools
 
 # Rust
 rust/target
+
+python/src/*.so
