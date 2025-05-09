@@ -109,9 +109,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
     else
     {
-        std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
+        std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps" << std::setw(18) << "Avg hops"
                   << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "99.9 Latency";
-        table_width += 4 + 12 + 18 + 20 + 15;
+        table_width += 4 + 12 + 18 + 18+ 20 + 15;
     }
     uint32_t recalls_to_print = 0;
     const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -131,9 +131,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<std::vector<float>> query_result_dists(Lvec.size());
     std::vector<float> latency_stats(query_num, 0);
     std::vector<uint32_t> cmp_stats;
+    std::vector<uint32_t> hop_stats;
     if (not tags || filtered_search)
     {
         cmp_stats = std::vector<uint32_t>(query_num, 0);
+        hop_stats = std::vector<uint32_t>(query_num, 0);
     }
 
     std::vector<TagT> query_result_tags;
@@ -171,6 +173,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                                                          query_result_ids[test_id].data() + i * recall_at,
                                                          query_result_dists[test_id].data() + i * recall_at);
                 cmp_stats[i] = retval.second;
+                hop_stats[i] = retval.first;
             }
             else if (metric == diskann::FAST_L2)
             {
@@ -203,6 +206,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                                    ->search(query + i * query_aligned_dim, recall_at, L,
                                             query_result_ids[test_id].data() + i * recall_at)
                                    .second;
+                hop_stats[i] = index
+                                   ->search(query + i * query_aligned_dim, recall_at, L,
+                                            query_result_ids[test_id].data() + i * recall_at)
+                                   .first;
             }
             auto qe = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> diff = qe - qs;
@@ -231,6 +238,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) / static_cast<float>(query_num);
 
         float avg_cmps = (float)std::accumulate(cmp_stats.begin(), cmp_stats.end(), 0) / (float)query_num;
+        float avg_hops = (float)std::accumulate(hop_stats.begin(), hop_stats.end(), 0) / (float)query_num;
 
         if (tags && !filtered_search)
         {
@@ -239,7 +247,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
         else
         {
-            std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
+            std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps << std::setw(18) << avg_hops
                       << std::setw(20) << (float)mean_latency << std::setw(15)
                       << (float)latency_stats[(uint64_t)(0.999 * query_num)];
         }
