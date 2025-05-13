@@ -1163,14 +1163,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
 
         float penalty = 0;
+        uint32_t res = 0;
         if (use_filter)
         {
             if (search_invocation)
             {
-                uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
-                if ((res) > _filter_penalty_threshold)
-                    continue;
-                penalty = res * penalty_scale;
+                res = detect_filter_penalty(id, search_invocation, filter_labels);
+                // if ((res) > _filter_penalty_threshold)
+                //     continue;
+                // penalty = res * penalty_scale;
+                if (res > 0) {
+                    res = 1;
+                }
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1205,7 +1209,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             uint32_t ids[] = {id};
             float distances[] = {std::numeric_limits<float>::max()};
             _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
-            distance = distances[0] + penalty;
+            distance = distances[0] + w_m * res;
 
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
@@ -1270,7 +1274,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Find which of the nodes in des have not been visited before
         id_scratch.clear();
         dist_scratch.clear();
-        std::vector<float> dist_pens;
+        std::vector<float> res_vec;
         if (_dynamic_index)
         {
             LockGuard guard(_locks[n]);
@@ -1342,19 +1346,23 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 }
 
                 float penalty = 0;
+                uint32_t res = 0;
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    uint32_t res;
+                    
                     if (search_invocation)
                     {
                         res = detect_filter_penalty(id, search_invocation, filter_labels);
-                        if (res > _filter_penalty_threshold)
-                        {
-                            id_iter++;
-                            continue;
+                        // if (res > _filter_penalty_threshold)
+                        // {
+                        //     id_iter++;
+                        //     continue;
+                        // }
+                        // penalty = res * penalty_scale;
+                        if (res > 0) {
+                            res = 1;
                         }
-                        penalty = res * penalty_scale;
 
                         if (print_qstats)
                         {
@@ -1375,7 +1383,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             continue;
                     }
                 }
-                dist_pens.push_back(penalty);
+                res_vec.push_back(res);
                 id_scratch.push_back(id);
             }
         }
@@ -1395,12 +1403,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
         cmps += (uint32_t)id_scratch.size();
-        assert(dist_pens.size() == id_scratch.size());
+        assert(res_vec.size() == id_scratch.size());
 
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m] + dist_pens[m]));
+            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m] + w_m * res_vec[m]));
         }
     }
     return std::make_pair(hops, cmps);
