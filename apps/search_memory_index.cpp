@@ -474,6 +474,7 @@ int main(int argc, char **argv)
 
     uint32_t maxN;
     float p1, p2;
+    float filter_match_weight;
 
     po::options_description desc{
         program_options_utils::make_program_description("search_memory_index", "Searches in-memory DiskANN indexes")};
@@ -546,6 +547,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("maxN", po::value<uint32_t>(&maxN)->default_value(10000000), "maxN");
         optional_configs.add_options()("p1", po::value<float>(&p1)->default_value(0.1), "p1");
         optional_configs.add_options()("p2", po::value<float>(&p2)->default_value(0.1), "p2");
+        optional_configs.add_options()("filter_match_weight",
+                                       po::value<float>(&filter_match_weight)->default_value(0.1),
+                                       "Weight of filter match in the final distance");
 
         // Output controls
         po::options_description output_controls("Output controls");
@@ -632,8 +636,10 @@ int main(int argc, char **argv)
 
     use_global_start = global_start;
     num_start_points = num_local;
+    w_m = filter_match_weight;
 
     std::cout<<"Num local start points: " << num_start_points << std::endl;
+    std::cout<<"w_m: "<< w_m<<std::endl;
 
     try
     {

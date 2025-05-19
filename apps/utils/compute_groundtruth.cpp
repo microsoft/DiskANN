@@ -437,7 +437,7 @@ getline(iss, token, '\t');
 std::istringstream new_iss(token);
 while (getline(new_iss, token, '&'))
 {
-std::vector<std::string> or_clause(0);
+std::vector<std::string> clause(0);
 std::istringstream inner_iss(token);
 while (getline(inner_iss, token, '|'))
 {
@@ -445,12 +445,12 @@ if (print_flag)
 std::cout<<token<<" || ";
 token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
 token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-or_clause.push_back(token);
+clause.push_back(token);
 labels.insert(token);
 }
 if (print_flag)
 std::cout<<" && ";
-lbls.push_back(or_clause);
+lbls.push_back(clause);
 }
 //        std::sort(lbls.begin(), lbls.end());
 query_labels.push_back(lbls);
@@ -529,20 +529,20 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
                 const auto &query_label_predicates = query_labels[i];
                 const auto &base_label_set = base_labels[iter.first];
 
-                // Check AND/OR predicates
+                // Check predicates
                 bool match = true;
-                for (const auto &or_clause : query_label_predicates)
+                for (const auto &clause : query_label_predicates)
                 {
-                    bool or_match = false;
-                    for (const auto &label : or_clause)
+                    bool match = false;
+                    for (const auto &label : clause)
                     {
                         if (base_label_set.find(label) != base_label_set.end())
                         {
-                            or_match = true;
+                            match = true;
                             break;
                         }
                     }
-                    if (!or_match)
+                    if (!match)
                     {
                         match = false;
                         break;
