@@ -244,7 +244,7 @@ void exact_knn(const size_t dim, const size_t k,
             while (l < k)
             {
                 closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] =
-                    std::numeric_limits<uint64_t>::max();
+                    std::numeric_limits<size_t>::max();
                 dist_closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] =
                     std::numeric_limits<float>::max();
                 l++;
@@ -337,7 +337,7 @@ template <typename T> inline void save_bin(const std::string filename, T *data, 
     std::cout << "Finished writing bin" << std::endl;
 }
 
-inline void save_groundtruth_as_one_file(const std::string filename, int32_t *data, float *distances, size_t npts,
+inline void save_groundtruth_as_one_file(const std::string filename, uint32_t *data, float *distances, size_t npts,
                                          size_t ndims)
 {
     std::ofstream writer(filename, std::ios::binary | std::ios::out);
@@ -563,8 +563,11 @@ processUnfilteredParts(
         {
             for (size_t j = 0; j < part_k; j++)
             {
+                if (closest_points_part[i * part_k + j] == std::numeric_limits<size_t>::max())
+                    continue;
+
                 if (!location_to_tag.empty())
-                    if (location_to_tag[closest_points_part[i * k + j] + start_id] == 0)
+                    if (location_to_tag[closest_points_part[i * part_k + j] + start_id] == 0)
                         continue;
 
                 res[i].push_back(std::make_pair((uint32_t)(closest_points_part[i * part_k + j] + start_id),
@@ -602,7 +605,7 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     const bool tags_enabled = tags_file.empty() ? false : true;
     std::vector<uint32_t> location_to_tag = diskann::loadTags(tags_file, base_file);
 
-    int *closest_points = new int[nqueries * k];
+    uint32_t *closest_points = new uint32_t[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
 
     auto process_result =
@@ -624,11 +627,11 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
             if (tags_enabled)
             {
                 std::uint32_t index_with_tag = location_to_tag[iter.first];
-                closest_points[i * k + j] = (int32_t)index_with_tag;
+                closest_points[i * k + j] = index_with_tag;
             }
             else
             {
-                closest_points[i * k + j] = (int32_t)iter.first;
+                closest_points[i * k + j] = iter.first;
             }
 
             if (metric == diskann::Metric::INNER_PRODUCT)
@@ -638,8 +641,15 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
 
             ++j;
         }
-        if (j < k)
+        if (j < k) {
             std::cout << "WARNING: found less than k GT entries for query " << i << std::endl;
+            // fill the rest with sentinels
+            for (; j < k; j++)
+            {
+                closest_points[i * k + j] = std::numeric_limits<uint32_t>::max();
+                dist_closest_points[i * k + j] = std::numeric_limits<float>::max();
+            }
+        }
     }
 
     // Save the full ground truth first
