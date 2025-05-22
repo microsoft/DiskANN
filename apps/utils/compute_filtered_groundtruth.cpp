@@ -240,9 +240,9 @@ void exact_knn(const size_t dim, const size_t k,
             }
             while (l < k)
             {
-                closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] = 0;
-                    // std::numeric_limits<uint64_t>::max();
-                dist_closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] =
+                closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] = 
+                    std::numeric_limits<uint64_t>::max();
+                dist_closest_points[(ptrdiff_t)(k - 1 - l) + (ptrdiff_t)q * (ptrdiff_t)k] = 
                     std::numeric_limits<float>::max();
                 l++;
             }

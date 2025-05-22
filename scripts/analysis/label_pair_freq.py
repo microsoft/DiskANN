@@ -11,7 +11,8 @@ def load_query_labels(label_path):
     """
     with open(label_path, 'r') as f:
         labels = [line.strip().split('&') for line in f.readlines()]
-    return np.array(labels)
+    # return np.array(labels)
+    return labels
 
 
 def load_query_file(file_path):
@@ -55,7 +56,12 @@ def get_label_pair_frequency(query_labels, vector_labels):
 
     # Calculate label pair frequencies
     label_pair_freq = {}
-    for l1, l2 in tqdm(query_labels, desc="Processing query labels", dynamic_ncols=True):
+    for labels in tqdm(query_labels, desc="Processing query labels", dynamic_ncols=True):
+        if len(labels) < 2:
+            # Skip queries with fewer than 2 labels
+            continue
+
+        l1, l2 = labels[:2]  # Unpack the first two labels
         if l1 == l2:
             continue
         if (l1, l2) not in label_pair_freq:
@@ -102,15 +108,23 @@ def load_label_pair_frequency_pickle(input_path):
 
 def main():
     # Parameters
-    query_label_path = '/data/wikipedia/query/query_label_reduced_5k_double.txt'
-    vector_label_path = '/data/wikipedia/cleaned_lemmatized_reduced_wiki_label.txt'
-    output_path_txt = '/data/wikipedia/analysis/label_pair_frequency.txt'
-    output_path_pickle = '/data/wikipedia/analysis/label_pair_frequency.pkl'
-    threshold = 100000
+    # query_label_path = '/data/wikipedia/query/query_label_reduced_5k_double.txt'
+    # vector_label_path = '/data/wikipedia/cleaned_lemmatized_reduced_wiki_label.txt'
+    # output_path_txt = '/data/wikipedia/analysis/label_pair_frequency.txt'
+    # output_path_pickle = '/data/wikipedia/analysis/label_pair_frequency.pkl'
+    # threshold = 100000
+    
+    query_label_path = '/home/t-asutradhar/yfcc/filtered_query_labels.txt'
+    vector_label_path = '/mnt/YFCC/base_1000000.u8bin.label'
+    output_path_txt = '/home/t-asutradhar/label_pair_frequency_filtered_queries.txt'
+    output_path_pickle = '/home/t-asutradhar/label_pair_frequency_filtered_queries.pkl'
+    threshold = 5000
 
     # Load query labels
     query_labels = load_query_labels(query_label_path)
-    print("Query labels shape:", query_labels.shape)
+    # Load query labels
+    query_labels = load_query_labels(query_label_path)
+    print("Query labels count:", len(query_labels))  # Use len() instead of .shape
     print("Query labels (first 10):", query_labels[:10])
 
     # Load vector labels

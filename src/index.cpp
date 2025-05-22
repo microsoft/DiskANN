@@ -1106,6 +1106,30 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
     return std::make_pair(hops, cmps);
 }
 
+
+template <typename T, typename TagT, typename LabelT>
+inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2) {
+    // std::cout << "calculate_jaccard_similarity called" << std::endl;
+    std::unordered_set<LabelT> intersection, union_set;
+
+    for (const auto &label : set1) {
+        union_set.insert(label);
+    }
+    for (const auto &label : set2) {
+        if (union_set.find(label) != union_set.end()) {
+            intersection.insert(label);
+        }
+        union_set.insert(label);
+    }
+
+    if (union_set.empty()) {
+        return 0.0f; // Avoid division by zero
+    }
+
+    return static_cast<float>(intersection.size()) / static_cast<float>(union_set.size());
+}
+
+
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
@@ -1191,6 +1215,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                     continue;
+                else {
+                    res = 1 - calculate_jaccard_similarity(_location_to_labels[id], filter_labels);
+                }
             }
         }
 
@@ -1381,6 +1408,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     {
                         if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                             continue;
+                        else {
+                           res = 1 - calculate_jaccard_similarity(_location_to_labels[id], filter_labels);
+                        }
                     }
                 }
                 res_vec.push_back(res);
@@ -1622,6 +1652,15 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     {
         for (auto &ngh : pool)
             ngh.distance = _data_store->get_distance(ngh.id, location);
+    }
+
+    for (auto &ngh : pool)
+    {
+        // Compute Jaccard distance between `location` and `ngh.id`
+        float jaccard_distance = 1.0f - calculate_jaccard_similarity(_location_to_labels[location], _location_to_labels[ngh.id]);
+
+        // Update the neighbor's distance with the weighted distance
+        ngh.distance += w_m * jaccard_distance;
     }
 
     // sort the pool based on distance to query and prune it with occlude_list
@@ -2246,11 +2285,11 @@ LabelT Index<T, TagT, LabelT>::get_converted_label(const std::string &raw_label)
     {
         return _universal_label;
     }
-    // std::stringstream stream;
-    // stream << "Unable to find label " << raw_label << " in the Label Map";
-    // diskann::cerr << stream.str() << std::endl;
-    // throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    return 0;
+    std::stringstream stream;
+    stream << "Unable to find label " << raw_label << " in the Label Map";
+    diskann::cerr << stream.str() << std::endl;
+    throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    // return 0;
 }
 
 template <typename T, typename TagT, typename LabelT>

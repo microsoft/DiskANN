@@ -26,7 +26,7 @@ int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
     uint32_t num_threads, R, L, Lf, build_PQ_bytes;
-    float alpha;
+    float alpha, filter_match_weight;
     uint32_t inter_size;
     bool use_pq_build, use_opq;
 
@@ -74,6 +74,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()(
             "min_inter", po::value<uint32_t>(&inter_size)->default_value(1),
             "Sets the minimum intersection size between filter sets. Defaults to 1, giving filtered-diskann");
+        optional_configs.add_options()("filter_match_weight",
+                                       po::value<float>(&filter_match_weight)->default_value(0.1),
+                                       "Weight of filter match in the final distance");
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
@@ -124,6 +127,9 @@ int main(int argc, char **argv)
         size_t data_num, data_dim;
         diskann::get_bin_metadata(data_path, data_num, data_dim);
         min_inter_size = inter_size;
+        w_m = filter_match_weight;
+
+        diskann::cout << "w_m: " << w_m << std::endl;
 
         auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
                                       .with_filter_list_size(Lf)
