@@ -101,6 +101,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _indexingThreads = index_config.index_write_params->num_threads;
         _saturate_graph = index_config.index_write_params->saturate_graph;
 
+        _diverse_index = index_config.index_write_params->diversity_index;
+        _seller_file = index_config.index_write_params->base_seller_labels;
+        _num_diverse_build = index_config.index_write_params->num_diverse_sellers;
+
         if (index_config.index_search_params != nullptr)
         {
             std::uint32_t default_queue_size = (std::max)(_indexingQueueSize, _filterIndexingQueueSize);
@@ -186,7 +190,7 @@ void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint
     for (uint32_t i = 0; i < num_threads; i++)
     {
         auto scratch = new InMemQueryScratch<T>(search_l, indexing_l, r, maxc, dim, _data_store->get_aligned_dim(),
-                                                _data_store->get_alignment_factor(), _pq_dist, bitmask_size);
+                                                _data_store->get_alignment_factor(), _pq_dist, _location_to_seller, bitmask_size);
         _query_scratch.push(scratch);
     }
 }
@@ -284,6 +288,11 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
 
     if (!_save_as_one_file)
     {
+        if (_diverse_index) {
+            std::string index_seller_file = std::string(filename) + "_sellers.txt";
+            std::filesystem::copy(_seller_file, index_seller_file);
+        }
+
         if (_filtered_index)
         {
             if (_label_to_start_id.size() > 0)
@@ -611,6 +620,14 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
+    std::string index_seller_file = std::string(filename) + "_sellers.txt";
+    if (file_exists(index_seller_file)) 
+    {
+        uint64_t nrows_seller_file;
+        parse_seller_file(index_seller_file, nrows_seller_file);
+        _diverse_index = true;
+    }
+
     if (file_exists(labels_file))
     {
         _label_map = load_label_map(labels_map_file);
@@ -820,11 +837,31 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
-    const std::vector<LabelT> &filter_labels, bool search_invocation)
+    const std::vector<LabelT> &filter_labels, bool search_invocation, uint32_t maxLperSeller)
 {
+    bool diverse_search = false;
+    if (maxLperSeller == 0)
+        maxLperSeller = Lsize;
+    else
+        diverse_search = true;
+
+    NeighborPriorityQueueBase* best_L_nodes = nullptr;
+
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
-    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
-    best_L_nodes.reserve(Lsize);
+
+    if (!diverse_search)
+    {
+        NeighborPriorityQueue& best_L_nodes_ref = scratch->best_l_nodes();
+        best_L_nodes_ref.reserve(Lsize);
+        best_L_nodes = &best_L_nodes_ref;
+    }
+    else
+    {
+        NeighborPriorityQueueExtendColor& best_diverse_nodes_ref = scratch->best_diverse_nodes();
+        best_diverse_nodes_ref.setup(Lsize, maxLperSeller);
+        best_L_nodes = &(best_diverse_nodes_ref);
+    }
+    
     tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
     boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
@@ -936,7 +973,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             distance = distances[0];
 
             Neighbor nn = Neighbor(id, distance);
-            best_L_nodes.insert(nn);
+            best_L_nodes->insert(nn);
         }
     }
 
@@ -945,9 +982,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     cmps += static_cast<uint32_t>(init_ids.size());
     std::vector<location_t> tmp_neighbor_list;
 
-    while (best_L_nodes.has_unexpanded_node())
+    while (best_L_nodes->has_unexpanded_node())
     {
-        auto nbr = best_L_nodes.closest_unexpanded();
+        auto nbr = best_L_nodes->closest_unexpanded();
         auto n = nbr.id;
 
         // Add node to expanded nodes to create pool for prune later
@@ -1054,7 +1091,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
+            best_L_nodes->insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
     }
     return std::make_pair(hops, cmps);
@@ -1069,10 +1106,16 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     const std::vector<uint32_t> init_ids = get_init_ids();
     const std::vector<LabelT> unused_filter_label;
 
+    uint32_t maxLperSeller = 0;
+    if (_diverse_index) 
+    {
+        maxLperSeller = (Lindex / _num_diverse_build > 0) ? Lindex / _num_diverse_build : 1;
+    }
+
     if (!use_filter)
     {
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false, maxLperSeller);
         prune_search_result(location, pruned_list, scratch);
     }
     else
@@ -1087,7 +1130,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         if (_dynamic_index)
             tl.unlock();
 
-        search_for_point_and_prune(location, Lindex, pruned_list, labels, scratch, filteredLindex);
+        search_for_point_and_prune(location, Lindex, pruned_list, labels, scratch, filteredLindex, maxLperSeller);
     }
 
     assert(_graph_store->get_total_points() == _max_points);
@@ -1099,7 +1142,8 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(
     std::vector<uint32_t>& pruned_list,
     const std::vector<LabelT>& labels,
     InMemQueryScratch<T>* scratch,
-    uint32_t filteredLindex)
+    uint32_t filteredLindex,
+    uint32_t maxLperSeller)
 {
     std::vector<uint32_t> filter_specific_start_nodes;
     for (auto& x : labels)
@@ -1107,7 +1151,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(
 
     _data_store->get_vector(location, scratch->aligned_query());
     iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
-        labels, false);
+        labels, false, maxLperSeller);
 
     if (Lindex > 0)
     {
@@ -1124,7 +1168,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(
         scratch->clear();
 
         _data_store->get_vector(location, scratch->aligned_query());
-        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
+        iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false, maxLperSeller);
 
         for (auto unfiltered_neighbour : scratch->pool())
         {
@@ -1180,6 +1224,10 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     assert(result.size() == 0);
     if (pool.size() > maxc)
         pool.resize(maxc);
+
+    tsl::robin_set<uint32_t> blockers;
+    blockers.reserve(pool.size());
+
     std::vector<float> &occlude_factor = scratch->occlude_factor();
     // occlude_list can be called with the same scratch more than once by
     // search_for_point_and_add_link through inter_insert.
@@ -1196,6 +1244,7 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
 
         for (auto iter = pool.begin(); result.size() < degree && iter != pool.end(); ++iter)
         {
+            auto block_iter = blockers.find(_location_to_seller[iter->id]);
             if (occlude_factor[iter - pool.begin()] > cur_alpha)
             {
                 continue;
@@ -1209,6 +1258,10 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 if (iter->id != location)
                 {
                     result.push_back(iter->id);
+                    if (_diverse_index)
+                    {
+                        blockers.insert(_location_to_seller[iter->id]);
+                    }
                 }
             }
 
@@ -1229,6 +1282,14 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     simple_bitmask bm2(_bitmask_buf.get_bitmask(b), _bitmask_buf._bitmask_size);
 
                     prune_allowed = bm1.test_full_mask_contain(bm2);
+                }
+                if (_diverse_index)
+                {
+                    if (blockers.size() < _num_diverse_build
+                        && blockers.find(_location_to_seller[iter2->id]) != blockers.end())
+                    {
+                        prune_allowed = false;
+                    }
                 }
                 if (!prune_allowed)
                     continue;
