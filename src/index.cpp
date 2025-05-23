@@ -1101,7 +1101,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     assert(_graph_store->get_total_points() == _max_points + _num_frozen_pts);
 }
 
-/*
+
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha,
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
@@ -1123,6 +1123,9 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
+    tsl::robin_set<uint32_t> blockers;
+    blockers.reserve(pool.size());
+    
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree)
     {
@@ -1145,6 +1148,10 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 if (iter->id != location)
                 {
                     result.push_back(iter->id);
+                    if (_diverse_index)
+                    {
+                        blockers.insert(_location_to_seller[iter->id]);
+                    }
                 }
             }
 
@@ -1173,6 +1180,14 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                             break;
                     }
                 }
+                if (_diverse_index)
+                {
+                    if (blockers.size() < _num_diverse_build
+                        && blockers.find(_location_to_seller[iter2->id]) != blockers.end())
+                    {
+                        prune_allowed = false;
+                    }
+                }
                 if (!prune_allowed)
                     continue;
 
@@ -1192,131 +1207,6 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                         occlude_factor[t] = std::max(occlude_factor[t], eps);
                     }
                 }
-            }
-        }
-        cur_alpha *= 1.2f;
-    }
-}
-*/
-
-
-template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha,
-                                          const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
-                                          InMemQueryScratch<T> *scratch,
-                                          const tsl::robin_set<uint32_t> *const delete_set_ptr)
-{
-    if (pool.size() == 0)
-        return;
-
-    // Truncate pool at maxc and initialize scratch spaces
-    assert(std::is_sorted(pool.begin(), pool.end()));
-    assert(result.size() == 0);
-    if (pool.size() > maxc)
-        pool.resize(maxc);
-    std::vector<float> &occlude_factor = scratch->occlude_factor();
-    std::vector<tsl::robin_set<uint32_t>> blockers(pool.size());
-    // occlude_list can be called with the same scratch more than once by
-    // search_for_point_and_add_link through inter_insert.
-    occlude_factor.clear();
-    // Initialize occlude_factor to pool.size() many 0.0f values for correctness
-    occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
-    float  cur_alpha = 1;
-    while (cur_alpha <= alpha && result.size() < degree)    
-    {
-        std::vector<tsl::robin_set<uint32_t>> blockers(pool.size());
-        // used for MIPS, where we store a value of eps in cur_alpha to
-        // denote pruned out entries which we can skip in later rounds.
-        float eps = cur_alpha + 0.01f;
-        for (auto iter = pool.begin(); result.size() < degree && iter != pool.end(); ++iter)
-        {
-            bool need_to_add_edge= true;
-            bool edge_added = false;
-            if (occlude_factor[iter - pool.begin()] == std::numeric_limits<float>::min()) {
-                need_to_add_edge = false; // added as an edge in earlier round
-                edge_added =true;
-            }
-            if (occlude_factor[iter - pool.begin()] > cur_alpha)
-            {
-                if (_diverse_index) {
-                if (blockers[iter - pool.begin()].size() >= _num_diverse_build)
-                need_to_add_edge = false;
-                else if (blockers[iter - pool.begin()].find(_location_to_seller[iter->id]) != blockers[iter - pool.begin()].end())
-                need_to_add_edge = false;
-                } else {
-                    need_to_add_edge = false;
-                }
-            }
-
-            // Set the entry to float::max so that is not considered again, similarly add its own color as a blocking color
-//            blockers[iter - pool.begin()].insert(_location_to_seller[iter->id]);
-
-            if (need_to_add_edge) {
-            occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::min();
-            // Add the entry to the result if its not been deleted, and doesn't
-            // add a self loop
-            if (delete_set_ptr == nullptr || delete_set_ptr->find(iter->id) == delete_set_ptr->end())
-            {
-                if (iter->id != location)
-                {
-                    result.push_back(iter->id);
-                }
-            }
-            }
-
-            if (need_to_add_edge || edge_added) {
-            // Update occlude factor for points from iter+1 to pool.end()
-            for (auto iter2 = iter + 1; iter2 != pool.end(); iter2++)
-            {
-                auto t = iter2 - pool.begin();
-//                if (occlude_factor[t] > alpha)
-//                    continue;
-
-                bool prune_allowed = true;
-                if (_filtered_index)
-                {
-                    uint32_t a = iter->id;
-                    uint32_t b = iter2->id;
-                    if (_location_to_labels.size() < b || _location_to_labels.size() < a)
-                        continue;
-                    for (auto &x : _location_to_labels[b])
-                    {
-                        if (std::find(_location_to_labels[a].begin(), _location_to_labels[a].end(), x) ==
-                            _location_to_labels[a].end())
-                        {
-                            prune_allowed = false;
-                        }
-                        if (!prune_allowed)
-                            break;
-                    }
-                }
-                if (!prune_allowed)
-                    continue;
-
-                float djk = _data_store->get_distance(iter2->id, iter->id);
-                if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
-                {
-                    occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
-                                                   : std::max(occlude_factor[t], iter2->distance / djk);
-                    if (_diverse_index) {
-                    if (iter2->distance / djk > cur_alpha) {
-                        blockers[t].insert(_location_to_seller[iter->id]);
-                    }
-                    }
-                }
-                else if (_dist_metric == diskann::Metric::INNER_PRODUCT)
-                {
-                    // Improvization for flipping max and min dist for MIPS
-                    float x = -iter2->distance;
-                    float y = -djk;
-                    if (y > cur_alpha * x)
-                    {
-                        occlude_factor[t] = std::max(occlude_factor[t], eps);
-                        if (_diverse_index)
-                            blockers[t].insert(_location_to_seller[iter->id]);
-                    }
-                }
-            }
             }
         }
         cur_alpha *= 1.2f;
