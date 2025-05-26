@@ -103,7 +103,7 @@ def lp_soft_method(distances, matches, eps=1e-4, method ='lp'):
             d = distances[q]
             mvals = matches[q]
             pos = np.where(mvals == 1)[0]
-            neg = np.where(mvals == 0)[0]
+            neg = np.where((mvals == 0) | (mvals == 0.5))[0]
             for i in pos:
                 neg_sample = np.random.choice(neg, size=min(2, len(neg)), replace=False)
 

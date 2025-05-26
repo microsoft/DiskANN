@@ -75,7 +75,7 @@ int main(int argc, char **argv)
             "min_inter", po::value<uint32_t>(&inter_size)->default_value(1),
             "Sets the minimum intersection size between filter sets. Defaults to 1, giving filtered-diskann");
         optional_configs.add_options()("filter_match_weight",
-                                       po::value<float>(&filter_match_weight)->default_value(0.1),
+                                       po::value<float>(&filter_match_weight)->default_value(0.0),
                                        "Weight of filter match in the final distance");
 
         // Merge required and optional parameters

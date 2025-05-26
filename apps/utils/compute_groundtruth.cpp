@@ -420,46 +420,46 @@ std::cout << "Identified " << labels.size() << " distinct label(s), and populate
 inline void parse_query_label_file(const std::string &query_label_file,
      std::vector<std::vector<std::vector<std::string>>> &query_labels)
 {
-query_labels.clear();
-std::ifstream infile(query_label_file);
-std::string line, token;
-std::set<std::string> labels;
-infile.clear();
-infile.seekg(0, std::ios::beg);
-uint32_t line_cnt = 0;
-bool print_flag = true;
-while (std::getline(infile, line))
-{
-std::istringstream iss(line);
-std::vector<std::vector<std::string>> lbls(0);
+    query_labels.clear();
+    std::ifstream infile(query_label_file);
+    std::string line, token;
+    std::set<std::string> labels;
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    uint32_t line_cnt = 0;
+    bool print_flag = true;
+    while (std::getline(infile, line))
+    {
+        std::istringstream iss(line);
+        std::vector<std::vector<std::string>> lbls(0);
 
-getline(iss, token, '\t');
-std::istringstream new_iss(token);
-while (getline(new_iss, token, '&'))
-{
-std::vector<std::string> clause(0);
-std::istringstream inner_iss(token);
-while (getline(inner_iss, token, '|'))
-{
-if (print_flag)
-std::cout<<token<<" || ";
-token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
-token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-clause.push_back(token);
-labels.insert(token);
-}
-if (print_flag)
-std::cout<<" && ";
-lbls.push_back(clause);
-}
-//        std::sort(lbls.begin(), lbls.end());
-query_labels.push_back(lbls);
-line_cnt++;
-if (line_cnt>10)
-print_flag = false;
-}
-std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
-<< query_labels.size() << " queries" << std::endl;
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        while (getline(new_iss, token, '&'))
+            {
+            std::vector<std::string> clause(0);
+            std::istringstream inner_iss(token);
+            while (getline(inner_iss, token, '|'))
+            {
+                if (print_flag)
+                std::cout<<token<<" || ";
+                token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+                token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+                clause.push_back(token);
+                labels.insert(token);
+            }
+            if (print_flag)
+            std::cout<<" && ";
+            lbls.push_back(clause);
+        }
+        //        std::sort(lbls.begin(), lbls.end());
+        query_labels.push_back(lbls);
+        line_cnt++;
+        if (line_cnt>10)
+        print_flag = false;
+    }
+    std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
+    << query_labels.size() << " queries" << std::endl;
 }
 
 
@@ -494,7 +494,7 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
 
     int *closest_points = new int[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
-    std::vector<std::vector<int>> match_scores(nqueries, std::vector<int>(k, 0));
+    std::vector<std::vector<float>> match_scores(nqueries, std::vector<float>(k, 0));
 
     std::vector<std::vector<std::pair<uint32_t, float>>> results =
         processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
@@ -529,30 +529,52 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
                 const auto &query_label_predicates = query_labels[i];
                 const auto &base_label_set = base_labels[iter.first];
 
-                // Check predicates
-                bool match = true;
+                // // Check predicates
+                // bool match = true;
+                // for (const auto &clause : query_label_predicates)
+                // {
+                //     bool clause_match = false;
+                //     for (const auto &label : clause)
+                //     {
+                //         if (base_label_set.find(label) != base_label_set.end())
+                //         {
+                //             clause_match = true;
+                //             break;
+                //         }
+                //     }
+                //     if (!clause_match)
+                //     {
+                //         match = false;
+                //         break;
+                //     }
+                // }
+
+                // if (match)
+                // {
+                //     match_scores[i][j] = 1; // Mark as a match
+                // }
+
+                // calculate jaccard distance between query and base labels
+                std::set<std::string> intersection;
                 for (const auto &clause : query_label_predicates)
                 {
-                    bool match = false;
                     for (const auto &label : clause)
                     {
                         if (base_label_set.find(label) != base_label_set.end())
                         {
-                            match = true;
-                            break;
+                            intersection.insert(label);
                         }
                     }
-                    if (!match)
-                    {
-                        match = false;
-                        break;
-                    }
                 }
+                
+                
+                float jaccard_distance = (float)intersection.size() / 2.0f;
+                // if (intersection.size() == 1) {
+                //     std::cout<< "Intersection is 1 for query " << i << " and base point " << iter.first
+                //               << ", jaccard distance = "<< (float)intersection.size() / 2.0f << std::endl;
+                // }
+                match_scores[i][j] = jaccard_distance; // Scale to percentage               
 
-                if (match)
-                {
-                    match_scores[i][j] = 1; // Mark as a match
-                }
             }
 
             ++j;

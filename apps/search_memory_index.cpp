@@ -548,7 +548,7 @@ int main(int argc, char **argv)
         optional_configs.add_options()("p1", po::value<float>(&p1)->default_value(0.1), "p1");
         optional_configs.add_options()("p2", po::value<float>(&p2)->default_value(0.1), "p2");
         optional_configs.add_options()("filter_match_weight",
-                                       po::value<float>(&filter_match_weight)->default_value(0.1),
+                                       po::value<float>(&filter_match_weight)->default_value(0.0),
                                        "Weight of filter match in the final distance");
 
         // Output controls

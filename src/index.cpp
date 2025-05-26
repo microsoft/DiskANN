@@ -1126,7 +1126,8 @@ inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::ve
         return 0.0f; // Avoid division by zero
     }
 
-    return static_cast<float>(intersection.size()) / static_cast<float>(union_set.size());
+    // return static_cast<float>(intersection.size()) / static_cast<float>(union_set.size());
+    return static_cast<float>(intersection.size()) / static_cast<float>(set1.size());
 }
 
 
@@ -1192,13 +1193,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             if (search_invocation)
             {
-                res = detect_filter_penalty(id, search_invocation, filter_labels);
+                // res = detect_filter_penalty(id, search_invocation, filter_labels);
                 // if ((res) > _filter_penalty_threshold)
                 //     continue;
                 // penalty = res * penalty_scale;
-                if (res > 0) {
-                    res = 1;
-                }
+                // if (res > 0) {
+                //     res = 1;
+                // }
+                res = calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1216,7 +1218,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                     continue;
                 else {
-                    res = 1 - calculate_jaccard_similarity(_location_to_labels[id], filter_labels);
+                    res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                 }
             }
         }
@@ -1380,16 +1382,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     
                     if (search_invocation)
                     {
-                        res = detect_filter_penalty(id, search_invocation, filter_labels);
+                        // res = detect_filter_penalty(id, search_invocation, filter_labels);
                         // if (res > _filter_penalty_threshold)
                         // {
                         //     id_iter++;
                         //     continue;
                         // }
                         // penalty = res * penalty_scale;
-                        if (res > 0) {
-                            res = 1;
-                        }
+                        // i
+                        
+                        res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+
 
                         if (print_qstats)
                         {
@@ -1409,7 +1412,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                             continue;
                         else {
-                           res = 1 - calculate_jaccard_similarity(_location_to_labels[id], filter_labels);
+                           res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                         }
                     }
                 }
