@@ -34,6 +34,7 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
         this->_pq_scratch = nullptr;
 
     _occlude_factor.reserve(maxc);
+    _candidate_pick_flags.reserve(maxc);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
     _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
     _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
@@ -46,6 +47,7 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _pool.clear();
     _best_l_nodes.clear();
     _occlude_factor.clear();
+    _candidate_pick_flags.clear();
 
     _inserted_into_pool_rs.clear();
     _inserted_into_pool_bs->reset();

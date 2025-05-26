@@ -1123,8 +1123,11 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
-    tsl::robin_set<uint32_t> blockers;
-    blockers.reserve(pool.size());
+    std::vector<bool> &candidate_pick_flags = scratch->candidate_pick_flags();
+    candidate_pick_flags.clear();
+    candidate_pick_flags.resize(pool.size(), false);
+
+    std::vector<tsl::robin_set<uint32_t>> blockers(pool.size());
     
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree)
@@ -1135,12 +1138,28 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
 
         for (auto iter = pool.begin(); result.size() < degree && iter != pool.end(); ++iter)
         {
-            if (occlude_factor[iter - pool.begin()] > cur_alpha)
+            auto cur_index = iter - pool.begin();
+            if (candidate_pick_flags[cur_index])
             {
                 continue;
             }
+
+            if (occlude_factor[cur_index] > cur_alpha)
+            {
+                if (!_diverse_index 
+                    || blockers[cur_index].size() >= _num_diverse_build)
+                {
+                    continue;
+                }
+                auto iter_seller = _location_to_seller[iter->id];
+                if (blockers[cur_index].find(iter_seller) != blockers[cur_index].end())
+                {
+                    continue;
+                }
+            }
             // Set the entry to float::max so that is not considered again
-            occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
+        //    occlude_factor[iter - pool.begin()] = std::numeric_limits<float>::max();
+            candidate_pick_flags[cur_index] = true;
             // Add the entry to the result if its not been deleted, and doesn't
             // add a self loop
             if (delete_set_ptr == nullptr || delete_set_ptr->find(iter->id) == delete_set_ptr->end())
@@ -1148,10 +1167,6 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 if (iter->id != location)
                 {
                     result.push_back(iter->id);
-                    if (_diverse_index)
-                    {
-                        blockers.insert(_location_to_seller[iter->id]);
-                    }
                 }
             }
 
@@ -1159,9 +1174,22 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
             for (auto iter2 = iter + 1; iter2 != pool.end(); iter2++)
             {
                 auto t = iter2 - pool.begin();
+                
                 if (occlude_factor[t] > alpha)
-                    continue;
+                {
+                    if (!_diverse_index
+                        || blockers[t].size() >= _num_diverse_build)
+                    {
+                        continue;
+                    }
 
+                    auto iter2_seller = _location_to_seller[iter2->id];
+                    if (blockers[t].find(iter2_seller) != blockers[t].end())
+                    {
+                        continue;
+                    }
+                }
+                    
                 bool prune_allowed = true;
                 if (_filtered_index)
                 {
@@ -1180,22 +1208,22 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                             break;
                     }
                 }
-                if (_diverse_index)
-                {
-                    if (blockers.size() < _num_diverse_build
-                        && blockers.find(_location_to_seller[iter2->id]) != blockers.end())
-                    {
-                        prune_allowed = false;
-                    }
-                }
+                
                 if (!prune_allowed)
                     continue;
 
                 float djk = _data_store->get_distance(iter2->id, iter->id);
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
                 {
+
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
-                                                   : std::max(occlude_factor[t], iter2->distance / djk);
+                        : std::max(occlude_factor[t], iter2->distance / djk);
+                
+                    if (_diverse_index && (iter2->distance / djk) > cur_alpha)
+                    {
+                        auto iter_seller = _location_to_seller[iter->id];
+                        blockers[t].insert(iter_seller);
+                    }
                 }
                 else if (_dist_metric == diskann::Metric::INNER_PRODUCT)
                 {
@@ -1205,6 +1233,11 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     if (y > cur_alpha * x)
                     {
                         occlude_factor[t] = std::max(occlude_factor[t], eps);
+                        if (_diverse_index)
+                        {
+                            auto iter_seller = _location_to_seller[iter->id];
+                            blockers[t].insert(iter_seller);
+                        }
                     }
                 }
             }

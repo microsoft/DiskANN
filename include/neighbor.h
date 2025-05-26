@@ -125,14 +125,14 @@ class NeighborExtendColorVector : public NeighborVectorBase
 {
   public:
 
-    NeighborExtendColorVector(std::vector<uint32_t>& location_to_seller)
+    NeighborExtendColorVector(const std::vector<uint32_t>& location_to_seller)
         : _location_to_seller(location_to_seller)
     {
         _color_to_max_node.reserve(1000);
         _color_to_len.reserve(1000);
     }
 
-    NeighborExtendColorVector(size_t capacity, uint32_t maxLperSeller, std::vector<uint32_t>& location_to_seller)
+    NeighborExtendColorVector(size_t capacity, uint32_t maxLperSeller, const std::vector<uint32_t>& location_to_seller)
         : _capacity(capacity)
         , _data(capacity + 1, NeighborExtendColor(std::numeric_limits<uint32_t>::max(),
                                                                        std::numeric_limits<float>::max(), 0))
@@ -156,6 +156,8 @@ class NeighborExtendColorVector : public NeighborVectorBase
 
     virtual void insert(const Neighbor &nbr, int insert_lo, int kick_loc, int quene_len) override
     {
+        assert(nbr.id < _location_to_seller.size());
+
         uint32_t color = _location_to_seller[nbr.id];
         NeighborExtendColor nbr_extend(nbr.id, nbr.distance, color);
 
@@ -252,8 +254,9 @@ class NeighborExtendColorVector : public NeighborVectorBase
 
     virtual size_t get_kick_location(const Neighbor& nbr, size_t queue_len) const override
     {
+        assert(nbr.id < _location_to_seller.size());
         uint32_t color = _location_to_seller[nbr.id];
-
+        
         auto len_iter = _color_to_len.find(color);
         if (len_iter == _color_to_len.end()
             || len_iter.value() < _maxLperSeller)
@@ -287,7 +290,7 @@ class NeighborExtendColorVector : public NeighborVectorBase
     
   private:
     std::vector<NeighborExtendColor> _data;
-    std::vector<uint32_t>& _location_to_seller;
+    const std::vector<uint32_t>& _location_to_seller;
     tsl::robin_map<uint32_t, int> _color_to_max_node;
     tsl::robin_map<uint32_t, uint32_t> _color_to_len;
 
@@ -319,6 +322,7 @@ public:
     void insert(const Neighbor& nbr, NeighborVectorBase& neighborVector)
     {
         auto kick_loc = neighborVector.get_kick_location(nbr, _size);
+        assert(kick_loc <= _capacity);
         // if the kick location is out of the max size,
         // that means it should be kick the last node
         if (kick_loc == _capacity)
@@ -461,15 +465,16 @@ public:
 class NeighborPriorityQueueExtendColor : public NeighborPriorityQueueBase
 {
 public:
-    NeighborPriorityQueueExtendColor(std::vector<uint32_t>& location_to_seller)
+    NeighborPriorityQueueExtendColor(const std::vector<uint32_t>& location_to_seller)
         : NeighborPriorityQueueBase(), _data(location_to_seller)
     {
     }
 
-    NeighborPriorityQueueExtendColor(size_t capacity, uint32_t maxLperSeller, std::vector<uint32_t>& location_to_seller)
+    NeighborPriorityQueueExtendColor(size_t capacity, uint32_t maxLperSeller, const std::vector<uint32_t>& location_to_seller)
         : NeighborPriorityQueueBase()
         , _data(capacity, maxLperSeller, location_to_seller)
     {
+        _capacity = capacity;
     }
 
     void setup(uint32_t capacity, uint32_t maxLperSeller) {

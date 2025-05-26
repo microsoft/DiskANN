@@ -69,6 +69,10 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _occlude_factor;
     }
+    inline std::vector<bool> &candidate_pick_flags()
+    {
+        return _candidate_pick_flags;
+    }
     inline tsl::robin_set<uint32_t> &inserted_into_pool_rs()
     {
         return _inserted_into_pool_rs;
@@ -118,6 +122,7 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     // _pool is clipped to maxc in occlude_list before affecting _occlude_factor
     // _occlude_factor is initialized to maxc size
     std::vector<float> _occlude_factor;
+    std::vector<bool> _candidate_pick_flags;
 
     // Capacity initialized to 20L
     tsl::robin_set<uint32_t> _inserted_into_pool_rs;
