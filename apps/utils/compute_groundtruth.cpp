@@ -524,7 +524,7 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
                 dist_closest_points[i * k + j] = iter.second;
 
             // Calculate match score for this vector
-            if (!base_labels.empty() && !query_labels.empty())
+            if (!base_labels.empty() && !query_labels.empty() && iter.first < base_labels.size())
             {
                 const auto &query_label_predicates = query_labels[i];
                 const auto &base_label_set = base_labels[iter.first];
@@ -568,7 +568,7 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
                 }
                 
                 
-                float jaccard_distance = (float)intersection.size() / 2.0f;
+                float jaccard_distance = (float)intersection.size() / (float)query_label_predicates.size();
                 // if (intersection.size() == 1) {
                 //     std::cout<< "Intersection is 1 for query " << i << " and base point " << iter.first
                 //               << ", jaccard distance = "<< (float)intersection.size() / 2.0f << std::endl;
