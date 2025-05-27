@@ -43,7 +43,7 @@ def direct_ratio_method(distances, matches, eps=1e-4):
     for q in range(Q):
         d = distances[q]
         m = matches[q]
-        pos_idx = np.where(m == 1)[0]
+        pos_idx = np.where(m == 1)[1]
         neg_idx = np.where(m == 0)[0]
         for i in pos_idx:
             for j in neg_idx:
@@ -61,7 +61,7 @@ def lp_soft_method(distances, matches, eps=1e-4, method ='lp'):
     if method == 'lp':
         # Using GEKKO
         m = GEKKO(remote=False)
-        w_d = m.Var(lb=0, name='w_d')
+        w_d = m.Var(lb=1, name='w_d')
         w_m = m.Var(lb=0, name='w_m')
         slacks = []
         for q in tqdm(range(Q), desc="Building LP constraints"):
@@ -105,15 +105,25 @@ def lp_soft_method(distances, matches, eps=1e-4, method ='lp'):
             pos = np.where(mvals == 1)[0]
             neg = np.where((mvals == 0) | (mvals == 0.5))[0]
             for i in pos:
-                neg_sample = np.random.choice(neg, size=min(2, len(neg)), replace=False)
-
-                for j in neg_sample:
+                # neg_sample = np.random.choice(neg, size=min(10, len(neg)), replace=False)
+                for j in neg:
+                    if d[i] < d[j]:
+                        continue
                     s = pulp.LpVariable(f's_{q}_{i}_{j}', lowBound=0)
                     slacks.append(s)
                     prob += (w_d * d[i] + w_m * (1 - mvals[i]) + eps
                              <= w_d * d[j] + w_m * (1 - mvals[j]) + s)
         print(f"Total equations: {len(slacks)}")
-        prob += pulp.lpSum(slacks)
+        alpha = 500 # or any value you want
+        print(f"Using alpha = {alpha} for normalization")
+
+        if len(slacks) > 0:
+            avg_slack = pulp.lpSum(slacks) / len(slacks)
+        else:
+            avg_slack = 0
+
+        prob += w_m + alpha * avg_slack
+        # prob += pulp.lpSum(slacks)
         print("Solving LP...")
         prob.solve(pulp.PULP_CBC_CMD(msg=False))
         slack_vals = [v.value() for v in slacks]
@@ -123,7 +133,8 @@ def lp_soft_method(distances, matches, eps=1e-4, method ='lp'):
 
 def main():
     parser = argparse.ArgumentParser(description='Learn weights for vector ranking')
-    parser.add_argument('ground_truth', help='Ground truth file (binary format)')
+    parser.add_argument('unfiltered_ground_truth', help='Unfiltered Ground truth file (binary format)')
+    parser.add_argument('filtered_ground_truth', help='Filtered Ground truth file (binary format)')
     parser.add_argument('filter_matches', help='Filter match file (binary match scores)')
     parser.add_argument('--method', choices=['ratio', 'lp', 'pulp'], default='ratio')
     parser.add_argument('--eps', type=float, default=1e-4)
@@ -131,21 +142,37 @@ def main():
     args = parser.parse_args()
 
     # Read the ground truth file
-    ground_truth_indices, ground_truth_distances = read_ground_truth(args.ground_truth)
+    ground_truth_indices, ground_truth_distances = read_ground_truth(args.unfiltered_ground_truth)
     print("Done reading ground truth file")
 
     # Read the filter match file
     filter_matches = np.loadtxt(args.filter_matches, dtype=np.int32)
     print(f"Filter matches shape: {filter_matches.shape}")
     print("Done reading filter match file")
-
+    
     # Validate shapes
     if ground_truth_indices.shape != filter_matches.shape:
         print(f"Shape mismatch: {ground_truth_indices.shape} vs {filter_matches.shape}")
         sys.exit(1)
-
-    # Use the distances from the ground truth file
-    distances = ground_truth_distances
+        
+    
+    # Concatenate filtered and unfiltered ground truth distances and match scores
+    # Read filtered ground truth
+    filtered_indices, filtered_distances = read_ground_truth(args.filtered_ground_truth)
+    # Read unfiltered ground truth (already read as ground_truth_distances)
+    # Read filtered match scores (assume first 100 rows from filtered, rest from unfiltered)
+    shape = filtered_indices.shape  # or ground_truth_distances.shape
+    filter_matches_all = np.ones(shape, dtype=np.int32)
+    num_filtered = filtered_indices.shape[0]
+    print(f"Number of filtered queries: {num_filtered}")
+    
+    # Concatenate: first 100 from filtered, rest from unfiltered
+    distances = np.concatenate([filtered_distances, ground_truth_distances], axis=1)
+    matches = np.concatenate([filter_matches_all, filter_matches_all], axis=1)
+    
+    print(f"Distances shape: {distances.shape}")
+    print(f"Matches shape: {matches.shape}")
+    
     print(f"Distances: {distances[0][:5]}")
     # distances_scaled = distances / distances.max()
     # print(f"Scaled distances: {distances_scaled[0][:5]}")
