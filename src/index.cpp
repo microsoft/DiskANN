@@ -1193,14 +1193,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             if (search_invocation)
             {
-                // res = detect_filter_penalty(id, search_invocation, filter_labels);
+                res = detect_filter_penalty(id, search_invocation, filter_labels);
                 // if ((res) > _filter_penalty_threshold)
                 //     continue;
                 // penalty = res * penalty_scale;
-                // if (res > 0) {
-                //     res = 1;
-                // }
-                res = calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                if (res > 0) {
+                    res = 1;
+                }
+                // res = calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1382,16 +1382,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     
                     if (search_invocation)
                     {
-                        // res = detect_filter_penalty(id, search_invocation, filter_labels);
+                        res = detect_filter_penalty(id, search_invocation, filter_labels);
                         // if (res > _filter_penalty_threshold)
                         // {
                         //     id_iter++;
                         //     continue;
                         // }
                         // penalty = res * penalty_scale;
-                        // i
+                        if (res > 0) {
+                            res = 1;
+                        }
                         
-                        res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                        // res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
 
 
                         if (print_qstats)
