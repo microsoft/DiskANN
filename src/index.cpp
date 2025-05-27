@@ -1200,7 +1200,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 // if (res > 0) {
                 //     res = 1;
                 // }
-                res = calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
