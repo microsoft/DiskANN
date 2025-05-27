@@ -125,11 +125,26 @@ class NeighborExtendColorVector : public NeighborVectorBase
 {
   public:
 
+    struct ColorInfo
+    {
+          int _max_node_location = -1; // location of the max node in the queue
+          uint32_t _len = 0;           // length of the color in the queue
+
+          ColorInfo() = default;
+
+          ColorInfo(int max_node_location, uint32_t len) 
+              : _max_node_location(max_node_location)
+              , _len(len)
+          {
+          }
+    };
+
     NeighborExtendColorVector(const std::vector<uint32_t>& location_to_seller)
         : _location_to_seller(location_to_seller)
     {
-        _color_to_max_node.reserve(1000);
-        _color_to_len.reserve(1000);
+        //_color_to_max_node.reserve(1000);
+        //_color_to_len.reserve(1000);
+        _color_to_info.reserve(1000);
     }
 
     NeighborExtendColorVector(size_t capacity, uint32_t maxLperSeller, const std::vector<uint32_t>& location_to_seller)
@@ -139,8 +154,9 @@ class NeighborExtendColorVector : public NeighborVectorBase
         , _location_to_seller(location_to_seller), _maxLperSeller(maxLperSeller)
 
     {
-        _color_to_max_node.reserve(1000);
-        _color_to_len.reserve(1000);
+        //_color_to_max_node.reserve(1000);
+        //_color_to_len.reserve(1000);
+        _color_to_info.reserve(1000);
     }
 
     virtual Neighbor &operator[](size_t i) override
@@ -159,6 +175,7 @@ class NeighborExtendColorVector : public NeighborVectorBase
         assert(nbr.id < _location_to_seller.size());
 
         uint32_t color = _location_to_seller[nbr.id];
+
         NeighborExtendColor nbr_extend(nbr.id, nbr.distance, color);
 
         // keep the kick out node to further process
@@ -182,7 +199,8 @@ class NeighborExtendColorVector : public NeighborVectorBase
             // update max node location
             if (_data[i].max_flag)
             {
-                _color_to_max_node[_data[i].color] = i + 1;
+                _color_to_info[_data[i].color]._max_node_location = i + 1;
+            //    _color_to_max_node[_data[i].color] = i + 1;
             }
 
             _data[i + 1] = _data[i];
@@ -216,38 +234,46 @@ class NeighborExtendColorVector : public NeighborVectorBase
             {
                 last.previous++;
             }
-            _color_to_max_node[last_node_color] = last.previous;
+        //    _color_to_max_node[last_node_color] = last.previous;
             if (last.previous != -1)
             {
                 _data[last.previous].max_flag = true;
             }
-            _color_to_len[last_node_color]--;
+       //     _color_to_len[last_node_color]--;
+
+            auto& color_info = _color_to_info.at(last_node_color);
+            color_info._max_node_location = last.previous;
+            color_info._len--;
         }
 
         // process the new node
-        auto max_iter = _color_to_max_node.find(color);
+        auto color_info_iter = _color_to_info.find(color);
+
+        //auto max_iter = _color_to_max_node.find(color);
         // current node is the max dist node
         if (nbr_extend.previous == -1
-            && max_iter != _color_to_max_node.end()
-            && max_iter.value() != -1
-            && insert_lo > max_iter.value())
+            && color_info_iter != _color_to_info.end()
+            && color_info_iter.value()._max_node_location != -1
+            && insert_lo > color_info_iter.value()._max_node_location)
         {
-            nbr_extend.previous = max_iter.value();
-            _data[max_iter.value()].max_flag = false;
-            _color_to_max_node[color] = insert_lo;
+            nbr_extend.previous = color_info_iter.value()._max_node_location;
+            _data[color_info_iter.value()._max_node_location].max_flag = false;
+            _color_to_info[color]._max_node_location = insert_lo;
             nbr_extend.max_flag = true;
         }
-        else if (max_iter == _color_to_max_node.end()
-            || max_iter.value() == -1)
+        else if (color_info_iter == _color_to_info.end()
+            || color_info_iter.value()._max_node_location == -1)
         {
             // new color insert to queue
-            _color_to_max_node[color] = insert_lo;
-            _color_to_len[color] = 0;
+            _color_to_info[color] = ColorInfo(insert_lo, 0);
+
+            //_color_to_max_node[color] = insert_lo;
+            //_color_to_len[color] = 0;
             nbr_extend.max_flag = true;
         }
             
         // update the length of the color
-        _color_to_len[color]++;
+        _color_to_info[color]._len++;
 
         _data[insert_lo] = nbr_extend;
     }
@@ -257,18 +283,22 @@ class NeighborExtendColorVector : public NeighborVectorBase
         assert(nbr.id < _location_to_seller.size());
         uint32_t color = _location_to_seller[nbr.id];
         
-        auto len_iter = _color_to_len.find(color);
-        if (len_iter == _color_to_len.end()
-            || len_iter.value() < _maxLperSeller)
+        auto color_info_iter = _color_to_info.find(color);
+
+       // auto len_iter = _color_to_len.find(color);
+        if (color_info_iter == _color_to_info.end()
+            || color_info_iter.value()._len < _maxLperSeller)
         {
             return queue_len;
         }
 
-        auto max_iter = _color_to_max_node.find(color);
-        
-        assert(max_iter.value() >= 0);
+       // auto max_iter = _color_to_max_node.find(color);
 
-        return max_iter.value();
+        assert(color_info_iter.value()._max_node_location >= 0);
+
+        assert(color_info_iter.value()._max_node_location < queue_len);
+
+        return color_info_iter.value()._max_node_location;
     }
 
     void resize(size_t capacity, uint32_t maxLperSeller)
@@ -282,8 +312,9 @@ class NeighborExtendColorVector : public NeighborVectorBase
     virtual void clear() override
     {
         // no need additional clear up
-        _color_to_len.clear();
-        _color_to_max_node.clear();
+        //_color_to_len.clear();
+        //_color_to_max_node.clear();
+        _color_to_info.clear();
         _data.clear();
     }
 
@@ -291,8 +322,10 @@ class NeighborExtendColorVector : public NeighborVectorBase
   private:
     std::vector<NeighborExtendColor> _data;
     const std::vector<uint32_t>& _location_to_seller;
-    tsl::robin_map<uint32_t, int> _color_to_max_node;
-    tsl::robin_map<uint32_t, uint32_t> _color_to_len;
+    tsl::robin_map<uint32_t, ColorInfo> _color_to_info;
+
+    //tsl::robin_map<uint32_t, int> _color_to_max_node;
+    //tsl::robin_map<uint32_t, uint32_t> _color_to_len;
 
     uint32_t _maxLperSeller = 0;
     size_t _capacity = 0;
@@ -323,6 +356,7 @@ public:
     {
         auto kick_loc = neighborVector.get_kick_location(nbr, _size);
         assert(kick_loc <= _capacity);
+
         // if the kick location is out of the max size,
         // that means it should be kick the last node
         if (kick_loc == _capacity)
