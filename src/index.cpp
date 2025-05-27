@@ -1126,8 +1126,8 @@ inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::ve
         return 0.0f; // Avoid division by zero
     }
 
-    // return static_cast<float>(intersection.size()) / static_cast<float>(union_set.size());
-    return static_cast<float>(intersection.size()) / static_cast<float>(set1.size());
+    return static_cast<float>(intersection.size()) / static_cast<float>(union_set.size());
+    // return static_cast<float>(intersection.size()) / static_cast<float>(set1.size());
 }
 
 
