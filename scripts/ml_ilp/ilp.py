@@ -105,8 +105,8 @@ def lp_soft_method(distances, matches, eps=1e-4, method ='lp'):
             pos = np.where(mvals == 1)[0]
             neg = np.where((mvals == 0) | (mvals == 0.5))[0]
             for i in pos:
-                neg_sample = np.random.choice(neg, size=min(10, len(neg)), replace=False)
-                for j in neg_sample:
+                # neg_sample = np.random.choice(neg, size=min(10, len(neg)), replace=False)
+                for j in neg:
                     if d[i] < d[j]:
                         continue
                     s = pulp.LpVariable(f's_{q}_{i}_{j}', lowBound=0)
@@ -114,7 +114,16 @@ def lp_soft_method(distances, matches, eps=1e-4, method ='lp'):
                     prob += (w_d * d[i] + w_m * (1 - mvals[i]) + eps
                              <= w_d * d[j] + w_m * (1 - mvals[j]) + s)
         print(f"Total equations: {len(slacks)}")
-        prob += pulp.lpSum(slacks)
+        alpha = 500 # or any value you want
+        print(f"Using alpha = {alpha} for normalization")
+
+        if len(slacks) > 0:
+            avg_slack = pulp.lpSum(slacks) / len(slacks)
+        else:
+            avg_slack = 0
+
+        prob += w_m + alpha * avg_slack
+        # prob += pulp.lpSum(slacks)
         print("Solving LP...")
         prob.solve(pulp.PULP_CBC_CMD(msg=False))
         slack_vals = [v.value() for v in slacks]
