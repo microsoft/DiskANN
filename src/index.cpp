@@ -1608,7 +1608,9 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 if (!prune_allowed)
                     continue;
 
-                float djk = _data_store->get_distance(iter2->id, iter->id);
+                float djk = _data_store->get_distance(iter2->id, iter->id) + (1 - calculate_jaccard_similarity(
+                    _location_to_labels[iter2->id], _location_to_labels[iter->id]) * w_m;)
+                    
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
@@ -1660,7 +1662,7 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     for (auto &ngh : pool)
     {
         // Compute Jaccard distance between `location` and `ngh.id`
-        float jaccard_distance = 1.0f - calculate_jaccard_similarity(_location_to_labels[location], _location_to_labels[ngh.id]);
+        float jaccard_distance = 1.0f - calculate_jaccard_similarity(_location_to_labels[ngh.id], _location_to_labels[location]);
 
         // Update the neighbor's distance with the weighted distance
         ngh.distance += w_m * jaccard_distance;
