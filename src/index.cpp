@@ -1609,8 +1609,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     continue;
 
                 float djk = _data_store->get_distance(iter2->id, iter->id) + (1 - calculate_jaccard_similarity(
-                    _location_to_labels[iter2->id], _location_to_labels[iter->id]) * w_m;)
-                    
+                    _location_to_labels[iter2->id], _location_to_labels[iter->id])) * w_m;
+
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
