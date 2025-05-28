@@ -79,6 +79,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
     std::cout << filter_penalty_threshold << " is value of filter_penalty_threshold at driver file" << std::endl;
+    std::cout <<"Will be using partial Jaccard for search" << std::endl;
     auto search_params =
         diskann::IndexSearchParams(*(std::max_element(Lvec.begin(), Lvec.end())), num_threads, filter_penalty_threshold,
                                    bruteforce_threshold, paged_search_threshold);
