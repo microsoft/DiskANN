@@ -127,7 +127,7 @@ void normalize_data_file(const std::string &inFileName, const std::string &outFi
 }
 
 double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist, uint32_t dim_gs,
-                        uint32_t *our_results, uint32_t dim_or, uint32_t recall_at, unsigned r2)
+                        uint32_t *our_results, uint32_t dim_or, uint32_t recall_at, unsigned r2, double recall_percentile_to_report)
 {
     if (recall_at > dim_gs)
     {
@@ -143,8 +143,9 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
         diskann::cerr << "Error: r2 is larger than the size of the results." << std::endl;
         throw diskann::ANNException("Invalid r2", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-        
-    double total_recall = 0;
+    
+    std::vector<double> recall_per_query;
+
     std::set<uint32_t> gt, res;
 
     for (size_t i = 0; i < num_queries; i++)
@@ -180,7 +181,7 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
         if (num_pts_in_gt == 0) {
             // case 1: num_pts_in_gt == 0
             // 0/0 = 100%, right? :) any solution gets 100% recall if no feasible basepoint exists
-            total_recall += 1.0;
+            recall_per_query.push_back(1.0);
         } else {
             res.clear();
             res.insert(res_vec, res_vec + r2);
@@ -224,10 +225,35 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
                 }
                 cur_recall += std::min(tiebreaking_recall, recall_at - tiebreaker_start);
             }
-            total_recall += (double)cur_recall / num_pts_in_gt;
+            recall_per_query.push_back((double)cur_recall / num_pts_in_gt);
         }
     }
-    return 100.0 * total_recall / num_queries;
+    if (recall_percentile_to_report < 0) {
+        // if recall_percentile_to_report is negative, we report the average recall
+        double total_recall = 0;
+        for (const auto &recall : recall_per_query)
+        {
+            total_recall += recall;
+        }
+        return 100.0 * total_recall / num_queries;
+    } else {
+        // otherwise, we report the recall at the given percentile
+
+        if (recall_percentile_to_report < 0.0 || recall_percentile_to_report > 100.0) {
+            diskann::cerr << "Error: recall_percentile_to_report must be in the interval [0, 100], got "
+                          << recall_percentile_to_report << std::endl;
+            throw diskann::ANNException("Invalid recall_percentile_to_report", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        size_t recall_percentile_index = (size_t)std::floor(((100.0 - recall_percentile_to_report) / 100.0) * num_queries);
+        if (recall_percentile_index >= recall_per_query.size()) {
+            diskann::cerr << "Error: recall_percentile_to_report is larger than 100. "
+                          << "Query id: " << recall_percentile_to_report << std::endl;
+            throw diskann::ANNException("Invalid recall_percentile_to_report", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+        std::sort(recall_per_query.begin(), recall_per_query.end());
+        return 100.0 * recall_per_query[recall_percentile_index];
+    }
 }
 
 double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist, uint32_t dim_gs,

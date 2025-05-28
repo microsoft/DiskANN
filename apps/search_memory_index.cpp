@@ -31,7 +31,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                         const uint32_t recall_at, const bool print_all_recalls, const std::vector<uint32_t> &Lvec,
                         const bool dynamic, const bool tags, const bool show_qps_per_thread,
                         const std::vector<std::string> &query_filters, const float fail_if_recall_below,
-                        const bool save_L_results)
+                        const bool save_L_results, const float recall_percentile_to_report)
 {
     using TagT = uint32_t;
     // Load the query file
@@ -121,6 +121,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
         {
             std::cout << std::setw(12) << ("Recall@" + std::to_string(curr_recall));
+            if (recall_percentile_to_report > 0) {
+                std::cout << "-" << static_cast<int>(std::round(recall_percentile_to_report)) << "percentile";
+            }
         }
         recalls_to_print = recall_at + 1 - first_recall;
         table_width += recalls_to_print * 12;
@@ -224,7 +227,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             for (uint32_t curr_recall = first_recall; curr_recall <= recall_at; curr_recall++)
             {
                 recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
-                                                            query_result_ids[test_id].data(), K_or_L, curr_recall, K_or_L));
+                                                            query_result_ids[test_id].data(), K_or_L, curr_recall, K_or_L, recall_percentile_to_report));
             }
         }
 
@@ -287,6 +290,7 @@ int main(int argc, char **argv)
     bool print_all_recalls, dynamic, tags, show_qps_per_thread;
     bool save_L_results;
     float fail_if_recall_below = 0.0f;
+    float recall_percentile_to_report = -1.0f;
 
     po::options_description desc{
         program_options_utils::make_program_description("search_memory_index", "Searches in-memory DiskANN indexes")};
@@ -336,14 +340,16 @@ int main(int argc, char **argv)
                                        po::value<float>(&fail_if_recall_below)->default_value(0.0f),
                                        program_options_utils::FAIL_IF_RECALL_BELOW);
         optional_configs.add_options()("save_L_results",
-                                        po::value<bool>(&save_L_results)->default_value(false),
-                                        "Whether or not to save L results rather than k, for each L in the search list");                                       
+                                       po::value<bool>(&save_L_results)->default_value(false),
+                                       "Whether or not to save L results rather than k, for each L in the search list");
+        optional_configs.add_options()("recall_percentile_to_report",
+                                       po::value<float>(&recall_percentile_to_report)->default_value(-1.0f),
+                                       "Percentile of recall to report (if missing, then report average)");
 
         // Output controls
         po::options_description output_controls("Output controls");
         output_controls.add_options()("print_all_recalls", po::bool_switch(&print_all_recalls),
-                                      "Print recalls at all positions, from 1 up to specified "
-                                      "recall_at value");
+                                      "Print recalls at all positions, from 1 up to specified recall_at value;");
         output_controls.add_options()("print_qps_per_thread", po::bool_switch(&show_qps_per_thread),
                                       "Print overall QPS divided by the number of threads in "
                                       "the output table");
@@ -428,19 +434,19 @@ int main(int argc, char **argv)
             {
                 return search_memory_index<int8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results, recall_percentile_to_report);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t, uint16_t>(
                     metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
-                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results);
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results, recall_percentile_to_report);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float, uint16_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                            show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results);
+                                                            show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results, recall_percentile_to_report);
             }
             else
             {
@@ -454,19 +460,19 @@ int main(int argc, char **argv)
             {
                 return search_memory_index<int8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                   show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results);
+                                                   show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results, recall_percentile_to_report);
             }
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                     num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                    show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results);
+                                                    show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results, recall_percentile_to_report);
             }
             else if (data_type == std::string("float"))
             {
                 return search_memory_index<float>(metric, index_path_prefix, result_path, query_file, gt_file,
                                                   num_threads, K, print_all_recalls, Lvec, dynamic, tags,
-                                                  show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results);
+                                                  show_qps_per_thread, query_filters, fail_if_recall_below, save_L_results, recall_percentile_to_report);
             }
             else
             {

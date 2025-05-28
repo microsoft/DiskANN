@@ -674,7 +674,8 @@ inline void copy_file(std::string in_file, std::string out_file)
 }
 
 DISKANN_DLLEXPORT double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist, unsigned dim_gs,
-                                          unsigned *our_results, unsigned dim_or, unsigned recall_at, unsigned r2 = 0);
+                                          unsigned *our_results, unsigned dim_or, unsigned recall_at, unsigned r2 = 0,
+                                          double recall_percentile_to_report = -1.0);
 
 DISKANN_DLLEXPORT double calculate_recall(unsigned num_queries, unsigned *gold_std, float *gs_dist, unsigned dim_gs,
                                           unsigned *our_results, unsigned dim_or, unsigned recall_at,
