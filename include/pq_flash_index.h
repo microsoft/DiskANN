@@ -241,6 +241,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     bool _diverse_index = false;
     uint32_t _max_L_per_seller = 0;
+    uint32_t _num_unique_sellers = 0;
     std::vector<uint32_t> _location_to_seller;
     std::string _seller_file;
 

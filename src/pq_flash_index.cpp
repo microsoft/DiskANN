@@ -794,6 +794,7 @@ void PQFlashIndex<T, LabelT>::parse_seller_file(const std::string &label_file, s
         _location_to_seller[line_cnt] = seller;
         line_cnt++;
     }
+    _num_unique_sellers = (uint32_t)sellers.size();
     num_points = (size_t)line_cnt;
     diskann::cout << "Identified " << sellers.size() << " distinct seller(s) across " << num_points <<" points." << std::endl;
 }
@@ -1431,7 +1432,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     NeighborPriorityQueueBase* retset;
     if(diverse_search) {
-        best_diverse_nodes_ref.setup(static_cast<uint32_t>(l_search), max_l_per_seller);
+        best_diverse_nodes_ref.setup(static_cast<uint32_t>(l_search), max_l_per_seller, _num_unique_sellers);
         retset = &(best_diverse_nodes_ref);
     } else {
         query_scratch->retset.reserve(l_search);
@@ -1757,7 +1758,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     if (diverse_search) {
         best_diverse_nodes_ref.clear();
-        best_diverse_nodes_ref.setup(static_cast<uint32_t>(k_search), max_k_per_seller);
+        best_diverse_nodes_ref.setup(static_cast<uint32_t>(k_search), max_k_per_seller, _num_unique_sellers);
 
         for (auto &x : full_retset) {
             best_diverse_nodes_ref.insert(Neighbor(x.id, x.distance));

@@ -819,7 +819,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     NeighborPriorityQueue &best_L_nodes_ref = scratch->best_l_nodes();
     NeighborPriorityQueueExtendColor&best_diverse_nodes_ref = scratch->best_diverse_nodes();
     best_L_nodes_ref.reserve(Lsize);
-    best_diverse_nodes_ref.setup(Lsize, maxLperSeller);
+    best_diverse_nodes_ref.setup(Lsize, maxLperSeller, _num_unique_sellers);
 
     NeighborPriorityQueueBase* best_L_nodes;
     if(diverse_search) {
@@ -1989,6 +1989,7 @@ void Index<T, TagT, LabelT>::parse_seller_file(const std::string &label_file, si
         _location_to_seller[line_cnt] = seller;
         line_cnt++;
     }
+    _num_unique_sellers = static_cast<uint32_t>(sellers.size());
     num_points = (size_t)line_cnt;
     diskann::cout << "Identified " << sellers.size() << " distinct seller(s) across " << num_points <<" points." << std::endl;
 }
