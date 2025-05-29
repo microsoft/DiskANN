@@ -124,10 +124,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     {
         std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
                   << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "Recall" << std::setw(20)
+                  << "Brute Dist Cmp" << std::setw(22)
                   << "Brute Latency (mus)" << std::setw(20) << "Brute Recall" << std::setw(20) << "Clus. Latency (mus)"
-                  << std::setw(20) << "Clus. Recall" << std::setw(20) << "Graph Latency (mus)" << std::setw(20)
-                  << "Graph Recall" << std::endl;
-        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20 + 20;
+                  << std::setw(20) << "Clus. Recall" << std::setw(20) << "Graph Dist Cmp" << std::setw(22)
+                  << "Graph Latency (mus)" << std::setw(20) << "Graph Recall" << std::endl;
+        table_width += 4 + 12 + 18 + 20 + 15 + 20 + 20 + 20 + 20 + 20 + 20 + 22 + 22 ;
     }
     /*    uint32_t recalls_to_print = 0;
         const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -152,6 +153,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<float> brute_lat(Lvec.size(), 0);
     std::vector<float> cluster_lat(Lvec.size(), 0);
     std::vector<float> graph_lat(Lvec.size(), 0);
+    std::vector<float> brute_dist_cmp(Lvec.size(), 0);
+    std::vector<float> graph_dist_cmp(Lvec.size(), 0);
     for (auto &x : query_result_class)
         x.resize(query_num, 0);
     std::vector<float> latency_stats(query_num, 0);
@@ -274,6 +277,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             {
             case 0:
                 query_result_class[test_id][i] = 0;
+                brute_dist_cmp[test_id] += cmp_stats[i];
                 brute_lat[test_id] += latency_stats[i];
                 break;
             case 1:
@@ -282,6 +286,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 break;
             case 2:
                 query_result_class[test_id][i] = 2;
+                graph_dist_cmp[test_id] += cmp_stats[i];
                 graph_lat[test_id] += latency_stats[i];
                 break;
             }
@@ -400,10 +405,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         {
             std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency << std::setw(15) << (float)recalls[0] << std::setw(20)
+                      << (float)(brute_dist_cmp[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
                       << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
                       << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) << std::setw(20)
                       << (float)(cluster_lat[test_id] * 1.0) / (num_clusters * 1.0) << std::setw(20)
                       << (float)(cluster_recalls[test_id] * 100.0) / (num_clusters * recall_at * 1.0) << std::setw(20)
+                      << (float)(graph_dist_cmp[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(22)
                       << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(20)
                       << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0)
                       //                      << std::setw(20) << (float)(brute_lat[test_id]*1.0) << std::setw(20) <<
