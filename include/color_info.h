@@ -179,8 +179,8 @@ public:
     ColorInfo _empty_info; // only used in error case
 
     ColorInfoVector(size_t capacity)
-        : _color_info_vector(capacity)
-        , _bitmask_buf(simple_bitmask::get_bitmask_size(capacity), simple_bitmask::get_bitmask_size(capacity))
+        : _color_info_vector(capacity + 1)
+        , _bitmask_buf(simple_bitmask::get_bitmask_size(capacity + 1), simple_bitmask::get_bitmask_size(capacity + 1))
         , _slot_mask(_bitmask_buf._buf.data(), _bitmask_buf._bitmask_size)
     {
     }

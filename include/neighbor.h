@@ -320,17 +320,23 @@ class NeighborExtendColorVector : public NeighborVectorBase
     {
         _data.resize(capacity + 1, NeighborExtendColor(std::numeric_limits<uint32_t>::max(),
             std::numeric_limits<float>::max(), 0));
+
         _capacity = capacity;
         _maxLperSeller = maxLperSeller;
-        if (uniqueSellerCount < s_vector_size_limited)
+        if (_color_to_info == nullptr)
         {
-            _color_to_info = std::make_unique<ColorInfoVector>(uniqueSellerCount);
-        }
-        else
-        {
-            auto color_to_info = std::make_unique<ColorInfoMap>();
-            color_to_info->reserve(uniqueSellerCount);
-            _color_to_info = std::move(color_to_info);
+            if (uniqueSellerCount < s_vector_size_limited)
+            {
+                std::cout << "unique seller " << uniqueSellerCount << "ColorInfoVector created" << std::endl;
+                _color_to_info = std::make_unique<ColorInfoVector>(uniqueSellerCount);
+            }
+            else
+            {
+                std::cout << "unique seller " << uniqueSellerCount << "ColorInfoMap created" << std::endl;
+                auto color_to_info = std::make_unique<ColorInfoMap>();
+                color_to_info->reserve(uniqueSellerCount);
+                _color_to_info = std::move(color_to_info);
+            }
         }
     }
 

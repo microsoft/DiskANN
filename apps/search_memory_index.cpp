@@ -26,7 +26,7 @@
 namespace po = boost::program_options;
 
 
-void parse_seller_file(const std::string &label_file, size_t &num_points, std::vector<uint32_t> &location_to_seller)
+void parse_seller_file(const std::string &label_file, size_t &num_points, uint32_t& unique_seller_count, std::vector<uint32_t> &location_to_seller)
 {
     // Format of Label txt file: filters with comma separators
 
@@ -67,6 +67,7 @@ void parse_seller_file(const std::string &label_file, size_t &num_points, std::v
         location_to_seller[line_cnt] = seller;
         line_cnt++;
     }
+    unique_seller_count = (uint32_t)sellers.size();
     num_points = (size_t)line_cnt;
     diskann::cout << " Search code: Identified " << sellers.size() << " distinct seller(s) across " << num_points <<" points." << std::endl;
 }
@@ -83,10 +84,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::cout<<max_K_per_seller <<" " << diverse_search <<" " << scale_seller_limits << " " << post_process << std::endl;
     std::vector<uint32_t> location_to_sellers;
     std::string seller_file = index_path +"_sellers.txt";
+    uint32_t unique_seller_count = 0;
     if (file_exists(seller_file)) {
         std::cout<<"Here" << std::endl;
         uint64_t num_pts_seller_file;
-        parse_seller_file(seller_file, num_pts_seller_file, location_to_sellers);
+        parse_seller_file(seller_file, num_pts_seller_file, unique_seller_count, location_to_sellers);
     }
     using TagT = uint32_t;
     // Load the query file
@@ -283,7 +285,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                                    .second;
             }
             if (post_process) {
-                    diskann::NeighborPriorityQueueExtendColor final_results(recall_at, max_K_per_seller, location_to_sellers);
+                    diskann::NeighborPriorityQueueExtendColor final_results(recall_at, max_K_per_seller, unique_seller_count, location_to_sellers);
                     for (uint32_t rr = 0; rr < L; rr++) {
                         final_results.insert(diskann::Neighbor(results[rr], dists[rr]));
                     }
