@@ -2769,7 +2769,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 out << std::endl;
                 out.close();
             }
-            retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            // retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
+            retval = iterate_to_fixed_point(scratch, L, init_ids, false, filter_vec, true);
         }
     }
 
