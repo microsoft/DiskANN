@@ -79,6 +79,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
     std::cout << filter_penalty_threshold << " is value of filter_penalty_threshold at driver file" << std::endl;
+    std::cout << "Will be using full jaccard during " << std::endl;
+
     auto search_params =
         diskann::IndexSearchParams(*(std::max_element(Lvec.begin(), Lvec.end())), num_threads, filter_penalty_threshold,
                                    bruteforce_threshold, paged_search_threshold);
@@ -132,15 +134,17 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
           << std::setw(20) << "99 Latency(mus)" 
           << std::setw(20) << "95 Latency(mus)" 
           << std::setw(10) << "Recall" 
+          << std::setw(22) << "Brute avg cmps"
           << std::setw(22) << "Brute Latency(mus)" 
           << std::setw(20) << "Brute Recall" 
           << std::setw(22) << "Page. Latency(mus)" 
           << std::setw(20) << "Page. Recall" 
+          << std::setw(22) << "Graph avg cmps"
           << std::setw(22) << "Graph Latency(mus)" 
           << std::setw(20) << "Graph Recall" 
           << std::endl;
 
-    table_width += 4 + 4 + 8 + 18 + 20 + 20 + 20 + 20 + 10 + 22 + 20 + 22 + 20 + 22 + 20;
+    table_width += 4 + 4 + 8 + 18 + 20 + 20 + 20 + 20 + 10 + 22 + 20 + 22 + 20 + 22 + 20 + 22 + 22;
     }
     /*    uint32_t recalls_to_print = 0;
         const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -165,6 +169,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<float> brute_lat(Lvec.size(), 0);
     std::vector<float> paged_search_lat(Lvec.size(), 0);
     std::vector<float> graph_lat(Lvec.size(), 0);
+    std::vector<float> brute_dist_cmp(Lvec.size(), 0);
+    std::vector<float> graph_dist_cmp(Lvec.size(), 0);
     for (auto &x : query_result_class)
         x.resize(query_num, 0);
     std::vector<float> latency_stats(query_num, 0);
@@ -288,6 +294,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             case 0:
                 query_result_class[test_id][i] = 0;
                 brute_lat[test_id] += latency_stats[i];
+                brute_dist_cmp[test_id] += cmp_stats[i];
                 break;
             case 1:
                 query_result_class[test_id][i] = 1;
@@ -296,6 +303,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             case 2:
                 query_result_class[test_id][i] = 2;
                 graph_lat[test_id] += latency_stats[i];
+                graph_dist_cmp[test_id] += cmp_stats[i];
                 break;
             }
         }
@@ -420,10 +428,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << std::setw(20) << (float)latency_99 << std::setw(15)
                       << std::setw(20) << (float)latency_95 << std::setw(15)
                       << (float)recalls[0] << std::setw(20)
+                      << (float)(brute_dist_cmp[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(22)
                       << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
                       << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) << std::setw(20)
                       << (float)(paged_search_lat[test_id] * 1.0) / (num_paged_search * 1.0) << std::setw(20)
                       << (float)(paged_search_recalls[test_id] * 100.0) / (num_paged_search * recall_at * 1.0) << std::setw(20)
+                      << (float)(graph_dist_cmp[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(22)
                       << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(20)
                       << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0)
                       //                      << std::setw(20) << (float)(brute_lat[test_id]*1.0) << std::setw(20) <<
