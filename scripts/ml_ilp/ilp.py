@@ -61,7 +61,7 @@ def lp_soft_method_gekko(distances, matches, eps=1e-4):
     # Using GEKKO
     print("using GEKKO")
     m = GEKKO(remote=False)
-    w_d = m.Var(lb=1, name='w_d')
+    w_d = 1
     w_m = m.Var(lb=0, name='w_m')
     slacks = []
     for q in tqdm(range(Q), desc="Building LP constraints"):
@@ -89,14 +89,14 @@ def lp_soft_method_gekko(distances, matches, eps=1e-4):
     # m.solve(disp=False)
     slack_vals = [float(s.value[0]) for s in slacks]
     violations = sum(1 for v in slack_vals if v > 1e-6)
-    return float(w_d.value[0]), float(w_m.value[0]), len(slacks), violations
+    return w_d, float(w_m.value[0]), len(slacks), violations
     
 def lp_soft_method_pulp(distances, matches, eps=1e-4):   
     Q, N = distances.shape 
     print("using PuLP")
     # Using PuLP
     prob = pulp.LpProblem('VectorRanking', pulp.LpMinimize)
-    w_d = pulp.LpVariable('w_d', lowBound=1)
+    w_d = 1
     w_m = pulp.LpVariable('w_m', lowBound=0)
     # prob += w_d + w_m == 2 #normalization constraint
 
@@ -130,7 +130,7 @@ def lp_soft_method_pulp(distances, matches, eps=1e-4):
     prob.solve(pulp.PULP_CBC_CMD(msg=False))
     slack_vals = [v.value() for v in slacks]
     violations = sum(1 for v in slack_vals if v > 1e-6)
-    return w_d.value(), w_m.value(), len(slacks), violations
+    return w_d, w_m.value(), len(slacks), violations
     
     
 def lp_soft_method_without_slack(distances, matches, eps=1e-4, method ='lp_wo_slack'): 
