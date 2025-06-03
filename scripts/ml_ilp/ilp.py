@@ -58,40 +58,41 @@ def direct_ratio_method(distances, matches, eps=1e-4):
 def lp_soft_method_gekko(distances, matches, eps=1e-4):
     Q, N = distances.shape
     # Build LP
-    if method == 'lp':
-        # Using GEKKO
-        m = GEKKO(remote=False)
-        w_d = m.Var(lb=1, name='w_d')
-        w_m = m.Var(lb=0, name='w_m')
-        slacks = []
-        for q in tqdm(range(Q), desc="Building LP constraints"):
-            d = distances[q]
-            mvals = matches[q]
-            pos = np.where(mvals == 1)[0]
-            neg = np.where(mvals == 0)[0]
-            for i in pos:
-                neg_sample = np.random.choice(neg, size=min(1, len(neg)), replace=False)
-                for j in neg_sample:
-                    s = m.Var(lb=0)
-                    slacks.append(s)
-                    m.Equation(w_d*d[i] + w_m*(1-mvals[i]) + eps <= w_d*d[j] + w_m*(1-mvals[j]) + s)
+    # Using GEKKO
+    print("using GEKKO")
+    m = GEKKO(remote=False)
+    w_d = m.Var(lb=1, name='w_d')
+    w_m = m.Var(lb=0, name='w_m')
+    slacks = []
+    for q in tqdm(range(Q), desc="Building LP constraints"):
+        d = distances[q]
+        mvals = matches[q]
+        pos = np.where(mvals == 1)[0]
+        neg = np.where(mvals == 0)[0]
+        for i in pos:
+            neg_sample = np.random.choice(neg, size=min(1, len(neg)), replace=False)
+            for j in neg_sample:
+                s = m.Var(lb=0)
+                slacks.append(s)
+                m.Equation(w_d*d[i] + w_m*(1-mvals[i]) + eps <= w_d*d[j] + w_m*(1-mvals[j]) + s)
 
-        print(f"Total equations: {len(slacks)}")
-        m.Obj(m.sum(slacks))
-        m.options.SOLVER = 1
-        m.solver_options = [
-            'minlp_print_level 5',
-            'max_iter 10000',
-            'print_level 5'
-        ]
-        print("Solving LP...")
-        m.solve(disp=True)
-        # m.solve(disp=False)
-        slack_vals = [float(s.value[0]) for s in slacks]
-        violations = sum(1 for v in slack_vals if v > 1e-6)
-        return float(w_d.value[0]), float(w_m.value[0]), len(slacks), violations
+    print(f"Total equations: {len(slacks)}")
+    m.Obj(m.sum(slacks))
+    m.options.SOLVER = 1
+    m.solver_options = [
+        'minlp_print_level 5',
+        'max_iter 10000',
+        'print_level 5'
+    ]
+    print("Solving LP...")
+    m.solve(disp=True)
+    # m.solve(disp=False)
+    slack_vals = [float(s.value[0]) for s in slacks]
+    violations = sum(1 for v in slack_vals if v > 1e-6)
+    return float(w_d.value[0]), float(w_m.value[0]), len(slacks), violations
     
-def lp_soft_method_pulp(distances, matches, eps=1e-4):    
+def lp_soft_method_pulp(distances, matches, eps=1e-4):   
+    Q, N = distances.shape 
     print("using PuLP")
     # Using PuLP
     prob = pulp.LpProblem('VectorRanking', pulp.LpMinimize)
