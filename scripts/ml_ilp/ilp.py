@@ -43,7 +43,7 @@ def direct_ratio_method(distances, matches, eps=1e-4):
     for q in range(Q):
         d = distances[q]
         m = matches[q]
-        pos_idx = np.where(m == 1)[1]
+        pos_idx = np.where(m == 1)[0]
         neg_idx = np.where(m == 0)[0]
         for i in pos_idx:
             for j in neg_idx:
@@ -165,40 +165,38 @@ def main():
     parser = argparse.ArgumentParser(description='Learn weights for vector ranking')
     parser.add_argument('unfiltered_ground_truth', help='Unfiltered Ground truth file (binary format)')
     parser.add_argument('filtered_ground_truth', help='Filtered Ground truth file (binary format)')
-    parser.add_argument('filter_matches', help='Filter match file (binary match scores)')
+    parser.add_argument('unfiltered_match_scores', help='Filter match file (match scores)')
     parser.add_argument('--method', choices=['ratio', 'gekko', 'pulp', 'pulp_wo_slack'], default='ratio')
     parser.add_argument('--eps', type=float, default=1e-4)
     parser.add_argument('--plot', action='store_true')
     args = parser.parse_args()
 
     # Read the ground truth file
-    ground_truth_indices, ground_truth_distances = read_ground_truth(args.unfiltered_ground_truth)
+    unfiltered_gt_indices, unfiltered_gt_distances = read_ground_truth(args.unfiltered_ground_truth)
     print("Done reading ground truth file")
 
     # Read the filter match file
-    filter_matches = np.loadtxt(args.filter_matches, dtype=np.int32)
-    print(f"Filter matches shape: {filter_matches.shape}")
+    unfiltered_match_scores = np.loadtxt(args.unfiltered_match_scores, dtype=np.int32)
+    print(f"Filter matches shape: {unfiltered_match_scores.shape}")
     print("Done reading filter match file")
     
     # Validate shapes
-    if ground_truth_indices.shape != filter_matches.shape:
-        print(f"Shape mismatch: {ground_truth_indices.shape} vs {filter_matches.shape}")
+    if unfiltered_gt_indices.shape != unfiltered_match_scores.shape:
+        print(f"Shape mismatch: {unfiltered_gt_indices.shape} vs {unfiltered_match_scores.shape}")
         sys.exit(1)
         
     
     # Concatenate filtered and unfiltered ground truth distances and match scores
     # Read filtered ground truth
-    filtered_indices, filtered_distances = read_ground_truth(args.filtered_ground_truth)
-    # Read unfiltered ground truth (already read as ground_truth_distances)
+    filtered_gt_indices, filtered_gt_distances = read_ground_truth(args.filtered_ground_truth)
     # Read filtered match scores (assume first 100 rows from filtered, rest from unfiltered)
-    shape = filtered_indices.shape  # or ground_truth_distances.shape
-    filter_matches_all = np.ones(shape, dtype=np.int32)
-    num_filtered = filtered_indices.shape[0]
+    shape = filtered_gt_indices.shape  
+    filtered_match_score = np.ones(shape, dtype=np.int32)
+    num_filtered = filtered_gt_indices.shape[0]
     print(f"Number of filtered queries: {num_filtered}")
     
-    # Concatenate: first 100 from filtered, rest from unfiltered
-    distances = np.concatenate([filtered_distances, ground_truth_distances], axis=1)
-    matches = np.concatenate([filter_matches_all, filter_matches_all], axis=1)
+    distances = np.concatenate([filtered_gt_distances, unfiltered_gt_distances], axis=1)
+    matches = np.concatenate([filtered_match_score, unfiltered_match_scores], axis=1)
     
     print(f"Distances shape: {distances.shape}")
     print(f"Matches shape: {matches.shape}")
@@ -210,13 +208,13 @@ def main():
     violations = 0
 
     if args.method == 'ratio':
-        w_d, w_m, total_pairs, _ = direct_ratio_method(distances, filter_matches, args.eps)
+        w_d, w_m, total_pairs, _ = direct_ratio_method(distances, unfiltered_match_scores, args.eps)
     if args.method == 'pulp_wo_slack':
-        w_m, total_pairs = lp_soft_method_without_slack(distances, filter_matches, args.eps)
+        w_m, total_pairs = lp_soft_method_without_slack(distances, unfiltered_match_scores, args.eps)
     if args.method == 'gekko':
-        w_d, w_m, total_pairs, violations = lp_soft_method_gekko(distances, filter_matches, args.eps)
+        w_d, w_m, total_pairs, violations = lp_soft_method_gekko(distances, unfiltered_match_scores, args.eps)
     if args.method == 'pulp':
-        w_d, w_m, total_pairs, violations = lp_soft_method_pulp(distances, filter_matches, args.eps)
+        w_d, w_m, total_pairs, violations = lp_soft_method_pulp(distances, unfiltered_match_scores, args.eps)
 
     print(f"Method: {args.method}")
     print(f"w_d = {w_d:.6f}, w_m = {w_m:.6f}")
