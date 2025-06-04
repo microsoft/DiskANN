@@ -8,7 +8,7 @@
 #include <vector>
 #include <assert.h>
 #include <tsl/robin_map.h>
-#include "utils.h"
+//#include "utils.h"
 #include "color_info.h"
 
 namespace diskann
