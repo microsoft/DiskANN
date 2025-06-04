@@ -217,9 +217,11 @@ def main():
         w_d, w_m, total_pairs, violations = lp_soft_method_pulp(distances, unfiltered_match_scores, args.eps)
 
     print(f"Method: {args.method}")
-    print(f"w_d = {w_d:.6f}, w_m = {w_m:.6f}")
     print(f"Total pairs evaluated: {total_pairs}")
     print(f"Violations (slack > 0): {violations}")
+    print("------------------")
+    print(f"| w_m = {w_m:.6f} |") 
+    print("------------------")
 
     if args.plot:
         try:
