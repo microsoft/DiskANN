@@ -529,30 +529,6 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
                 const auto &query_label_predicates = query_labels[i];
                 const auto &base_label_set = base_labels[iter.first];
 
-                // // Check predicates
-                // bool match = true;
-                // for (const auto &clause : query_label_predicates)
-                // {
-                //     bool clause_match = false;
-                //     for (const auto &label : clause)
-                //     {
-                //         if (base_label_set.find(label) != base_label_set.end())
-                //         {
-                //             clause_match = true;
-                //             break;
-                //         }
-                //     }
-                //     if (!clause_match)
-                //     {
-                //         match = false;
-                //         break;
-                //     }
-                // }
-
-                // if (match)
-                // {
-                //     match_scores[i][j] = 1; // Mark as a match
-                // }
 
                 // calculate jaccard distance between query and base labels
                 std::set<std::string> intersection;
@@ -566,15 +542,9 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
                         }
                     }
                 }
-                
-                
+                   
                 float jaccard_distance = (float)intersection.size() / (float)query_label_predicates.size();
-                // if (intersection.size() == 1) {
-                //     std::cout<< "Intersection is 1 for query " << i << " and base point " << iter.first
-                //               << ", jaccard distance = "<< (float)intersection.size() / 2.0f << std::endl;
-                // }
-                match_scores[i][j] = jaccard_distance; // Scale to percentage               
-
+                match_scores[i][j] = jaccard_distance;            
             }
 
             ++j;
