@@ -399,6 +399,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _num_diverse_build = 1;
     uint32_t _max_L_per_seller = 0;
     std::vector<uint32_t> _location_to_seller;
+    uint32_t _num_unique_sellers = 0;
     std::string _seller_file;
 
     bool _use_universal_label = false;

@@ -27,6 +27,14 @@ struct simple_bitmask_full_val
 
 struct simple_bitmask_buf
 {
+    simple_bitmask_buf() = default;
+
+    simple_bitmask_buf(std::uint64_t capacity, std::uint64_t bitmask_size)
+    {
+        _buf.resize(capacity);
+        _bitmask_size = bitmask_size;
+    }
+
     std::uint64_t* get_bitmask(std::uint64_t index)
     {
         return _buf.data() + index * _bitmask_size;
@@ -55,6 +63,8 @@ public:
     bool test_full_mask_contain(const simple_bitmask& bitmask_full_val) const;
 
     void set(size_t pos);
+
+    void clear();
 
 private:
     std::uint64_t* _bitsets;

@@ -6,7 +6,10 @@
 #include <cstddef>
 #include <mutex>
 #include <vector>
+#include <assert.h>
+#include <tsl/robin_map.h>
 #include "utils.h"
+#include "color_info.h"
 
 namespace diskann
 {
@@ -19,16 +22,16 @@ struct Neighbor
 
     Neighbor() = default;
 
-    Neighbor(unsigned id, float distance) : id{id}, distance{distance}, expanded(false)
+    Neighbor(unsigned id, float distance) : id{ id }, distance{ distance }, expanded(false)
     {
     }
 
-    inline bool operator<(const Neighbor &other) const
+    inline bool operator<(const Neighbor& other) const
     {
         return distance < other.distance || (distance == other.distance && id < other.id);
     }
 
-    inline bool operator==(const Neighbor &other) const
+    inline bool operator==(const Neighbor& other) const
     {
         return (id == other.id);
     }
@@ -56,6 +59,8 @@ struct NeighborExtendColor : public Neighbor
         return (id == other.id);
     }
 };
+
+
 
 class NeighborVectorBase
 {
@@ -122,23 +127,49 @@ private:
 class NeighborExtendColorVector : public NeighborVectorBase
 {
 public:
+    const static uint32_t s_vector_size_limited = 1000000;
 
-    NeighborExtendColorVector(std::vector<uint32_t>& location_to_seller)
+    //struct ColorInfo
+    //{
+    //      int _max_node_location = -1; // location of the max node in the queue
+    //      uint32_t _len = 0;           // length of the color in the queue
+
+    //      ColorInfo() = default;
+
+    //      ColorInfo(int max_node_location, uint32_t len) 
+    //          : _max_node_location(max_node_location)
+    //          , _len(len)
+    //      {
+    //      }
+    //};
+
+    NeighborExtendColorVector(const std::vector<uint32_t>& location_to_seller)
         : _location_to_seller(location_to_seller)
     {
-        _color_to_max_node.reserve(1000);
-        _color_to_len.reserve(1000);
+        //_color_to_max_node.reserve(1000);
+        //_color_to_len.reserve(1000);
+    //    _color_to_info.reserve(1000);
     }
 
-    NeighborExtendColorVector(size_t capacity, uint32_t maxLperSeller, std::vector<uint32_t>& location_to_seller)
+    NeighborExtendColorVector(size_t capacity, uint32_t maxLperSeller, uint32_t uniqueSellerCount, const std::vector<uint32_t>& location_to_seller)
         : _capacity(capacity)
         , _data(capacity + 1, NeighborExtendColor(std::numeric_limits<uint32_t>::max(),
             std::numeric_limits<float>::max(), 0))
         , _location_to_seller(location_to_seller), _maxLperSeller(maxLperSeller)
 
     {
-        _color_to_max_node.reserve(1000);
-        _color_to_len.reserve(1000);
+        if (uniqueSellerCount < s_vector_size_limited)
+        {
+            _color_to_info = std::make_unique<ColorInfoVector>(uniqueSellerCount);
+        }
+        else
+        {
+            auto color_to_info = std::make_unique<ColorInfoMap>();
+            color_to_info->reserve(uniqueSellerCount);
+            _color_to_info = std::move(color_to_info);
+        }
+        //_color_to_max_node.reserve(1000);
+        //_color_to_len.reserve(1000);
     }
 
     virtual Neighbor& operator[](size_t i) override
@@ -154,7 +185,12 @@ public:
 
     virtual void insert(const Neighbor& nbr, int insert_lo, int kick_loc, int quene_len) override
     {
+        assert(nbr.id < _location_to_seller.size());
+
+        auto& color_to_info = *_color_to_info;
+
         uint32_t color = _location_to_seller[nbr.id];
+
         NeighborExtendColor nbr_extend(nbr.id, nbr.distance, color);
 
         // keep the kick out node to further process
@@ -178,7 +214,8 @@ public:
             // update max node location
             if (_data[i].max_flag)
             {
-                _color_to_max_node[_data[i].color] = i + 1;
+                color_to_info[_data[i].color]._max_node_location = i + 1;
+                //    _color_to_max_node[_data[i].color] = i + 1;
             }
 
             _data[i + 1] = _data[i];
@@ -212,82 +249,114 @@ public:
             {
                 last.previous++;
             }
-            _color_to_max_node[last_node_color] = last.previous;
+            //    _color_to_max_node[last_node_color] = last.previous;
             if (last.previous != -1)
             {
                 _data[last.previous].max_flag = true;
             }
-            _color_to_len[last_node_color]--;
+            //     _color_to_len[last_node_color]--;
+
+            auto& color_info = color_to_info.at(last_node_color);
+            color_info._max_node_location = last.previous;
+            color_info._len--;
         }
 
         // process the new node
-        auto max_iter = _color_to_max_node.find(color);
+        auto color_info_iter = color_to_info.find(color);
+
+        //auto max_iter = _color_to_max_node.find(color);
         // current node is the max dist node
         if (nbr_extend.previous == -1
-            && max_iter != _color_to_max_node.end()
-            && max_iter.value() != -1
-            && insert_lo > max_iter.value())
+            && color_info_iter != color_to_info.end()
+            && color_info_iter.value()._max_node_location != -1
+            && insert_lo > color_info_iter.value()._max_node_location)
         {
-            nbr_extend.previous = max_iter.value();
-            _data[max_iter.value()].max_flag = false;
-            _color_to_max_node[color] = insert_lo;
+            nbr_extend.previous = color_info_iter.value()._max_node_location;
+            _data[color_info_iter.value()._max_node_location].max_flag = false;
+            color_to_info[color]._max_node_location = insert_lo;
             nbr_extend.max_flag = true;
         }
-        else if (max_iter == _color_to_max_node.end()
-            || max_iter.value() == -1)
+        else if (color_info_iter == color_to_info.end()
+            || color_info_iter.value()._max_node_location == -1)
         {
             // new color insert to queue
-            _color_to_max_node[color] = insert_lo;
-            _color_to_len[color] = 0;
+            color_to_info[color] = ColorInfo(insert_lo, 0);
+
+            //_color_to_max_node[color] = insert_lo;
+            //_color_to_len[color] = 0;
             nbr_extend.max_flag = true;
         }
 
         // update the length of the color
-        _color_to_len[color]++;
+        color_to_info[color]._len++;
 
         _data[insert_lo] = nbr_extend;
     }
 
     virtual size_t get_kick_location(const Neighbor& nbr, size_t queue_len) const override
     {
+        assert(nbr.id < _location_to_seller.size());
         uint32_t color = _location_to_seller[nbr.id];
 
-        auto len_iter = _color_to_len.find(color);
-        if (len_iter == _color_to_len.end()
-            || len_iter.value() < _maxLperSeller)
+        auto color_info_iter = _color_to_info->find(color);
+
+        // auto len_iter = _color_to_len.find(color);
+        if (color_info_iter == _color_to_info->end()
+            || color_info_iter.value()._len < _maxLperSeller)
         {
             return queue_len;
         }
 
-        auto max_iter = _color_to_max_node.find(color);
+        // auto max_iter = _color_to_max_node.find(color);
 
-        assert(max_iter.value() >= 0);
+        assert(color_info_iter.value()._max_node_location >= 0);
 
-        return max_iter.value();
+        assert(color_info_iter.value()._max_node_location < queue_len);
+
+        return color_info_iter.value()._max_node_location;
     }
 
-    void resize(size_t capacity, uint32_t maxLperSeller)
+    void resize(size_t capacity, uint32_t maxLperSeller, uint32_t uniqueSellerCount)
     {
         _data.resize(capacity + 1, NeighborExtendColor(std::numeric_limits<uint32_t>::max(),
             std::numeric_limits<float>::max(), 0));
+
         _capacity = capacity;
         _maxLperSeller = maxLperSeller;
+        if (_color_to_info == nullptr)
+        {
+            if (uniqueSellerCount < s_vector_size_limited)
+            {
+                std::cout << "unique seller " << uniqueSellerCount << "ColorInfoVector created" << std::endl;
+                _color_to_info = std::make_unique<ColorInfoVector>(uniqueSellerCount);
+            }
+            else
+            {
+                std::cout << "unique seller " << uniqueSellerCount << "ColorInfoMap created" << std::endl;
+                auto color_to_info = std::make_unique<ColorInfoMap>();
+                color_to_info->reserve(uniqueSellerCount);
+                _color_to_info = std::move(color_to_info);
+            }
+        }
     }
 
     virtual void clear() override
     {
         // no need additional clear up
-        _color_to_len.clear();
-        _color_to_max_node.clear();
+        //_color_to_len.clear();
+        //_color_to_max_node.clear();
+        _color_to_info->clear();
         _data.clear();
     }
 
 
 private:
     std::vector<NeighborExtendColor> _data;
-    std::vector<uint32_t>& _location_to_seller;
-    tsl::robin_map<uint32_t, int> _color_to_max_node;
-    tsl::robin_map<uint32_t, uint32_t> _color_to_len;
+    const std::vector<uint32_t>& _location_to_seller;
+    //  tsl::robin_map<uint32_t, ColorInfo> _color_to_info;
+    std::unique_ptr<ColorInfoMapBase> _color_to_info;
+    //tsl::robin_map<uint32_t, int> _color_to_max_node;
+    //tsl::robin_map<uint32_t, uint32_t> _color_to_len;
 
     uint32_t _maxLperSeller = 0;
     size_t _capacity = 0;
@@ -317,6 +386,8 @@ public:
     void insert(const Neighbor& nbr, NeighborVectorBase& neighborVector)
     {
         auto kick_loc = neighborVector.get_kick_location(nbr, _size);
+        assert(kick_loc <= _capacity);
+
         // if the kick location is out of the max size,
         // that means it should be kick the last node
         if (kick_loc == _capacity)
@@ -459,19 +530,20 @@ public:
 class NeighborPriorityQueueExtendColor : public NeighborPriorityQueueBase
 {
 public:
-    NeighborPriorityQueueExtendColor(std::vector<uint32_t>& location_to_seller)
+    NeighborPriorityQueueExtendColor(const std::vector<uint32_t>& location_to_seller)
         : NeighborPriorityQueueBase(), _data(location_to_seller)
     {
     }
 
-    NeighborPriorityQueueExtendColor(size_t capacity, uint32_t maxLperSeller, std::vector<uint32_t>& location_to_seller)
+    NeighborPriorityQueueExtendColor(size_t capacity, uint32_t maxLperSeller, uint32_t uniqueSellerCount, const std::vector<uint32_t>& location_to_seller)
         : NeighborPriorityQueueBase()
-        , _data(capacity, maxLperSeller, location_to_seller)
+        , _data(capacity, maxLperSeller, uniqueSellerCount, location_to_seller)
     {
+        _capacity = capacity;
     }
 
-    void setup(uint32_t capacity, uint32_t maxLperSeller) {
-        _data.resize(capacity, maxLperSeller);
+    void setup(uint32_t capacity, uint32_t maxLperSeller, uint32_t uniqueSellerCount) {
+        _data.resize(capacity, maxLperSeller, uniqueSellerCount);
         _capacity = capacity;
     }
 

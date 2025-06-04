@@ -74,4 +74,9 @@ void simple_bitmask::set(size_t pos)
     _bitsets[index] |= mask;
 }
 
+void simple_bitmask::clear()
+{
+    memset(_bitsets, 0, _bitmask_size * sizeof(std::uint64_t));
+}
+
 }
