@@ -345,7 +345,11 @@ public:
         // no need additional clear up
         //_color_to_len.clear();
         //_color_to_max_node.clear();
-        _color_to_info->clear();
+        if (_color_to_info != nullptr)
+        {
+            _color_to_info->clear();
+        }
+        
         _data.clear();
     }
 
