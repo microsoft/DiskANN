@@ -129,26 +129,9 @@ class NeighborExtendColorVector : public NeighborVectorBase
 public:
     const static uint32_t s_vector_size_limited = 1000000;
 
-    //struct ColorInfo
-    //{
-    //      int _max_node_location = -1; // location of the max node in the queue
-    //      uint32_t _len = 0;           // length of the color in the queue
-
-    //      ColorInfo() = default;
-
-    //      ColorInfo(int max_node_location, uint32_t len) 
-    //          : _max_node_location(max_node_location)
-    //          , _len(len)
-    //      {
-    //      }
-    //};
-
     NeighborExtendColorVector(const std::vector<uint32_t>& location_to_seller)
         : _location_to_seller(location_to_seller)
     {
-        //_color_to_max_node.reserve(1000);
-        //_color_to_len.reserve(1000);
-    //    _color_to_info.reserve(1000);
     }
 
     NeighborExtendColorVector(size_t capacity, uint32_t maxLperSeller, uint32_t uniqueSellerCount, const std::vector<uint32_t>& location_to_seller)
@@ -168,8 +151,6 @@ public:
             color_to_info->reserve(uniqueSellerCount);
             _color_to_info = std::move(color_to_info);
         }
-        //_color_to_max_node.reserve(1000);
-        //_color_to_len.reserve(1000);
     }
 
     virtual Neighbor& operator[](size_t i) override
@@ -342,9 +323,6 @@ public:
 
     virtual void clear() override
     {
-        // no need additional clear up
-        //_color_to_len.clear();
-        //_color_to_max_node.clear();
         if (_color_to_info != nullptr)
         {
             _color_to_info->clear();
@@ -357,10 +335,8 @@ public:
 private:
     std::vector<NeighborExtendColor> _data;
     const std::vector<uint32_t>& _location_to_seller;
-    //  tsl::robin_map<uint32_t, ColorInfo> _color_to_info;
+
     std::unique_ptr<ColorInfoMapBase> _color_to_info;
-    //tsl::robin_map<uint32_t, int> _color_to_max_node;
-    //tsl::robin_map<uint32_t, uint32_t> _color_to_len;
 
     uint32_t _maxLperSeller = 0;
     size_t _capacity = 0;
