@@ -14,8 +14,8 @@ namespace diskann
 //
 template <typename T>
 InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
-                                        size_t aligned_dim, size_t alignment_factor, bool init_pq_scratch, size_t bitmask_size)
-    : _L(0), _R(r), _maxc(maxc)
+                                        size_t aligned_dim, size_t alignment_factor, std::vector<uint32_t>& location_to_sellers, bool init_pq_scratch, size_t bitmask_size)
+    : _L(0), _R(r), _maxc(maxc), _best_diverse_nodes(location_to_sellers)
 {
     if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0)
     {
@@ -34,6 +34,7 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
         this->_pq_scratch = nullptr;
 
     _occlude_factor.reserve(maxc);
+    _candidate_pick_flags.reserve(maxc);
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
     _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
     _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
@@ -51,6 +52,7 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _pool.clear();
     _best_l_nodes.clear();
     _occlude_factor.clear();
+    _candidate_pick_flags.clear();
 
     _inserted_into_pool_rs.clear();
     _inserted_into_pool_bs->reset();
@@ -62,6 +64,8 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _expanded_nghrs_vec.clear();
     _occlude_list_output.clear();
     _query_label_bitmask.clear();
+
+    _best_diverse_nodes.clear();
 }
 
 template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l)

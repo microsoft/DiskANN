@@ -29,7 +29,7 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
   public:
     ~InMemQueryScratch();
     InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim, size_t aligned_dim,
-                      size_t alignment_factor, bool init_pq_scratch = false, size_t bitmask_size = 0);
+                      size_t alignment_factor, std::vector<uint32_t>& location_to_sellers, bool init_pq_scratch = false, size_t bitmask_size = 0);
     void resize_for_new_L(uint32_t new_search_l);
     void clear();
 
@@ -61,9 +61,17 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _best_l_nodes;
     }
+    inline NeighborPriorityQueueExtendColor& best_diverse_nodes()
+    {
+        return _best_diverse_nodes;
+    }
     inline std::vector<float> &occlude_factor()
     {
         return _occlude_factor;
+    }
+    inline std::vector<bool>& candidate_pick_flags()
+    {
+        return _candidate_pick_flags;
     }
     inline tsl::robin_set<uint32_t> &inserted_into_pool_rs()
     {
@@ -112,11 +120,13 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     // _best_l_nodes is reserved for storing best L entries
     // Underlying storage is L+1 to support inserts
     NeighborPriorityQueue _best_l_nodes;
+    NeighborPriorityQueueExtendColor _best_diverse_nodes;
 
     // _occlude_factor.size() >= pool.size() in occlude_list function
     // _pool is clipped to maxc in occlude_list before affecting _occlude_factor
     // _occlude_factor is initialized to maxc size
     std::vector<float> _occlude_factor;
+    std::vector<bool> _candidate_pick_flags;
 
     // Capacity initialized to 20L
     tsl::robin_set<uint32_t> _inserted_into_pool_rs;

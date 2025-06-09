@@ -136,12 +136,19 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // can customize L on a per-query basis without tampering with "Parameters"
     template <typename IDType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const uint32_t L,
-                                                           IDType *indices, float *distances = nullptr);
+                                                           IDType *indices, float *distances = nullptr, const uint32_t maxLperSeller = 0);
+
+    template <typename IDType>
+    std::pair<uint32_t, uint32_t> diverse_search(const T* query, const size_t K, const uint32_t L, const uint32_t maxLperSeller, IDType* indices,
+                                                           float* distances = nullptr);
 
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                               float *distances, std::vector<T *> &res_vectors, bool use_filters = false,
                                               const std::string filter_label = "");
+
+    virtual std::pair<uint32_t, uint32_t> _diverse_search(const DataType& query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
+        std::any& indices, float* distances = nullptr) override;
 
     // Filter support search
     template <typename IndexType>
@@ -247,6 +254,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t calculate_entry_point();
 
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
+    void parse_seller_file(const std::string& label_file, size_t& num_pts_labels);
 
     void convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels);
 
@@ -259,7 +267,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // The query to use is placed in scratch->aligned_query
     std::pair<uint32_t, uint32_t> iterate_to_fixed_point(InMemQueryScratch<T> *scratch, const uint32_t Lindex,
                                                          const std::vector<uint32_t> &init_ids, bool use_filter,
-                                                         const std::vector<LabelT> &filters, bool search_invocation);
+                                                         const std::vector<LabelT> &filters, bool search_invocation, uint32_t maxLperSeller = 0);
 
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
@@ -268,7 +276,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t>& pruned_list,
         const std::vector<LabelT>& labels,
         InMemQueryScratch<T>* scratch,
-        uint32_t filteredLindex);
+        uint32_t filteredLindex,
+        uint32_t maxLperSeller);
 
     void prune_search_result(int location, std::vector<uint32_t>& pruned_list, InMemQueryScratch<T>* scratch);
 
@@ -385,6 +394,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
+
+    bool _diverse_index = false;
+    uint32_t _num_diverse_build = 1;
+    uint32_t _max_L_per_seller = 0;
+    std::vector<uint32_t> _location_to_seller;
+    uint32_t _num_unique_sellers = 0;
+    std::string _seller_file;
 
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
