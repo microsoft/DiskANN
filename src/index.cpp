@@ -2570,7 +2570,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
 
-    std::vector<LabelT> filter_vec;
     /* std::vector<uint32_t> init_ids = get_init_ids(); */
     std::vector<uint32_t> init_ids;
 
@@ -2614,11 +2613,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             out.close();
         }*/
 
-    for (auto &lbl : filter_label)
-        filter_vec.push_back(lbl[0]);
-
-    std::vector<std::pair<LabelT, uint32_t>> sorted_filters = sort_filter_counts(filter_vec);
-
     _data_store->preprocess_query(query, scratch);
     std::pair<uint32_t, uint32_t> retval;
     if (_bruteforce_threshold < 3)
@@ -2627,7 +2621,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         {
         case 0: {
             num_brutes++;
-            // last_intersection has the common elements across all filters in sorted_filters
 #ifdef INSTRUMENT
             auto s = std::chrono::high_resolution_clock::now();
 #endif
@@ -2734,12 +2727,30 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         if (estimated_match < _bruteforce_threshold)
         {
             num_brutes++;
+#ifdef INSTRUMENT
+            auto s = std::chrono::high_resolution_clock::now();
+#endif
             auto &last_intersection = scratch->get_valid_bitmap();
-            last_intersection = _labels_to_points[sorted_filters[0].first];
+            for (uint32_t or_itr = 0; or_itr < filter_label[0].size(); or_itr++) {
+                last_intersection |= _labels_to_points[filter_label[0][or_itr]];
+            }
+            for (size_t i = 1; i < filter_label.size(); i++)
+            {
+                auto &tmp_intersection = scratch->get_tmp_bitmap();                
+                for (uint32_t or_itr = 0; or_itr < filter_label[i].size(); or_itr++) {
+                    tmp_intersection |= _labels_to_points[filter_label[i][or_itr]];
+                }
+                last_intersection &= tmp_intersection;
+            }            
+            /*last_intersection = _labels_to_points[sorted_filters[0].first];
             for (size_t i = 1; i < sorted_filters.size(); i++)
             {
                 last_intersection &= _labels_to_points[sorted_filters[i].first];
-            }
+            }*/
+#ifdef INSTRUMENT
+            std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+            time_to_get_valid += diff.count();
+#endif
             retval = brute_force_filters(scratch->aligned_query(), L, last_intersection, scratch);
         }
         else
@@ -2779,9 +2790,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             if (print_qstats)
             {
                 std::ofstream out("query_stats.txt", std::ios_base::app);
-                out << "Search path for query " << curr_query << " with filters/specificities ";
-                for (auto const &filt : filter_vec)
-                    out << filt << "/" << _labels_to_points[filt].cardinality() << " ";
+                out << "Search query " << curr_query;
+                //out << "Search path for query " << curr_query << " with filters/specificities ";
+                //for (auto const &filt : filter_vec)
+                //    out << filt << "/" << _labels_to_points[filt].cardinality() << " ";
                 out << std::endl;
                 out << "estimated intersection size is " << estimated_match << std::endl;
                 //out << "setting up init ids with id " << cand << std::endl;
