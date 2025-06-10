@@ -2509,7 +2509,7 @@ std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_inters
     {
         tmp_bitmap.removeRangeClosed(tmp_bitmap.minimum(), tmp_bitmap.maximum());
         for (uint32_t or_itr = 0; or_itr < filter_labels[i].size(); or_itr++) {
-            if (filter_labels[i][or_itr] < _labels_to_points_sample.size()) { // not sure
+            if (filter_labels[i][or_itr] < _labels_to_points_sample.size()) {
                 tmp_bitmap |= _labels_to_points_sample[filter_labels[i][or_itr]];
             }
         }
@@ -2684,27 +2684,27 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             }
             retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
             }
-            break;
-            case 2: {
-                uint32_t old_penalty_scale = penalty_scale;
-                penalty_scale = 0;
-                num_graphs++;
-                auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
-    
-                if (cand.size() > 0)
-                {
-                    init_ids.insert(init_ids.end(), cand.begin(), cand.end());
-    //                init_ids.emplace_back(cand);
-                } /*else {
-                    if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
-                    { 
-                        init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
-                    } 
-                } */
-                 if (use_global_start) {
+        break;
+        case 2: {
+            uint32_t old_penalty_scale = penalty_scale;
+            penalty_scale = 0;
+            num_graphs++;
+            auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
+
+            if (cand.size() > 0)
+            {
+                init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+//                init_ids.emplace_back(cand);
+            } /*else {
+                if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+                { 
+                    init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+                } 
+            } */
+                if (use_global_start) {
                     init_ids.emplace_back(_start);
-                 }
-    
+                }
+
                 local_print = true;
                 if (print_qstats)
                 {
@@ -2715,13 +2715,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 }
                 retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_label, true);
                 penalty_scale = old_penalty_scale;
-           }
-            break;
-    
+            }
+        break;
+
         }
     }
     else
     {
+        // bruteforce_threshold >= 3
 #ifdef INSTRUMENT
         auto s = std::chrono::high_resolution_clock::now();
 #endif
