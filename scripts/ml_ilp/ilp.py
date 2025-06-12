@@ -36,6 +36,15 @@ def read_ground_truth(file_path):
 
     return indices, distances
 
+def read_match_scores(match_score_file, Q, N):
+    scores = np.loadtxt(match_score_file)
+    if scores.shape[0] == 2 * Q:
+        jaccard_scores = scores[:Q, :]
+        relational_scores = scores[Q:, :]
+    else:
+        raise ValueError("Unexpected match score file shape")
+    return jaccard_scores, relational_scores
+
 def direct_ratio_method(distances, matches, eps=1e-4):
     Q, N = distances.shape
     max_diff = 0.0
@@ -158,7 +167,55 @@ def lp_soft_method_without_slack(distances, matches, eps=1e-4, method ='lp_wo_sl
     print("eps:", eps)
     prob.solve(pulp.PULP_CBC_CMD(msg=False))
     return w_m.value(), num_equations
-    
+
+
+def lp_soft_method_pulp_with_relational(distances, jaccard_scores, relational_scores, eps=1e-4):
+    print(f"Distances shape: {distances.shape}")
+    Q, N = distances.shape
+    print("using PuLP with relational filter weight")
+    prob = pulp.LpProblem('VectorRanking', pulp.LpMinimize)
+    w_d = 1
+    w_m = pulp.LpVariable('w_m', lowBound=0)
+    w_r = pulp.LpVariable('w_r', lowBound=0)
+    slacks = []
+
+    for q in tqdm(range(Q), desc="Building PuLP constraints"):
+        d = distances[q]
+        jac = jaccard_scores[q]
+        rel = relational_scores[q]
+        # Positive: jaccard==1 and (relational==0 if relational filter exists)
+        has_relational = np.any(rel != 0)
+        if has_relational:
+            pos = np.where((jac == 1) & (rel == 0))[0]
+            neg = np.where(~((jac == 1) & (rel == 0)))[0]
+        else:
+            pos = np.where(jac == 1)[0]
+            neg = np.where(jac < 1)[0]
+        neg_sample_size = min(1, len(neg))
+
+        for i in pos:
+            neg_sample = np.random.choice(neg, size=neg_sample_size, replace=False)
+            for j in neg_sample:
+                if d[i] < d[j]:
+                    continue
+                s = pulp.LpVariable(f's_{q}_{i}_{j}', lowBound=0)
+                slacks.append(s)
+                prob += (
+                    w_d * d[i] + w_m * (1 - jac[i]) + w_r * rel[i] + eps
+                    <= w_d * d[j] + w_m * (1 - jac[j]) + w_r * rel[j] + s
+                )
+    print(f"Total equations: {len(slacks)}")
+    alpha = 500
+    if len(slacks) > 0:
+        avg_slack = pulp.lpSum(slacks) / len(slacks)
+    else:
+        avg_slack = 0
+    prob += w_m + w_r + alpha * avg_slack
+    print("Solving LP...")
+    prob.solve(pulp.PULP_CBC_CMD(msg=False))
+    slack_vals = [v.value() for v in slacks]
+    violations = sum(1 for v in slack_vals if v > 1e-6)
+    return w_d, w_m.value(), w_r.value(), len(slacks), violations
 
 
 def main():
@@ -166,7 +223,7 @@ def main():
     parser.add_argument('unfiltered_ground_truth', help='Unfiltered Ground truth file (binary format)')
     parser.add_argument('filtered_ground_truth', help='Filtered Ground truth file (binary format)')
     parser.add_argument('unfiltered_match_scores', help='Filter match file (match scores)')
-    parser.add_argument('--method', choices=['ratio', 'gekko', 'pulp', 'pulp_wo_slack'], default='ratio')
+    parser.add_argument('--method', choices=['ratio', 'gekko', 'pulp', 'pulp_wo_slack', 'pulp_w_relational'], default='ratio')
     parser.add_argument('--eps', type=float, default=1e-4)
     parser.add_argument('--plot', action='store_true')
     args = parser.parse_args()
@@ -180,10 +237,10 @@ def main():
     print(f"Filter matches shape: {unfiltered_match_scores.shape}")
     print("Done reading filter match file")
     
-    # Validate shapes
-    if unfiltered_gt_indices.shape != unfiltered_match_scores.shape:
-        print(f"Shape mismatch: {unfiltered_gt_indices.shape} vs {unfiltered_match_scores.shape}")
-        sys.exit(1)
+    # # Validate shapes
+    # if unfiltered_gt_indices.shape != unfiltered_match_scores.shape:
+    #     print(f"Shape mismatch: {unfiltered_gt_indices.shape} vs {unfiltered_match_scores.shape}")
+    #     sys.exit(1)
         
     
     # Concatenate filtered and unfiltered ground truth distances and match scores
@@ -196,10 +253,10 @@ def main():
     print(f"Number of filtered queries: {num_filtered}")
     
     distances = np.concatenate([filtered_gt_distances, unfiltered_gt_distances], axis=1)
-    matches = np.concatenate([filtered_match_score, unfiltered_match_scores], axis=1)
+    # matches = np.concatenate([filtered_match_score, unfiltered_match_scores], axis=1)
     
     print(f"Distances shape: {distances.shape}")
-    print(f"Matches shape: {matches.shape}")
+    # print(f"Matches shape: {matches.shape}")
     
     print(f"Distances: {distances[0][:5]}")
     # distances_scaled = distances / distances.max()
@@ -215,6 +272,41 @@ def main():
         w_d, w_m, total_pairs, violations = lp_soft_method_gekko(distances, unfiltered_match_scores, args.eps)
     if args.method == 'pulp':
         w_d, w_m, total_pairs, violations = lp_soft_method_pulp(distances, unfiltered_match_scores, args.eps)
+    if args.method == 'pulp_w_relational':
+        unfiltered_jaccard_scores, unfiltered_relational_scores = read_match_scores(args.unfiltered_match_scores, *distances.shape)
+        print(f"Unfiltered Jaccard scores shape: {unfiltered_jaccard_scores.shape}")
+        print(f"Unfiltered Relational scores shape: {unfiltered_relational_scores.shape}")
+        max_rel = np.max(unfiltered_relational_scores, axis=1, keepdims=True)
+        max_rel[max_rel == 0] = 1.0
+        unfiltered_relational_scores = unfiltered_relational_scores / max_rel
+        
+        print(f"Relational scores: {unfiltered_relational_scores[0][:5]}")
+        
+        filtered_jaccard_scores = np.ones_like(filtered_gt_distances, dtype=np.float32)
+        filtered_relational_scores = np.zeros_like(filtered_gt_distances, dtype=np.float32)
+        
+        jaccard_scores = np.concatenate([filtered_jaccard_scores, unfiltered_jaccard_scores], axis=1)
+        relational_scores = np.concatenate([filtered_relational_scores, unfiltered_relational_scores], axis=1)
+        relational_scores = relational_scores.astype(np.float32)
+        
+        print(f"Jaccard scores shape: {jaccard_scores.shape}")
+        print(f"Relational scores shape: {relational_scores.shape}")
+        
+        print(f"Relational scores: {relational_scores[0]}")
+        
+        # # take the first 100 queries 
+        # jaccard_scores = jaccard_scores[:1000]
+        # relational_scores = relational_scores[:1000]
+        # distances = distances[:1000]
+        print(f"Filtered Jaccard scores shape: {jaccard_scores.shape}")
+        print(f"Filtered Relational scores shape: {relational_scores.shape}")
+        
+
+        
+        w_d, w_m, w_r, total_pairs, violations = lp_soft_method_pulp_with_relational(
+            distances, jaccard_scores, relational_scores, args.eps
+        )
+        print(f"Relational weight: {w_r:.6f}")
 
     print(f"Method: {args.method}")
     print(f"Total pairs evaluated: {total_pairs}")

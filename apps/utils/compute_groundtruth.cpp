@@ -494,10 +494,13 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
 
     int *closest_points = new int[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
-    std::vector<std::vector<float>> match_scores(nqueries, std::vector<float>(k, 0));
 
     std::vector<std::vector<std::pair<uint32_t, float>>> results =
         processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
+
+    std::vector<std::vector<float>> jaccard_scores(nqueries, std::vector<float>(k, 0));
+    std::vector<std::vector<float>> relational_scores(nqueries, std::vector<float>(k, 0));
+
 
     for (size_t i = 0; i < nqueries; i++)
     {
@@ -524,28 +527,60 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
                 dist_closest_points[i * k + j] = iter.second;
 
             // Calculate match score for this vector
+            // Jaccard score (normal filters)
+            float jaccard_similarity = 0.0f;
+            // Relational score (relational filters)
+            float rel_score = 0.0f;
+
             if (!base_labels.empty() && !query_labels.empty() && iter.first < base_labels.size())
             {
                 const auto &query_label_predicates = query_labels[i];
                 const auto &base_label_set = base_labels[iter.first];
 
-
-                // calculate jaccard distance between query and base labels
+                // Jaccard
                 std::set<std::string> intersection;
+                int normal_total = 0;
                 for (const auto &clause : query_label_predicates)
                 {
                     for (const auto &label : clause)
                     {
-                        if (base_label_set.find(label) != base_label_set.end())
-                        {
-                            intersection.insert(label);
+                        size_t pos = label.find_first_of("<>");
+                        if (pos == std::string::npos) { // normal filter
+                            normal_total++;
+                            if (base_label_set.find(label) != base_label_set.end())
+                                intersection.insert(label);
                         }
                     }
                 }
-                   
-                float jaccard_distance = (float)intersection.size() / (float)query_label_predicates.size();
-                match_scores[i][j] = jaccard_distance;            
+                jaccard_similarity = (normal_total > 0) ? (float)intersection.size() / normal_total : 0.0f;
+
+                // Relational
+                for (const auto &clause : query_label_predicates)
+                {
+                    for (const auto &label : clause)
+                    {
+                        size_t pos = label.find_first_of("<>");
+                        if (pos != std::string::npos) { // relational filter
+                            std::string field = label.substr(0, pos);
+                            std::string op = label.substr(pos, (label[pos+1] == '=') ? 2 : 1);
+                            std::string value = label.substr(pos + op.size());
+                            for (const auto &base_label : base_label_set)
+                            {
+                                if (base_label.find(field + "=") == 0)
+                                {
+                                    float query_val = std::stof(value);
+                                    float base_val = std::stof(base_label.substr(field.size() + 1));
+                                    rel_score = std::abs(query_val - base_val) / query_val;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
+
+            jaccard_scores[i][j] = jaccard_similarity;
+            relational_scores[i][j] = rel_score;
 
             ++j;
         }
@@ -564,11 +599,23 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
             std::cerr << "Failed to open match score file: " << match_score_file << std::endl;
             return -1;
         }
+        // First part: Jaccard scores
         for (size_t i = 0; i < nqueries; i++)
         {
             for (size_t j = 0; j < k; j++)
             {
-                match_score_writer << match_scores[i][j];
+                match_score_writer << jaccard_scores[i][j];
+                if (j < k - 1)
+                    match_score_writer << " ";
+            }
+            match_score_writer << "\n";
+        }
+        // Second part: Relational scores
+        for (size_t i = 0; i < nqueries; i++)
+        {
+            for (size_t j = 0; j < k; j++)
+            {
+                match_score_writer << relational_scores[i][j];
                 if (j < k - 1)
                     match_score_writer << " ";
             }

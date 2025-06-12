@@ -460,6 +460,26 @@ void print_query_stats(std::vector<std::pair<uint32_t, uint32_t>> &v)
     return;
 }
 
+// Add this struct and helper at the top of the file
+struct RelationalFilter {
+    std::string field;
+    std::string op;
+    std::string value;
+};
+
+inline bool is_relational(const std::string& label) {
+    return label.find('<') != std::string::npos || label.find('>') != std::string::npos;
+}
+
+inline bool eval_relational(const std::string& base_val, const std::string& op, const std::string& query_val) {
+    float b = std::stof(base_val), q = std::stof(query_val);
+    if (op == "<") return b < q;
+    if (op == "<=") return b <= q;
+    if (op == ">") return b > q;
+    if (op == ">=") return b >= q;
+    return false;
+}
+
 // template<typename A, typename B>
 // add UNIVERSAL LABEL SUPPORT
 int identify_matching_points(const std::string &base, const size_t start_id, const std::string &query,
@@ -493,18 +513,51 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
                 for (uint32_t k = 0; k < query_labels[i].size(); k++)
                 {
                     bool or_pass = false;
-                for (uint32_t l = 0; l < query_labels[i][k].size(); l++)
-                {
-                    if (base_labels[j].find(query_labels[i][k][l]) != base_labels[j].end())
+                    for (uint32_t l = 0; l < query_labels[i][k].size(); l++)
                     {
-                        or_pass = true;
+                        const std::string& qlabel = query_labels[i][k][l];
+                        if (!is_relational(qlabel)) {
+                            // Old flow: treat as set
+                            if (base_labels[j].find(qlabel) != base_labels[j].end()) {
+                                or_pass = true;
+                                break;
+                            }
+                        } else {
+                            // New flow: relational filter
+                            // Parse field, op, value from qlabel, e.g. "year<2020"
+                            size_t pos = qlabel.find_first_of("<>");
+                            std::string field = qlabel.substr(0, pos);
+                            std::string op = qlabel.substr(pos, (qlabel[pos+1] == '=') ? 2 : 1);
+                            std::string value = qlabel.substr(pos + op.size());
+                            // // Find base value for this field
+                            auto it = std::find_if(base_labels[j].begin(), base_labels[j].end(),
+                                [&](const std::string& s) { return s.find(field + "=") == 0; });
+                            // if (it != base_labels[j].end()) {
+                            //     std::string base_val = it->substr(field.size() + 1);
+                            //     if (eval_relational(base_val, op, value)) {
+                            //         or_pass = true;
+                            //         break;
+                            //     }
+                            // }
+                            if (it != base_labels[j].end()) {
+                                std::string base_val = it->substr(field.size() + 1);
+                                bool match = eval_relational(base_val, op, value);
+                                // #pragma omp critical
+                                // {
+                                //     std::cout << "Query: " << qlabel << ", Base: " << *it << ", Parsed: " << base_val
+                                //             << ", Match: " << match << std::endl;
+                                // }
+                                if (match) {
+                                    or_pass = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (!or_pass) {
+                        pass = false;
                         break;
                     }
-                }
-                if (or_pass == false) {
-                    pass = false;
-                    break;
-                }
                 }
             }
             if (pass)
