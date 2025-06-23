@@ -51,6 +51,15 @@ std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters(const DataType 
     return _search_with_filters(query, raw_label, K, L, any_indices, distances);
 }
 
+template <typename IndexType>
+std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search_with_filters(const DataType &query, const std::string &raw_label,
+                                                                 const size_t K, const uint32_t L, IndexType *indices,
+                                                                 float *distances, const uint32_t maxLperSeller)
+{
+    auto any_indices = std::any(indices);
+    return _diverse_search_with_filters(query, raw_label, K, L, any_indices, distances, maxLperSeller);
+}
+
 template <typename data_type>
 void AbstractIndex::search_with_optimized_layout(const data_type *query, size_t K, size_t L, uint32_t *indices)
 {
@@ -178,7 +187,13 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search<int8_t, uint64_t>(
     const int8_t *query, const size_t K, const uint32_t L, const uint32_t maxL,uint64_t *indices, float *distances);
 
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search_with_filters<uint32_t>(
+    const DataType &query, const std::string &raw_label, const size_t K, const uint32_t L, uint32_t *indices,
+    float *distances, const uint32_t maxLperSeller);
 
+template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search_with_filters<uint64_t>(
+    const DataType &query, const std::string &raw_label, const size_t K, const uint32_t L, uint64_t *indices,
+    float *distances, const uint32_t maxLperSeller);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters<uint32_t>(
     const DataType &query, const std::string &raw_label, const size_t K, const uint32_t L, uint32_t *indices,
