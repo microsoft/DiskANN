@@ -147,7 +147,12 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     template <typename IndexType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
                                                                         const size_t K, const uint32_t L,
-                                                                        IndexType *indices, float *distances);
+                                                                        IndexType *indices, float *distances, const uint32_t maxLperSeller = 0);
+    // Filter support + diverse search
+    template <typename IndexType>
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> diverse_search_with_filters(const T *query, const LabelT &filter_label,
+                                                                        const size_t K, const uint32_t L,
+                                                                        IndexType *indices, float *distances, const uint32_t maxLperSeller = 0);
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
@@ -216,6 +221,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                                float *distances) override;
     virtual std::pair<uint32_t, uint32_t> _diverse_search(const DataType &query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
                                                   std::any &indices, float *distances = nullptr) override;
+    virtual std::pair<uint32_t, uint32_t> _diverse_search_with_filters(const DataType &query,
+                                                               const std::string &filter_label_raw, const size_t K,
+                                                               const uint32_t L, std::any &indices,
+                                                               float *distances, const uint32_t maxLperSeller) override;
+
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
     virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) override;

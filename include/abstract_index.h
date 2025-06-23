@@ -82,6 +82,12 @@ class AbstractIndex
     std::pair<uint32_t, uint32_t> search_with_filters(const DataType &query, const std::string &raw_label,
                                                       const size_t K, const uint32_t L, IndexType *indices,
                                                       float *distances);
+    // Filter support + diverse search
+    // IndexType is either uint32_t or uint64_t
+    template <typename IndexType>
+    std::pair<uint32_t, uint32_t> diverse_search_with_filters(const DataType &query, const std::string &raw_label,
+                                                      const size_t K, const uint32_t L, IndexType *indices,
+                                                      float *distances, const uint32_t maxLperSeller);                                                  
 
     // insert points with labels, labels should be present for filtered index
     template <typename data_type, typename tag_type, typename label_type>
@@ -119,6 +125,9 @@ class AbstractIndex
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::string &filter_label,
                                                                const size_t K, const uint32_t L, std::any &indices,
                                                                float *distances) = 0;
+    virtual std::pair<uint32_t, uint32_t> _diverse_search_with_filters(const DataType &query, const std::string &filter_label,
+                                                               const size_t K, const uint32_t L, std::any &indices,
+                                                               float *distances, const uint32_t maxLperSeller) = 0;                                                               
     virtual int _insert_point(const DataType &data_point, const TagType tag, Labelvector &labels) = 0;
     virtual int _insert_point(const DataType &data_point, const TagType tag) = 0;
     virtual int _lazy_delete(const TagType &tag) = 0;

@@ -232,11 +232,19 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             if (filtered_search && !tags)
             {
                 std::string raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
-
-                auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
+                if (diverse_search){
+                    auto retval = index->diverse_search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
+                                                         query_result_ids[test_id].data() + i * recall_at,
+                                                         query_result_dists[test_id].data() + i * recall_at, maxLperSeller);
+                    cmp_stats[i] = retval.second;
+                }
+                else
+                {
+                    auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, recall_at, L,
                                                          query_result_ids[test_id].data() + i * recall_at,
                                                          query_result_dists[test_id].data() + i * recall_at);
-                cmp_stats[i] = retval.second;
+                    cmp_stats[i] = retval.second;
+                }
             }
             else if (metric == diskann::FAST_L2)
             {
