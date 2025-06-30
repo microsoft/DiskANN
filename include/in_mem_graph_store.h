@@ -40,10 +40,10 @@ class InMemGraphStore : public AbstractGraphStore
     virtual std::tuple<uint32_t, uint32_t, size_t> load_impl(AlignedFileReader &reader, size_t expected_num_points);
 #endif
 
-    int save_graph(const std::string &index_path_prefix, const size_t active_points, const size_t num_frozen_points,
+    virtual int save_graph(const std::string &index_path_prefix, const size_t active_points, const size_t num_frozen_points,
                    const uint32_t start);
 
-  private:
+  protected:
     size_t _max_range_of_graph = 0;
     uint32_t _max_observed_degree = 0;
     size_t _graph_size = 0;

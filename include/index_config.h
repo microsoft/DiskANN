@@ -11,7 +11,9 @@ enum class DataStoreStrategy
 enum class GraphStoreStrategy
 {
     MEMORY,
-    STATICMEMORY
+    STATICMEMORY,
+    REFORMAT_MEMORY,
+    REFORMAT_STATICMEMORY
 };
 
 struct IndexConfig

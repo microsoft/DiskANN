@@ -2,6 +2,8 @@
 #include "tag_uint128.h"
 #include "pq_l2_distance.h"
 #include "in_mem_static_graph_store.h"
+#include "in_mem_graph_reformat_store.h"
+#include "in_mem_static_graph_reformat_store.h"
 
 namespace diskann
 {
@@ -92,6 +94,10 @@ std::unique_ptr<AbstractGraphStore> IndexFactory::construct_graphstore(const Gra
         return std::make_unique<InMemGraphStore>(size, reserve_graph_degree);
     case GraphStoreStrategy::STATICMEMORY:
         return std::make_unique<InMemStaticGraphStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::REFORMAT_MEMORY:
+        return std::make_unique<InMemGraphReformatStore>(size, reserve_graph_degree);
+    case GraphStoreStrategy::REFORMAT_STATICMEMORY:
+        return std::make_unique<InMemStaticGraphReformatStore>(size, reserve_graph_degree);
     default:
         throw ANNException("Error : Current GraphStoreStratagy is not supported.", -1);
     }
