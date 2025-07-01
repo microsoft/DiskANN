@@ -96,7 +96,12 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Reads the number of frozen points from graph's metadata file section.
     DISKANN_DLLEXPORT static size_t get_graph_num_frozen_points(const std::string &graph_file);
 
-    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads, uint32_t search_l);
+    // Reads the graph from the stored data and enumerate the loaded tags
+    // using the provided TagEnumerator.
+    DISKANN_DLLEXPORT void load(const char *index_file, 
+                                uint32_t num_threads, 
+                                uint32_t search_l,
+                                const std::function<void(TagT)> *tag_enumerator);
 #endif
 
     // get some private variables
@@ -295,12 +300,12 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader, size_t expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(AlignedFileReader &reader);
-    DISKANN_DLLEXPORT size_t load_tags(AlignedFileReader &reader);
+    DISKANN_DLLEXPORT size_t load_tags(AlignedFileReader &reader, const std::function<void(TagT)> *tag_enumerator);
     DISKANN_DLLEXPORT size_t load_delete_set(AlignedFileReader &reader);
 #else
     DISKANN_DLLEXPORT size_t load_graph(const std::string filename, size_t expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(std::string filename0);
-    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name);
+    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name, const std::function<void(TagT)> *tag_enumerator);
     DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
 #endif
 

@@ -23,13 +23,25 @@
 
 namespace po = boost::program_options;
 
+/* template <typename TagT = uint32_t> class NoTagEnumerator : public diskann::TagEnumerator<TagT>
+{
+public:
+    virtual void ProcessTag(TagT) override
+    {
+        // No operation, as this enumerator does not handle tags.
+    }
+};*/
+
+
 template <typename T> void bfs_count(const std::string &index_path, unsigned data_dims)
 {
     using TagT = uint32_t;
     using LabelT = uint32_t;
     diskann::Index<T, TagT, LabelT> index(diskann::Metric::L2, data_dims, 0, false, false);
     std::cout << "Index class instantiated" << std::endl;
-    index.load(index_path.c_str(), 1, 100);
+
+    //NoTagEnumerator<TagT> no_tag_enumerator;
+    index.load(index_path.c_str(), 1, 100, nullptr);
     std::cout << "Index loaded" << std::endl;
     index.count_nodes_at_bfs_levels();
 }

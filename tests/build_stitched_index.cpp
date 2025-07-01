@@ -108,6 +108,15 @@ void handle_args(int argc, char **argv, std::string &data_type, path &input_data
     }
 }
 
+/* template <typename TagT = uint32_t> class NoTagEnumerator : public diskann::TagEnumerator<TagT>
+{
+public:
+    virtual void ProcessTag(TagT) override
+    {
+        // No operation, as this enumerator does not handle tags.
+    }
+};*/
+
 /*
  * Parses the label datafile, which has comma-separated labels on
  * each line. Line i corresponds to point id i.
@@ -647,7 +656,8 @@ void prune_and_save(path final_index_path_prefix, path full_index_path_prefix, p
     diskann::Index<T> index(diskann::Metric::L2, dimension, number_of_label_points, false, false);
 
     // not searching this index, set search_l to 0
-    index.load(full_index_path_prefix.c_str(), num_threads, 1);
+    //NoTagEnumerator<> no_tag_enumerator;
+    index.load(full_index_path_prefix.c_str(), num_threads, 1, nullptr);
 
     diskann::Parameters paras;
     paras.Set<unsigned>("R", stitched_R);

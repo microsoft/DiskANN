@@ -23,6 +23,15 @@
 
 namespace po = boost::program_options;
 
+/* template <typename TagT = uint32_t> class NoTagEnumerator : public diskann::TagEnumerator<TagT>
+{
+public:
+    virtual void ProcessTag(TagT) override
+    {
+        // No operation, as this enumerator does not handle tags.
+    }
+};*/
+
 template <typename T, typename LabelT = uint32_t>
 int search_memory_index(diskann::Metric &metric, const std::string &index_path, const std::string &result_path_prefix,
                         const std::string &query_file, const std::string &truthset_file, const unsigned num_threads,
@@ -66,8 +75,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     const size_t num_frozen_pts = IndexType::get_graph_num_frozen_points(index_path);
     IndexType index(metric, query_dim, 0, dynamic, tags, concurrent, pq_dist_build, num_pq_chunks, use_opq,
                     num_frozen_pts);
+    //NoTagEnumerator<TagT> no_tag_enumerator;
+
     std::cout << "Index class instantiated" << std::endl;
-    index.load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
+    index.load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())), nullptr);
     std::cout << "Index loaded" << std::endl;
     if (metric == diskann::FAST_L2)
         index.optimize_index_layout();

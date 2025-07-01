@@ -179,14 +179,19 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
         diskann::cout << "Not saving tags as they are not enabled." << std::endl;
         return 0;
     }
+
     size_t tag_bytes_written;
     TagT *tag_data = new TagT[_nd + _num_frozen_pts];
-    for (_u32 i = 0; i < _nd; i++)
+    _u32 tagIndex = 0;
+    const _u32 totalActivePoints = _nd + _num_frozen_pts;   
+    for (_u32 i = 0; i < _max_points; i++)
     {
         TagT tag;
         if (_location_to_tag.try_get(i, tag))
         {
-            tag_data[i] = tag;
+            tag_data[tagIndex] = tag;
+            tagIndex++;
+            assert(tagIndex <= totalActivePoints);
         }
         else
         {
@@ -194,10 +199,12 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
             std::memset((char *)&tag_data[i], 0, sizeof(TagT));
         }
     }
+
     if (_num_frozen_pts > 0)
     {
-        std::memset((char *)&tag_data[_start], 0, sizeof(TagT) * _num_frozen_pts);
+        std::memset((char *)&tag_data[tagIndex], 0, sizeof(TagT) * _num_frozen_pts);
     }
+
     try
     {
         tag_bytes_written = save_bin<TagT>(tags_file, tag_data, _nd + _num_frozen_pts, 1);
@@ -206,6 +213,7 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     {
         throw FileException(tags_file, e, __FUNCSIG__, __FILE__, __LINE__);
     }
+
     delete[] tag_data;
     return tag_bytes_written;
 }
@@ -277,19 +285,21 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
 
+    bool frozen_points_compacted = false;
     if (compact_before_save)
     {
         compact_data();
         compact_frozen_point();
+        frozen_points_compacted = true;
     }
-    else
-    {
-        if (!_data_compacted)
-        {
-            throw ANNException("Index save for non-compacted index is not yet implemented", -1, __FUNCSIG__, __FILE__,
-                               __LINE__);
-        }
-    }
+    //else
+    //{
+    //    if (!_data_compacted)
+    //    {
+    //        throw ANNException("Index save for non-compacted index is not yet implemented", -1, __FUNCSIG__, __FILE__,
+    //                           __LINE__);
+    //    }
+    //}
 
     if (!_save_as_one_file)
     {
@@ -361,7 +371,10 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     }
 
     // If frozen points were temporarily compacted to _nd, move back to _max_points.
-    reposition_frozen_point_to_end();
+    if (frozen_points_compacted)
+    {
+        reposition_frozen_point_to_end();
+    }
 
     diskann::cout << "Time taken for save: " << timer.elapsed() / 1000000.0 << "s." << std::endl;
 }
@@ -372,7 +385,8 @@ size_t Index<T, TagT, LabelT>::load_tags(AlignedFileReader &reader)
 {
 #else
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
+size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename,
+                                         const std::function<void(TagT)> *tag_enumerator)
 {
     if (_enable_tags && !file_exists(tag_filename))
     {
@@ -414,8 +428,16 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename)
         {
             _location_to_tag.set(i, tag);
             _tag_to_location[tag] = i;
+
+            if (tag_enumerator != nullptr)
+            {
+                (*tag_enumerator)(tag);
+            }
         }
     }
+
+    // TODO: not loading frozen points? But they are saved to the output file.
+
     diskann::cout << "Tags loaded." << std::endl;
     delete[] tag_data;
     return file_num_points;
@@ -503,7 +525,10 @@ template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l)
 {
 #else
-void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, uint32_t search_l)
+void Index<T, TagT, LabelT>::load(const char *filename, 
+                                  uint32_t num_threads, 
+                                  uint32_t search_l,
+                                  const std::function<void(TagT)> *tag_enumerator)
 {
 #endif
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
@@ -535,7 +560,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         }
         if (_enable_tags)
         {
-            tags_file_num_pts = load_tags(tags_file);
+            tags_file_num_pts = load_tags(tags_file, tag_enumerator);
         }
         graph_num_pts = load_graph(graph_file, data_file_num_pts);
 #endif
@@ -794,13 +819,14 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::get_vector_by_tag(TagT &tag, T *vec)
 {
     std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
-    if (_tag_to_location.find(tag) == _tag_to_location.end())
+    const auto tagIt = _tag_to_location.find(tag);
+    if (tagIt == _tag_to_location.end())
     {
-        diskann::cout << "Tag " << tag << " does not exist" << std::endl;
+        //diskann::cout << "Tag " << tag << " does not exist" << std::endl;
         return -1;
     }
 
-    size_t location = _tag_to_location[tag];
+    size_t location = tagIt->second;
     memcpy((void *)vec, (void *)(_data + location * _aligned_dim), (size_t)_dim * sizeof(T));
     return 0;
 }
