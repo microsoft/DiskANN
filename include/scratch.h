@@ -165,11 +165,12 @@ template <typename T> class SSDQueryScratch : public AbstractScratch<T>
 
     tsl::robin_set<size_t> visited;
     NeighborPriorityQueue retset;
+    NeighborPriorityQueueExtendColor _best_diverse_nodes;
     std::vector<Neighbor> full_retset;
     // bitmask buffer in searching time
     std::vector<std::uint64_t> _query_label_bitmask;
 
-    SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, size_t bitmask_size = 0);
+    SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, std::vector<uint32_t>& location_to_sellers, size_t bitmask_size = 0);
     ~SSDQueryScratch();
 
     void reset();
@@ -186,7 +187,7 @@ template <typename T> class SSDThreadData
     SSDQueryScratch<T> scratch;
     IOContext ctx;
 
-    SSDThreadData(size_t aligned_dim, size_t visited_reserve);
+    SSDThreadData(size_t aligned_dim, size_t visited_reserve, std::vector<uint32_t>& location_to_sellers);
     void clear();
 };
 
