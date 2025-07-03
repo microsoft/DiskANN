@@ -5,6 +5,7 @@
 #include <string>
 #include <stdexcept>
 #include <system_error>
+#include <cstdint>
 #include "windows_customizations.h"
 
 #ifndef _WINDOWS
