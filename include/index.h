@@ -201,6 +201,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT void count_nodes_at_bfs_levels();
 
+    DISKANN_DLLEXPORT bool is_equal(const Index &other) const;
     // This variable MUST be updated if the number of entries in the metadata
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
@@ -310,6 +311,12 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 #endif
 
   private:
+    struct PositionedTag
+    {
+        TagT m_tag;
+        unsigned m_location;
+    };
+
     // Distance functions
     Metric _dist_metric = diskann::L2;
     Distance<T> *_distance = nullptr;

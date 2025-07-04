@@ -674,13 +674,8 @@ inline void open_file_to_write(std::ofstream &writer, const std::string &filenam
 }
 
 template <typename T>
-inline uint64_t save_bin(const std::string &filename, T *data, size_t npts, size_t ndims, size_t offset = 0)
+inline uint64_t save_bin(std::ofstream& writer, const T *data, size_t npts, size_t ndims)
 {
-    std::ofstream writer;
-    open_file_to_write(writer, filename);
-
-    diskann::cout << "Writing bin: " << filename.c_str() << std::endl;
-    writer.seekp(offset, writer.beg);
     int npts_i32 = (int)npts, ndims_i32 = (int)ndims;
     size_t bytes_written = npts * ndims * sizeof(T) + 2 * sizeof(uint32_t);
     writer.write((char *)&npts_i32, sizeof(int));
@@ -689,10 +684,26 @@ inline uint64_t save_bin(const std::string &filename, T *data, size_t npts, size
                   << std::endl;
 
     writer.write((char *)data, npts * ndims * sizeof(T));
+
+    return bytes_written;
+}
+
+template <typename T>
+inline uint64_t save_bin(const std::string &filename, const T *data, size_t npts, size_t ndims, size_t offset = 0)
+{
+    diskann::cout << "Writing bin: " << filename.c_str() << std::endl;
+    std::ofstream writer;
+    open_file_to_write(writer, filename);
+
+    writer.seekp(offset, writer.beg);
+
+    const auto bytes_written = save_bin(writer, data, npts, ndims);
+
     writer.close();
     diskann::cout << "Finished writing bin." << std::endl;
     return bytes_written;
 }
+
 // load_aligned_bin functions START
 
 template <typename T>

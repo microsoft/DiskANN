@@ -180,49 +180,45 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
         return 0;
     }
 
-    size_t tag_bytes_written;
-    TagT *tag_data = new TagT[_nd + _num_frozen_pts];
-    _u32 tagIndex = 0;
-    const _u32 totalActivePoints = _nd + _num_frozen_pts;   
-    for (_u32 i = 0; i < _max_points; i++)
+    std::ofstream out;
+    open_file_to_write(out, tags_file);
+
+    std::vector<PositionedTag> tag_data;
+    tag_data.reserve(_nd + _num_frozen_pts);
+
+    for (unsigned i = 0; i < _max_points; i++)
     {
         TagT tag;
         if (_location_to_tag.try_get(i, tag))
         {
-            tag_data[tagIndex] = tag;
-            tagIndex++;
-            assert(tagIndex <= totalActivePoints);
+            tag_data.emplace_back();
+            auto& entry = tag_data.back();
+            entry.m_tag = tag;
+            entry.m_location = i;
         }
-        else
-        {
-            // catering to future when tagT can be any type.
-            std::memset((char *)&tag_data[i], 0, sizeof(TagT));
-        }
-    }
-
-    if (_num_frozen_pts > 0)
-    {
-        std::memset((char *)&tag_data[tagIndex], 0, sizeof(TagT) * _num_frozen_pts);
     }
 
     try
     {
-        tag_bytes_written = save_bin<TagT>(tags_file, tag_data, _nd + _num_frozen_pts, 1);
+        save_bin<PositionedTag>(out, tag_data.data(), tag_data.size(), 1);
+
+        save_bin<unsigned>(out, _empty_slots.get_values().data(), _empty_slots.size(), 1);
     }
     catch (std::system_error &e)
     {
         throw FileException(tags_file, e, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    delete[] tag_data;
-    return tag_bytes_written;
+    return tag_data.size();
 }
 
 template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_data(std::string data_file)
 {
-    // Note: at this point, either _nd == _max_points or any frozen points have been
+    // If data was compacted before saving, either _nd == _max_points or any frozen points have been
     // temporarily moved to _nd, so _nd + _num_frozen_points is the valid location limit.
-    return save_data_in_base_dimensions(data_file, _data, _nd + _num_frozen_pts, _dim, _aligned_dim);
+    // If not compacted, saving the whole data as the points may be spread around.
+    const unsigned node_count = _data_compacted ? _nd + _num_frozen_pts : _max_points + _num_frozen_pts;
+    return save_data_in_base_dimensions(data_file, _data, node_count, _dim, _aligned_dim);
 }
 
 // save the graph index on a file as an adjacency list. For each point,
@@ -235,27 +231,58 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
 
     _u64 file_offset = 0; // we will use this if we want
     out.seekp(file_offset, out.beg);
-    _u64 index_size = 24;
+
+    // The following two will be updated after the graph is written out.
     _u32 max_degree = 0;
-    out.write((char *)&index_size, sizeof(uint64_t));
-    out.write((char *)&_max_observed_degree, sizeof(unsigned));
-    unsigned ep_u32 = _start;
-    out.write((char *)&ep_u32, sizeof(unsigned));
-    out.write((char *)&_num_frozen_pts, sizeof(_u64));
-    // Note: at this point, either _nd == _max_points or any frozen points have been
+    _u64 index_size = 0; 
+    out.write((char *)&index_size, sizeof(index_size));
+    out.write((char *)&_max_observed_degree, sizeof(_max_observed_degree));
+
+    out.write((char *)&_start, sizeof(_start));
+    out.write((char *)&_num_frozen_pts, sizeof(_num_frozen_pts));
+
+    size_t data_compacted_output = _data_compacted ? 1 : 0;
+    out.write((char *)&data_compacted_output, sizeof(data_compacted_output));
+
+    const _u64 header_size = sizeof(index_size) + sizeof(_max_observed_degree) 
+                             + sizeof(_start) + sizeof(_num_frozen_pts) 
+                             + sizeof(data_compacted_output);
+    index_size = header_size;
+
+    // If the graph is compacted, either _nd == _max_points or any frozen points have been
     // temporarily moved to _nd, so _nd + _num_frozen_points is the valid location limit.
-    for (unsigned i = 0; i < _nd + _num_frozen_pts; i++)
+    unsigned total_points = _nd + _num_frozen_pts;
+
+    // If not compacted, saving the whole graph as the points may be spread around.
+    // TODO: check if the deleted nodes can be saved as is.
+    if (!_data_compacted)
+    {
+        total_points = _max_points + _num_frozen_pts;
+    }
+
+    unsigned empty_out_neighbors = 0;
+    for (unsigned i = 0; i < total_points; i++)
     {
         unsigned GK = (unsigned)_final_graph[i].size();
         out.write((char *)&GK, sizeof(unsigned));
         out.write((char *)_final_graph[i].data(), GK * sizeof(unsigned));
         max_degree = _final_graph[i].size() > max_degree ? (_u32)_final_graph[i].size() : max_degree;
         index_size += (_u64)(sizeof(unsigned) * (GK + 1));
+
+        if (GK == 0)
+        {
+            empty_out_neighbors++;
+        }
     }
     out.seekp(file_offset, out.beg);
     out.write((char *)&index_size, sizeof(uint64_t));
     out.write((char *)&max_degree, sizeof(_u32));
     out.close();
+
+    diskann::cout << "Graph data saved, total points: " << total_points << ", "
+        << "empty out nodes: " << empty_out_neighbors << ", "
+        << "max_degree: " << max_degree << std::endl;
+
     return index_size; // number of bytes written
 }
 
@@ -354,14 +381,34 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
         // the files are deleted before save. Ideally, we should check
         // the error code for delete_file, but will ignore now because
         // delete should succeed if save will succeed.
-        delete_file(graph_file);
-        save_graph(graph_file);
-        delete_file(data_file);
-        save_data(data_file);
-        delete_file(tags_file);
-        save_tags(tags_file);
-        delete_file(delete_list_file);
-        save_delete_list(delete_list_file);
+
+        {
+            diskann::Timer localTimer;
+            delete_file(graph_file);
+            save_graph(graph_file);
+            diskann::cout << "Graph saved, time taken: " << localTimer.elapsed() / 1000000.0 << "s." << std::endl;
+        }
+
+        {
+            diskann::Timer localTimer;
+            delete_file(data_file);
+            save_data(data_file);
+            diskann::cout << "Data saved, time taken: " << localTimer.elapsed() / 1000000.0 << "s." << std::endl;
+        }
+
+        {
+            diskann::Timer localTimer;
+            delete_file(tags_file);
+            save_tags(tags_file);
+            diskann::cout << "Tags saved, time taken: " << localTimer.elapsed() / 1000000.0 << "s." << std::endl;
+        }
+
+        {
+            diskann::Timer localTimer;
+            delete_file(delete_list_file);
+            save_delete_list(delete_list_file);
+            diskann::cout << "Delete list saved, time taken: " << localTimer.elapsed() / 1000000.0 << "s." << std::endl;
+        }
     }
     else
     {
@@ -400,47 +447,62 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename,
         return 0;
     }
 
-    size_t file_dim, file_num_points;
-    TagT *tag_data;
+    std::ifstream in;
+    in.exceptions(std::ios::badbit | std::ios::failbit);
+    in.open(tag_filename, std::ios::binary);
+
+    unsigned non_empty_tags = 0;
+    in.read((char *)&non_empty_tags, sizeof(non_empty_tags));
+
+    // dim_count is not used, but saved to the file.
+    unsigned dim_count = 0;
+    in.read((char *)&dim_count, sizeof(dim_count));
+
+    _location_to_tag.reserve(non_empty_tags);
+    _tag_to_location.reserve(non_empty_tags);
 #ifdef EXEC_ENV_OLS
-    load_bin<TagT>(reader, tag_data, file_num_points, file_dim);
+    static_assert(false, "OLS does not support loading tags.");
 #else
-    load_bin<TagT>(std::string(tag_filename), tag_data, file_num_points, file_dim);
-#endif
-
-    if (file_dim != 1)
+    for (unsigned i = 0; i < non_empty_tags; i++)
     {
-        std::stringstream stream;
-        stream << "ERROR: Found " << file_dim << " dimensions for tags,"
-               << "but tag file must have 1 dimension." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
-        delete[] tag_data;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
-    const size_t num_data_points = file_num_points - _num_frozen_pts;
-    _location_to_tag.reserve(num_data_points);
-    _tag_to_location.reserve(num_data_points);
-    for (_u32 i = 0; i < (_u32)num_data_points; i++)
-    {
-        TagT tag = *(tag_data + i);
-        if (_delete_set->find(i) == _delete_set->end())
+        PositionedTag tag;
+        in.read((char *)&tag, sizeof(tag));
+        if (_delete_set->find(tag.m_location) == _delete_set->end())
         {
-            _location_to_tag.set(i, tag);
-            _tag_to_location[tag] = i;
-
+            _location_to_tag.set(tag.m_location, tag.m_tag);
+            _tag_to_location[tag.m_tag] = tag.m_location;
             if (tag_enumerator != nullptr)
             {
-                (*tag_enumerator)(tag);
+                (*tag_enumerator)(tag.m_tag);
             }
         }
     }
+#endif
 
-    // TODO: not loading frozen points? But they are saved to the output file.
+    unsigned empty_slot_count = 0;
+    in.read((char *)&empty_slot_count, sizeof(empty_slot_count));
 
-    diskann::cout << "Tags loaded." << std::endl;
-    delete[] tag_data;
-    return file_num_points;
+    // Dim count is not used, but saved to the file.
+    in.read((char *)&dim_count, sizeof(dim_count));
+
+    _empty_slots.clear();
+
+    if (empty_slot_count > 0)
+    {
+        _empty_slots.reserve(empty_slot_count);
+        for (unsigned i = 0; i < empty_slot_count; i++)
+        {
+            unsigned empty_slot;
+            in.read((char *)&empty_slot, sizeof(empty_slot));
+            _empty_slots.insert(empty_slot);
+        }
+    }
+
+    diskann::cout << "Tags loaded. Tag count: " << non_empty_tags << ", "
+                  << "empty slot count: " << _empty_slots.size() << std::endl;
+
+    // TODO: frozen points?
+    return non_empty_tags + _empty_slots.size() + _num_frozen_pts;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -556,13 +618,22 @@ void Index<T, TagT, LabelT>::load(const char *filename,
         data_file_num_pts = load_data(data_file);
         if (file_exists(delete_set_file))
         {
+            diskann::Timer localTimer;
             load_delete_set(delete_set_file);
+            diskann::cout << "Deleted set loaded, time taken: " << localTimer.elapsed() / 1000000.0 << " s." << std::endl;
         }
         if (_enable_tags)
         {
+            diskann::Timer localTimer;
             tags_file_num_pts = load_tags(tags_file, tag_enumerator);
+            diskann::cout << "Tags loaded, time taken: " << localTimer.elapsed() / 1000000.0 << " s." << std::endl;
         }
-        graph_num_pts = load_graph(graph_file, data_file_num_pts);
+
+        {
+            diskann::Timer localTimer;
+            graph_num_pts = load_graph(graph_file, data_file_num_pts);
+            diskann::cout << "Graph loaded, time taken: " << localTimer.elapsed() / 1000000.0 << " s." << std::endl;
+        }
 #endif
     }
     else
@@ -573,7 +644,25 @@ void Index<T, TagT, LabelT>::load(const char *filename,
         return;
     }
 
-    if (data_file_num_pts != graph_num_pts || (data_file_num_pts != tags_file_num_pts && _enable_tags))
+    bool is_data_compatible = true;
+    if (data_file_num_pts != graph_num_pts)
+    {
+        is_data_compatible = false;
+    }
+
+    if (_enable_tags)
+    {
+        if (_data_compacted && data_file_num_pts != tags_file_num_pts)
+        {
+            is_data_compatible = false;
+        }
+
+        // TODO: when data is not compacted, the number of entries in the location maps
+        // will be smaller than the number of points in the data file and graph file. 
+        // There is no reliable way to validate compatibility in this case. Assume good.
+    }
+
+    if (!is_data_compatible)
     {
         std::stringstream stream;
         stream << "ERROR: When loading index, loaded " << data_file_num_pts << " points from datafile, "
@@ -586,6 +675,8 @@ void Index<T, TagT, LabelT>::load(const char *filename,
 
     if (file_exists(labels_file))
     {
+        diskann::Timer localTimer;
+
         _label_map = load_label_map(labels_map_file);
         parse_label_file(labels_file, label_num_pts);
         assert(label_num_pts == data_file_num_pts);
@@ -630,17 +721,32 @@ void Index<T, TagT, LabelT>::load(const char *filename,
             _use_universal_label = true;
             universal_label_reader.close();
         }
+
+        diskann::cout << "Labels loaded, time taken: " << localTimer.elapsed() / 1000000.0 << " s." << std::endl;
     }
 
+    // TODO: is this right for non-compacted data?
     _nd = data_file_num_pts - _num_frozen_pts;
-    _empty_slots.clear();
-    _empty_slots.reserve(_max_points);
-    for (auto i = _nd; i < _max_points; i++)
+
+    if (_data_compacted)
     {
-        _empty_slots.insert((uint32_t)i);
+        _empty_slots.clear();
+        _empty_slots.reserve(_max_points);
+        for (auto i = _nd; i < _max_points; i++)
+        {
+            _empty_slots.insert((uint32_t)i);
+        }
+
+        reposition_frozen_point_to_end();
+    }
+    else
+    {
+        // Empty slots were restored as part of loading the tags.
+        // Discount them from the active point count.
+        // TODO: do the same with deleted?
+        _nd -= _empty_slots.size();
     }
 
-    reposition_frozen_point_to_end();
     diskann::cout << "Num frozen points:" << _num_frozen_pts << " _nd: " << _nd << " _start: " << _start
                   << " size(_location_to_tag): " << _location_to_tag.size()
                   << " size(_tag_to_location):" << _tag_to_location.size() << " Max points: " << _max_points
@@ -707,16 +813,25 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     in.exceptions(std::ios::badbit | std::ios::failbit);
     in.open(filename, std::ios::binary);
     in.seekg(file_offset, in.beg);
-    in.read((char *)&expected_file_size, sizeof(_u64));
-    in.read((char *)&_max_observed_degree, sizeof(unsigned));
-    in.read((char *)&_start, sizeof(unsigned));
-    in.read((char *)&file_frozen_pts, sizeof(_u64));
-    _u64 vamana_metadata_size = sizeof(_u64) + sizeof(_u32) + sizeof(_u32) + sizeof(_u64);
+    in.read((char *)&expected_file_size, sizeof(expected_file_size));
+    in.read((char *)&_max_observed_degree, sizeof(_max_observed_degree));
+    in.read((char *)&_start, sizeof(_start));
+    in.read((char *)&file_frozen_pts, sizeof(file_frozen_pts));
+
+    // Use size_t for padding.
+    size_t data_compacted = 0;
+    in.read((char *)&data_compacted, sizeof(data_compacted));
+    _data_compacted = data_compacted != 0;
+
+    const _u64 vamana_metadata_size = sizeof(expected_file_size) + sizeof(_max_observed_degree) + sizeof(_start) +
+                                      sizeof(file_frozen_pts) + sizeof(data_compacted);
 
 #endif
     diskann::cout << "From graph header, expected_file_size: " << expected_file_size
                   << ", _max_observed_degree: " << _max_observed_degree << ", _start: " << _start
-                  << ", file_frozen_pts: " << file_frozen_pts << std::endl;
+                  << ", file_frozen_pts: " << file_frozen_pts 
+                  << ", _data_compacted: " << (_data_compacted ? "true" : "false")
+                  << std::endl;
 
     if (file_frozen_pts != _num_frozen_pts)
     {
@@ -782,6 +897,7 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
         }
     }
 #else
+    unsigned emptyOutNeighbors = 0;
     size_t bytes_read = vamana_metadata_size;
     size_t cc = 0;
     unsigned nodes_read = 0;
@@ -792,7 +908,15 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 
         if (k == 0)
         {
-            diskann::cerr << "ERROR: Point found with no out-neighbors, point#" << nodes_read << std::endl;
+            if (_data_compacted)
+            {
+                diskann::cerr << "ERROR: Point found with no out-neighbors, point#" << nodes_read << std::endl;
+            }
+            else
+            {
+                // If the graph was compacted, it is expected it will have empty out-neighbors.
+                emptyOutNeighbors++;
+            }
         }
 
         cc += k;
@@ -811,22 +935,22 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
     }
 #endif
 
-    diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, _start is set to "
-                  << _start << std::endl;
+    diskann::cout << "done. Index has " << nodes_read << " nodes and " << cc << " out-edges, " << emptyOutNeighbors << " empty out-neighbors, "
+                  << "_start is set to " << _start << std::endl;
     return nodes_read;
 }
 
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::get_vector_by_tag(TagT &tag, T *vec)
 {
     std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
-    const auto tagIt = _tag_to_location.find(tag);
-    if (tagIt == _tag_to_location.end())
+    const auto tag_it = _tag_to_location.find(tag);
+    if (tag_it == _tag_to_location.end())
     {
         //diskann::cout << "Tag " << tag << " does not exist" << std::endl;
         return -1;
     }
 
-    size_t location = tagIt->second;
+    const unsigned location = tag_it->second;
     memcpy((void *)vec, (void *)(_data + location * _aligned_dim), (size_t)_dim * sizeof(T));
     return 0;
 }
@@ -2295,6 +2419,10 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
         {
             _empty_slots.insert(slot);
         }
+
+        // When _empty_slots are populated, reserve_location can pick up any of these empty slots,
+        // so the points will not be allocated contiguously. Consider this a non-compacted graph.
+        _data_compacted = false;
     }
 
     return 0;
@@ -2670,7 +2798,7 @@ void Index<T, TagT, LabelT>::reposition_points(unsigned old_location_start, unsi
 
     // Update pointers to the moved nodes. Note: the computation is correct even when
     // new_location_start < old_location_start given the C++ unsigned integer arithmetic
-    // rules.
+    // rules. TODO: verify this. delta will be a very large positive number in that case.
     const unsigned location_delta = new_location_start - old_location_start;
 
     for (unsigned i = 0; i < _max_points + _num_frozen_pts; i++)
@@ -2901,14 +3029,15 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
     _data_compacted = false;
 
-    if (_tag_to_location.find(tag) == _tag_to_location.end())
+    const auto tag_it = _tag_to_location.find(tag);
+    if (tag_it == _tag_to_location.end())
     {
         diskann::cerr << "Delete tag not found " << tag << std::endl;
         return -1;
     }
-    assert(_tag_to_location[tag] < _max_points);
+    const unsigned location = tag_it->second;
+    assert(location < _max_points);
 
-    const auto location = _tag_to_location[tag];
     _delete_set->insert(location);
     _location_to_tag.erase(location);
     _tag_to_location.erase(tag);
@@ -2930,13 +3059,14 @@ void Index<T, TagT, LabelT>::lazy_delete(const std::vector<TagT> &tags, std::vec
 
     for (auto tag : tags)
     {
-        if (_tag_to_location.find(tag) == _tag_to_location.end())
+        const auto tag_it = _tag_to_location.find(tag);
+        if (tag_it == _tag_to_location.end())
         {
             failed_tags.push_back(tag);
         }
         else
         {
-            const auto location = _tag_to_location[tag];
+            const auto location = tag_it->second;
             _delete_set->insert(location);
             _location_to_tag.erase(location);
             _tag_to_location.erase(tag);
@@ -3134,6 +3264,186 @@ void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t
     }
 }
 
+template<typename TagT>
+bool is_equal_map(const tsl::sparse_map<TagT, unsigned>& map1, const tsl::sparse_map<TagT, unsigned> &map2)
+{
+    if (map1.size() != map2.size())
+    {
+        return false;
+    }
+
+    for (const auto &iter : map1)
+    {
+        if (!map2.contains(iter.first))
+        {
+            return false;
+        }
+
+        if (map2.at(iter.first) != iter.second)
+        {
+            return false;
+        }
+    }
+
+    for (const auto &iter : map2)
+    {
+        if (!map1.contains(iter.first))
+        {
+            return false;
+        }
+
+        if (map1.at(iter.first) != iter.second)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+template<typename TagT>
+bool is_equal_map(const natural_number_map<unsigned, TagT> &map1, const natural_number_map<unsigned, TagT> &map2)
+{
+    if (map1.size() != map2.size())
+    {
+        return false;
+    }
+
+    {
+        auto position = map1.find_first();
+        while (position.is_valid())
+        {
+            TagT value;
+            if (!map2.try_get(position._key, value))
+            {
+                return false;
+            }
+
+            if (value != map1.get(position))
+            {
+                return false;
+            }
+
+            position = map1.find_next(position);
+        }
+    }
+
+    {
+        auto position = map2.find_first();
+        while (position.is_valid())
+        {
+            TagT value;
+            if (!map1.try_get(position._key, value))
+            {
+                return false;
+            }
+
+            if (value != map2.get(position))
+            {
+                return false;
+            }
+
+            position = map2.find_next(position);
+        }
+    }
+
+    return true;
+}
+
+
+bool is_equal_map(const natural_number_set<unsigned> &map1, const natural_number_set<unsigned> &map2)
+{
+    return map1.get_values() == map2.get_values();
+}
+
+
+bool is_equal_set(const tsl::robin_set<unsigned> &map1, const tsl::robin_set<unsigned> &map2)
+{
+    {
+        for (const auto it : map1)
+        {
+            if (map2.find(it) == map2.end())
+            {
+                return false;
+            }
+        }
+    }
+
+    {
+        for (const auto it : map2)
+        {
+            if (map1.find(it) == map1.end())
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::is_equal(const Index &other) const
+{
+    if (_nd != other._nd || _max_points != other._max_points || _num_frozen_pts != other._num_frozen_pts)
+        return false;
+
+    if (_data_compacted != other._data_compacted)
+        return false;
+
+    if (_dim != other._dim || _aligned_dim != other._aligned_dim)
+        return false;
+
+    if (_dist_metric != other._dist_metric)
+        return false;
+
+    if (_final_graph != other._final_graph)
+        return false;
+
+    for (unsigned i = 0; i < _max_points; i++)
+    {
+        if (!_empty_slots.is_in_set(i) && _delete_set->find(i) == _delete_set->end())
+        {
+            if (_data[i] != other._data[i])
+            {
+                return false;
+            }
+        }
+    }
+
+    if (_enable_tags != other._enable_tags)
+    {
+        return false;
+    }
+
+    if (_enable_tags)
+    {
+        if (!is_equal_map(_tag_to_location, other._tag_to_location))
+        {
+            return false;
+        }
+
+        if (!is_equal_map(_location_to_tag, other._location_to_tag))
+        {
+            return false;
+        }
+    }
+
+    if (is_equal_set(*_delete_set, *other._delete_set) == false)
+    {
+        return false;
+    }
+
+    if (is_equal_map(_empty_slots, other._empty_slots) == false)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 /*  Internals of the library */
 template <typename T, typename TagT, typename LabelT> const float Index<T, TagT, LabelT>::INDEX_GROWTH_FACTOR = 1.5f;
 
@@ -3291,5 +3601,8 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t, uint16_t>::search_with_filters<
     uint32_t>(const int8_t *query, const uint16_t &filter_label, const size_t K, const unsigned L, uint32_t *indices,
               float *distances);
+
+template DISKANN_DLLEXPORT bool Index<int8_t, uint64_t, uint32_t>::is_equal(const Index& other) const;
+
 
 } // namespace diskann

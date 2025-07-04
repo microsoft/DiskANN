@@ -65,6 +65,50 @@ template <typename T> bool natural_number_set<T>::is_in_set(T id) const
     return _values_bitset->test(id);
 }
 
+template <typename T> const std::vector<T> &natural_number_set<T>::get_values() const
+{
+    return _values_vector;
+}
+
+//template <typename T> natural_number_set<T>::const_iterator::const_iterator(pointer ptr)
+//    : ptr_(ptr)
+//{
+//}
+//
+//template <typename T> natural_number_set<T>::const_iterator::reference natural_number_set<T>::const_iterator::operator*() const
+//{
+//    return *ptr_;
+//}
+//
+//template <typename T> natural_number_set<T>::const_iterator::pointer natural_number_set<T>::const_iterator::operator->() const
+//{
+//    return ptr_;
+//}
+//
+//template <typename T> natural_number_set<T>::const_iterator &natural_number_set<T>::const_iterator::operator++()
+//{
+//    ++ptr_;
+//    return *this;
+//}
+//
+//template <typename T> natural_number_set<T>::const_iterator natural_number_set<T>::const_iterator::operator++(int)
+//{
+//    const_iterator tmp = *this;
+//    ++(*this);
+//    return tmp;
+//}
+//
+//template <typename T> natural_number_set<T>::const_iterator natural_number_set<T>::begin() const
+//{
+//    return const_iterator(data_.data());
+//}
+//
+//template <typename T> natural_number_set<T>::const_iterator natural_number_set<T>::end() const
+//{
+//    return const_iterator(data_.data() + data_.size());
+//}
+
+
 // Instantiate used templates.
 template class natural_number_set<unsigned>;
 } // namespace diskann

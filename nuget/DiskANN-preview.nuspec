@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
   <metadata>
     <id>DiskANN-preview.win-x64</id>
-    <version>0.13.626.2</version>
+    <version>0.13.704.1</version>
     <authors>DiskANN team</authors>
     <owners>DiskANN team</owners>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
@@ -19,9 +19,12 @@ The goal of the project is to build scalable, performant and cost-effective appr
     </dependencies>
   </metadata>
   <files>
-      <file src="x64\Release\diskann.lib" target="lib\native\win-x64" />
-      <file src="x64\Release\diskann.dll" target="lib\native\win-x64" />
-      <file src="x64\Release\diskann.pdb" target="lib\native\win-x64" />
+      <file src="x64\Release\diskann.lib" target="lib\native\win-x64\retail" />
+      <file src="x64\Release\diskann.dll" target="lib\native\win-x64\retail" />
+      <file src="x64\Release\diskann.pdb" target="lib\native\win-x64\retail" />
+      <file src="x64\Debug\diskann.lib" target="lib\native\win-x64\debug" />
+      <file src="x64\Debug\diskann.dll" target="lib\native\win-x64\debug" />
+      <file src="x64\Debug\diskann.pdb" target="lib\native\win-x64\debug" />
       <file src="include\**" target="lib\native\include\diskann" />
       <file src="LICENSE" target="LICENSE" />
   </files>
