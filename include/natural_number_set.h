@@ -35,8 +35,10 @@ template <typename T> class natural_number_set
     size_t size() const;
     bool is_in_set(T id) const;
 
+    const std::vector<T> &get_values() const;
+
   private:
-    // Values that are currently in set.
+    // Values currently in the set.
     std::vector<T> _values_vector;
 
     // Values that are in the set have the corresponding bit index set
