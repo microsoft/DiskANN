@@ -16,7 +16,6 @@
 #include <fstream>
 #include <iostream>
 #include <iomanip>
-#include <omp.h>
 #include <queue>
 #include <random>
 #include <set>
