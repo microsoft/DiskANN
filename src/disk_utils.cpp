@@ -646,7 +646,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                       << full_index_ram / (1024 * 1024 * 1024) << "GiBs, so building in one shot" << std::endl;
 
         bool is_diverse_index = false;
-        if (seller_file_path != nullptr && seller_file_path != "")
+        if (seller_file_path != nullptr && !std::string(seller_file_path).empty())
         {
             is_diverse_index = true;
         }
