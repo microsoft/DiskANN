@@ -315,7 +315,8 @@ public:
             {
                 std::cout << "unique seller " << uniqueSellerCount << "ColorInfoMap created" << std::endl;
                 auto color_to_info = std::make_unique<ColorInfoMap>();
-                color_to_info->reserve(uniqueSellerCount);
+                uint32_t reserve_size = 5000;
+                color_to_info->reserve(reserve_size);
                 _color_to_info = std::move(color_to_info);
             }
         }
