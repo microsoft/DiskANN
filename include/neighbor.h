@@ -127,7 +127,8 @@ private:
 class NeighborExtendColorVector : public NeighborVectorBase
 {
 public:
-    const static uint32_t s_vector_size_limited = 1000000;
+    const static uint32_t s_vector_size_limited = 50 * 64;
+    const static uint32_t s_map_size_reserve = 100;
 
     NeighborExtendColorVector(const std::vector<uint32_t>& location_to_seller)
         : _location_to_seller(location_to_seller)
@@ -148,7 +149,7 @@ public:
         else
         {
             auto color_to_info = std::make_unique<ColorInfoMap>();
-            color_to_info->reserve(uniqueSellerCount);
+            color_to_info->reserve(s_map_size_reserve);
             _color_to_info = std::move(color_to_info);
         }
     }
@@ -315,8 +316,7 @@ public:
             {
                 std::cout << "unique seller " << uniqueSellerCount << "ColorInfoMap created" << std::endl;
                 auto color_to_info = std::make_unique<ColorInfoMap>();
-                uint32_t reserve_size = 5000;
-                color_to_info->reserve(reserve_size);
+                color_to_info->reserve(s_map_size_reserve);
                 _color_to_info = std::move(color_to_info);
             }
         }
