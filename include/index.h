@@ -202,6 +202,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT void count_nodes_at_bfs_levels();
 
     DISKANN_DLLEXPORT bool is_equal(const Index &other) const;
+
     // This variable MUST be updated if the number of entries in the metadata
     // change.
     DISKANN_DLLEXPORT static const int METADATA_ROWS = 5;
@@ -294,20 +295,20 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Do not call without acquiring appropriate locks
     // call public member functions save and load to invoke these.
-    DISKANN_DLLEXPORT _u64 save_graph(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_data(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_tags(std::string filename);
-    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string &filename);
+    DISKANN_DLLEXPORT _u64 save_graph(const std::string& filename) const;
+    DISKANN_DLLEXPORT _u64 save_data(const std::string& filename) const;
+    DISKANN_DLLEXPORT _u64 save_tags(const std::string& filename) const;
+    DISKANN_DLLEXPORT _u64 save_delete_list(const std::string& filename) const;
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT size_t load_graph(AlignedFileReader &reader, size_t expected_num_points);
     DISKANN_DLLEXPORT size_t load_data(AlignedFileReader &reader);
     DISKANN_DLLEXPORT size_t load_tags(AlignedFileReader &reader, const std::function<void(TagT)> *tag_enumerator);
     DISKANN_DLLEXPORT size_t load_delete_set(AlignedFileReader &reader);
 #else
-    DISKANN_DLLEXPORT size_t load_graph(const std::string filename, size_t expected_num_points);
-    DISKANN_DLLEXPORT size_t load_data(std::string filename0);
-    DISKANN_DLLEXPORT size_t load_tags(const std::string tag_file_name, const std::function<void(TagT)> *tag_enumerator);
-    DISKANN_DLLEXPORT size_t load_delete_set(const std::string &filename);
+    DISKANN_DLLEXPORT size_t load_graph(const std::string& filename, size_t expected_num_points);
+    DISKANN_DLLEXPORT size_t load_data(const std::string& filename0);
+    DISKANN_DLLEXPORT size_t load_tags(const std::string& tag_file_name, const std::function<void(TagT)> *tag_enumerator);
+    DISKANN_DLLEXPORT size_t load_delete_set(const std::string& filename);
 #endif
 
   private:

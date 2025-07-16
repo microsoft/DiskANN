@@ -16,6 +16,7 @@
 #endif
 
 #ifdef _WINDOWS
+#include "utils_windows.h"
 #include <xmmintrin.h>
 #endif
 #include "index.h"
@@ -172,7 +173,7 @@ void Index<T, TagT, LabelT>::initialize_query_scratch(uint32_t num_threads, uint
     }
 }
 
-template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_tags(std::string tags_file)
+template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_tags(const std::string& tags_file) const
 {
     if (!_enable_tags)
     {
@@ -212,20 +213,109 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     return tag_data.size();
 }
 
-template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_data(std::string data_file)
+template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_data(const std::string& data_file) const
 {
     // If data was compacted before saving, either _nd == _max_points or any frozen points have been
     // temporarily moved to _nd, so _nd + _num_frozen_points is the valid location limit.
     // If not compacted, saving the whole data as the points may be spread around.
     const unsigned node_count = _data_compacted ? _nd + _num_frozen_pts : _max_points + _num_frozen_pts;
+
+#ifdef _WINDOWS
+    const size_t size_of_data = node_count * _aligned_dim * sizeof(T);
+    const size_t total_size = 2 * sizeof(uint32_t) + size_of_data;
+
+    PagedBinaryWriter writer(data_file, total_size);
+
+    writer.Write(node_count);
+    writer.Write(_dim);
+
+    writer.WriteBytes(_data, size_of_data);
+
+    //diskann::utils_windows::write_to_file(data_file, reinterpret_cast<const char *>(_data), size_of_data);
+
+    return size_of_data;
+#else
     return save_data_in_base_dimensions(data_file, _data, node_count, _dim, _aligned_dim);
+#endif
 }
 
 // save the graph index on a file as an adjacency list. For each point,
 // first store the number of neighbors, and then the neighbor list (each as
 // 4 byte unsigned)
-template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_graph(std::string graph_file)
+template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_graph(const std::string& graph_file) const
 {
+#if _WINDOWS
+
+    Log(logging::Info, "save_graph", "Saving graph data using file map");
+
+    // Estimate the total file size.
+    _u32 max_degree = 0;
+    _u64 index_size = 0; 
+    const size_t data_compacted_output = _data_compacted ? 1 : 0;
+
+    const _u64 header_size = sizeof(index_size) + sizeof(_max_observed_degree) + sizeof(_start) +
+                             sizeof(_num_frozen_pts) + sizeof(data_compacted_output);
+
+    index_size = header_size;
+
+    // If the graph is compacted, either _nd == _max_points or any frozen points have been
+    // temporarily moved to _nd, so _nd + _num_frozen_points is the valid location limit.
+    unsigned total_points = _nd + _num_frozen_pts;
+
+    // If not compacted, saving the whole graph as the points may be spread around.
+    // TODO: check if the deleted nodes can be saved as is.
+    if (!_data_compacted)
+    {
+        total_points = _max_points + _num_frozen_pts;
+    }
+
+    for (unsigned i = 0; i < total_points; i++)
+    {
+        unsigned GK = (unsigned)_final_graph[i].size();
+        max_degree = _final_graph[i].size() > max_degree ? (_u32)_final_graph[i].size() : max_degree;
+        index_size += (_u64)(sizeof(unsigned) * (GK + 1));
+    }
+
+    PagedBinaryWriter writer(graph_file, index_size);
+
+    writer.Write(index_size);
+    writer.Write(_max_observed_degree);
+
+    writer.Write(_start);
+    writer.Write(_num_frozen_pts);
+
+    writer.Write(data_compacted_output);
+
+    unsigned empty_out_neighbors = 0;
+    for (unsigned i = 0; i < total_points; i++)
+    {
+        unsigned GK = (unsigned)_final_graph[i].size();
+        writer.Write(GK);
+        writer.WriteBytes(_final_graph[i].data(), GK * sizeof(unsigned));
+        max_degree = _final_graph[i].size() > max_degree ? (_u32)_final_graph[i].size() : max_degree;
+
+        if (GK == 0)
+        {
+            empty_out_neighbors++;
+        }
+    }
+
+    // Rewind the writer to the beginning of the file to write the header.
+    writer.Rewind(0);
+
+    writer.Write(index_size);
+    writer.Write(max_degree);
+
+    Log(logging::Info, 
+        "save_graph", 
+        "Graph data saved, total points: %u, empty out nodes: %u, max_degree: %u", 
+        total_points, 
+        empty_out_neighbors, 
+        max_degree);
+
+    return index_size;
+
+#else
     std::ofstream out;
     open_file_to_write(out, graph_file);
 
@@ -284,10 +374,11 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
         << "max_degree: " << max_degree << std::endl;
 
     return index_size; // number of bytes written
+#endif
 }
 
 template <typename T, typename TagT, typename LabelT>
-_u64 Index<T, TagT, LabelT>::save_delete_list(const std::string &filename)
+_u64 Index<T, TagT, LabelT>::save_delete_list(const std::string& filename) const
 {
     if (_delete_set->size() == 0)
     {
@@ -432,7 +523,7 @@ size_t Index<T, TagT, LabelT>::load_tags(AlignedFileReader &reader)
 {
 #else
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_tags(const std::string tag_filename,
+size_t Index<T, TagT, LabelT>::load_tags(const std::string& tag_filename,
                                          const std::function<void(TagT)> *tag_enumerator)
 {
     if (_enable_tags && !file_exists(tag_filename))
@@ -510,7 +601,7 @@ template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::load_data(AlignedFileReader &reader)
 {
 #else
-size_t Index<T, TagT, LabelT>::load_data(std::string filename)
+size_t Index<T, TagT, LabelT>::load_data(const std::string& filename)
 {
 #endif
     size_t file_dim, file_num_points;
@@ -561,7 +652,7 @@ size_t Index<T, TagT, LabelT>::load_delete_set(AlignedFileReader &reader)
 {
 #else
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_delete_set(const std::string &filename)
+size_t Index<T, TagT, LabelT>::load_delete_set(const std::string& filename)
 {
 #endif
     std::unique_ptr<_u32[]> delete_list;
@@ -791,7 +882,7 @@ size_t Index<T, TagT, LabelT>::load_graph(AlignedFileReader &reader, size_t expe
 #else
 
 template <typename T, typename TagT, typename LabelT>
-size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_num_points)
+size_t Index<T, TagT, LabelT>::load_graph(const std::string& filename, size_t expected_num_points)
 {
 #endif
     size_t expected_file_size;
