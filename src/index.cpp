@@ -20,6 +20,7 @@
 #include <xmmintrin.h>
 #endif
 #include "index.h"
+#include "logging_internal.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
@@ -221,8 +222,13 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     const unsigned node_count = _data_compacted ? _nd + _num_frozen_pts : _max_points + _num_frozen_pts;
 
 #ifdef _WINDOWS
+
     const size_t size_of_data = node_count * _aligned_dim * sizeof(T);
     const size_t total_size = 2 * sizeof(uint32_t) + size_of_data;
+    Log(logging::Info, 
+        "save_data", 
+        "Saving data using windows map-of-file, file size: %.1f MB",
+        (float)total_size / (1024 * 1024));
 
     PagedBinaryWriter writer(data_file, total_size);
 
@@ -230,8 +236,6 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     writer.Write(_dim);
 
     writer.WriteBytes(_data, size_of_data);
-
-    //diskann::utils_windows::write_to_file(data_file, reinterpret_cast<const char *>(_data), size_of_data);
 
     return size_of_data;
 #else
@@ -588,6 +592,12 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string& tag_filename,
             _empty_slots.insert(empty_slot);
         }
     }
+
+    Log(logging::Info, 
+        "load_tags", 
+        "Tags loaded. Tag count: %u, empty slot count: %I64u", 
+        non_empty_tags, 
+        _empty_slots.size());
 
     diskann::cout << "Tags loaded. Tag count: " << non_empty_tags << ", "
                   << "empty slot count: " << _empty_slots.size() << std::endl;
