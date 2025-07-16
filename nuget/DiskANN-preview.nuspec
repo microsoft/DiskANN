@@ -1,0 +1,31 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+  <metadata>
+    <id>DiskANN-preview.win-x64</id>
+    <version>0.13.717.2</version>
+    <authors>DiskANN team</authors>
+    <owners>DiskANN team</owners>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <license type="file">LICENSE</license>
+    <licenseUrl>https://aka.ms/deprecateLicenseUrl</licenseUrl>
+    <projectUrl>https://github.com/microsoft/DiskANN</projectUrl>
+    <description>The package includes Windows x64 libraries
+
+The goal of the project is to build scalable, performant and cost-effective approximate nearest neighbor search algorithms. This release has the code from the DiskANN paper published in NeurIPS 2019, and improvements. This code reuses and builds upon some of the code for NSG algorithm.</description>
+    <copyright>Copyright (c) Microsoft Corporation</copyright>
+    <tags>DiskANN ANNS ANN nearest neighbor vector search</tags>
+    <dependencies>
+      <dependency id="intelopenmp.redist.win" version="[2022.0.3.3747]" />
+    </dependencies>
+  </metadata>
+  <files>
+      <file src="x64\Release\diskann.lib" target="lib\native\win-x64\retail" />
+      <file src="x64\Release\diskann.dll" target="lib\native\win-x64\retail" />
+      <file src="x64\Release\diskann.pdb" target="lib\native\win-x64\retail" />
+      <file src="x64\Debug\diskann.lib" target="lib\native\win-x64\debug" />
+      <file src="x64\Debug\diskann.dll" target="lib\native\win-x64\debug" />
+      <file src="x64\Debug\diskann.pdb" target="lib\native\win-x64\debug" />
+      <file src="include\**" target="lib\native\include\diskann" />
+      <file src="LICENSE" target="LICENSE" />
+  </files>
+</package>
