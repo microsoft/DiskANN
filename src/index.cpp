@@ -794,13 +794,14 @@ size_t Index<T, TagT, LabelT>::load_graph(std::string filename, size_t expected_
 template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::get_vector_by_tag(TagT &tag, T *vec)
 {
     std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
-    if (_tag_to_location.find(tag) == _tag_to_location.end())
+    const auto tagIt = _tag_to_location.find(tag);
+    if (tagIt == _tag_to_location.end())
     {
-        diskann::cout << "Tag " << tag << " does not exist" << std::endl;
+        // diskann::cout << "Tag " << tag << " does not exist" << std::endl;
         return -1;
     }
 
-    size_t location = _tag_to_location[tag];
+    const unsigned location = tagIt->second;
     memcpy((void *)vec, (void *)(_data + location * _aligned_dim), (size_t)_dim * sizeof(T));
     return 0;
 }
