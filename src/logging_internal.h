@@ -33,8 +33,6 @@ namespace diskann
                                LogLevel level,
                                char const* title, 
                                char const* message) override;
-
-            virtual void Abort() override;
         };
     }
 }

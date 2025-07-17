@@ -10,7 +10,6 @@ namespace diskann
         {
             Debug,
             Info,
-            Status,
             Warning,
             Error,
             Assert
@@ -29,9 +28,6 @@ namespace diskann
                                LogLevel level, 
                                char const *title, 
                                char const *message) = 0;
-
-            // Abort the program.
-            virtual void Abort() = 0;
         };
 
         DISKANN_DLLEXPORT void RegisterLogger(ILogger *logger);

@@ -47,11 +47,6 @@ namespace diskann
                    << std::endl;
         }
 
-        void ConsoleLogger::Abort()
-        {
-            // No-op.
-        }
-
         // By default console logger is used.
         static ConsoleLogger consoleLogger;
         static ILogger *g_logger = &consoleLogger;
