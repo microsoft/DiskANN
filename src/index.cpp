@@ -375,9 +375,10 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     out.write((char *)&max_degree, sizeof(_u32));
     out.close();
 
-    diskann::cout << "Graph data saved, total points: " << total_points << ", "
-        << "empty out nodes: " << empty_out_neighbors << ", "
-        << "max_degree: " << max_degree << std::endl;
+    Log(logging::Info, 
+        "save_graph", 
+        "Graph data saved, total points: %u, empty out nodes: %u, max_degree: %u",
+        total_points, empty_out_neighbors, max_degree);
 
     return index_size; // number of bytes written
 #endif
@@ -483,28 +484,29 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
             diskann::Timer localTimer;
             delete_file(graph_file);
             save_graph(graph_file);
-            diskann::cout << "Graph saved, time taken: " << localTimer.elapsed() / 1000000.0 << "s." << std::endl;
+
+            Log(logging::Info, "save_graph", "Graph saved, time taken: %.3f sec", localTimer.elapsed_seconds());
         }
 
         {
             diskann::Timer localTimer;
             delete_file(data_file);
             save_data(data_file);
-            diskann::cout << "Data saved, time taken: " << localTimer.elapsed() / 1000000.0 << "s." << std::endl;
+            Log(logging::Info, "save_data", "Data saved, time taken: %.3f sec", localTimer.elapsed_seconds());
         }
 
         {
             diskann::Timer localTimer;
             delete_file(tags_file);
             save_tags(tags_file);
-            diskann::cout << "Tags saved, time taken: " << localTimer.elapsed() / 1000000.0 << "s." << std::endl;
+            Log(logging::Info, "save_tags", "Tags saved, time taken: %.3f sec", localTimer.elapsed_seconds());
         }
 
         {
             diskann::Timer localTimer;
             delete_file(delete_list_file);
             save_delete_list(delete_list_file);
-            diskann::cout << "Delete list saved, time taken: " << localTimer.elapsed() / 1000000.0 << "s." << std::endl;
+            Log(logging::Info, "save_delete_list", "Delete list saved, time taken: %.3f sec", localTimer.elapsed_seconds());
         }
     }
     else
@@ -722,19 +724,19 @@ void Index<T, TagT, LabelT>::load(const char *filename,
         {
             diskann::Timer localTimer;
             load_delete_set(delete_set_file);
-            diskann::cout << "Deleted set loaded, time taken: " << localTimer.elapsed() / 1000000.0 << " s." << std::endl;
+            Log(logging::Info, "Index", "Deleted set loaded, time taken: %.3f s.", localTimer.elapsed_seconds());
         }
         if (_enable_tags)
         {
             diskann::Timer localTimer;
             tags_file_num_pts = load_tags(tags_file, tag_enumerator);
-            diskann::cout << "Tags loaded, time taken: " << localTimer.elapsed() / 1000000.0 << " s." << std::endl;
+            Log(logging::Info, "Index", "Tags loaded, time taken: %.3f s.", localTimer.elapsed_seconds());
         }
 
         {
             diskann::Timer localTimer;
             graph_num_pts = load_graph(graph_file, data_file_num_pts);
-            diskann::cout << "Graph loaded, time taken: " << localTimer.elapsed() / 1000000.0 << " s." << std::endl;
+            Log(logging::Info, "Index", "Graph loaded, time taken: %.3f s.", localTimer.elapsed_seconds());
         }
 #endif
     }
@@ -822,7 +824,7 @@ void Index<T, TagT, LabelT>::load(const char *filename,
             universal_label_reader.close();
         }
 
-        diskann::cout << "Labels loaded, time taken: " << localTimer.elapsed() / 1000000.0 << " s." << std::endl;
+        Log(logging::Info, "Index", "Labels loaded, time taken: %.3f s.", localTimer.elapsed_seconds());
     }
 
     // TODO: is this right for non-compacted data?
