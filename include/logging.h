@@ -10,7 +10,6 @@ namespace diskann
         {
             Debug,
             Info,
-            Status,
             Warning,
             Error,
             Assert
@@ -23,13 +22,14 @@ namespace diskann
             virtual ~ILogger() = default;
 
             // Log a message associated with a specific level, title, file name, function, and line number.
-            virtual void Write(char const *filename, char const *function, unsigned lineNumber,
-                               LogLevel level, char const *title, char const *message) = 0;
-
-            // Abort the program.
-            virtual void Abort() = 0;
+            virtual void Write(char const *filename, 
+                               char const *function, 
+                               unsigned lineNumber,
+                               LogLevel level, 
+                               char const *title, 
+                               char const *message) = 0;
         };
 
         DISKANN_DLLEXPORT void RegisterLogger(ILogger *logger);
-    } // namespace logging
-} // namespace diskann
+    }
+}
