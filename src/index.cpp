@@ -849,6 +849,7 @@ void Index<T, TagT, LabelT>::load(const char *filename,
         _nd -= _empty_slots.size();
     }
 
+
     Log(logging::Info, 
         "Index", 
         "Num frozen points: %I64u, _nd: %I64u, _start: %u, size(_location_to_tag): %I64u, size(_tag_to_location): %I64u, Max points: %I64u",
