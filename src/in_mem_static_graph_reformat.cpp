@@ -24,6 +24,9 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
     in.read((char*)&file_frozen_pts, sizeof(size_t));
     in.read((char*)&num_points, sizeof(size_t));
 
+    // max observed degree is the max degree of the graph
+    _max_range_of_graph = _max_observed_degree;
+
     size_t vamana_metadata_size = sizeof(size_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(size_t) + sizeof(size_t);
 
     diskann::cout << "From graph header, expected_file_size: " << expected_file_size
