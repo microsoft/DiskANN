@@ -30,7 +30,7 @@ int InMemGraphReformatStore::save_graph(const std::string& index_path_prefix, co
     {
         uint32_t GK = (uint32_t)_graph[i].size();
         size_t offset = GK * sizeof(uint32_t);
-        node_offset[i + 1] = node_offset[0] + offset;
+        node_offset[i + 1] = node_offset[i] + offset;
     }
     out.write((char*)node_offset.data(), node_offset.size() * sizeof(size_t));
     
