@@ -630,7 +630,9 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                               std::string medoids_file, std::string centroids_file, size_t build_pq_bytes, bool use_opq,
                               uint32_t num_threads, bool use_filters, const std::string &label_file,
                               const std::string &labels_to_medoids_file, const std::string &universal_label,
-                              const uint32_t Lf, uint32_t universal_label_num = 0)
+                              const uint32_t Lf, uint32_t universal_label_num = 0,
+                              const char* seller_file_path = nullptr,
+                              uint32_t num_diverse_build = 1)
 {
     size_t base_num, base_dim;
     diskann::get_bin_metadata(base_file, base_num, base_dim);
@@ -643,10 +645,18 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         diskann::cout << "Full index fits in RAM budget, should consume at most "
                       << full_index_ram / (1024 * 1024 * 1024) << "GiBs, so building in one shot" << std::endl;
 
+        bool is_diverse_index = false;
+        if (seller_file_path != nullptr && !std::string(seller_file_path).empty())
+        {
+            is_diverse_index = true;
+        }
         diskann::IndexWriteParameters paras = diskann::IndexWriteParametersBuilder(L, R)
                                                   .with_filter_list_size(Lf)
                                                   .with_saturate_graph(!use_filters)
                                                   .with_num_threads(num_threads)
+                                                  .with_diverse_index(is_diverse_index)
+                                                  .with_seller_file(seller_file_path)
+                                                  .with_num_diverse_build(num_diverse_build)
                                                   .build();
         using TagT = uint32_t;
         diskann::Index<T, TagT, LabelT> _index(compareMetric, base_dim, base_num,
@@ -1106,7 +1116,9 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
                      diskann::Metric compareMetric, bool use_opq, const std::string &codebook_prefix, bool use_filters,
                      const std::string &label_file, const std::string &universal_label, const uint32_t filter_threshold,
                      const uint32_t Lf,
-                     const char* reorderDataFilePath)
+                     const char* reorderDataFilePath,
+                     const char* sellerFilePath,
+                     uint32_t num_diverse_build)
 {
     std::stringstream parser;
     parser << std::string(indexBuildParameters);
@@ -1194,6 +1206,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string mem_univ_label_file = mem_index_path + "_universal_label.txt";
     std::string disk_univ_label_file = disk_index_path + "_universal_label.txt";
     std::string disk_labels_int_map_file = disk_index_path + "_labels_map.txt";
+    std::string disk_seller_file = disk_index_path + "_sellers.txt";
     std::string dummy_remap_file = disk_index_path + "_dummy_remap.txt"; // remap will be used if we break-up points of
                                                                          // high label-density to create copies
 
@@ -1333,7 +1346,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     diskann::build_merged_vamana_index<T, LabelT>(data_file_to_use.c_str(), diskann::Metric::L2, L, R, p_val,
                                                   indexing_ram_budget, mem_index_path, medoids_path, centroids_path,
                                                   build_pq_bytes, use_opq, num_threads, use_filters, labels_file_to_use,
-                                                  labels_to_medoids_path, universal_label, Lf, universal_label_id);
+                                                  labels_to_medoids_path, universal_label, Lf, universal_label_id, 
+                                                  sellerFilePath, num_diverse_build);
     diskann::cout << timer.elapsed_seconds_for_step("building merged vamana index") << std::endl;
 
     timer.reset();
@@ -1377,6 +1391,14 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         std::remove(augmented_labels_file.c_str());
         std::remove(labels_file_to_use.c_str());
     }
+    
+    std::string seller_mem_file = std::string(mem_index_path) + "_sellers.txt";
+    if (file_exists(seller_mem_file))
+    {
+        copy_file(seller_mem_file, disk_seller_file);
+        std::remove(seller_mem_file.c_str());
+    }
+
     if (created_temp_file_for_processed_data)
         std::remove(prepped_base.c_str());
     std::remove(mem_index_path.c_str());
@@ -1448,7 +1470,8 @@ template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint32_t>(const char *da
                                                                   const std::string &label_file,
                                                                   const std::string &universal_label,
                                                                   const uint32_t filter_threshold, const uint32_t Lf,
-                                                                  const char* reorderDataFilePath);
+                                                                  const char* reorderDataFilePath, const char* sellerFilePath,
+                                                                  uint32_t num_diverse_build);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                    const char *indexBuildParameters,
                                                                    diskann::Metric compareMetric, bool use_opq,
@@ -1456,7 +1479,8 @@ template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint32_t>(const char *d
                                                                    const std::string &label_file,
                                                                    const std::string &universal_label,
                                                                    const uint32_t filter_threshold, const uint32_t Lf,
-                                                                   const char* reorderDataFilePath);
+                                                                   const char* reorderDataFilePath, const char* sellerFilePath,
+                                                                   uint32_t num_diverse_build);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint32_t>(const char *dataFilePath, const char *indexFilePath,
                                                                  const char *indexBuildParameters,
                                                                  diskann::Metric compareMetric, bool use_opq,
@@ -1464,7 +1488,8 @@ template DISKANN_DLLEXPORT int build_disk_index<float, uint32_t>(const char *dat
                                                                  const std::string &label_file,
                                                                  const std::string &universal_label,
                                                                  const uint32_t filter_threshold, const uint32_t Lf,
-                                                                 const char* reorderDataFilePath);
+                                                                 const char* reorderDataFilePath, const char* sellerFilePath,
+                                                                 uint32_t num_diverse_build);
 // LabelT = uint16
 template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                   const char *indexBuildParameters,
@@ -1473,7 +1498,8 @@ template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint16_t>(const char *da
                                                                   const std::string &label_file,
                                                                   const std::string &universal_label,
                                                                   const uint32_t filter_threshold, const uint32_t Lf,
-                                                                  const char* reorderDataFilePath);
+                                                                  const char* reorderDataFilePath, const char* sellerFilePath,
+                                                                  uint32_t num_diverse_build);
 template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                    const char *indexBuildParameters,
                                                                    diskann::Metric compareMetric, bool use_opq,
@@ -1481,7 +1507,8 @@ template DISKANN_DLLEXPORT int build_disk_index<uint8_t, uint16_t>(const char *d
                                                                    const std::string &label_file,
                                                                    const std::string &universal_label,
                                                                    const uint32_t filter_threshold, const uint32_t Lf,
-                                                                   const char* reorderDataFilePath);
+                                                                   const char* reorderDataFilePath, const char* sellerFilePath,
+                                                                   uint32_t num_diverse_build);
 template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                  const char *indexBuildParameters,
                                                                  diskann::Metric compareMetric, bool use_opq,
@@ -1489,7 +1516,8 @@ template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(const char *dat
                                                                  const std::string &label_file,
                                                                  const std::string &universal_label,
                                                                  const uint32_t filter_threshold, const uint32_t Lf,
-                                                                 const char* reorderDataFilePath);
+                                                                 const char* reorderDataFilePath, const char* sellerFilePath,
+                                                                 uint32_t num_diverse_build);
 
 template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,

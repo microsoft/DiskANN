@@ -121,7 +121,7 @@ void PQFlashIndex<T, LabelT>::setup_thread_data(uint64_t nthreads, uint64_t visi
     {
 #pragma omp critical
         {
-            SSDThreadData<T> *data = new SSDThreadData<T>(this->_aligned_dim, visited_reserve);
+            SSDThreadData<T> *data = new SSDThreadData<T>(this->_aligned_dim, visited_reserve, _location_to_seller);
             this->reader->register_thread();
             data->ctx = this->reader->get_ctx();
             this->_thread_data.push(data);
@@ -562,6 +562,8 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
     std::string labels_to_medoids = std::string(index_prefix) + "_labels_to_medoids.txt";
     std::string labels_map_file = std::string(index_prefix) + "_labels_map.txt";
     std::string univ_label_file = std::string(index_prefix) + "_universal_label.txt";
+    std::string seller_file = std::string(index_prefix) + "_sellers.txt";
+
 #ifdef EXEC_ENV_OLS
     return load_from_separate_paths(files, num_threads, disk_index_file.c_str(), pq_table_bin.c_str(),
         pq_compressed_vectors.c_str(), labels_file.c_str(), labels_to_medoids.c_str(),
@@ -569,7 +571,7 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
 #else
     return load_from_separate_paths(num_threads, disk_index_file.c_str(), pq_table_bin.c_str(),
         pq_compressed_vectors.c_str(), labels_file.c_str(), labels_to_medoids.c_str(),
-        labels_map_file.c_str(), univ_label_file.c_str());
+        labels_map_file.c_str(), univ_label_file.c_str(), seller_file.c_str());
 #endif
 }
 
@@ -586,7 +588,8 @@ template <typename T, typename LabelT>
 int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, const char *index_filepath,
                                                       const char *pivots_filepath, const char *compressed_filepath,
                                                       const char* labels_filepath, const char* labels_to_medoids_filepath,
-                                                      const char* labels_map_filepath, const char* unv_label_filepath, bool load_bitmask_label)
+                                                      const char* labels_map_filepath, const char* unv_label_filepath, 
+                                                      const char* seller_filepath, bool load_bitmask_label)
 {
 #endif
     std::string pq_table_bin = pivots_filepath;
@@ -823,6 +826,13 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
                       << std::endl;
     }
 
+    if (file_exists(seller_filepath))
+    {
+        uint64_t nrows_seller_file;
+        parse_seller_file(seller_filepath, nrows_seller_file);
+        _diverse_index = true;
+    }
+
 // read index metadata
 #ifdef EXEC_ENV_OLS
     // This is a bit tricky. We have to read the header from the
@@ -1051,45 +1061,95 @@ bool getNextCompletedRequest(std::shared_ptr<AlignedFileReader> &reader, IOConte
 #endif
 
 template <typename T, typename LabelT>
+void PQFlashIndex<T, LabelT>::parse_seller_file(const std::string& label_file, size_t& num_points)
+{
+    // Format of Label txt file: filters with comma separators
+
+    std::ifstream infile(label_file);
+    if (infile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+
+    std::string line, token;
+    uint32_t line_cnt = 0;
+    std::set<uint32_t> sellers;
+    while (std::getline(infile, line))
+    {
+        line_cnt++;
+    }
+    _location_to_seller.resize(line_cnt);
+
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
+
+    while (std::getline(infile, line))
+    {
+        std::istringstream iss(line);
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        uint32_t seller;
+        while (getline(new_iss, token, ','))
+        {
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+            uint32_t token_as_num = (uint32_t)std::stoul(token);
+            seller = token_as_num;
+            sellers.insert(seller);
+        }
+
+        _location_to_seller[line_cnt] = seller;
+        line_cnt++;
+    }
+    _num_unique_sellers = static_cast<uint32_t>(sellers.size());
+    num_points = (size_t)line_cnt;
+    diskann::cout << "Identified " << sellers.size() << " distinct seller(s) across " << num_points << " points." << std::endl;
+}
+
+
+template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const bool use_reorder_data, 
+                                                 uint32_t maxLperSeller, const bool use_reorder_data,
                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, std::numeric_limits<uint32_t>::max(),
-                       use_reorder_data, stats);
+        maxLperSeller, use_reorder_data, stats);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
-                                                 const bool use_reorder_data,
+                                                 uint32_t maxLperSeller, const bool use_reorder_data,
                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
-                       std::numeric_limits<uint32_t>::max(), use_reorder_data, rerank_fn, stats);
+                       std::numeric_limits<uint32_t>::max(), maxLperSeller, use_reorder_data, rerank_fn, stats);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const uint32_t io_limit, const bool use_reorder_data,
+                                                 const uint32_t io_limit, uint32_t maxLperSeller, 
+                                                 const bool use_reorder_data,
                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
     LabelT dummy_filter = 0;
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
-                       use_reorder_data, rerank_fn, stats);
+        maxLperSeller, use_reorder_data, rerank_fn, stats);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
                                                  const bool use_filter, const LabelT &filter_label,
-                                                 const uint32_t io_limit, const bool use_reorder_data,
+                                                 const uint32_t io_limit, uint32_t maxLperSeller, 
+                                                 const bool use_reorder_data,
                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
@@ -1098,6 +1158,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (beam_width > num_sector_per_nodes * defaults::MAX_N_SECTOR_READS)
         throw ANNException("Beamwidth can not be higher than defaults::MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__,
                            __LINE__);
+
+    if (_diverse_index && maxLperSeller == 0)
+    {
+        maxLperSeller = static_cast<uint32_t>(l_search);
+    }
 
     ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
     auto data = manager.scratch_space();
@@ -1193,8 +1258,20 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     Timer query_timer, io_timer, cpu_timer;
 
     tsl::robin_set<uint64_t> &visited = query_scratch->visited;
-    NeighborPriorityQueue &retset = query_scratch->retset;
-    retset.reserve(l_search);
+    NeighborPriorityQueueBase* retset = nullptr;
+    if (!_diverse_index)
+    {
+        NeighborPriorityQueue& retset_ref = query_scratch->retset;
+        retset_ref.reserve(l_search);
+        retset = &retset_ref;
+    }
+    else
+    {
+        NeighborPriorityQueueExtendColor& best_diverse_nodes_ref = query_scratch->_best_diverse_nodes;
+        best_diverse_nodes_ref.setup(static_cast<uint32_t>(l_search), maxLperSeller, _num_unique_sellers);
+        retset = &best_diverse_nodes_ref;
+    }
+
     std::vector<Neighbor> &full_retset = query_scratch->full_retset;
 
     uint32_t best_medoid = 0;
@@ -1237,7 +1314,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     }
 
     compute_dists(&best_medoid, 1, dist_scratch);
-    retset.insert(Neighbor(best_medoid, dist_scratch[0]));
+    retset->insert(Neighbor(best_medoid, dist_scratch[0]));
     visited.insert(best_medoid);
 
     uint32_t cmps = 0;
@@ -1254,7 +1331,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t *>>> cached_nhoods;
     cached_nhoods.reserve(2 * beam_width);
 
-    while (retset.has_unexpanded_node() && num_ios < io_limit)
+    while (retset->has_unexpanded_node() && num_ios < io_limit)
     {
         // clear iteration state
         frontier.clear();
@@ -1264,9 +1341,9 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         sector_scratch_idx = 0;
         // find new beam
         uint32_t num_seen = 0;
-        while (retset.has_unexpanded_node() && frontier.size() < beam_width && num_seen < beam_width)
+        while (retset->has_unexpanded_node() && frontier.size() < beam_width && num_seen < beam_width)
         {
-            auto nbr = retset.closest_unexpanded();
+            auto nbr = retset->closest_unexpanded();
             num_seen++;
             auto iter = _nhood_cache.find(nbr.id);
             if (iter != _nhood_cache.end())
@@ -1376,7 +1453,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     cmps++;
                     float dist = dist_scratch[m];
                     Neighbor nn(id, dist);
-                    retset.insert(nn);
+                    retset->insert(nn);
                 }
             }
         }
@@ -1451,7 +1528,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                     }
 
                     Neighbor nn(id, dist);
-                    retset.insert(nn);
+                    retset->insert(nn);
                 }
             }
 
@@ -1522,6 +1599,19 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         }
 
         std::sort(full_retset.begin(), full_retset.end());
+    }
+
+    if (_diverse_index)
+    {
+        NeighborPriorityQueueExtendColor& best_diverse_nodes_ref = query_scratch->_best_diverse_nodes;
+        best_diverse_nodes_ref.clear();
+        best_diverse_nodes_ref.setup(static_cast<uint32_t>(l_search), maxLperSeller, _num_unique_sellers);
+        for (auto& ret : full_retset)
+        {
+            best_diverse_nodes_ref.insert(ret);
+        }
+        full_retset.clear();
+        best_diverse_nodes_ref.get_data(full_retset);
     }
 
     // copy k_search values
