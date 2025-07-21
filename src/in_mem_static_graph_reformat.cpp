@@ -47,11 +47,9 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
     _node_index.resize(num_points + 1);
     in.read((char*)_node_index.data(), _node_index.size() * sizeof(size_t));
 
-    _graph_size = _node_index[num_points];
-
-    assert(_graph_size % sizeof(std::uint32_t) == 0);
+    _graph_size = _node_index[num_points] * sizeof(std::uint32_t);
     
-    size_t total_neighbors = _graph_size / sizeof(std::uint32_t);
+    size_t total_neighbors = _node_index[num_points];
     // add one more slot than actually need to avoid read invaild address
     // while the last point is no neighbor
     _graph.resize(total_neighbors + 1);

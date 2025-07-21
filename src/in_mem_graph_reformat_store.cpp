@@ -29,13 +29,13 @@ int InMemGraphReformatStore::save_graph(const std::string& index_path_prefix, co
     for (uint32_t i = 0; i < num_points; i++)
     {
         uint32_t GK = (uint32_t)_graph[i].size();
-        size_t offset = GK * sizeof(uint32_t);
+        size_t offset = GK;
         node_offset[i + 1] = node_offset[i] + offset;
     }
     out.write((char*)node_offset.data(), node_offset.size() * sizeof(size_t));
     
     index_size += node_offset.size() * sizeof(size_t);
-    index_size += node_offset[num_points];
+    index_size += node_offset[num_points] * sizeof(uint32_t);
 
     for (uint32_t i = 0; i < num_points; i++)
     {
