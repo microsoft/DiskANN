@@ -26,6 +26,7 @@
 #include "index.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 40000000
+#define MAX_GREEDY_SEARCHES 100000
 
 namespace diskann
 {
@@ -117,6 +118,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _bruteforce_threshold = index_config.index_search_params->bruteforce_threshold;
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
+        diskann::cout << "Inside Index, paged_search_threshold is " << _paged_search_threshold << std::endl;
     }
     //    if (_filtered_index) {
     //    }
@@ -929,6 +931,31 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
     return std::make_pair(hops, cmps);
 }
 
+
+template <typename T, typename TagT, typename LabelT>
+inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2) {
+    // std::cout << "calculate_jaccard_similarity called" << std::endl;
+    std::unordered_set<LabelT> intersection, union_set;
+
+    for (const auto &label : set1) {
+        union_set.insert(label);
+    }
+    for (const auto &label : set2) {
+        if (union_set.find(label) != union_set.end()) {
+            intersection.insert(label);
+        }
+        union_set.insert(label);
+    }
+
+    if (union_set.empty()) {
+        return 0.0f; // Avoid division by zero
+    }
+
+    // return static_cast<float>(intersection.size()) / static_cast<float>(union_set.size());
+    return static_cast<float>(intersection.size()) / static_cast<float>(set1.size());
+}
+
+
 // used for index build, single vector of labels are sent to iterate to fixed point. Need to be FIXED and made consistent
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
@@ -963,7 +990,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     std::vector<uint32_t> &id_scratch = scratch->id_scratch();
     std::vector<float> &dist_scratch = scratch->dist_scratch();
     assert(id_scratch.size() == 0);
-
     T *aligned_query = scratch->aligned_query();
 
     float *pq_dists = nullptr;
@@ -1008,23 +1034,19 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
 
         float penalty = 0;
+        uint32_t res = 0;
         if (use_filter)
         {
             if (search_invocation)
             {
-                #ifdef INSTRUMENT
-                auto s = std::chrono::high_resolution_clock::now();
-#endif
-                uint32_t res = detect_filter_penalty(id, search_invocation, filter_labels);
-                #ifdef INSTRUMENT
-                std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-                time_to_get_valid += diff.count();
-            #endif
-            
-//                std::cout<<id <<" has penalty " << res << std::endl;
-                if ((res) > _filter_penalty_threshold)
-                    continue;
-                penalty = res * penalty_scale;
+                // res = detect_filter_penalty(id, search_invocation, filter_labels);
+                // if ((res) > _filter_penalty_threshold)
+                //     continue;
+                // penalty = res * penalty_scale;
+                // if (res > 0) {
+                //     res = 1;
+                // }
+                res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1041,6 +1063,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
                     continue;
+                else {
+                    res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                }
             }
         }
 
@@ -1059,11 +1084,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             uint32_t ids[] = {id};
             float distances[] = {std::numeric_limits<float>::max()};
             _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
-            distance = distances[0] + penalty;
+            distance = distances[0] + w_m * res;
 
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
         }
+    }
+
+    for (size_t i = 0; i < best_L_nodes.size(); ++i) {
+        auto nbr = best_L_nodes[i];
     }
 
     uint32_t hops = 0;
@@ -1131,7 +1160,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Find which of the nodes in des have not been visited before
         id_scratch.clear();
         dist_scratch.clear();
-        std::vector<float> dist_pens;
+        std::vector<float> res_vec;
         if (_dynamic_index)
         {
             LockGuard guard(_locks[n]);
@@ -1139,8 +1168,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 assert(id < _max_points + _num_frozen_pts);
 
-                if (!is_not_visited(id))
+                if (!is_not_visited(id)) {
                     continue;
+                }
 
                 if (fast_iterate)
                 {
@@ -1193,8 +1223,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 assert(id < _max_points + _num_frozen_pts);
 
-                if (!is_not_visited(id))
+                if (!is_not_visited(id)) {
                     continue;
+                }
 
                 if (fast_iterate)
                 {
@@ -1206,28 +1237,24 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 }
 
                 float penalty = 0;
+                uint32_t res = 0;
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
-                    uint32_t res;
+                    
                     if (search_invocation)
                     {
-                        #ifdef INSTRUMENT
-                        auto s = std::chrono::high_resolution_clock::now();
-        #endif
-        
-                        res = detect_filter_penalty(id, search_invocation, filter_labels);
-                        #ifdef INSTRUMENT
-                        std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
-                        time_to_get_valid += diff.count();
-                    #endif
-        
-                        if (res > _filter_penalty_threshold)
-                        {
-                            id_iter++;
-                            continue;
-                        }
-                        penalty = res * penalty_scale;
+                        // res = detect_filter_penalty(id, search_invocation, filter_labels);
+                        // if (res > _filter_penalty_threshold)
+                        // {
+                        //     id_iter++;
+                        //     continue;
+                        // }
+                        // penalty = res * penalty_scale;
+                        // i
+                        
+                        res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+
 
                         if (print_qstats)
                         {
@@ -1246,9 +1273,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     {
                         if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
                             continue;
+                        else {
+                           res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                        }
                     }
                 }
-                dist_pens.push_back(penalty);
+                res_vec.push_back(res);
                 id_scratch.push_back(id);
             }
         }
@@ -1268,12 +1298,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
         cmps += (uint32_t)id_scratch.size();
-        assert(dist_pens.size() == id_scratch.size());
+        assert(res_vec.size() == id_scratch.size());
 
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m] + dist_pens[m]));
+            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m] + w_m * res_vec[m]));
         }
     }
     return std::make_pair(hops, cmps);
@@ -1440,7 +1470,9 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 if (!prune_allowed)
                     continue;
 
-                float djk = _data_store->get_distance(iter2->id, iter->id);
+                float djk = _data_store->get_distance(iter2->id, iter->id) + (1 - calculate_jaccard_similarity(
+                    _location_to_labels[iter2->id], _location_to_labels[iter->id])) * w_m;
+
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
@@ -1487,6 +1519,15 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     {
         for (auto &ngh : pool)
             ngh.distance = _data_store->get_distance(ngh.id, location);
+    }
+
+    for (auto &ngh : pool)
+    {
+        // Compute Jaccard distance between `location` and `ngh.id`
+        float jaccard_distance = 1.0f - calculate_jaccard_similarity(_location_to_labels[ngh.id], _location_to_labels[location]);
+
+        // Update the neighbor's distance with the weighted distance
+        ngh.distance += w_m * jaccard_distance;
     }
 
     // sort the pool based on distance to query and prune it with occlude_list
@@ -2724,6 +2765,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
         time_to_estimate += diff.count();
 #endif
+        if (cand.size() > 0)
+        {
+            init_ids.insert(init_ids.end(), cand.begin(), cand.end());
+        //                init_ids.emplace_back(cand);
+        } /*else {
+            if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
+            { 
+                init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
+            } 
+        }*/
+        if (use_global_start) {
+            init_ids.emplace_back(_start);
+        }
+
         if (estimated_match < _bruteforce_threshold)
         {
             num_brutes++;
@@ -2771,20 +2826,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             /* } */
             /* if (_dynamic_index) */
             /*     tl.unlock(); */
-
-            if (cand.size() > 0)
-            {
-                init_ids.insert(init_ids.end(), cand.begin(), cand.end());
-//                init_ids.emplace_back(cand);
-            } /*else {
-                if (_label_to_start_id.find(filter_label[0]) != _label_to_start_id.end()) 
-                { 
-                    init_ids.emplace_back(_label_to_start_id[filter_label[0]]); 
-                } 
-            }*/
-             if (use_global_start) {
-                init_ids.emplace_back(_start);
-             }
 
             local_print = true;
             if (print_qstats)

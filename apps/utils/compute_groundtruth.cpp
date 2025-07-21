@@ -377,9 +377,97 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
     return res;
 };
 
+inline void parse_base_label_file(const std::string &map_file, std::vector<tsl::robin_set<std::string>> &pts_to_labels,
+    uint32_t start_id = 0)
+{
+pts_to_labels.clear();
+std::ifstream infile(map_file);
+std::string line, token;
+std::set<std::string> labels;
+infile.clear();
+infile.seekg(0, std::ios::beg);
+uint32_t line_no = 0;
+while (std::getline(infile, line))
+{
+if (line_no < start_id)
+{
+line_no++;
+continue;
+}
+line_no++;
+std::istringstream iss(line);
+tsl::robin_set<std::string> lbls;
+
+getline(iss, token, '\t');
+std::istringstream new_iss(token);
+while (getline(new_iss, token, ','))
+{
+token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+lbls.insert(token);
+labels.insert(token);
+}
+//        std::sort(lbls.begin(), lbls.end());
+pts_to_labels.push_back(lbls);
+if (pts_to_labels.size() >= PARTSIZE)
+break;
+}
+std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
+<< pts_to_labels.size() << " points" << std::endl;
+}
+
+// outer vector is # queries,  inner vector is size of the AND predicate
+inline void parse_query_label_file(const std::string &query_label_file,
+     std::vector<std::vector<std::vector<std::string>>> &query_labels)
+{
+    query_labels.clear();
+    std::ifstream infile(query_label_file);
+    std::string line, token;
+    std::set<std::string> labels;
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    uint32_t line_cnt = 0;
+    bool print_flag = true;
+    while (std::getline(infile, line))
+    {
+        std::istringstream iss(line);
+        std::vector<std::vector<std::string>> lbls(0);
+
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        while (getline(new_iss, token, '&'))
+            {
+            std::vector<std::string> clause(0);
+            std::istringstream inner_iss(token);
+            while (getline(inner_iss, token, '|'))
+            {
+                if (print_flag)
+                std::cout<<token<<" || ";
+                token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+                token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+                clause.push_back(token);
+                labels.insert(token);
+            }
+            if (print_flag)
+            std::cout<<" && ";
+            lbls.push_back(clause);
+        }
+        //        std::sort(lbls.begin(), lbls.end());
+        query_labels.push_back(lbls);
+        line_cnt++;
+        if (line_cnt>10)
+        print_flag = false;
+    }
+    std::cout << "Identified " << labels.size() << " distinct label(s), and populated labels for "
+    << query_labels.size() << " queries" << std::endl;
+}
+
+
 template <typename T>
 int aux_main(const std::string &base_file, const std::string &query_file, const std::string &gt_file, size_t k,
-             const diskann::Metric &metric, const std::string &tags_file = std::string(""))
+             const diskann::Metric &metric, const std::string &tags_file = std::string(""),
+             const std::string &base_label_file = std::string(""), const std::string &query_label_file = std::string(""),
+             const std::string &match_score_file = std::string(""))
 {
     size_t npoints, nqueries, dim;
 
@@ -390,12 +478,23 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
         std::cerr << "WARNING: #Queries provided (" << nqueries << ") is greater than " << PARTSIZE
                   << ". Computing GT only for the first " << PARTSIZE << " queries." << std::endl;
 
-    // load tags
+    // Load tags
     const bool tags_enabled = tags_file.empty() ? false : true;
     std::vector<uint32_t> location_to_tag = diskann::loadTags(tags_file, base_file);
 
+    // Parse base and query labels
+    std::vector<tsl::robin_set<std::string>> base_labels;
+    std::vector<std::vector<std::vector<std::string>>> query_labels;
+
+    if (!base_label_file.empty())
+        parse_base_label_file(base_label_file, base_labels);
+
+    if (!query_label_file.empty())
+        parse_query_label_file(query_label_file, query_labels);
+
     int *closest_points = new int[nqueries * k];
     float *dist_closest_points = new float[nqueries * k];
+    std::vector<std::vector<float>> match_scores(nqueries, std::vector<float>(k, 0));
 
     std::vector<std::vector<std::pair<uint32_t, float>>> results =
         processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag);
@@ -424,6 +523,60 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
             else
                 dist_closest_points[i * k + j] = iter.second;
 
+            // Calculate match score for this vector
+            if (!base_labels.empty() && !query_labels.empty())
+            {
+                const auto &query_label_predicates = query_labels[i];
+                const auto &base_label_set = base_labels[iter.first];
+
+                // // Check predicates
+                // bool match = true;
+                // for (const auto &clause : query_label_predicates)
+                // {
+                //     bool clause_match = false;
+                //     for (const auto &label : clause)
+                //     {
+                //         if (base_label_set.find(label) != base_label_set.end())
+                //         {
+                //             clause_match = true;
+                //             break;
+                //         }
+                //     }
+                //     if (!clause_match)
+                //     {
+                //         match = false;
+                //         break;
+                //     }
+                // }
+
+                // if (match)
+                // {
+                //     match_scores[i][j] = 1; // Mark as a match
+                // }
+
+                // calculate jaccard distance between query and base labels
+                std::set<std::string> intersection;
+                for (const auto &clause : query_label_predicates)
+                {
+                    for (const auto &label : clause)
+                    {
+                        if (base_label_set.find(label) != base_label_set.end())
+                        {
+                            intersection.insert(label);
+                        }
+                    }
+                }
+                
+                
+                float jaccard_distance = (float)intersection.size() / 2.0f;
+                // if (intersection.size() == 1) {
+                //     std::cout<< "Intersection is 1 for query " << i << " and base point " << iter.first
+                //               << ", jaccard distance = "<< (float)intersection.size() / 2.0f << std::endl;
+                // }
+                match_scores[i][j] = jaccard_distance; // Scale to percentage               
+
+            }
+
             ++j;
         }
         if (j < k)
@@ -431,6 +584,30 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     }
 
     save_groundtruth_as_one_file(gt_file, closest_points, dist_closest_points, nqueries, k);
+
+    // Save match scores
+    if (!match_score_file.empty())
+    {
+        std::ofstream match_score_writer(match_score_file, std::ios::out);
+        if (!match_score_writer.is_open())
+        {
+            std::cerr << "Failed to open match score file: " << match_score_file << std::endl;
+            return -1;
+        }
+        for (size_t i = 0; i < nqueries; i++)
+        {
+            for (size_t j = 0; j < k; j++)
+            {
+                match_score_writer << match_scores[i][j];
+                if (j < k - 1)
+                    match_score_writer << " ";
+            }
+            match_score_writer << "\n";
+        }
+        match_score_writer.close();
+        std::cout << "Match scores saved to " << match_score_file << std::endl;
+    }
+
     delete[] closest_points;
     delete[] dist_closest_points;
     diskann::aligned_free(query_data);
@@ -438,58 +615,10 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     return 0;
 }
 
-void load_truthset(const std::string &bin_file, uint32_t *&ids, float *&dists, size_t &npts, size_t &dim)
-{
-    size_t read_blk_size = 64 * 1024 * 1024;
-    cached_ifstream reader(bin_file, read_blk_size);
-    diskann::cout << "Reading truthset file " << bin_file.c_str() << " ..." << std::endl;
-    size_t actual_file_size = reader.get_file_size();
-
-    int npts_i32, dim_i32;
-    reader.read((char *)&npts_i32, sizeof(int));
-    reader.read((char *)&dim_i32, sizeof(int));
-    npts = (uint32_t)npts_i32;
-    dim = (uint32_t)dim_i32;
-
-    diskann::cout << "Metadata: #pts = " << npts << ", #dims = " << dim << "... " << std::endl;
-
-    int truthset_type = -1; // 1 means truthset has ids and distances, 2 means
-                            // only ids, -1 is error
-    size_t expected_file_size_with_dists = 2 * npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
-
-    if (actual_file_size == expected_file_size_with_dists)
-        truthset_type = 1;
-
-    size_t expected_file_size_just_ids = npts * dim * sizeof(uint32_t) + 2 * sizeof(uint32_t);
-
-    if (actual_file_size == expected_file_size_just_ids)
-        truthset_type = 2;
-
-    if (truthset_type == -1)
-    {
-        std::stringstream stream;
-        stream << "Error. File size mismatch. File should have bin format, with "
-                  "npts followed by ngt followed by npts*ngt ids and optionally "
-                  "followed by npts*ngt distance values; actual size: "
-               << actual_file_size << ", expected: " << expected_file_size_with_dists << " or "
-               << expected_file_size_just_ids;
-        diskann::cout << stream.str();
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
-    ids = new uint32_t[npts * dim];
-    reader.read((char *)ids, npts * dim * sizeof(uint32_t));
-
-    if (truthset_type == 1)
-    {
-        dists = new float[npts * dim];
-        reader.read((char *)dists, npts * dim * sizeof(float));
-    }
-}
-
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file;
+    std::string data_type, dist_fn, base_file, query_file, gt_file, tags_file, base_label_file, query_label_file,
+        match_score_file;
     uint64_t K;
 
     try
@@ -506,15 +635,17 @@ int main(int argc, char **argv)
         desc.add_options()("query_file", po::value<std::string>(&query_file)->required(),
                            "File containing the query vectors in binary format");
         desc.add_options()("gt_file", po::value<std::string>(&gt_file)->required(),
-                           "File name for the writing ground truth in binary "
-                           "format, please don' append .bin at end if "
-                           "no filter_label or filter_label_file is provided it "
-                           "will save the file with '.bin' at end."
-                           "else it will save the file as filename_label.bin");
+                           "File name for the writing ground truth in binary format");
         desc.add_options()("K", po::value<uint64_t>(&K)->required(),
                            "Number of ground truth nearest neighbors to compute");
         desc.add_options()("tags_file", po::value<std::string>(&tags_file)->default_value(std::string()),
                            "File containing the tags in binary format");
+        desc.add_options()("base_label_file", po::value<std::string>(&base_label_file)->default_value(std::string()),
+                           "File containing labels for base vectors");
+        desc.add_options()("query_label_file", po::value<std::string>(&query_label_file)->default_value(std::string()),
+                           "File containing labels for query vectors");
+        desc.add_options()("match_score_file", po::value<std::string>(&match_score_file)->default_value(std::string()),
+                           "File to save match scores between queries and ground truth vectors");
 
         po::variables_map vm;
         po::store(po::parse_command_line(argc, argv, desc), vm);
@@ -559,11 +690,14 @@ int main(int argc, char **argv)
     try
     {
         if (data_type == std::string("float"))
-            aux_main<float>(base_file, query_file, gt_file, K, metric, tags_file);
+            aux_main<float>(base_file, query_file, gt_file, K, metric, tags_file, base_label_file, query_label_file,
+                            match_score_file);
         if (data_type == std::string("int8"))
-            aux_main<int8_t>(base_file, query_file, gt_file, K, metric, tags_file);
+            aux_main<int8_t>(base_file, query_file, gt_file, K, metric, tags_file, base_label_file, query_label_file,
+                             match_score_file);
         if (data_type == std::string("uint8"))
-            aux_main<uint8_t>(base_file, query_file, gt_file, K, metric, tags_file);
+            aux_main<uint8_t>(base_file, query_file, gt_file, K, metric, tags_file, base_label_file, query_label_file,
+                              match_score_file);
     }
     catch (const std::exception &e)
     {

@@ -80,6 +80,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
 
     std::cout << filter_penalty_threshold << " is value of filter_penalty_threshold at driver file" << std::endl;
+    std::cout << "Will be using full jaccard during " << std::endl;
+
     auto search_params =
         diskann::IndexSearchParams(*(std::max_element(Lvec.begin(), Lvec.end())), num_threads, filter_penalty_threshold,
                                    bruteforce_threshold);
@@ -106,7 +108,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     auto index = index_factory.create_instance();
     index->load(index_path.c_str(), num_threads, *(std::max_element(Lvec.begin(), Lvec.end())));
     std::cout << "Index loaded" << std::endl;
-
+    // std::cout << "[test] using paged search approach" << std::endl;
+    
     if (metric == diskann::FAST_L2)
         index->optimize_index_layout();
 
@@ -123,20 +126,24 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
     else
     {
-        std::cout << std::setw(4) << "Ls" << std::setw(12) << qps_title << std::setw(18) << "Avg dist cmps"
-                  << std::setw(20) << "Mean Latency (mus)" << std::setw(15) << "Recall" 
-                  #ifdef INSTRUMENT
-                  << std::setw(20) << "Brute Latency (mus)" << std::setw(20) << "Brute Recall" <<  std::setw(20) << "Graph Latency (mus)" << std::setw(20)
-                  << "Graph Recall" 
-                  #else
-                  << std::endl;
-                  #endif
-        table_width += 4 + 12 + 18 + 20 + 15 
-        #ifdef INSTRUMENT
-        + 20 + 20 + 20 + 20 + 20 + 20;
-        #else
-        ;
-        #endif
+        std::cout << std::setw(4) << "Ls" 
+        << std::setw(4) << "K"
+          << std::setw(8) << qps_title 
+          << std::setw(18) << "Avg dist cmps"
+          << std::setw(20) << "Mean Latency(mus)" 
+          << std::setw(20) << "99.9 Latency(mus)" 
+          << std::setw(20) << "99 Latency(mus)" 
+          << std::setw(20) << "95 Latency(mus)" 
+          << std::setw(10) << "Recall" 
+          << std::setw(22) << "Brute avg cmps"
+          << std::setw(22) << "Brute Latency(mus)" 
+          << std::setw(20) << "Brute Recall" 
+          << std::setw(22) << "Graph avg cmps"
+          << std::setw(22) << "Graph Latency(mus)" 
+          << std::setw(20) << "Graph Recall" 
+          << std::endl;
+
+    table_width += 4 + 4 + 8 + 18 + 20 + 20 + 20 + 20 + 10 + 22 + 20 + 22 + 20 + 22 + 22;
     }
     /*    uint32_t recalls_to_print = 0;
         const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -159,6 +166,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     std::vector<float> graph_recalls(Lvec.size(), 0);
     std::vector<float> brute_lat(Lvec.size(), 0);
     std::vector<float> graph_lat(Lvec.size(), 0);
+    std::vector<float> brute_dist_cmp(Lvec.size(), 0);
+    std::vector<float> graph_dist_cmp(Lvec.size(), 0);
     for (auto &x : query_result_class)
         x.resize(query_num, 0);
     std::vector<float> latency_stats(query_num, 0);
@@ -276,10 +285,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             case 0:
                 query_result_class[test_id][i] = 0;
                 brute_lat[test_id] += latency_stats[i];
+                brute_dist_cmp[test_id] += cmp_stats[i];
                 break;
             case 1:
                 query_result_class[test_id][i] = 1;
                 graph_lat[test_id] += latency_stats[i];
+                graph_dist_cmp[test_id] += cmp_stats[i];
                 break;
             }
         }
@@ -312,25 +323,25 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                             tie_breaker++;
                     }
 
-                    gt.insert(gt_vec, gt_vec + tie_breaker);
-                    res.insert(res_vec,
-                               res_vec + recall_at); // change to recall_at for recall k@k
-                                                     // or dim_or for k@dim_or
-                    uint32_t cur_recall = 0;
-                    for (auto &v : gt)
-                    {
-                        if (res.find(v) != res.end())
-                        {
-                            cur_recall++;
-                        }
-                    }
-                    query_stats_file << cmp_stats[i] << "\t" << cur_recall << "\t" << filter_match_time[i] << "\t"
-                                     << dist_cmp_time[i] << "\t" << latency_stats[i] << "\t";
-                    for (auto const &r : res)
-                        query_stats_file << r << " ";
-                    query_stats_file << std::endl;
+                gt.insert(gt_vec, gt_vec + tie_breaker);
+                res.insert(res_vec,
+                       res_vec + recall_at); // change to recall_at for recall k@k
+                                 // or dim_or for k@dim_or
+                uint32_t cur_recall = 0;
+                for (auto &v : gt)
+                {
+                if (res.find(v) != res.end())
+                {
+                    cur_recall++;
                 }
-                query_stats_file.close();
+                }
+                query_stats_file << i << "," << cmp_stats[i] << "," << cur_recall << "," << filter_match_time[i] << ","
+                         << dist_cmp_time[i] << "," << latency_stats[i] << ",";
+                for (auto const &r : res)
+                query_stats_file << r << " ";
+                query_stats_file << std::endl;
+            }
+            query_stats_file.close();
             }
 
             recalls.reserve(1);
@@ -380,6 +391,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
 
         std::sort(latency_stats.begin(), latency_stats.end());
+        double latency_999 = latency_stats[(uint64_t)(0.999 * query_num)];
+        double latency_99 = latency_stats[(uint64_t)(0.99 * query_num)];
+        double latency_95 = latency_stats[(uint64_t)(0.95 * query_num)];
         double mean_latency =
             std::accumulate(latency_stats.begin(), latency_stats.end(), 0.0) / static_cast<float>(query_num);
 
@@ -392,10 +406,14 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
         else
         {
-            std::cout << std::setw(4) << L << std::setw(12) << displayed_qps << std::setw(18) << avg_cmps
-                      << std::setw(20) << (float)mean_latency << std::setw(15) << (float)recalls[0] 
-                      #ifdef INSTRUMENT
-                      << std::setw(20) << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
+            std::cout << std::setw(4) << L << std::setw(4) << recall_at << std::setw(8) << displayed_qps << std::setw(15) << avg_cmps
+                      << std::setw(20) << (float)mean_latency << std::setw(15) 
+                      << std::setw(20) << (float)latency_999 << std::setw(15)
+                      << std::setw(20) << (float)latency_99 << std::setw(15)
+                      << std::setw(20) << (float)latency_95 << std::setw(15)
+                      << (float)recalls[0] << std::setw(20)
+                      << (float)(brute_dist_cmp[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(22)
+                      << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
                       << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) << std::setw(20)
                       << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(20)
                       << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0) << " " << (1000000*time_to_detect_penalty) / query_num << "\t" << (1000000*time_to_get_valid) / query_num 
@@ -450,6 +468,7 @@ int main(int argc, char **argv)
 
     uint32_t maxN;
     float p1, p2;
+    float filter_match_weight;
 
     po::options_description desc{
         program_options_utils::make_program_description("search_memory_index", "Searches in-memory DiskANN indexes")};
@@ -525,6 +544,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("maxN", po::value<uint32_t>(&maxN)->default_value(10000000), "maxN");
         optional_configs.add_options()("p1", po::value<float>(&p1)->default_value(0.1), "p1");
         optional_configs.add_options()("p2", po::value<float>(&p2)->default_value(0.1), "p2");
+        optional_configs.add_options()("filter_match_weight",
+                                       po::value<float>(&filter_match_weight)->default_value(0.0),
+                                       "Weight of filter match in the final distance");
 
         // Output controls
         po::options_description output_controls("Output controls");
@@ -620,8 +642,10 @@ int main(int argc, char **argv)
 
     use_global_start = global_start;
     num_start_points = num_local;
+    w_m = filter_match_weight;
 
     std::cout<<"Num local start points: " << num_start_points << std::endl;
+    std::cout<<"w_m: "<< w_m<<std::endl;
 
     try
     {

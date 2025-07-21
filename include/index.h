@@ -34,18 +34,20 @@
 //#define INSTRUMENT true
 
 inline double time_to_intersect = 0.;
-inline double time_to_cluster = 0.;
+inline double time_to_page_search = 0.;
 inline double time_to_filter_check_and_compare = 0.;
 inline double time_to_get_valid = 0.;
 inline double time_to_detect_penalty = 0.;
 inline double time_to_estimate = 0;
 inline uint32_t num_brutes = 0;
-inline uint32_t num_clusters = 0;
+inline uint32_t num_paged_search = 0;
 inline uint32_t num_graphs = 0;
+inline uint32_t num_paged = 0;
 inline uint32_t min_inter_size = 2;
 inline bool print_qstats = false;
 inline int64_t curr_query = -1;
 inline uint32_t penalty_scale = 10;
+inline double w_m = 0.0;
 inline uint32_t num_sp = 2;
 inline bool use_global_start = false;
 inline uint32_t num_start_points = 1;
@@ -113,7 +115,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                      const std::vector<LabelT> &incoming_labels);
 
     DISKANN_DLLEXPORT inline uint32_t detect_filter_penalty(uint32_t point_id, bool search_invocation,
-                                                            const std::vector<std::vector<LabelT>> &incoming_labels);
+                                                        const std::vector<std::vector<LabelT>> &incoming_labels);
+
+    DISKANN_DLLEXPORT inline float calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2); 
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,

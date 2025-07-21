@@ -187,6 +187,7 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
     if (unv_label != "")
         string_int_map[unv_label] = 0; // if universal label is provided map it to 0 always
     std::string line, token;
+    uint32_t line_no = 0;
     while (std::getline(label_reader, line))
     {
         std::istringstream new_iss(line);
@@ -214,6 +215,7 @@ inline void convert_labels_string_to_int(const std::string &inFileName, const st
             else
                 label_writer << lbls[j] << std::endl;
         }
+        line_no++;
     }
     label_writer.close();
 
