@@ -11,7 +11,7 @@ else()
     set(CPP_SOURCES abstract_data_store.cpp ann_exception.cpp cluster_store.cpp disk_utils.cpp 
         distance.cpp index.cpp in_mem_graph_store.cpp in_mem_data_store.cpp
         linux_aligned_file_reader.cpp math_utils.cpp natural_number_map.cpp
-        in_mem_data_store.cpp in_mem_graph_store.cpp
+        in_mem_data_store.cpp in_mem_graph_store.cpp normalization.cpp
         natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp
         pq_flash_index.cpp scratch.cpp logger.cpp utils.cpp filter_utils.cpp index_factory.cpp abstract_index.cpp pq_l2_distance.cpp pq_data_store.cpp ../roaring/roaring.c ../include/id_list.h)
     if (RESTAPI)

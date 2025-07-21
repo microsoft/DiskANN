@@ -24,6 +24,7 @@
 #endif
 
 #include "index.h"
+#include "normalization.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 40000000
 #define MAX_GREEDY_SEARCHES 100000
@@ -118,7 +119,6 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _bruteforce_threshold = index_config.index_search_params->bruteforce_threshold;
         diskann::cout << "Inside Index, filter_penalty_threshold is " << _filter_penalty_threshold << std::endl;
         diskann::cout << "Inside Index, bruteforce_threshold is " << _bruteforce_threshold << std::endl;
-        diskann::cout << "Inside Index, paged_search_threshold is " << _paged_search_threshold << std::endl;
     }
     //    if (_filtered_index) {
     //    }
@@ -815,6 +815,23 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
     return common_filters.size();
 }
 
+// Overloaded version for multiple filter sets
+template <typename T, typename TagT, typename LabelT>
+uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool search_invocation,
+                                                       const std::vector<std::vector<LabelT>> &incoming_labels)
+{
+    if (incoming_labels.empty()) return 0;
+    
+    // For multi-filter, we want at least one filter set to have common filters
+    // This implements OR logic: any filter set can satisfy the condition
+    uint32_t max_common = 0;
+    for (const auto& filter_set : incoming_labels) {
+        uint32_t common_count = detect_common_filters(point_id, search_invocation, filter_set);
+        max_common = std::max(max_common, common_count);
+    }
+    return max_common;
+}
+
 // Find common filter between a node's labels and a given set of labels, while
 // taking into account universal label
 // TODO: modify for handling universal label
@@ -1024,6 +1041,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     };
 
     // Initialize the candidate pool with starting points
+    // std::cout << "DEBUG: Starting with " << init_ids.size() << " initial candidates" << std::endl;
+    uint32_t candidates_added = 0;
+    uint32_t candidates_filtered = 0;
+    
     for (auto id : init_ids)
     {
         if (id >= _max_points + _num_frozen_pts)
@@ -1046,7 +1067,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 // if (res > 0) {
                 //     res = 1;
                 // }
-                res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                res = 1 - calculate_jaccard_similarity(filter_labels[0], _location_to_labels[id]);
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1061,16 +1082,33 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             }
             else
             {
-                if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
+                uint32_t common_count = detect_common_filters(id, search_invocation, filter_labels);
+                if (common_count < min_inter_size)
+                {
+                    candidates_filtered++;
+                    if (print_qstats)
+                    {
+                        std::ofstream out("query_stats.txt", std::ios_base::app);
+                        out << "FILTERED OUT: id " << id << " has only " << common_count << " common filters (need " << min_inter_size << ")" << std::endl;
+                        out.close();
+                    }
                     continue;
+                }
                 else {
-                    res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                    res = 1 - calculate_jaccard_similarity(filter_labels[0], _location_to_labels[id]);
+                    if (print_qstats)
+                    {
+                        std::ofstream out("query_stats.txt", std::ios_base::app);
+                        out << "INCLUDED: id " << id << " has " << common_count << " common filters, jaccard_dist=" << res << std::endl;
+                        out.close();
+                    }
                 }
             }
         }
 
         if (is_not_visited(id))
         {
+            candidates_added++;
             if (fast_iterate)
             {
                 inserted_into_pool_bs.add(id);
@@ -1084,12 +1122,19 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             uint32_t ids[] = {id};
             float distances[] = {std::numeric_limits<float>::max()};
             _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
-            distance = distances[0] + w_m * res;
+            
+            // Apply normalization to vector distance
+            float normalized_distance = g_normalization_config.normalize_distance(distances[0]);
+            
+            distance = normalized_distance + w_m * res;
 
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
         }
     }
+
+    // std::cout << "DEBUG: Added " << candidates_added << " candidates, filtered " << candidates_filtered 
+    //           << " candidates, best_L_nodes.size() = " << best_L_nodes.size() << std::endl;
 
     for (size_t i = 0; i < best_L_nodes.size(); ++i) {
         auto nbr = best_L_nodes[i];
@@ -1253,7 +1298,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         // penalty = res * penalty_scale;
                         // i
                         
-                        res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                        res = 1 - calculate_jaccard_similarity(filter_labels[0], _location_to_labels[id]);
 
 
                         if (print_qstats)
@@ -1271,10 +1316,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     }
                     else
                     {
-                        if (detect_common_filters(id, search_invocation, filter_labels[0]) < min_inter_size)
+                        if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                             continue;
                         else {
-                           res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                           res = 1 - calculate_jaccard_similarity(filter_labels[0], _location_to_labels[id]);
                         }
                     }
                 }
@@ -1303,7 +1348,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m] + w_m * res_vec[m]));
+            // Apply normalization to vector distance before combining with filter score
+            float normalized_distance = g_normalization_config.normalize_distance(dist_scratch[m]);
+            best_L_nodes.insert(Neighbor(id_scratch[m], normalized_distance + w_m * res_vec[m]));
         }
     }
     return std::make_pair(hops, cmps);
@@ -1470,7 +1517,9 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 if (!prune_allowed)
                     continue;
 
-                float djk = _data_store->get_distance(iter2->id, iter->id) + (1 - calculate_jaccard_similarity(
+                float raw_distance = _data_store->get_distance(iter2->id, iter->id);
+                float normalized_distance = g_normalization_config.normalize_distance(raw_distance);
+                float djk = normalized_distance + (1 - calculate_jaccard_similarity(
                     _location_to_labels[iter2->id], _location_to_labels[iter->id])) * w_m;
 
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
@@ -1526,8 +1575,11 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
         // Compute Jaccard distance between `location` and `ngh.id`
         float jaccard_distance = 1.0f - calculate_jaccard_similarity(_location_to_labels[ngh.id], _location_to_labels[location]);
 
+        // Apply normalization to vector distance before combining with filter score
+        float normalized_vector_distance = g_normalization_config.normalize_distance(ngh.distance);
+        
         // Update the neighbor's distance with the weighted distance
-        ngh.distance += w_m * jaccard_distance;
+        ngh.distance = normalized_vector_distance + w_m * jaccard_distance;
     }
 
     // sort the pool based on distance to query and prune it with occlude_list
@@ -2536,6 +2588,9 @@ std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_inters
                                                                           const std::vector<std::vector<LabelT>> &filter_labels)
 {
 
+    // std::cout << "DEBUG sample_intersection: _labels_to_points_sample.size()=" << _labels_to_points_sample.size() 
+    //           << ", _sample_map is " << (_sample_map ? "not null" : "null") << std::endl;
+
     #ifdef INSTRUMENT
     auto s = std::chrono::high_resolution_clock::now();
 #endif
@@ -2556,6 +2611,8 @@ std::pair<uint32_t, std::vector<uint32_t>> Index<T, TagT, LabelT>::sample_inters
         }
         intersection_bitmap &= tmp_bitmap;
     }            
+
+    // std::cout << "DEBUG sample_intersection: intersection_bitmap.cardinality()=" << intersection_bitmap.cardinality() << std::endl;
 
 
 
@@ -2694,6 +2751,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             num_graphs++;
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
 
+            // std::cout << "DEBUG Case 1: inter_estim=" << inter_estim << ", cand.size()=" << cand.size() << std::endl;
+
             if (cand.size() > 0)
             {
                 init_ids.insert(init_ids.end(), cand.begin(), cand.end());
@@ -2707,6 +2766,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
              if (use_global_start) {
                 init_ids.emplace_back(_start);
              }
+
+            // std::cout << "DEBUG Case 1: final init_ids.size()=" << init_ids.size() << std::endl;
 
             local_print = true;
             if (print_qstats)
@@ -2725,6 +2786,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
             num_graphs++;
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
 
+            // std::cout << "DEBUG Case 2: inter_estim=" << inter_estim << ", cand.size()=" << cand.size() << std::endl;
+
             if (cand.size() > 0)
             {
                 init_ids.insert(init_ids.end(), cand.begin(), cand.end());
@@ -2738,6 +2801,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
                 if (use_global_start) {
                     init_ids.emplace_back(_start);
                 }
+
+                // std::cout << "DEBUG Case 2: final init_ids.size()=" << init_ids.size() << std::endl;
 
                 local_print = true;
                 if (print_qstats)
@@ -2940,9 +3005,11 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     {
         const std::vector<LabelT> unused_filter_label;
         iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
+        // std::cout << "DEBUG: Unfiltered search completed" << std::endl;
     }
     else
     {
+        // std::cout << "DEBUG: Using filtered search" << std::endl;
         auto converted_label = this->get_converted_label(filter_label);
         std::vector<LabelT> filter_vec;
         filter_vec.push_back(converted_label);
@@ -2951,6 +3018,8 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
 
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     assert(best_L_nodes.size() <= L);
+
+    // std::cout << "DEBUG: best_L_nodes.size() = " << best_L_nodes.size() << " for L = " << L << std::endl;
 
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
 

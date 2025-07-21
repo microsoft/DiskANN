@@ -24,6 +24,8 @@
 #include "utils.h"
 #include "program_options_utils.hpp"
 #include "index_factory.h"
+#include "normalization.h"
+#include "normalization.h"
 
 namespace po = boost::program_options;
 
@@ -422,9 +424,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       //                     << std::setw(20) << (float)(graph_lat[test_id]*1.0) << std::setw(20) <<
                       //                     (float)(graph_recalls[test_id]*100.0)
                       << std::endl;
-                      #else
-                      << std::endl;
-                      #endif
         }
     }
     std::cout << "num_graphs " << num_graphs << std::endl;
@@ -547,6 +546,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("filter_match_weight",
                                        po::value<float>(&filter_match_weight)->default_value(0.0),
                                        "Weight of filter match in the final distance");
+        optional_configs.add_options()("normalization_config",
+                                       po::value<std::string>()->default_value(""),
+                                       "Path to normalization config JSON file");
 
         // Output controls
         po::options_description output_controls("Output controls");
@@ -568,6 +570,21 @@ int main(int argc, char **argv)
             return 0;
         }
         po::notify(vm);
+        
+        // Initialize normalization if config file is provided
+        if (vm.count("normalization_config") && !vm["normalization_config"].as<std::string>().empty())
+        {
+            std::string norm_config_file = vm["normalization_config"].as<std::string>();
+            if (!diskann::initialize_normalization(norm_config_file))
+            {
+                std::cerr << "Warning: Failed to load normalization config from " << norm_config_file << std::endl;
+            }
+            else
+            {
+                std::cout << "Successfully loaded normalization config from " << norm_config_file << std::endl;
+                diskann::g_normalization_config.print_config();
+            }
+        }
     }
     catch (const std::exception &ex)
     {

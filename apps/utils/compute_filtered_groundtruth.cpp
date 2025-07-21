@@ -400,18 +400,41 @@ inline void parse_query_label_file(const std::string &query_label_file,
 {
     query_labels.clear();
     std::ifstream infile(query_label_file);
+    
+    if (!infile.is_open()) {
+        std::cerr << "Error: Cannot open query labels file: " << query_label_file << std::endl;
+        return;
+    }
+    
     std::string line, token;
     std::set<std::string> labels;
     infile.clear();
     infile.seekg(0, std::ios::beg);
     uint32_t line_cnt = 0;
     bool print_flag = true;
+    
+    std::cout << "Debug: Starting to parse query labels file..." << std::endl;
+    
     while (std::getline(infile, line))
     {
+        if (line_cnt < 5) {  // Debug: print first few lines
+            std::cout << "Debug: Line " << line_cnt << ": '" << line << "'" << std::endl;
+        }
+        
+        if (line.empty()) {
+            line_cnt++;
+            continue;  // Skip empty lines
+        }
+        
         std::istringstream iss(line);
         std::vector<std::vector<std::string>> lbls(0);
 
         getline(iss, token, '\t');
+        
+        if (line_cnt < 5) {  // Debug: print token before tab
+            std::cout << "Debug: Token before tab: '" << token << "'" << std::endl;
+        }
+        
         std::istringstream new_iss(token);
         while (getline(new_iss, token, '&'))
         {
@@ -476,6 +499,14 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
     matching_points.clear();
     uint32_t num_query = query_labels.size();
     uint32_t num_base = base_labels.size();
+    
+    // Safety check: if no queries were parsed, this is likely an error
+    if (num_query == 0) {
+        std::cerr << "Error: No query labels were parsed from file: " << query << std::endl;
+        std::cerr << "Please check the query labels file format." << std::endl;
+        return -1;
+    }
+    
     matching_points.resize(num_query);
     for (auto &x : matching_points)
         x.resize(num_base);

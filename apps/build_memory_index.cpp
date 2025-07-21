@@ -8,6 +8,7 @@
 #include "index.h"
 #include "utils.h"
 #include "program_options_utils.hpp"
+#include "normalization.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -77,6 +78,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("filter_match_weight",
                                        po::value<float>(&filter_match_weight)->default_value(0.0),
                                        "Weight of filter match in the final distance");
+        optional_configs.add_options()("normalization_config",
+                                       po::value<std::string>()->default_value(""),
+                                       "Path to normalization config JSON file");
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
@@ -91,6 +95,21 @@ int main(int argc, char **argv)
         po::notify(vm);
         use_pq_build = (build_PQ_bytes > 0);
         use_opq = vm["use_opq"].as<bool>();
+        
+        // Initialize normalization if config file is provided
+        if (vm.count("normalization_config") && !vm["normalization_config"].as<std::string>().empty())
+        {
+            std::string norm_config_file = vm["normalization_config"].as<std::string>();
+            if (!diskann::initialize_normalization(norm_config_file))
+            {
+                std::cerr << "Warning: Failed to load normalization config from " << norm_config_file << std::endl;
+            }
+            else
+            {
+                std::cout << "Successfully loaded normalization config for build from " << norm_config_file << std::endl;
+                diskann::g_normalization_config.print_config();
+            }
+        }
     }
     catch (const std::exception &ex)
     {
