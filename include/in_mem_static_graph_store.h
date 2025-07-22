@@ -68,7 +68,7 @@ protected:
 #endif
 
 
-private:
+protected:
     size_t _max_range_of_graph = 0;
     uint32_t _max_observed_degree = 0;
     size_t _graph_size = 0;
