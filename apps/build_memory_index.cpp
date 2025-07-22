@@ -78,9 +78,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("filter_match_weight",
                                        po::value<float>(&filter_match_weight)->default_value(0.0),
                                        "Weight of filter match in the final distance");
-        optional_configs.add_options()("normalization_config",
+        optional_configs.add_options()("normalization_factors",
                                        po::value<std::string>()->default_value(""),
-                                       "Path to normalization config JSON file");
+                                       "Path to normalization factors text file (format: scale_factor shift_factor)");
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
@@ -96,18 +96,17 @@ int main(int argc, char **argv)
         use_pq_build = (build_PQ_bytes > 0);
         use_opq = vm["use_opq"].as<bool>();
         
-        // Initialize normalization if config file is provided
-        if (vm.count("normalization_config") && !vm["normalization_config"].as<std::string>().empty())
+        // Initialize normalization if factors file is provided
+        if (vm.count("normalization_factors") && !vm["normalization_factors"].as<std::string>().empty())
         {
-            std::string norm_config_file = vm["normalization_config"].as<std::string>();
-            if (!diskann::initialize_normalization(norm_config_file))
+            std::string norm_factors_file = vm["normalization_factors"].as<std::string>();
+            if (!diskann::initialize_normalization(norm_factors_file))
             {
-                std::cerr << "Warning: Failed to load normalization config from " << norm_config_file << std::endl;
+                std::cerr << "Warning: Failed to load normalization factors from " << norm_factors_file << std::endl;
             }
             else
             {
-                std::cout << "Successfully loaded normalization config for build from " << norm_config_file << std::endl;
-                diskann::g_normalization_config.print_config();
+                std::cout << "Successfully loaded normalization factors for build from " << norm_factors_file << std::endl;
             }
         }
     }

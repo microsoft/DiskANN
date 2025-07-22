@@ -1,0 +1,36 @@
+{
+  "dataset": "rust/diskann/tests/data/siftsmall_learn_256pts.fbin",
+  "metric": "euclidean",
+  "recommended": {
+    "method": "min_max",
+    "scale_factor": 0.002012827846215235,
+    "shift_factor": -192.3512420654297,
+    "formula": "(distance + shift_factor) * scale_factor"
+  },
+  "alternatives": {
+    "robust": {
+      "scale_factor": 0.0038224538096882873,
+      "shift_factor": -396.93387603759766
+    },
+    "mean": {
+      "scale_factor": 0.0019976768958802973,
+      "shift_factor": 0.0
+    },
+    "median": {
+      "scale_factor": 0.002091165178117585,
+      "shift_factor": 0.0
+    }
+  },
+  "distance_stats": {
+    "min": 192.3512420654297,
+    "max": 689.1647338867188,
+    "mean": 500.5814514160156,
+    "std": 119.98970794677734,
+    "median": 478.2023010253906
+  },
+  "metadata": {
+    "generated_from": "rust/diskann/tests/data/siftsmall_learn_256pts.fbin",
+    "samples_used": 1000,
+    "data_type": "float32"
+  }
+}
