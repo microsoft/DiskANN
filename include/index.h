@@ -121,6 +121,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                         const std::vector<std::vector<LabelT>> &incoming_labels);
 
     DISKANN_DLLEXPORT inline float calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2); 
+    
+    // Overloaded version for multi-filter query labels (vector<vector<LabelT>>)
+    DISKANN_DLLEXPORT inline float calculate_jaccard_similarity(const std::vector<std::vector<LabelT>> &filter_sets, const std::vector<LabelT> &vector_labels);
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,

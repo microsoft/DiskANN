@@ -130,6 +130,7 @@ def main():
     parser.add_argument('--method', choices=['ratio', 'lp', 'pulp'], default='ratio')
     parser.add_argument('--eps', type=float, default=1e-4)
     parser.add_argument('--plot', action='store_true')
+    parser.add_argument('--norm_factors', help='Normalization factors file (scale, shift)', default=None)
     args = parser.parse_args()
 
     # Read the ground truth file
@@ -164,9 +165,23 @@ def main():
     print(f"Distances shape: {distances.shape}")
     print(f"Matches shape: {matches.shape}")
     
-    print(f"Distances: {distances[0][:5]}")
-    # distances_scaled = distances / distances.max()
-    # print(f"Scaled distances: {distances_scaled[0][:5]}")
+    print(f"Original distances: {distances[0][:5]}")
+    
+    # Apply normalization if provided
+    if args.norm_factors:
+        with open(args.norm_factors, 'r') as f:
+            line = f.readline().strip()
+            scale, shift = map(float, line.split())
+        print(f"Applying normalization: scale={scale}, shift={shift}")
+        distances_normalized = (distances + shift) * scale
+        print(f"Normalized distances: {distances_normalized[0][:5]}")
+        distances = distances_normalized
+    else:
+        # Fallback: simple max normalization
+        distances_max = distances.max()
+        print(f"Max distance: {distances_max}")
+        distances = distances / distances_max
+        print(f"Max-normalized distances: {distances[0][:5]}")
 
     if args.method == 'ratio':
         w_d, w_m, total_pairs, _ = direct_ratio_method(distances, filter_matches, args.eps)

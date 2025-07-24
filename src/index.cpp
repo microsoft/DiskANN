@@ -951,25 +951,63 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 
 template <typename T, typename TagT, typename LabelT>
 inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2) {
-    // std::cout << "calculate_jaccard_similarity called" << std::endl;
-    std::unordered_set<LabelT> intersection, union_set;
-
-    for (const auto &label : set1) {
-        union_set.insert(label);
-    }
-    for (const auto &label : set2) {
-        if (union_set.find(label) != union_set.end()) {
-            intersection.insert(label);
+    if (set1.empty()) return 0.0f;
+    
+    size_t intersection_count = 0;
+    
+    // For small sets, linear scan is often faster due to cache locality
+    // Threshold based on your colleagues' discussion about cache vs complexity
+    constexpr size_t LINEAR_SCAN_THRESHOLD = 100;
+    
+    if (set1.size() <= LINEAR_SCAN_THRESHOLD && set2.size() <= LINEAR_SCAN_THRESHOLD) {
+        // Linear scan approach - cache friendly for small sets
+        for (const auto &label : set1) {
+            if (std::find(set2.begin(), set2.end(), label) != set2.end()) {
+                intersection_count++;
+            }
         }
-        union_set.insert(label);
+    } else {
+        // Hash table approach for larger sets
+        const auto &smaller = set1.size() <= set2.size() ? set1 : set2;
+        const auto &larger = set1.size() <= set2.size() ? set2 : set1;
+        
+        std::unordered_set<LabelT> lookup_set(larger.begin(), larger.end());
+        
+        for (const auto &label : smaller) {
+            if (lookup_set.count(label)) {
+                intersection_count++;
+            }
+        }
     }
+    
+    return static_cast<float>(intersection_count) / static_cast<float>(set1.size());
+}
 
-    if (union_set.empty()) {
-        return 0.0f; // Avoid division by zero
+// Overloaded version for multi-filter query labels (vector<vector<LabelT>>)
+// Returns the count of how many filter sets (clauses) have intersection with vector_labels
+template <typename T, typename TagT, typename LabelT>
+inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::vector<std::vector<LabelT>> &filter_sets, const std::vector<LabelT> &vector_labels) {
+    if (filter_sets.empty()) return 0.0f;
+    
+    size_t matching_clauses = 0;
+    
+    // Count how many filter sets (clauses) have ANY intersection with vector_labels
+    for (const auto& filter_set : filter_sets) {
+        // Check if ANY filter in this clause matches ANY label in vector_labels
+        bool clause_satisfied = false;
+        for (const auto& filter : filter_set) {
+            if (std::find(vector_labels.begin(), vector_labels.end(), filter) != vector_labels.end()) {
+                clause_satisfied = true;
+                break; // Early exit - this clause is satisfied
+            }
+        }
+        if (clause_satisfied) {
+            matching_clauses++;
+        }
     }
-
-    // return static_cast<float>(intersection.size()) / static_cast<float>(union_set.size());
-    return static_cast<float>(intersection.size()) / static_cast<float>(set1.size());
+    
+    // Return fraction of clauses that match
+    return static_cast<float>(matching_clauses) / static_cast<float>(filter_sets.size());
 }
 
 
@@ -1067,7 +1105,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 // if (res > 0) {
                 //     res = 1;
                 // }
-                res = 1 - calculate_jaccard_similarity(filter_labels[0], _location_to_labels[id]);
+                res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1095,7 +1133,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     continue;
                 }
                 else {
-                    res = 1 - calculate_jaccard_similarity(filter_labels[0], _location_to_labels[id]);
+                    res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                     if (print_qstats)
                     {
                         std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1298,7 +1336,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         // penalty = res * penalty_scale;
                         // i
                         
-                        res = 1 - calculate_jaccard_similarity(filter_labels[0], _location_to_labels[id]);
+                        res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
 
 
                         if (print_qstats)
@@ -1319,7 +1357,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                             continue;
                         else {
-                           res = 1 - calculate_jaccard_similarity(filter_labels[0], _location_to_labels[id]);
+                           res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                         }
                     }
                 }

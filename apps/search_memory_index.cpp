@@ -142,7 +142,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
           << std::setw(20) << "Brute Recall" 
           << std::setw(22) << "Graph avg cmps"
           << std::setw(22) << "Graph Latency(mus)" 
-          << std::setw(20) << "Graph Recall" 
+          << std::setw(20) << "Graph Recall"
+          << std::setw(18) << "Filter Eval(mus)"
+          << std::setw(18) << "Penalty Det(mus)"
+          << std::setw(18) << "Core Algo(mus)"
           << std::endl;
 
     table_width += 4 + 4 + 8 + 18 + 20 + 20 + 20 + 20 + 10 + 22 + 20 + 22 + 20 + 22 + 22;
@@ -408,26 +411,49 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
         else
         {
-            std::cout << std::setw(4) << L << std::setw(4) << recall_at << std::setw(8) << displayed_qps << std::setw(15) << avg_cmps
-                      << std::setw(20) << (float)mean_latency << std::setw(15) 
-                      << std::setw(20) << (float)latency_999 << std::setw(15)
-                      << std::setw(20) << (float)latency_99 << std::setw(15)
-                      << std::setw(20) << (float)latency_95 << std::setw(15)
-                      << (float)recalls[0] << std::setw(20)
-                      << (float)(brute_dist_cmp[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(22)
-                      << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) << std::setw(20)
-                      << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) << std::setw(20)
-                      << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) << std::setw(20)
-                      << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0) << " " << (1000000*time_to_detect_penalty) / query_num << "\t" << (1000000*time_to_get_valid) / query_num 
-                      //                      << std::setw(20) << (float)(brute_lat[test_id]*1.0) << std::setw(20) <<
-                      //                      (float)(brute_recalls[test_id]*100.0)
-                      //                     << std::setw(20) << (float)(graph_lat[test_id]*1.0) << std::setw(20) <<
-                      //                     (float)(graph_recalls[test_id]*100.0)
+            // Calculate timing breakdowns (convert to microseconds)
+            float filter_eval_time_us = (float)(time_to_get_valid * 1000000.0) / (float)query_num;
+            float penalty_detection_time_us = (float)(time_to_detect_penalty * 1000000.0) / (float)query_num;
+            float core_algo_time_us = mean_latency - filter_eval_time_us - penalty_detection_time_us;
+            
+            std::cout << std::setw(4) << L << std::setw(4) << recall_at << std::setw(8) << displayed_qps << std::setw(18) << avg_cmps
+                      << std::setw(20) << (float)mean_latency 
+                      << std::setw(20) << (float)latency_999
+                      << std::setw(20) << (float)latency_99
+                      << std::setw(20) << (float)latency_95
+                      << std::setw(10) << (float)recalls[0] 
+                      << std::setw(22) << (float)(brute_dist_cmp[test_id] * 1.0) / (num_brutes * 1.0) 
+                      << std::setw(22) << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) 
+                      << std::setw(20) << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) 
+                      << std::setw(22) << (float)(graph_dist_cmp[test_id] * 1.0) / (num_graphs * 1.0)
+                      << std::setw(22) << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) 
+                      << std::setw(20) << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0)
+                      << std::setw(18) << filter_eval_time_us
+                      << std::setw(18) << penalty_detection_time_us
+                      << std::setw(18) << core_algo_time_us
                       << std::endl;
         }
     }
     std::cout << "num_graphs " << num_graphs << std::endl;
     std::cout << "num_brutes " << num_brutes << std::endl;
+    
+    // Print detailed timing breakdown summary
+    if (filtered_search) {
+        std::cout << "\n=== TIMING BREAKDOWN ANALYSIS ===" << std::endl;
+        std::cout << "Total queries: " << query_num << std::endl;
+        std::cout << "Filter evaluation time: " << (time_to_get_valid * 1000000.0) / query_num << " μs/query" << std::endl;
+        std::cout << "Penalty detection time: " << (time_to_detect_penalty * 1000000.0) / query_num << " μs/query" << std::endl;
+        std::cout << "Filter intersection time: " << (time_to_intersect * 1000000.0) / query_num << " μs/query" << std::endl;
+        std::cout << "Filter check & compare time: " << (time_to_filter_check_and_compare * 1000000.0) / query_num << " μs/query" << std::endl;
+        
+        double total_filter_overhead = (time_to_get_valid + time_to_detect_penalty + time_to_intersect + time_to_filter_check_and_compare) * 1000000.0 / query_num;
+        std::cout << "Total filter overhead: " << total_filter_overhead << " μs/query" << std::endl;
+        
+        std::cout << "Breakdown percentage:" << std::endl;
+        std::cout << "  Graph searches: " << (100.0 * num_graphs) / query_num << "%" << std::endl;
+        std::cout << "  Brute force searches: " << (100.0 * num_brutes) / query_num << "%" << std::endl;
+        std::cout << "=================================" << std::endl;
+    }
 
     std::cout << "Done searching. Now saving results " << std::endl;
     uint64_t test_id = 0;
