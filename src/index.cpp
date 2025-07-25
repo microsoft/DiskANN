@@ -576,17 +576,24 @@ size_t Index<T, TagT, LabelT>::load_tags(const std::string& tag_filename,
     }
 #endif
 
+    _empty_slots.clear();
+    _empty_slots.reserve(_max_points);
+
+    // Empty slots may have values from [0, _max_points) range. Consolidate delete inspects values from this range,
+    // however during Save and Load not all values are seen. As a result, _empty_slots may not reserve enough bits
+    // to cover the whole range. To avoid this, we insert _max_points as an empty slot and delete it.
+    _empty_slots.insert(_max_points);
+    _empty_slots.pop_any();
+    assert(_empty_slots.size() == 0);
+
     unsigned empty_slot_count = 0;
     in.read((char *)&empty_slot_count, sizeof(empty_slot_count));
 
     // Dim count is not used, but saved to the file.
     in.read((char *)&dim_count, sizeof(dim_count));
 
-    _empty_slots.clear();
-
     if (empty_slot_count > 0)
     {
-        _empty_slots.reserve(empty_slot_count);
         for (unsigned i = 0; i < empty_slot_count; i++)
         {
             unsigned empty_slot;
