@@ -952,6 +952,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 
 template <typename T, typename TagT, typename LabelT>
 inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2) {
+    // Early exit optimizations
     if (set1.empty() || set2.empty()) return 0.0f;
     
     // // Cache profiling start
@@ -1070,6 +1071,27 @@ inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::ve
     return static_cast<float>(matching_clauses) / static_cast<float>(filter_sets.size());
 }
 
+// Optimized version that reuses detect_filter_penalty logic for point IDs
+template <typename T, typename TagT, typename LabelT>
+inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity_fast(uint32_t point_id, const std::vector<std::vector<LabelT>> &filter_labels) {
+    if (filter_labels.empty()) return 0.0f;
+    
+    // Use the exact same logic as detect_filter_penalty
+    uint32_t matching_clauses = 0;
+    for (uint32_t i = 0; i < filter_labels.size(); i++) {
+        bool or_pass = false;
+        for (uint32_t j = 0; j < filter_labels[i].size(); j++) {
+            if (_labels_to_points_set[filter_labels[i][j]].count(point_id)) {
+                or_pass = true;
+                break;
+            }
+        }
+        matching_clauses += or_pass;
+    }
+    
+    return static_cast<float>(matching_clauses) / static_cast<float>(filter_labels.size());
+}
+
 
 // used for index build, single vector of labels are sent to iterate to fixed point. Need to be FIXED and made consistent
 template <typename T, typename TagT, typename LabelT>
@@ -1165,7 +1187,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 // if (res > 0) {
                 //     res = 1;
                 // }
-                res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1193,7 +1215,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     continue;
                 }
                 else {
-                    res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                    res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
                     if (print_qstats)
                     {
                         std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1396,7 +1418,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         // penalty = res * penalty_scale;
                         // i
                         
-                        res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                        res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
 
 
                         if (print_qstats)
@@ -1417,7 +1439,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                             continue;
                         else {
-                           res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
+                           res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
                         }
                     }
                 }
