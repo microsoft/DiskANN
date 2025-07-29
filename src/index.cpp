@@ -25,6 +25,7 @@
 
 #include "index.h"
 #include "normalization.h"
+#include "cache_profiler.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 40000000
 #define MAX_GREEDY_SEARCHES 100000
@@ -951,35 +952,94 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
 
 template <typename T, typename TagT, typename LabelT>
 inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2) {
-    if (set1.empty()) return 0.0f;
+    if (set1.empty() || set2.empty()) return 0.0f;
     
+    // // Cache profiling start
+    // static bool enable_cache_profiling = getenv("CACHE_PROFILE") != nullptr;
+    // static uint64_t call_count = 0;
+    // auto profile_start = g_cache_profiler.start_profile();
+    
+    // // Calculate access times for cumulative stats
+    // double access_time_set1 = 0.0;
+    // double access_time_set2 = 0.0;
+    // if (enable_cache_profiling) {
+    //     access_time_set1 = g_cache_profiler.time_memory_access(set1.data(), set1.size());
+    //     access_time_set2 = g_cache_profiler.time_memory_access(set2.data(), set2.size());
+    // }
+    
+    // if (enable_cache_profiling && (call_count % 1000 == 0)) {
+    //     diskann::cout << "\n=== Jaccard Similarity Cache Analysis (Call #" << call_count << ") ===" << std::endl;
+    //     diskann::cout << "Set1 size: " << set1.size() << ", Set2 size: " << set2.size() << std::endl;
+        
+    //     // Estimate cache behavior for input data
+    //     g_cache_profiler.estimate_cache_behavior(set1.data(), set1.size(), "Set1 (filter_labels)");
+    //     g_cache_profiler.estimate_cache_behavior(set2.data(), set2.size(), "Set2 (vector_labels)");
+    // }
+    
+    // Two-pointer approach for sorted arrays - cache-friendly version
+    // Note: _location_to_labels vectors are already sorted in parse_label_file()
     size_t intersection_count = 0;
     
-    // For small sets, linear scan is often faster due to cache locality
-    // Threshold based on your colleagues' discussion about cache vs complexity
-    constexpr size_t LINEAR_SCAN_THRESHOLD = 100;
+    size_t i = 0, j = 0;
     
-    if (set1.size() <= LINEAR_SCAN_THRESHOLD && set2.size() <= LINEAR_SCAN_THRESHOLD) {
-        // Linear scan approach - cache friendly for small sets
-        for (const auto &label : set1) {
-            if (std::find(set2.begin(), set2.end(), label) != set2.end()) {
-                intersection_count++;
-            }
-        }
-    } else {
-        // Hash table approach for larger sets
-        const auto &smaller = set1.size() <= set2.size() ? set1 : set2;
-        const auto &larger = set1.size() <= set2.size() ? set2 : set1;
+    // // Track memory access patterns
+    // uint64_t memory_accesses = 0;
+    // auto access_start = std::chrono::high_resolution_clock::now();
+    
+    // Two-pointer merge to count intersection (no manual prefetching)
+    while (i < set1.size() && j < set2.size()) {
+        // memory_accesses += 2; // Two array accesses per comparison
         
-        std::unordered_set<LabelT> lookup_set(larger.begin(), larger.end());
-        
-        for (const auto &label : smaller) {
-            if (lookup_set.count(label)) {
-                intersection_count++;
-            }
+        if (set1[i] == set2[j]) {
+            // Element in both sets
+            intersection_count++;
+            i++;
+            j++;
+        } else if (set1[i] < set2[j]) {
+            // Element only in set1
+            i++;
+        } else {
+            // Element only in set2
+            j++;
         }
     }
     
+    // auto access_end = std::chrono::high_resolution_clock::now();
+    // auto profile_end = g_cache_profiler.end_profile(profile_start);
+    
+    // // Add to cumulative statistics
+    // if (enable_cache_profiling) {
+    //     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(access_end - access_start);
+    //     bool high_access_warning = (access_time_set1 > 20.0 || access_time_set2 > 20.0);
+        
+    //     g_cache_profiler.add_to_cumulative_stats(
+    //         memory_accesses, 
+    //         profile_end.cycles, 
+    //         duration.count(),
+    //         intersection_count,
+    //         set1.size(),
+    //         set2.size(),
+    //         access_time_set1,
+    //         access_time_set2,
+    //         high_access_warning
+    //     );
+    // }
+    
+    // if (enable_cache_profiling && (call_count % 1000 == 0)) {
+    //     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(access_end - access_start);
+    //     diskann::cout << "Memory accesses: " << memory_accesses << ", Time: " << duration.count() 
+    //                   << " ns, Avg: " << (memory_accesses > 0 ? (double)duration.count() / memory_accesses : 0.0) 
+    //                   << " ns/access" << std::endl;
+    //     diskann::cout << "Cycles spent: " << profile_end.cycles << ", Cycles/access: " 
+    //                   << (memory_accesses > 0 ? (double)profile_end.cycles / memory_accesses : 0.0) << std::endl;
+    //     diskann::cout << "Intersection count: " << intersection_count << ", Result: " 
+    //                   << static_cast<float>(intersection_count) / static_cast<float>(set1.size()) << std::endl;
+    //     diskann::cout << "===============================================" << std::endl << std::endl;
+    // }
+    
+    // call_count++;
+    
+    // Return intersection / |set1| (where set1 is typically the query/incoming labels)
     return static_cast<float>(intersection_count) / static_cast<float>(set1.size());
 }
 
@@ -992,16 +1052,16 @@ inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::ve
     size_t matching_clauses = 0;
     
     // Count how many filter sets (clauses) have ANY intersection with vector_labels
-    for (const auto& filter_set : filter_sets) {
-        // Check if ANY filter in this clause matches ANY label in vector_labels
-        bool clause_satisfied = false;
-        for (const auto& filter : filter_set) {
-            if (std::find(vector_labels.begin(), vector_labels.end(), filter) != vector_labels.end()) {
-                clause_satisfied = true;
-                break; // Early exit - this clause is satisfied
-            }
-        }
-        if (clause_satisfied) {
+    for (size_t fs_idx = 0; fs_idx < filter_sets.size(); ++fs_idx) {
+        const auto& filter_set = filter_sets[fs_idx];
+        
+        // Use the base two-pointer Jaccard similarity function for this filter set
+        // Note: filter_set is already sorted during conversion in _search_with_filters()
+        // and vector_labels (_location_to_labels) is sorted in parse_label_file()
+        float jaccard_sim = calculate_jaccard_similarity(filter_set, vector_labels);
+        
+        // If there's any intersection (jaccard_sim > 0), this clause is satisfied
+        if (jaccard_sim > 0.0f) {
             matching_clauses++;
         }
     }
@@ -2572,7 +2632,11 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
                 cur_labels.push_back(converted_label);
         }
         if (cur_labels.size() > 0)
+        {
+            // Sort each filter set to ensure two-pointer algorithm works correctly
+            std::sort(cur_labels.begin(), cur_labels.end());
             converted_labels.push_back(cur_labels);
+        }
         else {
             for (uint32_t i = 0; i < K; i++) {
                 distances[i] = std::numeric_limits<float>::max();
@@ -2988,6 +3052,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         {
             diskann::cerr << "Found fewer than K elements for query" << std::endl;
         } */
+
+    // // Print cumulative cache statistics if profiling is enabled
+    // static bool enable_cache_profiling = getenv("CACHE_PROFILE") != nullptr;
+    // if (enable_cache_profiling) {
+    //     static uint64_t search_count = 0;
+    //     search_count++;
+    //     // Print summary every 100 searches or on first search
+    //     if (search_count == 1 || search_count % 100 == 0) {
+    //         g_cache_profiler.print_cumulative_summary();
+    //     }
+    // }
 
     return retval;
 }
