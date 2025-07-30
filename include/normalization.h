@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <windows_customizations.h>
 
 namespace diskann
 {
@@ -37,13 +38,13 @@ struct NormalizationConfig
 /**
  * @brief Global normalization configuration instance
  */
-extern NormalizationConfig g_normalization_config;
+DISKANN_DLLEXPORT extern NormalizationConfig g_normalization_config;
 
 /**
  * @brief Initialize normalization from factors file
  * @param factors_file Path to text file with scale and shift factors
  * @return true if successful, false otherwise
  */
-bool initialize_normalization(const std::string& factors_file);
+DISKANN_DLLEXPORT bool initialize_normalization(const std::string& factors_file);
 
 } // namespace diskann

@@ -3,7 +3,7 @@
 #include <chrono>
 #include <iostream>
 #include <immintrin.h>
-#include <x86intrin.h>
+//#include <x86intrin.h>
 #include "logger.h"
 
 class CacheProfiler {

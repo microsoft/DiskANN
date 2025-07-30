@@ -1,12 +1,13 @@
 #include "normalization.h"
 #include <fstream>
 #include <iostream>
+#include "windows_customizations.h"
 
 namespace diskann
 {
 
 // Global normalization configuration instance
-NormalizationConfig g_normalization_config;
+DISKANN_DLLEXPORT NormalizationConfig g_normalization_config;
 
 bool NormalizationConfig::load_from_file(const std::string& factors_file)
 {

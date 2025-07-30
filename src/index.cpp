@@ -9,7 +9,6 @@
 #include "id_list.h"
 #include "index_factory.h"
 #include "memory_mapper.h"
-#include "roaring.h"
 #include "timer.h"
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
@@ -616,7 +615,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             std::string rev_map = sample_label_file + "_map.bin";
             uint64_t n1, n2;
             diskann::load_bin<uint32_t>(rev_map, _sample_map, n1, n2);
-            _sample_prob = (1.0 * num_samples) / (1.0 * label_num_pts);
+            _sample_prob = (1.0f * num_samples) / (1.0f * label_num_pts);
             std::cout << "Loaded sample file with rate " << _sample_prob << std::endl;
         }
 
@@ -813,7 +812,7 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
                 common_filters.push_back(_universal_label);
         }
     }
-    return common_filters.size();
+    return (uint32_t) common_filters.size();
 }
 
 // Overloaded version for multiple filter sets
@@ -892,7 +891,7 @@ inline uint32_t Index<T, TagT, LabelT>::detect_filter_penalty(uint32_t point_id,
 auto s = std::chrono::high_resolution_clock::now();
 #endif
 
-    uint32_t cur_penalty = incoming_labels.size();
+    uint32_t cur_penalty = (uint32_t) incoming_labels.size();
     for (uint32_t i = 0; i < incoming_labels.size(); i++) {
         bool or_pass = false;
         for (uint32_t j = 0; j < incoming_labels[i].size(); j++) {
