@@ -26,6 +26,7 @@
 #include "index_factory.h"
 #include "normalization.h"
 #include "normalization.h"
+#include <gperftools/profiler.h>
 
 namespace po = boost::program_options;
 
@@ -50,6 +51,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
     std::vector<double> filter_match_time(query_num);
     std::vector<double> dist_cmp_time(query_num);
+    std::vector<double> intersection_timing_stats(query_num, 0.0);
+    std::vector<double> jaccard_timing_stats(query_num, 0.0);
 
     bool calc_recall_flag = false;
     if (truthset_file != std::string("null") && file_exists(truthset_file))
@@ -143,12 +146,14 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
           << std::setw(22) << "Graph avg cmps"
           << std::setw(22) << "Graph Latency(mus)" 
           << std::setw(20) << "Graph Recall"
-          << std::setw(18) << "Filter Eval(mus)"
-          << std::setw(18) << "Penalty Det(mus)"
-          << std::setw(18) << "Core Algo(mus)"
+        //   << std::setw(18) << "Filter Eval(mus)"
+        //   << std::setw(18) << "Penalty Det(mus)"
+        //   << std::setw(18) << "Core Algo(mus)"
+          << std::setw(18) << "Intersect(mus)"
+          << std::setw(18) << "Jaccard(mus)"
           << std::endl;
 
-    table_width += 4 + 4 + 8 + 18 + 20 + 20 + 20 + 20 + 10 + 22 + 20 + 22 + 20 + 22 + 22;
+    table_width += 4 + 4 + 8 + 18 + 20 + 20 + 20 + 20 + 10 + 22 + 20 + 22 + 20 + 22 + 22 + 18 + 18;
     }
     /*    uint32_t recalls_to_print = 0;
         const uint32_t first_recall = print_all_recalls ? 1 : recall_at;
@@ -229,6 +234,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 print_qstats = false;
 
             auto qs = std::chrono::high_resolution_clock::now();
+            
+            // Reset timing for this query
+            curr_intersection_time = 0.0;
+            curr_jaccard_time = 0.0;
+            
             if (filtered_search && !tags)
             {
                 uint32_t old_b, old_g, old_c;
@@ -285,6 +295,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             auto qe = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> diff = qe - qs;
             latency_stats[i] = (float)(diff.count() * 1000000);
+            
+            // Store timing for this query
+            intersection_timing_stats[i] = curr_intersection_time;
+            jaccard_timing_stats[i] = curr_jaccard_time;
+            
             switch (method_used)
             {
             case 0:
@@ -313,7 +328,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             {
                 std::ofstream query_stats_file;
                 query_stats_file.open(result_path_prefix + "_query_stats.txt");
-                query_stats_file << "cmps\tnum correct\tfilt time\tcmp time\tlatency" << std::endl;
+                query_stats_file << "cmps\tnum correct\tfilt time\tcmp time\tlatency\tintersection time\tjaccard time" << std::endl;
                 for (size_t i = 0; i < query_num; i++)
                 {
                     std::set<uint32_t> gt, res;
@@ -341,7 +356,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 }
                 }
                 query_stats_file << i << "," << cmp_stats[i] << "," << cur_recall << "," << filter_match_time[i] << ","
-                         << dist_cmp_time[i] << "," << latency_stats[i] << ",";
+                         << dist_cmp_time[i] << "," << latency_stats[i] << "," << intersection_timing_stats[i] << "," << jaccard_timing_stats[i] << ",";
                 for (auto const &r : res)
                 query_stats_file << r << " ";
                 query_stats_file << std::endl;
@@ -412,10 +427,20 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         else
         {
             // Calculate timing breakdowns (convert to microseconds)
-            float filter_eval_time_us = (float)(time_to_get_valid * 1000000.0) / (float)query_num;
-            float penalty_detection_time_us = (float)(time_to_detect_penalty * 1000000.0) / (float)query_num;
-            float core_algo_time_us = mean_latency - filter_eval_time_us - penalty_detection_time_us;
+            // float filter_eval_time_us = (float)(time_to_get_valid * 1000000.0) / (float)query_num;
+            // float penalty_detection_time_us = (float)(time_to_detect_penalty * 1000000.0) / (float)query_num;
+            // float core_algo_time_us = mean_latency - filter_eval_time_us - penalty_detection_time_us;
             
+            // Calculate average timing from stats vectors (convert to microseconds)
+            float avg_intersection_time_us = 0.0f;
+            float avg_jaccard_time_us = 0.0f;
+            for (size_t i = 0; i < query_num; i++) {
+                avg_intersection_time_us += intersection_timing_stats[i];
+                avg_jaccard_time_us += jaccard_timing_stats[i];
+            }
+            avg_intersection_time_us = (avg_intersection_time_us * 1000000.0f) / (float)query_num;
+            avg_jaccard_time_us = (avg_jaccard_time_us * 1000000.0f) / (float)query_num;
+
             std::cout << std::setw(4) << L << std::setw(4) << recall_at << std::setw(8) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency 
                       << std::setw(20) << (float)latency_999
@@ -428,9 +453,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << std::setw(22) << (float)(graph_dist_cmp[test_id] * 1.0) / (num_graphs * 1.0)
                       << std::setw(22) << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) 
                       << std::setw(20) << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0)
-                      << std::setw(18) << filter_eval_time_us
-                      << std::setw(18) << penalty_detection_time_us
-                      << std::setw(18) << core_algo_time_us
+                    //   << std::setw(18) << filter_eval_time_us
+                    //   << std::setw(18) << penalty_detection_time_us
+                    //   << std::setw(18) << core_algo_time_us
+                      << std::setw(18) << avg_intersection_time_us
+                      << std::setw(18) << avg_jaccard_time_us
                       << std::endl;
         }
     }
@@ -441,13 +468,26 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     if (filtered_search) {
         std::cout << "\n=== TIMING BREAKDOWN ANALYSIS ===" << std::endl;
         std::cout << "Total queries: " << query_num << std::endl;
-        std::cout << "Filter evaluation time: " << (time_to_get_valid * 1000000.0) / query_num << " μs/query" << std::endl;
-        std::cout << "Penalty detection time: " << (time_to_detect_penalty * 1000000.0) / query_num << " μs/query" << std::endl;
-        std::cout << "Filter intersection time: " << (time_to_intersect * 1000000.0) / query_num << " μs/query" << std::endl;
-        std::cout << "Filter check & compare time: " << (time_to_filter_check_and_compare * 1000000.0) / query_num << " μs/query" << std::endl;
+        // std::cout << "Filter evaluation time: " << (time_to_get_valid * 1000000.0) / query_num << " μs/query" << std::endl;
+        // std::cout << "Penalty detection time: " << (time_to_detect_penalty * 1000000.0) / query_num << " μs/query" << std::endl;
+        // std::cout << "Filter intersection time: " << (time_to_intersect * 1000000.0) / query_num << " μs/query" << std::endl;
+        // std::cout << "Filter check & compare time: " << (time_to_filter_check_and_compare * 1000000.0) / query_num << " μs/query" << std::endl;
         
-        double total_filter_overhead = (time_to_get_valid + time_to_detect_penalty + time_to_intersect + time_to_filter_check_and_compare) * 1000000.0 / query_num;
-        std::cout << "Total filter overhead: " << total_filter_overhead << " μs/query" << std::endl;
+        // Calculate average timing from stats vectors
+        double avg_intersection_time = 0.0;
+        double avg_jaccard_time = 0.0;
+        for (size_t i = 0; i < query_num; i++) {
+            avg_intersection_time += intersection_timing_stats[i];
+            avg_jaccard_time += jaccard_timing_stats[i];
+        }
+        avg_intersection_time = (avg_intersection_time * 1000000.0) / query_num;
+        avg_jaccard_time = (avg_jaccard_time * 1000000.0) / query_num;
+        std::cout << "Get intersection time: " << avg_intersection_time << " μs/query" << std::endl;
+        std::cout << "Jaccard similarity time: " << avg_jaccard_time << " μs/query" << std::endl;
+        
+        // double total_filter_overhead = (time_to_get_valid + time_to_detect_penalty + time_to_intersect + time_to_filter_check_and_compare) * 1000000.0 / query_num;
+        // total_filter_overhead += avg_intersection_time;  // Add the new intersection timing
+        // std::cout << "Total filter overhead: " << total_filter_overhead << " μs/query" << std::endl;
         
         std::cout << "Breakdown percentage:" << std::endl;
         std::cout << "  Graph searches: " << (100.0 * num_graphs) / query_num << "%" << std::endl;
@@ -749,6 +789,7 @@ int main(int argc, char **argv)
                 return -1;
             }
         }
+        return 0;
     }
     catch (std::exception &e)
     {

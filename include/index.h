@@ -46,6 +46,8 @@ inline uint32_t num_paged = 0;
 inline uint32_t min_inter_size = 1;
 inline bool print_qstats = false;
 inline int64_t curr_query = -1;
+inline double curr_intersection_time = 0.0;
+inline double curr_jaccard_time = 0.0;
 inline uint32_t penalty_scale = 10;
 inline double w_m = 1.0;
 inline uint32_t num_sp = 2;
@@ -121,9 +123,6 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                         const std::vector<std::vector<LabelT>> &incoming_labels);
 
     DISKANN_DLLEXPORT inline float calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2); 
-    
-    // Optimized version that uses inverted index like detect_filter_penalty
-    DISKANN_DLLEXPORT inline float calculate_jaccard_similarity_inverted(const std::vector<LabelT> &query_labels, uint32_t point_id);
     
     // Overloaded version for multi-filter query labels (vector<vector<LabelT>>)
     DISKANN_DLLEXPORT inline float calculate_jaccard_similarity(const std::vector<std::vector<LabelT>> &filter_sets, const std::vector<LabelT> &vector_labels);

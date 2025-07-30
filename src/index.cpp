@@ -1187,7 +1187,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 // if (res > 0) {
                 //     res = 1;
                 // }
+                auto jaccard_start = std::chrono::high_resolution_clock::now();
                 res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
+                std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
+                curr_jaccard_time += jaccard_diff.count();
                 if (print_qstats)
                 {
                     std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1215,7 +1218,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                     continue;
                 }
                 else {
+                    auto jaccard_start = std::chrono::high_resolution_clock::now();
                     res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
+                    std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
+                    curr_jaccard_time += jaccard_diff.count();
                     if (print_qstats)
                     {
                         std::ofstream out("query_stats.txt", std::ios_base::app);
@@ -1418,7 +1424,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         // penalty = res * penalty_scale;
                         // i
                         
+                        auto jaccard_start = std::chrono::high_resolution_clock::now();
                         res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
+                        std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
+                        curr_jaccard_time += jaccard_diff.count();
 
 
                         if (print_qstats)
@@ -1439,7 +1448,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
                             continue;
                         else {
+                           auto jaccard_start = std::chrono::high_resolution_clock::now();
                            res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
+                           std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
+                           curr_jaccard_time += jaccard_diff.count();
                         }
                     }
                 }
@@ -2873,7 +2885,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         break;
         case 1: {
             num_graphs++;
+            auto s = std::chrono::high_resolution_clock::now();
             auto [inter_estim, cand] = sample_intersection(scratch->get_valid_bitmap(), scratch->get_tmp_bitmap(), filter_label);
+            std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+            curr_intersection_time += diff.count();
 
             // std::cout << "DEBUG Case 1: inter_estim=" << inter_estim << ", cand.size()=" << cand.size() << std::endl;
 
