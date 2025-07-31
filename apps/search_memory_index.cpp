@@ -217,6 +217,14 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         query_result_dists[test_id].resize(K_or_L * query_num);
         std::vector<T *> res = std::vector<T *>();
         int method_used = 0;
+        
+        // Start profiling for this L value
+        std::string profile_filename = result_path_prefix + "_L" + std::to_string(L) + "_profile.prof";
+        std::cout << "Starting profiling: " << profile_filename << std::endl;
+        if (ProfilerStart(profile_filename.c_str()) == 0) {
+            std::cout << "Warning: Failed to start profiler" << std::endl;
+        }
+        
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);
 #pragma omp parallel for schedule(dynamic, 1)
@@ -247,6 +255,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 method_used = 0;
                 std::vector<std::vector<std::string>> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
 
+                // Profile the filtered search specifically
+                ProfilerRegisterThread();
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, K_or_L, L,
                                                          query_result_ids[test_id].data() + i * K_or_L,
                                                          query_result_dists[test_id].data() + i * K_or_L);
@@ -314,6 +324,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 break;
             }
         }
+        
+        // Stop profiling after search loop completes
+        ProfilerStop();
+        std::cout << "Profiling stopped for L=" << L << std::endl;
+        
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
 
         double displayed_qps = query_num / diff.count();

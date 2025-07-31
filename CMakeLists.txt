@@ -67,6 +67,9 @@ if (DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS)
     endif()
 endif()
 
+# Add gperftools include for CPU profiler
+include_directories(${PROJECT_SOURCE_DIR}/gperftools/install/include)
+
 #OpenMP
 if (MSVC)
     # Do not use find_package here since it would use VisualStudio's built-in OpenMP, but MKL libraries
