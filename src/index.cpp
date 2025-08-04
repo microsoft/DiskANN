@@ -31,6 +31,28 @@
 
 namespace diskann
 {
+    // Global variable definitions
+    double time_to_intersect = 0.0;
+    double time_to_page_search = 0.0;
+    double time_to_filter_check_and_compare = 0.0;
+    double time_to_get_valid = 0.0;
+    double time_to_detect_penalty = 0.0;
+    double time_to_estimate = 0.0;
+    uint32_t num_brutes = 0;
+    uint32_t num_paged_search = 0;
+    uint32_t num_graphs = 0;
+    uint32_t num_paged = 0;
+    uint32_t min_inter_size = 1;
+    bool print_qstats = false;
+    int64_t curr_query = -1;
+    double curr_intersection_time = 0.0;
+    double curr_jaccard_time = 0.0;
+    uint32_t penalty_scale = 10;
+    float w_m = 1.0f;
+    uint32_t num_sp = 2;
+    bool use_global_start = true;
+    uint32_t num_start_points = 1;
+    bool expand_two_hops = false;
 // Initialize an index with metric m, load the data of type T with filename
 // (bin), and initialize max_points
 template <typename T, typename TagT, typename LabelT>
@@ -1174,7 +1196,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
 
         float penalty = 0;
-        uint32_t res = 0;
+        float res = 0;
         if (use_filter)
         {
             if (search_invocation)
@@ -2293,7 +2315,7 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
         }
         this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load);
         std::string sample_label_file = filter_params.save_path_prefix + "_sample";
-        float p_val = 1000000.0/num_points_to_load;
+        float p_val = 1000000.0f/num_points_to_load;
         p_val = (p_val > 1) ? 1 : p_val;
         gen_random_slice<T>(data_file, sample_label_file, p_val,
                       labels_file_to_use);
@@ -2387,9 +2409,9 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             {
                 _labels_to_points.at(token_as_num).add(line_cnt);
             }
-            catch (const std::out_of_range &oor)
+            catch (const std::out_of_range &)
             {
-                _labels_to_points.resize(token_as_num + 1);
+                _labels_to_points.resize(static_cast<size_t>(token_as_num) + 1);
                 _labels_to_points.at(token_as_num).add(line_cnt);
             }
         }
@@ -2459,7 +2481,7 @@ void Index<T, TagT, LabelT>::parse_sample_label_file(const std::string &label_fi
             }
             catch (const std::out_of_range &oor)
             {
-                _labels_to_points_sample.resize(token_as_num + 1);
+                _labels_to_points_sample.resize(static_cast<size_t>(token_as_num) + 1);
                 _labels_to_points_sample.at(token_as_num).add(line_cnt);
             }
         }
@@ -3100,6 +3122,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     //     }
     // }
 
+    //std::cout << "[DEBUG] Inside search_with_filters: num_graphs = " << num_graphs << std::endl;
     return retval;
 }
 

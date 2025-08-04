@@ -144,10 +144,10 @@ int main(int argc, char **argv)
         std::cout <<"Will be using partial Jaccard for search" << std::endl;
         size_t data_num, data_dim;
         diskann::get_bin_metadata(data_path, data_num, data_dim);
-        min_inter_size = inter_size;
-        w_m = filter_match_weight;
+        diskann::min_inter_size = inter_size;
+        diskann::w_m = filter_match_weight;
 
-        diskann::cout << "w_m: " << w_m << std::endl;
+        diskann::cout << "w_m: " << diskann::w_m << std::endl;
 
         auto index_build_params = diskann::IndexWriteParametersBuilder(L, R)
                                       .with_filter_list_size(Lf)

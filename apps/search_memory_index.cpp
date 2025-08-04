@@ -26,7 +26,6 @@
 #include "index_factory.h"
 #include "normalization.h"
 #include "normalization.h"
-#include <gperftools/profiler.h>
 
 namespace po = boost::program_options;
 
@@ -199,12 +198,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
         query_result_class[test_id].resize(query_num, 0);
-        time_to_get_valid = 0;
-        time_to_intersect = 0;
-        time_to_filter_check_and_compare = 0;
-        time_to_detect_penalty = 0;
-        num_brutes = 0;
-        num_graphs = 0;
+        diskann::time_to_get_valid = 0;
+        diskann::time_to_intersect = 0;
+        diskann::time_to_filter_check_and_compare = 0;
+        diskann::time_to_detect_penalty = 0;
+        diskann::num_brutes = 0;
+        diskann::num_graphs = 0;
         uint32_t L = Lvec[test_id];
         const uint32_t K_or_L = save_L_results ? L : recall_at;
         /*        if (L < recall_at)
@@ -217,16 +216,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         query_result_dists[test_id].resize(K_or_L * query_num);
         std::vector<T *> res = std::vector<T *>();
         int method_used = 0;
+        int curr_query = 0;
         
-        // Start profiling for this L value
-        std::string profile_filename = result_path_prefix + "_L" + std::to_string(L) + "_profile.prof";
-        std::cout << "Starting profiling: " << profile_filename << std::endl;
-        if (ProfilerStart(profile_filename.c_str()) == 0) {
-            std::cout << "Warning: Failed to start profiler" << std::endl;
-        }
+        std::cout << "Starting search on " << query_num << " queries..." << std::endl;
         
         auto s = std::chrono::high_resolution_clock::now();
-        omp_set_num_threads(num_threads);
+        omp_set_num_threads(num_threads);     
 #pragma omp parallel for schedule(dynamic, 1)
         for (int64_t i = 0; i < (int64_t)query_num; i++)
         {
@@ -237,30 +232,41 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
             std::cout<<std::endl;*/
             if (L_for_print == L)
-                print_qstats = true;
+                diskann::print_qstats = true;
             else
-                print_qstats = false;
+                diskann::print_qstats = false;
 
             auto qs = std::chrono::high_resolution_clock::now();
             
             // Reset timing for this query
-            curr_intersection_time = 0.0;
-            curr_jaccard_time = 0.0;
+            diskann::curr_intersection_time = 0.0;
+            diskann::curr_jaccard_time = 0.0;
             
             if (filtered_search && !tags)
             {
                 uint32_t old_b, old_g, old_c;
-                old_b = num_brutes;
-                old_g = num_graphs;
+                old_b = diskann::num_brutes;
+                old_g = diskann::num_graphs;
                 method_used = 0;
                 std::vector<std::vector<std::string>> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
 
-                // Profile the filtered search specifically
-                ProfilerRegisterThread();
+                //// Debug: print num_graphs before search
+                //if (num_threads == 1 && i % 100 == 0)
+                //{
+                //    std::cout << "[DEBUG] Query " << i << ": About to call search_with_filters, num_graphs = "<<diskann::num_graphs << std::endl;
+                //}
+
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, K_or_L, L,
                                                          query_result_ids[test_id].data() + i * K_or_L,
                                                          query_result_dists[test_id].data() + i * K_or_L);
-                if (num_graphs > old_g)
+
+                //// Debug: print num_graphs after search
+                //if (num_threads == 1 && i % 100 == 0) {
+                //    std::cout << "[DEBUG] Query " << i << ": search_with_filters completed, num_graphs = "<< diskann::num_graphs << std::endl;
+                //}
+                ////std::cout << "[DEBUG] After search_with_filters: num_graphs = " << diskann::num_graphs << std::endl;
+
+                if (diskann::num_graphs > old_g)
                     method_used = 1;
                 else
                     method_used = 0;
@@ -307,8 +313,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             latency_stats[i] = (float)(diff.count() * 1000000);
             
             // Store timing for this query
-            intersection_timing_stats[i] = curr_intersection_time;
-            jaccard_timing_stats[i] = curr_jaccard_time;
+            intersection_timing_stats[i] = diskann::curr_intersection_time;
+            jaccard_timing_stats[i] = diskann::curr_jaccard_time;
             
             switch (method_used)
             {
@@ -324,10 +330,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 break;
             }
         }
-        
-        // Stop profiling after search loop completes
-        ProfilerStop();
-        std::cout << "Profiling stopped for L=" << L << std::endl;
         
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
 
@@ -462,12 +464,13 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << std::setw(20) << (float)latency_99
                       << std::setw(20) << (float)latency_95
                       << std::setw(10) << (float)recalls[0] 
-                      << std::setw(22) << (float)(brute_dist_cmp[test_id] * 1.0) / (num_brutes * 1.0) 
-                      << std::setw(22) << (float)(brute_lat[test_id] * 1.0) / (num_brutes * 1.0) 
-                      << std::setw(20) << (float)(brute_recalls[test_id] * 100.0) / (num_brutes * recall_at * 1.0) 
-                      << std::setw(22) << (float)(graph_dist_cmp[test_id] * 1.0) / (num_graphs * 1.0)
-                      << std::setw(22) << (float)(graph_lat[test_id] * 1.0) / (num_graphs * 1.0) 
-                      << std::setw(20) << (float)(graph_recalls[test_id] * 100.0) / (num_graphs * recall_at * 1.0)
+                      << std::setw(22) << (float)(brute_dist_cmp[test_id] * 1.0) / (diskann::num_brutes * 1.0) 
+                      << std::setw(22) << (float)(brute_lat[test_id] * 1.0) / (diskann::num_brutes * 1.0) 
+                      << std::setw(20) << (float)(brute_recalls[test_id] * 100.0) / (diskann::num_brutes * recall_at * 1.0) 
+                      << std::setw(22)
+                      << (float)(graph_dist_cmp[test_id] * 1.0) / (diskann::num_graphs * 1.0)
+                      << std::setw(22) << (float)(graph_lat[test_id] * 1.0) / (diskann::num_graphs * 1.0) 
+                      << std::setw(20) << (float)(graph_recalls[test_id] * 100.0) / (diskann::num_graphs * recall_at * 1.0)
                     //   << std::setw(18) << filter_eval_time_us
                     //   << std::setw(18) << penalty_detection_time_us
                     //   << std::setw(18) << core_algo_time_us
@@ -476,8 +479,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << std::endl;
         }
     }
-    std::cout << "num_graphs " << num_graphs << std::endl;
-    std::cout << "num_brutes " << num_brutes << std::endl;
+    std::cout << "num_graphs " << diskann::num_graphs << std::endl;
+    std::cout << "num_brutes " << diskann::num_brutes << std::endl;
     
     // Print detailed timing breakdown summary
     if (filtered_search) {
@@ -505,8 +508,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         // std::cout << "Total filter overhead: " << total_filter_overhead << " μs/query" << std::endl;
         
         std::cout << "Breakdown percentage:" << std::endl;
-        std::cout << "  Graph searches: " << (100.0 * num_graphs) / query_num << "%" << std::endl;
-        std::cout << "  Brute force searches: " << (100.0 * num_brutes) / query_num << "%" << std::endl;
+        std::cout << "  Graph searches: " << (100.0 * diskann::num_graphs) / query_num << "%" << std::endl;
+        std::cout << "  Brute force searches: " << (100.0 * diskann::num_brutes) / query_num << "%" << std::endl;
         std::cout << "=================================" << std::endl;
     }
 
@@ -545,6 +548,7 @@ int main(int argc, char **argv)
     bool print_all_recalls, dynamic, tags, show_qps_per_thread, global_start;
     bool save_L_results;
     float fail_if_recall_below = 0.0f;
+    bool expand_two_hops_local = false;  // Local variable for program options
 
     uint32_t maxN;
     float p1, p2;
@@ -592,7 +596,7 @@ int main(int argc, char **argv)
                                        po::value<bool>(&global_start)->default_value(false),
                                        "Whether or not to use global start or predicate-aware starting point in graph search");
         optional_configs.add_options()("expand_two_hops",
-                                       po::value<bool>(&expand_two_hops)->default_value(false),
+                                       po::value<bool>(&expand_two_hops_local)->default_value(false),
                                        "Whether or not to use ACORN-like idea of two hops at search");                                       
         optional_configs.add_options()("num_local_start",
                                        po::value<uint32_t>(&num_local)->default_value(0),
@@ -737,12 +741,13 @@ int main(int argc, char **argv)
         }
     }
 
-    use_global_start = global_start;
-    num_start_points = num_local;
-    w_m = filter_match_weight;
+    diskann::use_global_start = global_start;
+    diskann::num_start_points = num_local;
+    diskann::w_m = filter_match_weight;
+    diskann::expand_two_hops = expand_two_hops_local;
 
-    std::cout<<"Num local start points: " << num_start_points << std::endl;
-    std::cout<<"w_m: "<< w_m<<std::endl;
+    std::cout<<"Num local start points: " << diskann::num_start_points << std::endl;
+    std::cout<<"w_m: "<< diskann::w_m<<std::endl;
 
     try
     {

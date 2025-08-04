@@ -33,30 +33,30 @@
 #define DEFAULT_MAXC 750
 //#define INSTRUMENT true
 
-inline double time_to_intersect = 0.;
-inline double time_to_page_search = 0.;
-inline double time_to_filter_check_and_compare = 0.;
-inline double time_to_get_valid = 0.;
-inline double time_to_detect_penalty = 0.;
-inline double time_to_estimate = 0;
-inline uint32_t num_brutes = 0;
-inline uint32_t num_paged_search = 0;
-inline uint32_t num_graphs = 0;
-inline uint32_t num_paged = 0;
-inline uint32_t min_inter_size = 1;
-inline bool print_qstats = false;
-inline int64_t curr_query = -1;
-inline double curr_intersection_time = 0.0;
-inline double curr_jaccard_time = 0.0;
-inline uint32_t penalty_scale = 10;
-inline double w_m = 1.0;
-inline uint32_t num_sp = 2;
-inline bool use_global_start = true;
-inline uint32_t num_start_points = 1;
-inline bool expand_two_hops = false;
-
 namespace diskann
 {
+// Extern declarations for global variables
+DISKANN_DLLEXPORT extern double time_to_intersect;
+DISKANN_DLLEXPORT extern double time_to_page_search;
+DISKANN_DLLEXPORT extern double time_to_filter_check_and_compare;
+DISKANN_DLLEXPORT extern double time_to_get_valid;
+DISKANN_DLLEXPORT extern double time_to_detect_penalty;
+DISKANN_DLLEXPORT extern double time_to_estimate;
+DISKANN_DLLEXPORT extern uint32_t num_brutes;
+DISKANN_DLLEXPORT extern uint32_t num_paged_search;
+DISKANN_DLLEXPORT extern uint32_t num_graphs;
+DISKANN_DLLEXPORT extern uint32_t num_paged;
+DISKANN_DLLEXPORT extern uint32_t min_inter_size;
+DISKANN_DLLEXPORT extern bool print_qstats;
+DISKANN_DLLEXPORT extern int64_t curr_query;
+DISKANN_DLLEXPORT extern double curr_intersection_time;
+DISKANN_DLLEXPORT extern double curr_jaccard_time;
+DISKANN_DLLEXPORT extern uint32_t penalty_scale;
+DISKANN_DLLEXPORT extern float w_m;
+DISKANN_DLLEXPORT extern uint32_t num_sp;
+DISKANN_DLLEXPORT extern bool use_global_start;
+DISKANN_DLLEXPORT extern uint32_t num_start_points;
+DISKANN_DLLEXPORT extern bool expand_two_hops;
 
 inline double estimate_ram_usage(size_t size, uint32_t dim, uint32_t datasize, uint32_t degree)
 {
