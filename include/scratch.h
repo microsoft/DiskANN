@@ -122,6 +122,36 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
         return _tmp_intersection;
     }
 
+    // Scratch space accessors for Jaccard similarity calculations
+    inline std::vector<float> &jaccard_similarities_scratch()
+    {
+        return _jaccard_similarities_scratch;
+    }
+    
+    inline std::vector<float> &init_penalties_scratch()
+    {
+        return _init_penalties_scratch;
+    }
+    
+    inline std::vector<uint32_t> &valid_init_candidates_scratch()
+    {
+        return _valid_init_candidates_scratch;
+    }
+    
+    inline std::vector<uint32_t> &filtered_ids_scratch()
+    {
+        return _filtered_ids_scratch;
+    }
+    
+    // Method to pre-size scratch vectors for batch operations
+    inline void resize_jaccard_scratch_for_batch(size_t expected_batch_size)
+    {
+        _jaccard_similarities_scratch.reserve(expected_batch_size);
+        _init_penalties_scratch.reserve(expected_batch_size);
+        _valid_init_candidates_scratch.reserve(expected_batch_size);
+        _filtered_ids_scratch.reserve(expected_batch_size);
+    }
+
 
   private:
     uint32_t _L;
@@ -169,6 +199,12 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     std::vector<uint32_t> _closest_clusters;
     std::vector<float> _cluster_distances;
     float *_aligned_query_float;
+    
+    // Scratch space for Jaccard similarity batch calculations
+    std::vector<float> _jaccard_similarities_scratch;
+    std::vector<float> _init_penalties_scratch;
+    std::vector<uint32_t> _valid_init_candidates_scratch;
+    std::vector<uint32_t> _filtered_ids_scratch;
 };
 
 //
