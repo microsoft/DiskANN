@@ -1118,15 +1118,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     InMemQueryScratch<T> *scratch, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, bool use_filter,
     const std::vector<std::vector<LabelT>> &filter_labels, bool search_invocation)
 {
-
-/*    for (auto &x : filter_labels) {
-        std::cout<<"(";
-        for (auto &y : x) {
-            std::cout<<y<<"|";
-        }
-        std::cout<<")&";
-    }*/
-
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     best_L_nodes.reserve(Lsize);
@@ -1137,7 +1128,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     assert(id_scratch.size() == 0);
     T *aligned_query = scratch->aligned_query();
     uint32_t hops = 0;
-    uint32_t cmps = 0;  
+    uint32_t cmps = 0;
 
     float *pq_dists = nullptr;
 
@@ -1170,15 +1161,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         _pq_data_store->get_distance(scratch->aligned_query(), ids, dists_out, scratch);
     };
 
-    // Initialize the candidate pool with starting points - BATCH PROCESS ALL INITIAL CANDIDATES
-    // Initialize the candidate pool with starting points - BATCH PROCESS ALL INITIAL CANDIDATES
-    // std::cout << "DEBUG: Starting with " << init_ids.size() << " initial candidates" << std::endl;
+    // Initialize the candidate pool with starting points
     uint32_t candidates_added = 0;
     uint32_t candidates_filtered = 0;
-    
-    // STEP 1: Collect all valid initial candidates first
-    std::vector<uint32_t> valid_init_candidates;
-    valid_init_candidates.reserve(init_ids.size());
     
     // STEP 1: Collect all valid initial candidates first
     std::vector<uint32_t> valid_init_candidates;
@@ -1252,65 +1237,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         {
             inserted_into_pool_rs.insert(id);
         }
-        // Pre-filter for non-search invocations
-        if (use_filter && !search_invocation)
-        {
-            uint32_t common_count = detect_common_filters(id, search_invocation, filter_labels);
-            if (common_count < min_inter_size)
-            {
-                candidates_filtered++;
-                if (print_qstats)
-                {
-                    std::ofstream out("query_stats.txt", std::ios_base::app);
-                    out << "FILTERED OUT: id " << id << " has only " << common_count << " common filters (need " << min_inter_size << ")" << std::endl;
-                    out.close();
-                }
-                continue;
-            }
-        }
-
-        if (is_not_visited(id))
-        {
-            valid_init_candidates.push_back(id);
-        }
-    }
-    
-    // STEP 2: BATCH PROCESS all initial candidates' filter scores at once
-    std::vector<float> init_penalties;
-    if (use_filter && !valid_init_candidates.empty())
-    {
-        auto jaccard_start = std::chrono::high_resolution_clock::now();
-        std::vector<float> jaccard_similarities;
-        calculate_jaccard_similarity_batch(valid_init_candidates, filter_labels, jaccard_similarities);
-        std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
-        curr_jaccard_time += jaccard_diff.count();
-        
-        // Convert similarities to penalties
-        init_penalties.reserve(jaccard_similarities.size());
-        for (float sim : jaccard_similarities) {
-            init_penalties.push_back(1.0f - sim);
-        }
-    }
-    else
-    {
-        init_penalties.resize(valid_init_candidates.size(), 0.0f);
-    }
-    
-    // STEP 3: Process all candidates with their pre-computed penalties
-    for (size_t i = 0; i < valid_init_candidates.size(); ++i)
-    {
-        uint32_t id = valid_init_candidates[i];
-        float res = init_penalties[i];
-        
-        candidates_added++;
-        if (fast_iterate)
-        {
-            inserted_into_pool_bs.add(id);
-        }
-        else
-        {
-            inserted_into_pool_rs.insert(id);
-        }
 
         float distance;
         uint32_t ids[] = {id};
@@ -1323,19 +1249,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         
         distance = normalized_distance + w_m * res;
 
-        Neighbor nn = Neighbor(id, distance);
-        best_L_nodes.insert(nn);
-        
-        if (print_qstats)
-        {
-            std::ofstream out("query_stats.txt", std::ios_base::app);
-            out << "BATCH INIT: id " << id << " has penalty " << res << " and filters ";
-            for (auto const &filter : _location_to_labels[id])
-            {
-                out << filter << " ";
-            }
-            out << std::endl;
-            out.close();
         Neighbor nn = Neighbor(id, distance);
         best_L_nodes.insert(nn);
         
@@ -1553,62 +1466,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             {
                 // No filtering - fill res_vec with zeros
                 res_vec.resize(id_scratch.size(), 0.0f);
-                // Pre-filter check for non-search invocations
-                if (use_filter && !search_invocation)
-                {
-                    if (detect_common_filters(id, search_invocation, filter_labels) < min_inter_size)
-                        continue;
-                }
-
-                // Collect all valid IDs first for batch processing
-                id_scratch.push_back(id);
-            }
-            
-            // BATCH PROCESSING: Process all Jaccard similarities at once
-            if (use_filter && !id_scratch.empty())
-            {
-                auto jaccard_start = std::chrono::high_resolution_clock::now();
-                std::vector<float> jaccard_similarities;
-                calculate_jaccard_similarity_batch(id_scratch, filter_labels, jaccard_similarities);
-                std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
-                curr_jaccard_time += jaccard_diff.count();
-                
-                // Convert similarities to penalties and apply filtering
-                res_vec.reserve(id_scratch.size());
-                std::vector<uint32_t> filtered_ids;
-                filtered_ids.reserve(id_scratch.size());
-                
-                for (size_t i = 0; i < id_scratch.size(); ++i)
-                {
-                    float penalty = 1.0f - jaccard_similarities[i];
-                    
-                    // Optional: Filter out points with very high penalty during search
-                    if (search_invocation && penalty > 0.95f) // 95% penalty threshold
-                        continue;
-                        
-                    res_vec.push_back(penalty);
-                    filtered_ids.push_back(id_scratch[i]);
-                    
-                    if (print_qstats)
-                    {
-                        std::ofstream out("query_stats.txt", std::ios_base::app);
-                        out << "BATCH processed nbr " << id_scratch[i] << " penalty " << penalty << " with filters ";
-                        for (auto const &filter : _location_to_labels[id_scratch[i]])
-                        {
-                            out << filter << " ";
-                        }
-                        out << std::endl;
-                        out.close();
-                    }
-                }
-                
-                // Replace id_scratch with filtered IDs
-                id_scratch = std::move(filtered_ids);
-            }
-            else if (!use_filter)
-            {
-                // No filtering - fill res_vec with zeros
-                res_vec.resize(id_scratch.size(), 0.0f);
             }
         }
 
@@ -1619,11 +1476,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             out.close();
         }
 
-        // Mark nodes visited
-        /*        for (auto id : id_scratch)
-                {
-                } */
-
+        // Mark nodes visited and compute distances
         assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
         cmps += static_cast<uint32_t>(id_scratch.size());  // Count distance comparisons
@@ -1632,7 +1485,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            // Apply normalization to vector distance before combining with filter score
+            // Apply normalization to vector distance before combining with filter score  
             float normalized_distance = g_normalization_config.normalize_distance(dist_scratch[m]);
             best_L_nodes.insert(Neighbor(id_scratch[m], normalized_distance + w_m * res_vec[m]));
         }
