@@ -1130,6 +1130,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t hops = 0;
     uint32_t cmps = 0;
 
+    // Pre-size scratch vectors for batch operations to avoid reallocations
+    size_t estimated_batch_size = std::max(init_ids.size(), (size_t)(Lsize * 2));
+    scratch->resize_jaccard_scratch_for_batch(estimated_batch_size);
+
     float *pq_dists = nullptr;
 
     if (print_qstats)
@@ -1166,7 +1170,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     uint32_t candidates_filtered = 0;
     
     // STEP 1: Collect all valid initial candidates first
-    std::vector<uint32_t> valid_init_candidates;
+    std::vector<uint32_t> &valid_init_candidates = scratch->valid_init_candidates_scratch();
+    valid_init_candidates.clear();
     valid_init_candidates.reserve(init_ids.size());
     
     for (auto id : init_ids)
@@ -1202,11 +1207,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     }
     
     // STEP 2: BATCH PROCESS all initial candidates' filter scores at once
-    std::vector<float> init_penalties;
+    std::vector<float> &init_penalties = scratch->init_penalties_scratch();
+    init_penalties.clear();
     if (use_filter && !valid_init_candidates.empty())
     {
         auto jaccard_start = std::chrono::high_resolution_clock::now();
-        std::vector<float> jaccard_similarities;
+        std::vector<float> &jaccard_similarities = scratch->jaccard_similarities_scratch();
+        jaccard_similarities.clear();
         calculate_jaccard_similarity_batch(valid_init_candidates, filter_labels, jaccard_similarities);
         std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
         curr_jaccard_time += jaccard_diff.count();
@@ -1425,14 +1432,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             if (use_filter && !id_scratch.empty())
             {
                 auto jaccard_start = std::chrono::high_resolution_clock::now();
-                std::vector<float> jaccard_similarities;
+                std::vector<float> &jaccard_similarities = scratch->jaccard_similarities_scratch();
+                jaccard_similarities.clear();
                 calculate_jaccard_similarity_batch(id_scratch, filter_labels, jaccard_similarities);
                 std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
                 curr_jaccard_time += jaccard_diff.count();
                 
                 // Convert similarities to penalties and apply filtering
                 res_vec.reserve(id_scratch.size());
-                std::vector<uint32_t> filtered_ids;
+                std::vector<uint32_t> &filtered_ids = scratch->filtered_ids_scratch();
+                filtered_ids.clear();
                 filtered_ids.reserve(id_scratch.size());
                 
                 for (size_t i = 0; i < id_scratch.size(); ++i)

@@ -42,6 +42,16 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
     _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R * _R));
     _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R * _R));
+    
+    // Initialize scratch space for Jaccard similarity calculations
+    size_t max_neighbor_batch = (size_t)std::ceil(defaults::GRAPH_SLACK_FACTOR * _R); // Single level neighbors
+    size_t max_init_batch = 1000; // Conservative estimate for initial candidates
+    size_t max_batch_size = std::max(max_neighbor_batch, max_init_batch);
+    
+    _jaccard_similarities_scratch.reserve(max_batch_size);
+    _init_penalties_scratch.reserve(max_batch_size);
+    _valid_init_candidates_scratch.reserve(max_batch_size);
+    _filtered_ids_scratch.reserve(max_batch_size);
 
     resize_for_new_L(std::max(search_l, indexing_l));
 }
@@ -62,6 +72,12 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _expanded_nodes_set.clear();
     _expanded_nghrs_vec.clear();
     _occlude_list_output.clear();
+    
+    // Clear Jaccard similarity scratch vectors
+    _jaccard_similarities_scratch.clear();
+    _init_penalties_scratch.clear();
+    _valid_init_candidates_scratch.clear();
+    _filtered_ids_scratch.clear();
 }
 
 template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l)
