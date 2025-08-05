@@ -217,8 +217,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         std::vector<T *> res = std::vector<T *>();
         int method_used = 0;
         int curr_query = 0;
-        
-        std::cout << "Starting search on " << query_num << " queries..." << std::endl;
+
+        if (test_id == 0)
+        { // Only pause on[ first L to avoid multiple pauses
+            std::cout << "[PERF] About to start search_with_filters. Press Enter to continue..." << std::endl;
+            std::cin.get(); // Wait for user input
+        }
         
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);     
@@ -338,7 +342,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         if (show_qps_per_thread)
             displayed_qps /= num_threads;
 
-        std::vector<double> recalls;
+        std::vector<float> recalls;
         if (calc_recall_flag)
         {
             if (L == L_for_print)
@@ -382,6 +386,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
 
             recalls.reserve(1);
+            double overall_recall = 0;
 
             for (size_t i = 0; i < query_num; i++)
             {
@@ -418,13 +423,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                     graph_recalls[test_id] += cur_recall;
                     break;
                 }
+                overall_recall += cur_recall;
             }
 
-            for (uint32_t curr_recall = recall_at; curr_recall <= recall_at; curr_recall++)
-            {
-                recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
-                                                            query_result_ids[test_id].data(), K_or_L, curr_recall, K_or_L));
-            }
+            float recall_val = (overall_recall * 100.0) / (query_num * recall_at * 1.0);
+            recalls.push_back(recall_val);
         }
 
         std::sort(latency_stats.begin(), latency_stats.end());
@@ -500,8 +503,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
         avg_intersection_time = (avg_intersection_time * 1000000.0) / query_num;
         avg_jaccard_time = (avg_jaccard_time * 1000000.0) / query_num;
-        std::cout << "Get intersection time: " << avg_intersection_time << " μs/query" << std::endl;
-        std::cout << "Jaccard similarity time: " << avg_jaccard_time << " μs/query" << std::endl;
+        std::cout << "Get intersection time: " << avg_intersection_time << " mus/query" << std::endl;
+        std::cout << "Jaccard similarity time: " << avg_jaccard_time << " mus/query" << std::endl;
         
         // double total_filter_overhead = (time_to_get_valid + time_to_detect_penalty + time_to_intersect + time_to_filter_check_and_compare) * 1000000.0 / query_num;
         // total_filter_overhead += avg_intersection_time;  // Add the new intersection timing

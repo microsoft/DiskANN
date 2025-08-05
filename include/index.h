@@ -129,6 +129,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Optimized version that reuses detect_filter_penalty logic for point IDs
     DISKANN_DLLEXPORT inline float calculate_jaccard_similarity_fast(uint32_t point_id, const std::vector<std::vector<LabelT>> &filter_labels);
+    
+    // Batch processing version for multiple points simultaneously
+    DISKANN_DLLEXPORT inline void calculate_jaccard_similarity_batch(const std::vector<uint32_t>& point_ids, 
+                                                                    const std::vector<std::vector<LabelT>>& filter_labels,
+                                                                    std::vector<float>& results);
 
     // Batch build from a file. Optionally pass tags vector.
     DISKANN_DLLEXPORT void build(const char *filename, const size_t num_points_to_load,
@@ -436,7 +441,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // default as a location can only be released at end of consolidate deletes
     std::vector<std::vector<LabelT>> _location_to_labels;
     std::vector<tsl::robin_set<LabelT>> _location_to_labels_robin;
-    //std::vector<roaring::Roaring> _location_to_labels_bitmap;
+    std::vector<roaring::Roaring> _location_to_labels_bitmap;
     tsl::robin_set<LabelT> _labels;
     std::string _labels_file;
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
