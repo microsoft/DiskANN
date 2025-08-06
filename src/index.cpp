@@ -1161,8 +1161,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     };
 
     // Lambda to batch compute query<-> node distances in PQ space
-    auto compute_dists = [this, scratch, pq_dists](const std::vector<uint32_t> &ids, std::vector<float> &dists_out) {
-        _pq_data_store->get_distance(scratch->aligned_query(), ids, dists_out, scratch);
+    auto compute_dists = [this, scratch, pq_dists, aligned_query](const std::vector<uint32_t> &ids, std::vector<float> &dists_out) {
+        // Always prefetch query vector for better cache performance
+        _mm_prefetch((const char*)aligned_query, _MM_HINT_T0);
+        
+        // Prefetch the first few candidate vectors using the data store interface
+        size_t prefetch_count = ids.size() < 4ul ? ids.size() : 4ul;
+        for (size_t prefetch_idx = 0; prefetch_idx < prefetch_count; ++prefetch_idx) {
+            // Use the data store's prefetch_vector method - works for both InMemDataStore and PQDataStore
+            _pq_data_store->prefetch_vector(ids[prefetch_idx]);
+        }
+        
+        _pq_data_store->get_distance(aligned_query, ids, dists_out, scratch);
     };
 
     // Initialize the candidate pool with starting points
@@ -1248,6 +1258,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         float distance;
         uint32_t ids[] = {id};
         float distances[] = {std::numeric_limits<float>::max()};
+        
+        // Prefetch both query vector and next candidate vector for single distance calculation
+        _mm_prefetch((const char*)aligned_query, _MM_HINT_T0);
+        if (i + 1 < valid_init_candidates.size()) {
+            // Prefetch next candidate's vector data using the data store interface
+            _pq_data_store->prefetch_vector(valid_init_candidates[i + 1]);
+        }
+        
         _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
         cmps++;  // Count this distance comparison
         
