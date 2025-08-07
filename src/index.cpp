@@ -47,6 +47,8 @@ namespace diskann
     int64_t curr_query = -1;
     double curr_intersection_time = 0.0;
     double curr_jaccard_time = 0.0;
+    uint32_t curr_init_cmps = 0;        // Distance comparisons for initial candidates in current query
+    uint32_t curr_expansion_cmps = 0;   // Distance comparisons for neighbor expansion in current query
     uint32_t penalty_scale = 10;
     float w_m = 1.0f;
     uint32_t num_sp = 2;
@@ -1128,7 +1130,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     assert(id_scratch.size() == 0);
     T *aligned_query = scratch->aligned_query();
     uint32_t hops = 0;
-    uint32_t cmps = 0;
+    uint32_t init_cmps = 0;        // Distance comparisons for initial candidates
+    uint32_t expansion_cmps = 0;   // Distance comparisons for neighbor expansion
 
     // Pre-size scratch vectors for batch operations to avoid reallocations
     size_t estimated_batch_size = std::max(init_ids.size(), (size_t)(Lsize * 2));
@@ -1229,14 +1232,21 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         curr_jaccard_time += jaccard_diff.count();
         
         // Convert similarities to penalties
-        init_penalties.reserve(jaccard_similarities.size());
+        init_penalties.clear();
+        // Ensure capacity without reallocating - use assert to catch capacity issues early
+        assert(init_penalties.capacity() >= jaccard_similarities.size());
         for (float sim : jaccard_similarities) {
             init_penalties.push_back(1.0f - sim);
         }
     }
     else
     {
-        init_penalties.resize(valid_init_candidates.size(), 0.0f);
+        init_penalties.clear();
+        // Ensure capacity without reallocating 
+        assert(init_penalties.capacity() >= valid_init_candidates.size());
+        for (size_t i = 0; i < valid_init_candidates.size(); ++i) {
+            init_penalties.push_back(0.0f);
+        }
     }
     
     // STEP 3: Process all candidates with their pre-computed penalties
@@ -1267,7 +1277,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         }
         
         _pq_data_store->get_distance(aligned_query, ids, 1, distances, scratch);
-        cmps++;  // Count this distance comparison
+        init_cmps++;  // Count this as initial candidate distance comparison
         
         // Apply normalization to vector distance
         float normalized_distance = g_normalization_config.normalize_distance(distances[0]);
@@ -1456,22 +1466,16 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
                 curr_jaccard_time += jaccard_diff.count();
                 
-                // Convert similarities to penalties and apply filtering
-                res_vec.reserve(id_scratch.size());
-                std::vector<uint32_t> &filtered_ids = scratch->filtered_ids_scratch();
-                filtered_ids.clear();
-                filtered_ids.reserve(id_scratch.size());
+                // Convert similarities to penalties - zero allocations
+                res_vec.clear();
+                // Ensure capacity without reallocating - should be pre-allocated by scratch space
+                assert(res_vec.capacity() >= jaccard_similarities.size());
                 
-                for (size_t i = 0; i < id_scratch.size(); ++i)
+                // Simple conversion from similarities to penalties
+                for (size_t i = 0; i < jaccard_similarities.size(); ++i)
                 {
                     float penalty = 1.0f - jaccard_similarities[i];
-                    
-                    // Optional: Filter out points with very high penalty during search
-                    if (search_invocation && penalty > 0.95f) // 95% penalty threshold
-                        continue;
-                        
                     res_vec.push_back(penalty);
-                    filtered_ids.push_back(id_scratch[i]);
                     
                     if (print_qstats)
                     {
@@ -1485,14 +1489,15 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         out.close();
                     }
                 }
-                
-                // Replace id_scratch with filtered IDs
-                id_scratch = std::move(filtered_ids);
             }
             else if (!use_filter)
             {
-                // No filtering - fill res_vec with zeros
-                res_vec.resize(id_scratch.size(), 0.0f);
+                // No filtering - fill res_vec with zeros, no allocations
+                res_vec.clear();
+                assert(res_vec.capacity() >= id_scratch.size());
+                for (size_t i = 0; i < id_scratch.size(); ++i) {
+                    res_vec.push_back(0.0f);
+                }
             }
         }
 
@@ -1506,7 +1511,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Mark nodes visited and compute distances
         assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
-        cmps += static_cast<uint32_t>(id_scratch.size());  // Count distance comparisons
+        expansion_cmps += static_cast<uint32_t>(id_scratch.size());  // Count neighbor expansion distance comparisons
         assert(res_vec.size() == id_scratch.size());
 
         // Insert <id, dist> pairs into the pool of candidates
@@ -1517,7 +1522,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
             best_L_nodes.insert(Neighbor(id_scratch[m], normalized_distance + w_m * res_vec[m]));
         }
     }
-    return std::make_pair(hops, cmps);
+    
+    // Update global variables for query statistics
+    curr_init_cmps = init_cmps;
+    curr_expansion_cmps = expansion_cmps;
+    
+    uint32_t total_cmps = init_cmps + expansion_cmps;
+    return std::make_pair(hops, total_cmps);
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -2681,6 +2692,17 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
         diskann::cerr << "Found pos: " << pos << "fewer than K elements " << K << " for query" << std::endl;
     }
 
+    // Print distance comparison statistics if enabled
+    if (print_qstats)
+    {
+        std::ofstream out("query_stats.txt", std::ios_base::app);
+        out << "Distance comparisons - Initial candidates: " << curr_init_cmps 
+            << ", Neighbor expansion: " << curr_expansion_cmps 
+            << ", Total: " << (curr_init_cmps + curr_expansion_cmps) << std::endl;
+        out << std::endl;
+        out.close();
+    }
+
     return retval;
 }
 
@@ -3138,6 +3160,18 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     // }
 
     //std::cout << "[DEBUG] Inside search_with_filters: num_graphs = " << num_graphs << std::endl;
+    
+    // Print distance comparison statistics if enabled
+    if (print_qstats && local_print)
+    {
+        std::ofstream out("query_stats.txt", std::ios_base::app);
+        out << "Distance comparisons - Initial candidates: " << curr_init_cmps 
+            << ", Neighbor expansion: " << curr_expansion_cmps 
+            << ", Total: " << (curr_init_cmps + curr_expansion_cmps) << std::endl;
+        out << std::endl;
+        out.close();
+    }
+    
     return retval;
 }
 

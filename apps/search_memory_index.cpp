@@ -336,6 +336,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
         
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
+        
+         if(test_id == 0) {
+                std::cout << "[PERF] Search complete. Press enter to continue...";
+                std::cin.get();
+            }
 
         double displayed_qps = query_num / diff.count();
 
