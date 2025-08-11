@@ -24,6 +24,8 @@
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
+#define USE_MAP_OF_FILE 1
+
 namespace diskann
 {
 
@@ -223,7 +225,7 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     // If not compacted, saving the whole data as the points may be spread around.
     const unsigned node_count = _data_compacted ? _nd + _num_frozen_pts : _max_points + _num_frozen_pts;
 
-#ifdef _WINDOWS
+#ifdef USE_MAP_OF_FILE
 
     const size_t size_of_data = node_count * _aligned_dim * sizeof(T);
     const size_t total_size = 2 * sizeof(uint32_t) + size_of_data;
@@ -241,6 +243,10 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
 
     return size_of_data;
 #else
+    Log(logging::Info, 
+        "save_data", 
+        "Saving data using ofstream");
+
     return save_data_in_base_dimensions(data_file, _data, node_count, _dim, _aligned_dim);
 #endif
 }
@@ -250,7 +256,7 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
 // 4 byte unsigned)
 template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_graph(const std::string& graph_file) const
 {
-#if _WINDOWS
+#if USE_MAP_OF_FILE
 
     Log(logging::Info, "save_graph", "Saving graph data using file map");
 
@@ -322,6 +328,8 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     return index_size;
 
 #else
+    Log(logging::Info, "save_graph", "Saving graph data using ofstream");
+
     std::ofstream out;
     open_file_to_write(out, graph_file);
 
@@ -337,12 +345,12 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     out.write((char *)&_start, sizeof(_start));
     out.write((char *)&_num_frozen_pts, sizeof(_num_frozen_pts));
 
-    size_t data_compacted_output = _data_compacted ? 1 : 0;
+    const size_t data_compacted_output = _data_compacted ? 1 : 0;
     out.write((char *)&data_compacted_output, sizeof(data_compacted_output));
 
-    const _u64 header_size = sizeof(index_size) + sizeof(_max_observed_degree) 
-                             + sizeof(_start) + sizeof(_num_frozen_pts) 
-                             + sizeof(data_compacted_output);
+    const _u64 header_size = sizeof(index_size) + sizeof(_max_observed_degree) + sizeof(_start) +
+                             sizeof(_num_frozen_pts) + sizeof(data_compacted_output);
+
     index_size = header_size;
 
     // If the graph is compacted, either _nd == _max_points or any frozen points have been
@@ -378,7 +386,9 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     Log(logging::Info, 
         "save_graph", 
         "Graph data saved, total points: %u, empty out nodes: %u, max_degree: %u",
-        total_points, empty_out_neighbors, max_degree);
+        total_points, 
+        empty_out_neighbors, 
+        max_degree);
 
     return index_size; // number of bytes written
 #endif
@@ -470,10 +480,10 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
             }
         }
 
-        std::string graph_file = std::string(filename);
-        std::string tags_file = std::string(filename) + ".tags";
-        std::string data_file = std::string(filename) + ".data";
-        std::string delete_list_file = std::string(filename) + ".del";
+        const std::string graph_file = std::string(filename);
+        const std::string tags_file = std::string(filename) + ".tags";
+        const std::string data_file = std::string(filename) + ".data";
+        const std::string delete_list_file = std::string(filename) + ".del";
 
         // Because the save_* functions use append mode, ensure that
         // the files are deleted before save. Ideally, we should check
