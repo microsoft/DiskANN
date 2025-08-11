@@ -87,7 +87,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT ~Index();
 
     // Saves graph, data, metadata and associated tags.
+    // Takes exclusive locks on update, tags, consolidate_delete and delete. Some of these locks
+    // are used in search and lookup methods which means those will be blocked until save completes.
     DISKANN_DLLEXPORT void save(const char *filename, bool compact_before_save = false);
+
+    // Same as above, but adds ability to skip btaining locks.
+    // if no_lock is true, the function will not acquire any locks. This is useful for customers
+    // that can guarantee no updates to the index will happen while saving. In this case, the query 
+    // part continue to work.
+    DISKANN_DLLEXPORT void save(const char *filename, bool compact_before_save, bool no_lock);
 
     // Load functions
 #ifdef EXEC_ENV_OLS

@@ -411,14 +411,28 @@ _u64 Index<T, TagT, LabelT>::save_delete_list(const std::string& filename) const
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save)
+void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save /* = false */)
+{
+    save(filename, compact_before_save, false);
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save, bool no_lock)
 {
     diskann::Timer timer;
 
-    std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
-    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock);
-    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock);
-    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock);
+    std::unique_lock<std::shared_timed_mutex> ul(_update_lock, std::defer_lock);
+    std::unique_lock<std::shared_timed_mutex> cl(_consolidate_lock, std::defer_lock);
+    std::unique_lock<std::shared_timed_mutex> tl(_tag_lock, std::defer_lock);
+    std::unique_lock<std::shared_timed_mutex> dl(_delete_lock, std::defer_lock);
+
+    if (!no_lock)
+    {
+        ul.lock();
+        cl.lock();
+        tl.lock();
+        dl.lock();
+    }
 
     bool frozen_points_compacted = false;
     if (compact_before_save)
