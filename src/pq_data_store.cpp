@@ -6,6 +6,12 @@
 #include "utils.h"
 #include "distance.h"
 
+#ifdef _WIN32
+#include <intrin.h>
+#else
+#include <x86intrin.h>
+#endif
+
 namespace diskann
 {
 
@@ -180,6 +186,17 @@ void PQDataStore<data_t>::get_distance(const data_t *preprocessed_query, const l
     {
         throw diskann::ANNException("PQScratch not set in scratch space.", -1);
     }
+    
+    // Prefetch preprocessed query data
+    _mm_prefetch((const char*)preprocessed_query, _MM_HINT_T0);
+    
+    // Prefetch some of the quantized data for the locations we'll process
+    for (uint32_t i = 0; i < location_count && i < 4; i++)
+    {
+        const uint8_t *quantized_loc = _quantized_data + locations[i] * this->_num_chunks;
+        _mm_prefetch((const char*)quantized_loc, _MM_HINT_T0);
+    }
+    
     diskann::aggregate_coords(locations, location_count, _quantized_data, this->_num_chunks,
                               pq_scratch->aligned_pq_coord_scratch);
     _pq_distance_fn->preprocessed_distance(*pq_scratch, location_count, distances);
@@ -198,6 +215,18 @@ void PQDataStore<data_t>::get_distance(const data_t *preprocessed_query, const s
     {
         throw diskann::ANNException("PQScratch not set in scratch space.", -1);
     }
+    
+    // Prefetch preprocessed query data
+    _mm_prefetch((const char*)preprocessed_query, _MM_HINT_T0);
+    
+    // Prefetch some of the quantized data for the locations we'll process
+    size_t prefetch_count = ids.size() < 4 ? ids.size() : 4;
+    for (size_t i = 0; i < prefetch_count; i++)
+    {
+        const uint8_t *quantized_loc = _quantized_data + ids[i] * this->_num_chunks;
+        _mm_prefetch((const char*)quantized_loc, _MM_HINT_T0);
+    }
+    
     diskann::aggregate_coords(ids, _quantized_data, this->_num_chunks, pq_scratch->aligned_pq_coord_scratch);
     _pq_distance_fn->preprocessed_distance(*pq_scratch, (location_t)ids.size(), distances);
 }

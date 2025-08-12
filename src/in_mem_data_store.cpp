@@ -7,6 +7,12 @@
 
 #include "utils.h"
 
+#ifdef _WIN32
+#include <intrin.h>
+#else
+#include <x86intrin.h>
+#endif
+
 namespace diskann
 {
 
@@ -197,7 +203,14 @@ void InMemDataStore<data_t>::preprocess_query(const data_t *query, AbstractScrat
 
 template <typename data_t> float InMemDataStore<data_t>::get_distance(const data_t *query, const location_t loc) const
 {
-    return _distance_fn->compare(query, _data + _aligned_dim * loc, (uint32_t)_aligned_dim);
+    // Prefetch query vector for better cache performance
+    _mm_prefetch((const char*)query, _MM_HINT_T0);
+    
+    // Prefetch the current vector data
+    const data_t *vector_data = _data + _aligned_dim * loc;
+    _mm_prefetch((const char*)vector_data, _MM_HINT_T0);
+    
+    return _distance_fn->compare(query, vector_data, (uint32_t)_aligned_dim);
 }
 
 template <typename data_t>
@@ -205,9 +218,23 @@ void InMemDataStore<data_t>::get_distance(const data_t *query, const location_t 
                                           const uint32_t location_count, float *distances,
                                           AbstractScratch<data_t> *scratch_space) const
 {
+    // Prefetch query vector once for the entire batch
+    _mm_prefetch((const char*)query, _MM_HINT_T0);
+    
     for (location_t i = 0; i < location_count; i++)
     {
-        distances[i] = _distance_fn->compare(query, _data + locations[i] * _aligned_dim, (uint32_t)this->_aligned_dim);
+        // Prefetch current vector data
+        const data_t *current_vector = _data + locations[i] * _aligned_dim;
+        _mm_prefetch((const char*)current_vector, _MM_HINT_T0);
+        
+        // Prefetch next vector data if available
+        if (i + 1 < location_count)
+        {
+            const data_t *next_vector = _data + locations[i + 1] * _aligned_dim;
+            _mm_prefetch((const char*)next_vector, _MM_HINT_T0);
+        }
+        
+        distances[i] = _distance_fn->compare(query, current_vector, (uint32_t)this->_aligned_dim);
     }
 }
 
@@ -222,10 +249,24 @@ template <typename data_t>
 void InMemDataStore<data_t>::get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
                                           std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const
 {
+    // Prefetch query vector once for the entire batch
+    _mm_prefetch((const char*)preprocessed_query, _MM_HINT_T0);
+    
     for (int i = 0; i < ids.size(); i++)
     {
+        // Prefetch current vector data
+        const data_t *current_vector = _data + ids[i] * _aligned_dim;
+        _mm_prefetch((const char*)current_vector, _MM_HINT_T0);
+        
+        // Prefetch next vector data if available
+        if (i + 1 < (int)ids.size())
+        {
+            const data_t *next_vector = _data + ids[i + 1] * _aligned_dim;
+            _mm_prefetch((const char*)next_vector, _MM_HINT_T0);
+        }
+        
         distances[i] =
-            _distance_fn->compare(preprocessed_query, _data + ids[i] * _aligned_dim, (uint32_t)this->_aligned_dim);
+            _distance_fn->compare(preprocessed_query, current_vector, (uint32_t)this->_aligned_dim);
     }
 }
 

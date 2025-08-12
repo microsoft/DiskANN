@@ -120,15 +120,31 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) c
 {
 #ifdef _WINDOWS
 #ifdef USE_AVX2
+    // Prefetch the start of both vectors
+    _mm_prefetch((const char*)a, _MM_HINT_T0);
+    _mm_prefetch((const char*)b, _MM_HINT_T0);
+    
     __m256 r = _mm256_setzero_ps();
     char *pX = (char *)a, *pY = (char *)b;
+    const char *original_pX = pX;
+    const char *original_pY = pY;
+    uint32_t prefetch_offset = 64; // Prefetch 64 bytes ahead
+    
     while (size >= 32)
     {
+        // Prefetch ahead for better cache performance
+        if (size > prefetch_offset) 
+        {
+            _mm_prefetch(original_pX + prefetch_offset, _MM_HINT_T0);
+            _mm_prefetch(original_pY + prefetch_offset, _MM_HINT_T0);
+        }
+        
         __m256i r1 = _mm256_subs_epi8(_mm256_loadu_si256((__m256i *)pX), _mm256_loadu_si256((__m256i *)pY));
         r = _mm256_add_ps(r, _mm256_mul_epi8(r1, r1));
         pX += 32;
         pY += 32;
         size -= 32;
+        prefetch_offset += 32;
     }
     while (size > 0)
     {
@@ -141,19 +157,39 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) c
     r = _mm256_hadd_ps(_mm256_hadd_ps(r, r), r);
     return r.m256_f32[0] + r.m256_f32[4];
 #else
+    // Prefetch the start of both vectors for non-AVX2 fallback
+    _mm_prefetch((const char*)a, _MM_HINT_T0);
+    _mm_prefetch((const char*)b, _MM_HINT_T0);
+    
     int32_t result = 0;
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
     for (int32_t i = 0; i < (int32_t)size; i++)
     {
+        // Prefetch ahead every 64 bytes (64 int8_t values)
+        if (i % 64 == 0 && i + 64 < (int32_t)size) 
+        {
+            _mm_prefetch((const char*)(a + i + 64), _MM_HINT_T0);
+            _mm_prefetch((const char*)(b + i + 64), _MM_HINT_T0);
+        }
         result += ((int32_t)((int16_t)a[i] - (int16_t)b[i])) * ((int32_t)((int16_t)a[i] - (int16_t)b[i]));
     }
     return (float)result;
 #endif
 #else
+    // Prefetch the start of both vectors for Linux version
+    _mm_prefetch((const char*)a, _MM_HINT_T0);
+    _mm_prefetch((const char*)b, _MM_HINT_T0);
+    
     int32_t result = 0;
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
     for (int32_t i = 0; i < (int32_t)size; i++)
     {
+        // Prefetch ahead every 64 bytes (64 int8_t values)
+        if (i % 64 == 0 && i + 64 < (int32_t)size) 
+        {
+            _mm_prefetch((const char*)(a + i + 64), _MM_HINT_T0);
+            _mm_prefetch((const char*)(b + i + 64), _MM_HINT_T0);
+        }
         result += ((int32_t)((int16_t)a[i] - (int16_t)b[i])) * ((int32_t)((int16_t)a[i] - (int16_t)b[i]));
     }
     return (float)result;
@@ -162,12 +198,22 @@ float DistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t size) c
 
 float DistanceL2UInt8::compare(const uint8_t *a, const uint8_t *b, uint32_t size) const
 {
+    // Prefetch the start of both vectors
+    _mm_prefetch((const char*)a, _MM_HINT_T0);
+    _mm_prefetch((const char*)b, _MM_HINT_T0);
+    
     uint32_t result = 0;
 #ifndef _WINDOWS
 #pragma omp simd reduction(+ : result) aligned(a, b : 8)
 #endif
     for (int32_t i = 0; i < (int32_t)size; i++)
     {
+        // Prefetch ahead every 64 bytes (64 uint8_t values)
+        if (i % 64 == 0 && i + 64 < (int32_t)size) 
+        {
+            _mm_prefetch((const char*)(a + i + 64), _MM_HINT_T0);
+            _mm_prefetch((const char*)(b + i + 64), _MM_HINT_T0);
+        }
         result += ((int32_t)((int16_t)a[i] - (int16_t)b[i])) * ((int32_t)((int16_t)a[i] - (int16_t)b[i]));
     }
     return (float)result;
@@ -209,11 +255,21 @@ float DistanceL2Float::compare(const float *a, const float *b, uint32_t size) co
     // horizontal add sum
     result = _mm256_reduce_add_ps(sum);
 #else
+    // Prefetch the start of both vectors for non-AVX2 fallback
+    _mm_prefetch((const char*)a, _MM_HINT_T0);
+    _mm_prefetch((const char*)b, _MM_HINT_T0);
+    
 #ifndef _WINDOWS
 #pragma omp simd reduction(+ : result) aligned(a, b : 32)
 #endif
     for (int32_t i = 0; i < (int32_t)size; i++)
     {
+        // Prefetch ahead every 16 floats (64 bytes)
+        if (i % 16 == 0 && i + 16 < (int32_t)size) 
+        {
+            _mm_prefetch((const char*)(a + i + 16), _MM_HINT_T0);
+            _mm_prefetch((const char*)(b + i + 16), _MM_HINT_T0);
+        }
         result += (a[i] - b[i]) * (a[i] - b[i]);
     }
 #endif
@@ -271,11 +327,26 @@ float AVXDistanceL2Int8::compare(const int8_t *a, const int8_t *b, uint32_t leng
 
 float AVXDistanceL2Float::compare(const float *a, const float *b, uint32_t length) const
 {
+    // Prefetch the start of both vectors
+    _mm_prefetch((const char*)a, _MM_HINT_T0);
+    _mm_prefetch((const char*)b, _MM_HINT_T0);
+    
     __m128 diff, v1, v2;
     __m128 sum = _mm_set1_ps(0);
+    
+    const float *original_a = a;
+    const float *original_b = b;
+    uint32_t prefetch_offset = 64; // Prefetch 64 bytes ahead (16 floats)
 
     while (length >= 4)
     {
+        // Prefetch ahead for better cache performance
+        if (length > prefetch_offset) 
+        {
+            _mm_prefetch((const char*)(original_a + prefetch_offset), _MM_HINT_T0);
+            _mm_prefetch((const char*)(original_b + prefetch_offset), _MM_HINT_T0);
+        }
+        
         v1 = _mm_loadu_ps(a);
         a += 4;
         v2 = _mm_loadu_ps(b);
@@ -283,6 +354,7 @@ float AVXDistanceL2Float::compare(const float *a, const float *b, uint32_t lengt
         diff = _mm_sub_ps(v1, v2);
         sum = _mm_add_ps(sum, _mm_mul_ps(diff, diff));
         length -= 4;
+        prefetch_offset += 4;
     }
 
     return sum.m128_f32[0] + sum.m128_f32[1] + sum.m128_f32[2] + sum.m128_f32[3];

@@ -1074,7 +1074,8 @@ inline void Index<T, TagT, LabelT>::calculate_jaccard_similarity_batch(
                 
                 // Check if any label in this clause matches the point
                 for (const auto& label : clause) {
-                    if (_labels_to_points_set[label].count(point_id)) {
+                    auto it = _labels_to_points_set.find(label);
+                    if (it != _labels_to_points_set.end() && it->second.count(point_id)) {
                         matching_clauses++;
                         break; // Found match, move to next clause
                     }

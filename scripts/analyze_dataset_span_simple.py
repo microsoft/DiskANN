@@ -190,23 +190,6 @@ def main():
     print(f"{'Mean normalization':<25} {suggestions['mean_norm']:<15.6f} {'0.0':<15} {'Simple scaling only'}")
     print(f"{'Median normalization':<25} {suggestions['median_norm']:<15.6f} {'0.0':<15} {'Robust to outliers'}")
     
-    # Practical recommendations
-    print("\n" + "="*60)
-    print("PRACTICAL RECOMMENDATIONS")
-    print("="*60)
-    
-    print("For DiskANN filter + distance combination:")
-    print(f"1. RECOMMENDED: Min-Max normalization")
-    print(f"   - Apply: normalized_dist = (distance - {stats['min']:.6f}) * {suggestions['span_norm']:.6f}")
-    print(f"   - Result: distances in [0, 1] range, same as filter similarities")
-    
-    print(f"\n2. ALTERNATIVE: Robust normalization (if outliers present)")
-    print(f"   - Apply: normalized_dist = (distance - {stats['q25']:.6f}) * {suggestions['robust_norm']:.6f}")
-    print(f"   - Result: most distances in [0, 1], outliers may exceed 1")
-    
-    print(f"\n3. SIMPLE: Mean normalization (if centering not needed)")
-    print(f"   - Apply: normalized_dist = distance * {suggestions['mean_norm']:.6f}")
-    print(f"   - Result: average distance becomes 1.0")
     
     # Always save simple normalization factors to text file
     norm_config_file = args.norm_factors if args.norm_factors else 'normalization_factors.txt'
