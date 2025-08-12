@@ -2473,23 +2473,29 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     _data_store->preprocess_query(query, scratch);
     auto retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true, maxLperSeller);
 
-    auto best_L_nodes = scratch->best_l_nodes();
+    NeighborPriorityQueueBase* best_L_nodes;
+    if (!_diverse_index) {
+        best_L_nodes = &(scratch->best_l_nodes());
+    }
+    else {
+        best_L_nodes = &(scratch->best_diverse_nodes());
+    }
 
     size_t pos = 0;
-    for (size_t i = 0; i < best_L_nodes.size(); ++i)
+    for (size_t i = 0; i < best_L_nodes->size(); ++i)
     {
-        if (best_L_nodes[i].id < _max_points)
+        if ((*best_L_nodes)[i].id < _max_points)
         {
-            indices[pos] = (IdType)best_L_nodes[i].id;
+            indices[pos] = (IdType)(*best_L_nodes)[i].id;
 
             if (distances != nullptr)
             {
 #ifdef EXEC_ENV_OLS
                 // DLVS expects negative distances
-                distances[pos] = best_L_nodes[i].distance;
+                distances[pos] = (*best_L_nodes)[i].distance;
 #else
-                distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT ? -1 * best_L_nodes[i].distance
-                                                                                : best_L_nodes[i].distance;
+                distances[pos] = _dist_metric == diskann::Metric::INNER_PRODUCT ? -1 * (*best_L_nodes)[i].distance
+                                                                                : (*best_L_nodes)[i].distance;
 #endif
             }
             pos++;
