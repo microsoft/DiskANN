@@ -3138,6 +3138,7 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
                                         __FUNCSIG__, __FILE__, __LINE__);
         }
 #else
+        Log(logging::Error, "Index", "Error adding tag %I64u: Out of capacity", tag);
         return -1;
 #endif
     }
@@ -3148,8 +3149,10 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag)
     {
         if (_tag_to_location.find(tag) != _tag_to_location.end())
         {
+            Log(logging::Warning, "Index", "Tag %I64u already exists in the index. Not inserting.", tag);
+
             release_location(location);
-            return -1;
+            return -2;
         }
 
         _tag_to_location[tag] = location;
