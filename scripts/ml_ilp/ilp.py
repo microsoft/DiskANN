@@ -138,7 +138,7 @@ def main():
     print("Done reading ground truth file")
 
     # Read the filter match file
-    filter_matches = np.loadtxt(args.filter_matches, dtype=np.int32)
+    filter_matches = np.loadtxt(args.filter_matches, dtype=np.float32)
     print(f"Filter matches shape: {filter_matches.shape}")
     print("Done reading filter match file")
     

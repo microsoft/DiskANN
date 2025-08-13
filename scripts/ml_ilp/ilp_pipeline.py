@@ -255,16 +255,20 @@ def main():
     # Step 4: Run ILP weight calculation
     print("STEP 4: Running ILP weight calculation")
     
+    # Define output file for ILP weights
+    ilp_weights_path = os.path.join(args.output_dir, f"ilp_weights_{args.base_size}_{args.query_size}.txt")
+    
     if not ensure_executable_exists(ilp_script, "ilp.py"):
         print("⚠ ILP script not found, skipping weight calculation")
         print("You can run ILP manually later using the generated ground truth files")
+        ilp_result = None
     else:
         ilp_cmd = [
             sys.executable,
             ilp_script,
             unfiltered_gt_path,
             filtered_gt_path,
-            # Note: match scores file not available, ILP script will work without it
+            unfiltered_match_scores_path,
             "--method", "pulp",  # Start with simple pulp method
             "--eps", "0.001"
         ]
@@ -272,29 +276,52 @@ def main():
         if args.norm_factors:
             ilp_cmd.extend(["--norm_factors", args.norm_factors])
         
-        result = run_command(ilp_cmd, "ILP weight calculation")
-        if result is None:
+        ilp_result = run_command(ilp_cmd, "ILP weight calculation")
+        if ilp_result is None:
             print("ILP weight calculation failed. Trying with different parameters...")
             
             # Try with PuLP method if ratio fails
             ilp_cmd_pulp = ilp_cmd.copy()
             try:
                 ilp_cmd_pulp[ilp_cmd_pulp.index("ratio")] = "pulp"
-                result = run_command(ilp_cmd_pulp, "ILP weight calculation (PuLP method)")
+                ilp_result = run_command(ilp_cmd_pulp, "ILP weight calculation (PuLP method)")
             except ValueError:
                 # "ratio" not in list, already using pulp
                 print("Already using PuLP method, trying with different epsilon...")
                 ilp_cmd_eps = ilp_cmd.copy()
                 ilp_cmd_eps[ilp_cmd_eps.index("0.001")] = "0.01"
-                result = run_command(ilp_cmd_eps, "ILP weight calculation (larger epsilon)")
+                ilp_result = run_command(ilp_cmd_eps, "ILP weight calculation (larger epsilon)")
         
-        if result is None:
+        if ilp_result is None:
             print("⚠ All ILP methods failed. Check your data and try manually.")
             print("Ground truth files are ready for manual ILP execution:")
             print(f"  Unfiltered GT: {unfiltered_gt_path}")
             print(f"  Filtered GT: {filtered_gt_path}")
         else:
             print("✓ ILP weight calculation completed successfully!")
+            # Save the ILP output to a file since the script doesn't support --output
+            print("⚠ Saving ILP output manually...")
+            with open(ilp_weights_path, 'w') as f:
+                f.write("ILP Weight Calculation Results\n")
+                f.write("="*40 + "\n\n")
+                f.write("STDOUT:\n")
+                f.write(ilp_result.stdout)
+                f.write("\n\nSTDERR:\n")
+                f.write(ilp_result.stderr)
+                f.write(f"\n\nGenerated at: {__import__('datetime').datetime.now()}\n")
+            print(f"✓ ILP output saved to: {ilp_weights_path}")
+            
+            # Extract w_m weight and save to separate file
+            import re
+            w_m_match = re.search(r'w_m = ([\d.]+)', ilp_result.stdout)
+            if w_m_match:
+                w_m_value = w_m_match.group(1)
+                w_m_file = os.path.join(args.output_dir, "w_m_weight.txt")
+                with open(w_m_file, 'w') as f:
+                    f.write(w_m_value)
+                print(f"✓ w_m weight ({w_m_value}) saved to: {w_m_file}")
+            else:
+                print("⚠ Could not extract w_m value from ILP output")
     
     # Save results summary
     summary_path = os.path.join(args.output_dir, "pipeline_summary.txt")
@@ -316,10 +343,15 @@ def main():
         f.write(f"  Filtered GT: {filtered_gt_path} ({'exists' if os.path.exists(filtered_gt_path) else 'missing'})\n")
         if args.norm_factors:
             f.write(f"  Normalization factors: {args.norm_factors} ({'exists' if os.path.exists(args.norm_factors) else 'missing'})\n")
+        if 'ilp_weights_path' in locals():
+            f.write(f"  ILP weights: {ilp_weights_path} ({'exists' if os.path.exists(ilp_weights_path) else 'missing'})\n")
+        w_m_file = os.path.join(args.output_dir, "w_m_weight.txt")
+        if os.path.exists(w_m_file):
+            f.write(f"  w_m weight: {w_m_file} (exists)\n")
         f.write(f"\n")
-        if 'result' in locals() and result:
+        if 'ilp_result' in locals() and ilp_result:
             f.write("ILP Results:\n")
-            f.write(result.stdout)
+            f.write(ilp_result.stdout)
         f.write(f"\nPipeline completed at: {__import__('datetime').datetime.now()}\n")
     
     print(f"\n{'='*60}")
@@ -335,10 +367,19 @@ def main():
     print(f"  Filtered GT: {'✓' if os.path.exists(filtered_gt_path) else '✗'}")
     if args.norm_factors:
         print(f"  Norm factors: {'✓' if os.path.exists(args.norm_factors) else '✗'}")
+    if 'ilp_weights_path' in locals():
+        print(f"  ILP weights: {'✓' if os.path.exists(ilp_weights_path) else '✗'}")
+    w_m_file = os.path.join(args.output_dir, "w_m_weight.txt")
+    if os.path.exists(w_m_file):
+        print(f"  w_m weight: ✓")
     
     if os.path.exists(unfiltered_gt_path) and os.path.exists(filtered_gt_path):
-        print(f"\n✓ Ready for ILP weight calculation!")
-        print(f"Check the summary file for ILP weights (w_d, w_m)")
+        if 'ilp_weights_path' in locals() and os.path.exists(ilp_weights_path):
+            print(f"\n✓ ILP pipeline completed successfully!")
+            print(f"✓ ILP weights are available in: {ilp_weights_path}")
+        else:
+            print(f"\n✓ Ground truth files ready for ILP weight calculation!")
+            print(f"Check the summary file for results")
     else:
         print(f"\n⚠ Some ground truth files are missing. Check the log above for errors.")
 
