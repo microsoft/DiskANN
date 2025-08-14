@@ -514,7 +514,7 @@ int identify_matching_points(const std::string &base, const size_t start_id, con
     std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
 
 #pragma omp parallel for schedule(dynamic, 128)
-    for (uint32_t i = 0; i < num_query; i++)
+    for (int32_t i = 0; i < num_query; i++)
     {
         //        if (i % 100 == 0)
         //        std::cout<<"."<< std::flush;
