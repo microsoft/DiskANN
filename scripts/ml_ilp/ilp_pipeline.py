@@ -171,9 +171,9 @@ def main():
     print("STEP 2: Calculating unfiltered ground truth")
     
     unfiltered_gt_path = os.path.join(args.output_dir, f"unfiltered_groundtruth_{args.base_size}_{args.query_size}_train.bin")
-    unfiltered_match_scores_path = os.path.join(args.output_dir, f"unfiltered_match_scores_{args.base_size}_{args.query_size}_test.txt")
-    
-    if (check_file_exists(unfiltered_gt_path, "Unfiltered ground truth") and 
+    unfiltered_match_scores_path = os.path.join(args.output_dir, f"unfiltered_match_scores_{args.base_size}_{args.query_size}_train.txt")
+
+    if (check_file_exists(unfiltered_gt_path, "Unfiltered ground truth") and
         check_file_exists(unfiltered_match_scores_path, "Unfiltered match scores")):
         print("✓ Unfiltered ground truth already computed, skipping...")
     else:

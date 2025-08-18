@@ -43,7 +43,7 @@ def direct_ratio_method(distances, matches, eps=1e-4):
     for q in range(Q):
         d = distances[q]
         m = matches[q]
-        pos_idx = np.where(m == 1)[1]
+        pos_idx = np.where(m == 1)[0]
         neg_idx = np.where(m == 0)[0]
         for i in pos_idx:
             for j in neg_idx:
@@ -105,7 +105,7 @@ def lp_soft_method(distances, matches, eps=1e-4, method ='lp'):
             pos = np.where(mvals == 1)[0]
             neg = np.where((mvals == 0) | (mvals == 0.5))[0]
             for i in pos:
-                neg_sample = np.random.choice(neg, size=min(10, len(neg)), replace=False)
+                neg_sample = np.random.choice(neg, size=min(100, len(neg)), replace=False)
                 for j in neg_sample:
                     if d[i] < d[j]:
                         continue
@@ -116,7 +116,7 @@ def lp_soft_method(distances, matches, eps=1e-4, method ='lp'):
         print(f"Total equations: {len(slacks)}")
         prob += pulp.lpSum(slacks)
         print("Solving LP...")
-        prob.solve(pulp.PULP_CBC_CMD(msg=False))
+        prob.solve(pulp.PULP_CBC_CMD(msg=True))
         slack_vals = [v.value() for v in slacks]
         violations = sum(1 for v in slack_vals if v > 1e-6)
         return w_d.value(), w_m.value(), len(slacks), violations
@@ -126,7 +126,7 @@ def main():
     parser = argparse.ArgumentParser(description='Learn weights for vector ranking')
     parser.add_argument('unfiltered_ground_truth', help='Unfiltered Ground truth file (binary format)')
     parser.add_argument('filtered_ground_truth', help='Filtered Ground truth file (binary format)')
-    parser.add_argument('filter_matches', help='Filter match file (binary match scores)')
+    parser.add_argument('filter_match_scores', help='Filter match file (binary match scores)')
     parser.add_argument('--method', choices=['ratio', 'lp', 'pulp'], default='ratio')
     parser.add_argument('--eps', type=float, default=1e-4)
     parser.add_argument('--plot', action='store_true')
@@ -138,13 +138,13 @@ def main():
     print("Done reading ground truth file")
 
     # Read the filter match file
-    filter_matches = np.loadtxt(args.filter_matches, dtype=np.float32)
-    print(f"Filter matches shape: {filter_matches.shape}")
+    filter_match_scores = np.loadtxt(args.filter_match_scores, dtype=np.float32)
+    print(f"Filter matches shape: {filter_match_scores.shape}")
     print("Done reading filter match file")
     
     # Validate shapes
-    if ground_truth_indices.shape != filter_matches.shape:
-        print(f"Shape mismatch: {ground_truth_indices.shape} vs {filter_matches.shape}")
+    if ground_truth_indices.shape != filter_match_scores.shape:
+        print(f"Shape mismatch: {ground_truth_indices.shape} vs {filter_match_scores.shape}")
         sys.exit(1)
         
     
@@ -154,13 +154,13 @@ def main():
     # Read unfiltered ground truth (already read as ground_truth_distances)
     # Read filtered match scores (assume first 100 rows from filtered, rest from unfiltered)
     shape = filtered_indices.shape  # or ground_truth_distances.shape
-    filter_matches_all = np.ones(shape, dtype=np.int32)
+    filter_matches_all = np.ones(shape, dtype=np.int32) # All filtered matches are considered valid for filtered gt
     num_filtered = filtered_indices.shape[0]
     print(f"Number of filtered queries: {num_filtered}")
     
     # Concatenate: first 100 from filtered, rest from unfiltered
     distances = np.concatenate([filtered_distances, ground_truth_distances], axis=1)
-    matches = np.concatenate([filter_matches_all, filter_matches_all], axis=1)
+    matches = np.concatenate([filter_matches_all, filter_match_scores], axis=1)
     
     print(f"Distances shape: {distances.shape}")
     print(f"Matches shape: {matches.shape}")
@@ -184,10 +184,10 @@ def main():
         print(f"Max-normalized distances: {distances[0][:5]}")
 
     if args.method == 'ratio':
-        w_d, w_m, total_pairs, _ = direct_ratio_method(distances, filter_matches, args.eps)
+        w_d, w_m, total_pairs, _ = direct_ratio_method(distances, filter_match_scores, args.eps)
         violations = 0
     else:
-        w_d, w_m, total_pairs, violations = lp_soft_method(distances, filter_matches, args.eps, args.method)
+        w_d, w_m, total_pairs, violations = lp_soft_method(distances, filter_match_scores, args.eps, args.method)
 
     print(f"Method: {args.method}")
     print(f"w_d = {w_d:.6f}, w_m = {w_m:.6f}")
