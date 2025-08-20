@@ -218,11 +218,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         int method_used = 0;
         int curr_query = 0;
 
-        if (test_id == 0)
-        { // Only pause on[ first L to avoid multiple pauses
-            std::cout << "[PERF] About to start search_with_filters. Press Enter to continue..." << std::endl;
-            std::cin.get(); // Wait for user input
-        }
+        //if (test_id == 0)
+        //{ // Only pause on[ first L to avoid multiple pauses
+        //    std::cout << "[PERF] About to start search_with_filters. Press Enter to continue..." << std::endl;
+        //    std::cin.get(); // Wait for user input
+        //}
         
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);     
@@ -337,10 +337,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
         
-         if(test_id == 0) {
+         /*if(test_id == 0) {
                 std::cout << "[PERF] Search complete. Press enter to continue...";
                 std::cin.get();
-            }
+            }*/
 
         double displayed_qps = query_num / diff.count();
 
