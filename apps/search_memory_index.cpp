@@ -218,7 +218,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         int method_used = 0;
         int curr_query = 0;
         
-        std::cout << "Starting search on " << query_num << " queries..." << std::endl;
+        //std::cout << "Starting search on " << query_num << " queries..." << std::endl;
         
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);     
@@ -500,8 +500,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         }
         avg_intersection_time = (avg_intersection_time * 1000000.0) / query_num;
         avg_jaccard_time = (avg_jaccard_time * 1000000.0) / query_num;
-        std::cout << "Get intersection time: " << avg_intersection_time << " μs/query" << std::endl;
-        std::cout << "Jaccard similarity time: " << avg_jaccard_time << " μs/query" << std::endl;
+        std::cout << "Get intersection time: " << avg_intersection_time << " mus/query" << std::endl;
+        std::cout << "Jaccard similarity time: " << avg_jaccard_time << " mus/query" << std::endl;
         
         // double total_filter_overhead = (time_to_get_valid + time_to_detect_penalty + time_to_intersect + time_to_filter_check_and_compare) * 1000000.0 / query_num;
         // total_filter_overhead += avg_intersection_time;  // Add the new intersection timing
