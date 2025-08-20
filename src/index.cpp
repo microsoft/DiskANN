@@ -1068,50 +1068,37 @@ inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::ve
 // Overloaded version for multi-filter query labels (vector<vector<LabelT>>)
 // Returns the count of how many filter sets (clauses) have intersection with vector_labels
 template <typename T, typename TagT, typename LabelT>
-inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::vector<std::vector<LabelT>> &filter_sets, const std::vector<LabelT> &vector_labels) {
-    if (filter_sets.empty()) return 0.0f;
-    
+inline float Index<T, TagT, LabelT>::calculate_jaccard_similarity(const std::vector<std::vector<LabelT>> &filter_sets,
+                                                                  const std::vector<LabelT> &vector_labels)
+{
+    if (filter_sets.empty())
+        return 0.0f;
+
     size_t matching_clauses = 0;
-    
+
     // Count how many filter sets (clauses) have ANY intersection with vector_labels
-    for (size_t fs_idx = 0; fs_idx < filter_sets.size(); ++fs_idx) {
-        const auto& filter_set = filter_sets[fs_idx];
-        
-        // Use the base two-pointer Jaccard similarity function for this filter set
-        // Note: filter_set is already sorted during conversion in _search_with_filters()
-        // and vector_labels (_location_to_labels) is sorted in parse_label_file()
-        float jaccard_sim = calculate_jaccard_similarity(filter_set, vector_labels);
-        
-        // If there's any intersection (jaccard_sim > 0), this clause is satisfied
-        if (jaccard_sim > 0.0f) {
+    for (const auto &filter_set : filter_sets)
+    {
+        // Check if ANY filter in this clause matches ANY label in vector_labels
+        bool clause_satisfied = false;
+        for (const auto &filter : filter_set)
+        {
+            if (std::find(vector_labels.begin(), vector_labels.end(), filter) != vector_labels.end())
+            {
+                clause_satisfied = true;
+                break; // Early exit - this clause is satisfied
+            }
+        }
+        if (clause_satisfied)
+        {
             matching_clauses++;
         }
     }
-    
+
     // Return fraction of clauses that match
     return static_cast<float>(matching_clauses) / static_cast<float>(filter_sets.size());
 }
 
-// Optimized version that reuses detect_filter_penalty logic for point IDs
-template <typename T, typename TagT, typename LabelT>
-inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity_fast(uint32_t point_id, const std::vector<std::vector<LabelT>> &filter_labels) {
-    if (filter_labels.empty()) return 0.0f;
-    
-    // Use the exact same logic as detect_filter_penalty
-    uint32_t matching_clauses = 0;
-    for (uint32_t i = 0; i < filter_labels.size(); i++) {
-        bool or_pass = false;
-        for (uint32_t j = 0; j < filter_labels[i].size(); j++) {
-            if (_labels_to_points_set[filter_labels[i][j]].count(point_id)) {
-                or_pass = true;
-                break;
-            }
-        }
-        matching_clauses += or_pass;
-    }
-    
-    return static_cast<float>(matching_clauses) / static_cast<float>(filter_labels.size());
-}
 
 
 // used for index build, single vector of labels are sent to iterate to fixed point. Need to be FIXED and made consistent
@@ -1209,7 +1196,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 //     res = 1;
                 // }
                 auto jaccard_start = std::chrono::high_resolution_clock::now();
-                res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
+                res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                 std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
                 curr_jaccard_time += jaccard_diff.count();
                 if (print_qstats)
@@ -1240,7 +1227,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 }
                 else {
                     auto jaccard_start = std::chrono::high_resolution_clock::now();
-                    res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
+                    res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                     std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
                     curr_jaccard_time += jaccard_diff.count();
                     if (print_qstats)
@@ -1446,7 +1433,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                         // i
                         
                         auto jaccard_start = std::chrono::high_resolution_clock::now();
-                        res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
+                        res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                         std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
                         curr_jaccard_time += jaccard_diff.count();
 
@@ -1470,7 +1457,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                             continue;
                         else {
                            auto jaccard_start = std::chrono::high_resolution_clock::now();
-                           res = 1 - calculate_jaccard_similarity_fast(id, filter_labels);
+                            res = 1 - calculate_jaccard_similarity(filter_labels, _location_to_labels[id]);
                            std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
                            curr_jaccard_time += jaccard_diff.count();
                         }
