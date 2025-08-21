@@ -1051,40 +1051,30 @@ inline void Index<T, TagT, LabelT>::calculate_jaccard_similarity_batch(
     results.resize(point_ids.size());
     const uint32_t num_clauses = static_cast<uint32_t>(filter_labels.size());
     
-    // if (num_clauses == 0) {
-    //     std::fill(results.begin(), results.end(), 0.0f);
-    //     return;
-    // }
-    
-    // Cache filter_labels reference for better access patterns
-    const auto& cached_filter_labels = filter_labels;
-    
-    // Unified processing with batch size 64 for all cases
-    const size_t batch_size = 64;
-    for (size_t batch_start = 0; batch_start < point_ids.size(); batch_start += batch_size) {
-        size_t batch_end = std::min(batch_start + batch_size, point_ids.size());
+    for (size_t i = 0; i < point_ids.size(); ++i) {
+        uint32_t point_id = point_ids[i];
+        uint32_t matching_clauses = 0;
         
-        for (size_t i = batch_start; i < batch_end; ++i) {
-            uint32_t point_id = point_ids[i];
-            uint32_t matching_clauses = 0;
+        // Use the same data structure as non-batched version for consistency
+        const auto& point_labels = _location_to_labels[point_id];
+        
+        // Check each filter clause
+        for (uint32_t j = 0; j < num_clauses; ++j) {
+            const auto& clause = filter_labels[j];
             
-            // Check each filter clause
-            for (uint32_t j = 0; j < num_clauses; ++j) {
-                const auto& clause = cached_filter_labels[j];
-                
-                // Check if any label in this clause matches the point
-                for (const auto& label : clause) {
-                    auto it = _labels_to_points_set.find(label);
-                    if (it != _labels_to_points_set.end() && it->second.count(point_id)) {
-                        matching_clauses++;
-                        break; // Found match, move to next clause
-                    }
+            // Check if any label in this clause matches the point
+            for (const auto& label : clause) {
+                auto it = _labels_to_points_set.find(label);
+                if (it != _labels_to_points_set.end() && it->second.count(point_id)) {
+                // if (std::find(point_labels.begin(), point_labels.end(), label) != point_labels.end()) {
+                    matching_clauses++;
+                    break; // Found match, move to next clause
                 }
             }
-            
-            // Return fraction of clauses that have intersection
-            results[i] = static_cast<float>(matching_clauses) / static_cast<float>(num_clauses);
         }
+        
+        // Return fraction of clauses that have intersection
+        results[i] = static_cast<float>(matching_clauses) / static_cast<float>(num_clauses);
     }
 }
 
@@ -1370,7 +1360,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Find which of the nodes in des have not been visited before
         id_scratch.clear();
         dist_scratch.clear();
-        std::vector<float> res_vec;
         if (_dynamic_index)
         {
             LockGuard guard(_locks[n]);
@@ -1456,7 +1445,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 // Collect all valid IDs first for batch processing
                 id_scratch.push_back(id);
             }
-            
+
             // BATCH PROCESSING: Process all Jaccard similarities at once
             if (use_filter && !id_scratch.empty())
             {
@@ -1466,39 +1455,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 calculate_jaccard_similarity_batch(id_scratch, filter_labels, jaccard_similarities);
                 std::chrono::duration<double> jaccard_diff = std::chrono::high_resolution_clock::now() - jaccard_start;
                 curr_jaccard_time += jaccard_diff.count();
-                
-                // Convert similarities to penalties - zero allocations
-                res_vec.clear();
-                // Ensure capacity without reallocating - should be pre-allocated by scratch space
-                assert(res_vec.capacity() >= jaccard_similarities.size());
-                
-                // Simple conversion from similarities to penalties
-                for (size_t i = 0; i < jaccard_similarities.size(); ++i)
-                {
-                    float penalty = 1.0f - jaccard_similarities[i];
-                    res_vec.push_back(penalty);
-                    
-                    if (print_qstats)
-                    {
-                        std::ofstream out("query_stats.txt", std::ios_base::app);
-                        out << "BATCH processed nbr " << id_scratch[i] << " penalty " << penalty << " with filters ";
-                        for (auto const &filter : _location_to_labels[id_scratch[i]])
-                        {
-                            out << filter << " ";
-                        }
-                        out << std::endl;
-                        out.close();
-                    }
-                }
-            }
-            else if (!use_filter)
-            {
-                // No filtering - fill res_vec with zeros, no allocations
-                res_vec.clear();
-                assert(res_vec.capacity() >= id_scratch.size());
-                for (size_t i = 0; i < id_scratch.size(); ++i) {
-                    res_vec.push_back(0.0f);
-                }
             }
         }
 
@@ -1512,18 +1468,22 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         // Mark nodes visited and compute distances
         assert(dist_scratch.capacity() >= id_scratch.size());
         compute_dists(id_scratch, dist_scratch);
-        expansion_cmps += static_cast<uint32_t>(id_scratch.size());  // Count neighbor expansion distance comparisons
-        assert(res_vec.size() == id_scratch.size());
+        expansion_cmps += static_cast<uint32_t>(id_scratch.size()); // Count neighbor expansion distance comparisons
 
         // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            // Apply normalization to vector distance before combining with filter score  
+            float penalty = 0.0f;
+            if (use_filter && !id_scratch.empty())
+            {
+                penalty = 1.0f - scratch->jaccard_similarities_scratch()[m];
+            }
+            // Apply normalization to vector distance before combining with filter score
             float normalized_distance = g_normalization_config.normalize_distance(dist_scratch[m]);
-            best_L_nodes.insert(Neighbor(id_scratch[m], normalized_distance + w_m * res_vec[m]));
+            best_L_nodes.insert(Neighbor(id_scratch[m], normalized_distance + w_m * penalty));
         }
     }
-    
+
     // Update global variables for query statistics
     curr_init_cmps = init_cmps;
     curr_expansion_cmps = expansion_cmps;
