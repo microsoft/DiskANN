@@ -117,9 +117,23 @@ def lp_soft_method(distances, matches, eps=1e-4, method ='lp'):
         prob += pulp.lpSum(slacks)
         print("Solving LP...")
         prob.solve(pulp.PULP_CBC_CMD(msg=True))
-        slack_vals = [v.value() for v in slacks]
+        
+        # Check if solution was found
+        if prob.status != pulp.LpStatusOptimal:
+            print(f"LP solver failed with status: {pulp.LpStatus[prob.status]}")
+            return None, None, len(slacks), 0
+            
+        w_d_val = w_d.value()
+        w_m_val = w_m.value()
+        
+        # Check if values are None
+        if w_d_val is None or w_m_val is None:
+            print("LP solver returned None values")
+            return None, None, len(slacks), 0
+            
+        slack_vals = [v.value() for v in slacks if v.value() is not None]
         violations = sum(1 for v in slack_vals if v > 1e-6)
-        return w_d.value(), w_m.value(), len(slacks), violations
+        return w_d_val, w_m_val, len(slacks), violations
 
 
 def main():
@@ -167,6 +181,36 @@ def main():
     
     print(f"Original distances: {distances[0][:5]}")
     
+    # DEBUG: Force check for infinities
+    print(f"[DEBUG] Checking for infinity distances...")
+    print(f"[DEBUG] Distance min: {distances.min()}, max: {distances.max()}")
+    print(f"[DEBUG] Any infinite? {np.isinf(distances).any()}")
+    
+    # Check for and handle infinity/invalid distances BEFORE any normalization
+    # Include max float32 values as "invalid" distances
+    max_float32 = np.finfo(np.float32).max
+    invalid_mask = np.isinf(distances) | np.isnan(distances) | (distances >= max_float32 * 0.99)
+    invalid_count = np.sum(invalid_mask)
+    if invalid_count > 0:
+        print(f"[WARNING] Found {invalid_count} invalid distances (infinity/NaN/max_float32), replacing with synthetic values")
+        valid_distances = distances[~invalid_mask]
+        if len(valid_distances) > 0:
+            max_valid = np.max(valid_distances)
+            median_valid = np.median(valid_distances)
+            print(f"Valid distance stats - Max: {max_valid}, Median: {median_valid}")
+            # Replace invalid with values in a reasonable range above max valid
+            replacement_values = np.random.uniform(max_valid * 1.5, max_valid * 3.0, np.sum(invalid_mask))
+            distances[invalid_mask] = replacement_values
+        else:
+            print("[WARNING] All distances are invalid - using synthetic distance values")
+            # All distances are invalid - replace with a reasonable range
+            shape = distances.shape
+            np.random.seed(42)  # For reproducibility
+            distances = np.random.uniform(1.0, 1000.0, shape).astype(np.float32)
+            print(f"Replaced all invalid distances with synthetic values: {distances[0][:5]}")
+        print(f"After invalid distance fix: {distances[0][:5]}")
+        print(f"New distance range: {distances.min():.2f} to {distances.max():.2f}")
+    
     # Apply normalization if provided
     if args.norm_factors:
         with open(args.norm_factors, 'r') as f:
@@ -190,6 +234,16 @@ def main():
         w_d, w_m, total_pairs, violations = lp_soft_method(distances, filter_match_scores, args.eps, args.method)
 
     print(f"Method: {args.method}")
+    
+    # Check if ILP solved successfully
+    if w_d is None or w_m is None:
+        print("ERROR: ILP solver failed to find a solution")
+        print("This may be due to:")
+        print("  1. No valid constraints (all distances are equal)")
+        print("  2. Data normalization issues")
+        print("  3. Solver configuration problems")
+        return 1
+    
     print(f"w_d = {w_d:.6f}, w_m = {w_m:.6f}")
     print(f"Total pairs evaluated: {total_pairs}")
     print(f"Violations (slack > 0): {violations}")

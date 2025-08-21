@@ -25,10 +25,10 @@ def run_command(cmd, description=""):
         print("STDOUT:", result.stdout)
         if result.stderr:
             print("STDERR:", result.stderr)
-        print(f"✓ {description} completed successfully")
+        print(f"[OK] {description} completed successfully")
         return result
     except subprocess.CalledProcessError as e:
-        print(f"✗ {description} failed with return code {e.returncode}")
+        print(f"[ERROR] {description} failed with return code {e.returncode}")
         print("STDOUT:", e.stdout)
         print("STDERR:", e.stderr)
         return None
@@ -37,16 +37,16 @@ def check_file_exists(filepath, description=""):
     """Check if a file exists and report its status"""
     if os.path.exists(filepath):
         size = os.path.getsize(filepath)
-        print(f"✓ {description} already exists: {filepath} ({size:,} bytes)")
+        print(f"[OK] {description} already exists: {filepath} ({size:,} bytes)")
         return True
     else:
-        print(f"⚠ {description} not found: {filepath}")
+        print(f"[WARNING] {description} not found: {filepath}")
         return False
 
 def ensure_executable_exists(executable_path, name=""):
     """Check if an executable exists and is accessible"""
     if not os.path.exists(executable_path):
-        print(f"✗ ERROR: {name} executable not found: {executable_path}")
+        print(f"[ERROR] ERROR: {name} executable not found: {executable_path}")
         print("Please ensure DiskANN is built and executables are in the expected location.")
         return False
     return True
@@ -117,7 +117,7 @@ def main():
             print("Please ensure the workload data is available or use explicit file path arguments")
             sys.exit(1)
     
-    print("✓ All required files found")
+    print("[OK] All required files found")
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -149,7 +149,7 @@ def main():
         check_file_exists(query_test_vectors, "Test query vectors") and
         check_file_exists(query_train_labels, "Training query labels") and
         check_file_exists(query_test_labels, "Test query labels")):
-        print("✓ Query splitting already completed, skipping...")
+        print("[OK] Query splitting already completed, skipping...")
     else:
         split_cmd = [
             sys.executable, 
@@ -175,7 +175,7 @@ def main():
 
     if (check_file_exists(unfiltered_gt_path, "Unfiltered ground truth") and
         check_file_exists(unfiltered_match_scores_path, "Unfiltered match scores")):
-        print("✓ Unfiltered ground truth already computed, skipping...")
+        print("[OK] Unfiltered ground truth already computed, skipping...")
     else:
         # Command for unfiltered ground truth
         search_unfiltered_cmd = [
@@ -202,7 +202,7 @@ def main():
     filtered_gt_path = os.path.join(args.output_dir, f"filtered_groundtruth_{args.base_size}_{args.query_size}_train.bin")
     
     if check_file_exists(filtered_gt_path, "Filtered ground truth"):
-        print("✓ Filtered ground truth already computed, skipping...")
+        print("[OK] Filtered ground truth already computed, skipping...")
     else:
         # Command for filtered ground truth - using correct executable and parameters
         search_filtered_cmd = [
@@ -230,7 +230,7 @@ def main():
         
         if check_file_exists(norm_factors_path, "Normalization factors"):
             args.norm_factors = norm_factors_path
-            print("✓ Using existing normalization factors")
+            print("[OK] Using existing normalization factors")
         elif ensure_executable_exists(norm_factors_script, "analyze_dataset_span_simple.py"):
             norm_cmd = [
                 sys.executable,
@@ -246,11 +246,11 @@ def main():
             result = run_command(norm_cmd, "Normalization factors generation")
             if result is not None:
                 args.norm_factors = norm_factors_path
-                print(f"✓ Generated normalization factors: {norm_factors_path}")
+                print(f"[OK] Generated normalization factors: {norm_factors_path}")
             else:
-                print("⚠ Normalization factors generation failed, continuing without them")
+                print("[WARNING] Normalization factors generation failed, continuing without them")
         else:
-            print("⚠ Normalization script not found, continuing without normalization factors")
+            print("[WARNING] Normalization script not found, continuing without normalization factors")
     
     # Step 4: Run ILP weight calculation
     print("STEP 4: Running ILP weight calculation")
@@ -259,7 +259,7 @@ def main():
     ilp_weights_path = os.path.join(args.output_dir, f"ilp_weights_{args.base_size}_{args.query_size}.txt")
     
     if not ensure_executable_exists(ilp_script, "ilp.py"):
-        print("⚠ ILP script not found, skipping weight calculation")
+        print("[WARNING] ILP script not found, skipping weight calculation")
         print("You can run ILP manually later using the generated ground truth files")
         ilp_result = None
     else:
@@ -293,14 +293,14 @@ def main():
                 ilp_result = run_command(ilp_cmd_eps, "ILP weight calculation (larger epsilon)")
         
         if ilp_result is None:
-            print("⚠ All ILP methods failed. Check your data and try manually.")
+            print("[WARNING] All ILP methods failed. Check your data and try manually.")
             print("Ground truth files are ready for manual ILP execution:")
             print(f"  Unfiltered GT: {unfiltered_gt_path}")
             print(f"  Filtered GT: {filtered_gt_path}")
         else:
-            print("✓ ILP weight calculation completed successfully!")
+            print("[OK] ILP weight calculation completed successfully!")
             # Save the ILP output to a file since the script doesn't support --output
-            print("⚠ Saving ILP output manually...")
+            print("[WARNING] Saving ILP output manually...")
             with open(ilp_weights_path, 'w') as f:
                 f.write("ILP Weight Calculation Results\n")
                 f.write("="*40 + "\n\n")
@@ -309,7 +309,7 @@ def main():
                 f.write("\n\nSTDERR:\n")
                 f.write(ilp_result.stderr)
                 f.write(f"\n\nGenerated at: {__import__('datetime').datetime.now()}\n")
-            print(f"✓ ILP output saved to: {ilp_weights_path}")
+            print(f"[OK] ILP output saved to: {ilp_weights_path}")
             
             # Extract w_m weight and save to separate file
             import re
@@ -319,9 +319,9 @@ def main():
                 w_m_file = os.path.join(args.output_dir, "w_m_weight.txt")
                 with open(w_m_file, 'w') as f:
                     f.write(w_m_value)
-                print(f"✓ w_m weight ({w_m_value}) saved to: {w_m_file}")
+                print(f"[OK] w_m weight ({w_m_value}) saved to: {w_m_file}")
             else:
-                print("⚠ Could not extract w_m value from ILP output")
+                print("[WARNING] Could not extract w_m value from ILP output")
     
     # Save results summary
     summary_path = os.path.join(args.output_dir, "pipeline_summary.txt")
@@ -362,26 +362,26 @@ def main():
     
     # Print status of key files
     print(f"\nGenerated Files Status:")
-    print(f"  Query splits: {'✓' if os.path.exists(query_test_vectors) else '✗'}")
-    print(f"  Unfiltered GT: {'✓' if os.path.exists(unfiltered_gt_path) else '✗'}")
-    print(f"  Filtered GT: {'✓' if os.path.exists(filtered_gt_path) else '✗'}")
+    print(f"  Query splits: {'[OK]' if os.path.exists(query_test_vectors) else '[MISSING]'}")
+    print(f"  Unfiltered GT: {'[OK]' if os.path.exists(unfiltered_gt_path) else '[MISSING]'}")
+    print(f"  Filtered GT: {'[OK]' if os.path.exists(filtered_gt_path) else '[MISSING]'}")
     if args.norm_factors:
-        print(f"  Norm factors: {'✓' if os.path.exists(args.norm_factors) else '✗'}")
+        print(f"  Norm factors: {'[OK]' if os.path.exists(args.norm_factors) else '[MISSING]'}")
     if 'ilp_weights_path' in locals():
-        print(f"  ILP weights: {'✓' if os.path.exists(ilp_weights_path) else '✗'}")
+        print(f"  ILP weights: {'[OK]' if os.path.exists(ilp_weights_path) else '[MISSING]'}")
     w_m_file = os.path.join(args.output_dir, "w_m_weight.txt")
     if os.path.exists(w_m_file):
-        print(f"  w_m weight: ✓")
+        print(f"  w_m weight: [OK]")
     
     if os.path.exists(unfiltered_gt_path) and os.path.exists(filtered_gt_path):
         if 'ilp_weights_path' in locals() and os.path.exists(ilp_weights_path):
-            print(f"\n✓ ILP pipeline completed successfully!")
-            print(f"✓ ILP weights are available in: {ilp_weights_path}")
+            print(f"\n[OK] ILP pipeline completed successfully!")
+            print(f"[OK] ILP weights are available in: {ilp_weights_path}")
         else:
-            print(f"\n✓ Ground truth files ready for ILP weight calculation!")
+            print(f"\n[OK] Ground truth files ready for ILP weight calculation!")
             print(f"Check the summary file for results")
     else:
-        print(f"\n⚠ Some ground truth files are missing. Check the log above for errors.")
+        print(f"\n[WARNING] Some ground truth files are missing. Check the log above for errors.")
 
 if __name__ == "__main__":
     main()
