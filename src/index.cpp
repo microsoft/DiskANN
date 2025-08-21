@@ -815,7 +815,7 @@ uint32_t Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool s
     std::set_intersection(incoming_labels.begin(), incoming_labels.end(), curr_node_labels.begin(),
                           curr_node_labels.end(), std::back_inserter(common_filters));
     /*    if (common_filters.size() > 0)
-        {
+    {
             // This is to reduce the repetitive calls. If common_filters size is > 0 ,
             // we dont need to check further for universal label
             return true;
@@ -975,38 +975,9 @@ template <typename T, typename TagT, typename LabelT>
 inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2) {
     // Early exit optimizations
     if (set1.empty() || set2.empty()) return 0.0f;
-    
-    // // Cache profiling start
-    // static bool enable_cache_profiling = getenv("CACHE_PROFILE") != nullptr;
-    // static uint64_t call_count = 0;
-    // auto profile_start = g_cache_profiler.start_profile();
-    
-    // // Calculate access times for cumulative stats
-    // double access_time_set1 = 0.0;
-    // double access_time_set2 = 0.0;
-    // if (enable_cache_profiling) {
-    //     access_time_set1 = g_cache_profiler.time_memory_access(set1.data(), set1.size());
-    //     access_time_set2 = g_cache_profiler.time_memory_access(set2.data(), set2.size());
-    // }
-    
-    // if (enable_cache_profiling && (call_count % 1000 == 0)) {
-    //     diskann::cout << "\n=== Jaccard Similarity Cache Analysis (Call #" << call_count << ") ===" << std::endl;
-    //     diskann::cout << "Set1 size: " << set1.size() << ", Set2 size: " << set2.size() << std::endl;
-        
-    //     // Estimate cache behavior for input data
-    //     g_cache_profiler.estimate_cache_behavior(set1.data(), set1.size(), "Set1 (filter_labels)");
-    //     g_cache_profiler.estimate_cache_behavior(set2.data(), set2.size(), "Set2 (vector_labels)");
-    // }
-    
-    // Two-pointer approach for sorted arrays - cache-friendly version
-    // Note: _location_to_labels vectors are already sorted in parse_label_file()
+
     size_t intersection_count = 0;
-    
     size_t i = 0, j = 0;
-    
-    // // Track memory access patterns
-    // uint64_t memory_accesses = 0;
-    // auto access_start = std::chrono::high_resolution_clock::now();
     
     // Two-pointer merge to count intersection (no manual prefetching)
     while (i < set1.size() && j < set2.size()) {
@@ -1026,41 +997,6 @@ inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::ve
         }
     }
     
-    // auto access_end = std::chrono::high_resolution_clock::now();
-    // auto profile_end = g_cache_profiler.end_profile(profile_start);
-    
-    // // Add to cumulative statistics
-    // if (enable_cache_profiling) {
-    //     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(access_end - access_start);
-    //     bool high_access_warning = (access_time_set1 > 20.0 || access_time_set2 > 20.0);
-        
-    //     g_cache_profiler.add_to_cumulative_stats(
-    //         memory_accesses, 
-    //         profile_end.cycles, 
-    //         duration.count(),
-    //         intersection_count,
-    //         set1.size(),
-    //         set2.size(),
-    //         access_time_set1,
-    //         access_time_set2,
-    //         high_access_warning
-    //     );
-    // }
-    
-    // if (enable_cache_profiling && (call_count % 1000 == 0)) {
-    //     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(access_end - access_start);
-    //     diskann::cout << "Memory accesses: " << memory_accesses << ", Time: " << duration.count() 
-    //                   << " ns, Avg: " << (memory_accesses > 0 ? (double)duration.count() / memory_accesses : 0.0) 
-    //                   << " ns/access" << std::endl;
-    //     diskann::cout << "Cycles spent: " << profile_end.cycles << ", Cycles/access: " 
-    //                   << (memory_accesses > 0 ? (double)profile_end.cycles / memory_accesses : 0.0) << std::endl;
-    //     diskann::cout << "Intersection count: " << intersection_count << ", Result: " 
-    //                   << static_cast<float>(intersection_count) / static_cast<float>(set1.size()) << std::endl;
-    //     diskann::cout << "===============================================" << std::endl << std::endl;
-    // }
-    
-    // call_count++;
-    
     // Return intersection / |set1| (where set1 is typically the query/incoming labels)
     return static_cast<float>(intersection_count) / static_cast<float>(set1.size());
 }
@@ -1068,35 +1004,46 @@ inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::ve
 // Overloaded version for multi-filter query labels (vector<vector<LabelT>>)
 // Returns the count of how many filter sets (clauses) have intersection with vector_labels
 template <typename T, typename TagT, typename LabelT>
-inline float Index<T, TagT, LabelT>::calculate_jaccard_similarity(const std::vector<std::vector<LabelT>> &filter_sets,
+inline float Index<T, TagT, LabelT>::calculate_jaccard_similarity(const std::vector<std::vector<LabelT>> &filter_labels,
                                                                   const std::vector<LabelT> &vector_labels)
 {
-    if (filter_sets.empty())
+    if (filter_labels.empty() || vector_labels.empty())
         return 0.0f;
+
+    // Sort vector_labels once outside the loop
+    std::vector<LabelT> sorted_vector_labels = vector_labels;
+    std::sort(sorted_vector_labels.begin(), sorted_vector_labels.end());
 
     size_t matching_clauses = 0;
 
-    // Count how many filter sets (clauses) have ANY intersection with vector_labels
-    for (const auto &filter_set : filter_sets)
+    for (const auto &filter_set : filter_labels)
     {
-        // Check if ANY filter in this clause matches ANY label in vector_labels
+        if (filter_set.empty())
+            continue;
+
+        // Sort filter_set for two-pointer intersection
+        std::vector<LabelT> sorted_filter_set = filter_set;
+        std::sort(sorted_filter_set.begin(), sorted_filter_set.end());
+
+        // Two-pointer intersection
+        size_t i = 0, j = 0;
         bool clause_satisfied = false;
-        for (const auto &filter : filter_set)
-        {
-            if (std::find(vector_labels.begin(), vector_labels.end(), filter) != vector_labels.end())
-            {
+        while (i < sorted_filter_set.size() && j < sorted_vector_labels.size()) {
+            if (sorted_filter_set[i] == sorted_vector_labels[j]) {
                 clause_satisfied = true;
-                break; // Early exit - this clause is satisfied
+                break;
+            } else if (sorted_filter_set[i] < sorted_vector_labels[j]) {
+                ++i;
+            } else {
+                ++j;
             }
         }
-        if (clause_satisfied)
-        {
+        if (clause_satisfied) {
             matching_clauses++;
         }
     }
 
-    // Return fraction of clauses that match
-    return static_cast<float>(matching_clauses) / static_cast<float>(filter_sets.size());
+    return static_cast<float>(matching_clauses) / static_cast<float>(filter_labels.size());
 }
 
 
@@ -1416,7 +1363,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
                 }
 
                 float penalty = 0;
-                uint32_t res = 0;
+                float res = 0;
                 if (use_filter)
                 {
                     // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
