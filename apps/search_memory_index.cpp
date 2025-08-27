@@ -25,7 +25,6 @@
 #include "program_options_utils.hpp"
 #include "index_factory.h"
 #include "normalization.h"
-#include "normalization.h"
 
 namespace po = boost::program_options;
 
@@ -270,10 +269,16 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 //}
                 ////std::cout << "[DEBUG] After search_with_filters: num_graphs = " << diskann::num_graphs << std::endl;
 
-                if (diskann::num_graphs > old_g)
-                    method_used = 1;
-                else
-                    method_used = 0;
+                if (diskann::num_graphs > old_g) {
+                    method_used = 1;  // Graph search
+                    // Debug the classifications
+                    // if (i < 5) std::cout << "[DEBUG] Query " << i << ": classified as GRAPH search" << std::endl;
+                }
+                else {
+                    method_used = 0;  // Brute force
+                    // Debug the classifications
+                    // if (i < 5) std::cout << "[DEBUG] Query " << i << ": classified as BRUTE FORCE search" << std::endl;
+                }
                 cmp_stats[i] = retval.second;
 //                                filter_match_time[i] = time_to_get_valid*1000000;
                 //                dist_cmp_time[i] = time_to_compare*1000000;
@@ -391,7 +396,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
 
             recalls.reserve(1);
+
             double overall_recall = 0;
+
+
+            // std::wcout << "[DEBUG] Will calclate brute and graph recall now..." << std::endl;
 
             for (size_t i = 0; i < query_num; i++)
             {
@@ -408,9 +417,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 }
 
                 gt.insert(gt_vec, gt_vec + tie_breaker);
-                res.insert(res_vec,
-                           res_vec + recall_at); // change to recall_at for recall k@k
-                                                 // or dim_or for k@dim_or
+                res.insert(res_vec, res_vec + K_or_L); // Use K_or_L for recall@L or recall@K
                 uint32_t cur_recall = 0;
                 for (auto &v : gt)
                 {
@@ -428,11 +435,13 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                     graph_recalls[test_id] += cur_recall;
                     break;
                 }
-                overall_recall += cur_recall;
             }
 
-            float recall_val = (overall_recall * 100.0) / (query_num * recall_at * 1.0);
-            recalls.push_back(recall_val);
+            for (uint32_t curr_recall = recall_at; curr_recall <= recall_at; curr_recall++)
+            {
+                recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
+                                                            query_result_ids[test_id].data(), K_or_L, curr_recall, K_or_L));
+            }
         }
 
         std::sort(latency_stats.begin(), latency_stats.end());
