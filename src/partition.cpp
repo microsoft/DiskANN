@@ -529,6 +529,8 @@ int partition_with_ram_budget(const std::string data_file, const double sampling
     size_t max_k_means_reps = 10;
 
     int num_parts = 3;
+    k_base = std::min(k_base, static_cast<size_t>(num_parts));
+
     bool fit_in_ram = false;
 
     gen_random_slice<T>(data_file, sampling_rate, train_data_float, num_train, train_dim);
