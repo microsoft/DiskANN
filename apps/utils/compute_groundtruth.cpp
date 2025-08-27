@@ -529,54 +529,35 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
                 const auto &query_label_predicates = query_labels[i];
                 const auto &base_label_set = base_labels[iter.first];
 
-                // // Check predicates
-                // bool match = true;
-                // for (const auto &clause : query_label_predicates)
-                // {
-                //     bool clause_match = false;
-                //     for (const auto &label : clause)
-                //     {
-                //         if (base_label_set.find(label) != base_label_set.end())
-                //         {
-                //             clause_match = true;
-                //             break;
-                //         }
-                //     }
-                //     if (!clause_match)
-                //     {
-                //         match = false;
-                //         break;
-                //     }
-                // }
-
-                // if (match)
-                // {
-                //     match_scores[i][j] = 1; // Mark as a match
-                // }
-
-                // calculate jaccard distance between query and base labels
-                std::set<std::string> intersection;
+                // Count how many clauses have at least one matching label
+                int matching_clauses = 0;
+                int total_clauses = query_label_predicates.size();
+                
                 for (const auto &clause : query_label_predicates)
                 {
+                    bool clause_matches = false;
                     for (const auto &label : clause)
                     {
                         if (base_label_set.find(label) != base_label_set.end())
                         {
-                            intersection.insert(label);
+                            clause_matches = true;
+                            break; // Found at least one matching label in this clause
                         }
+                    }
+                    if (clause_matches)
+                    {
+                        matching_clauses++;
                     }
                 }
                 
-                
-                float jaccard_distance = (float)intersection.size() / 2.0f;
-                // if (intersection.size() == 1) {
-                //     std::cout<< "Intersection is 1 for query " << i << " and base point " << iter.first
-                //               << ", jaccard distance = "<< (float)intersection.size() / 2.0f << std::endl;
-                // }
-                match_scores[i][j] = jaccard_distance; // Scale to percentage               
-
+                // Calculate match score as ratio of matching clauses
+                float match_score = 0.0f;
+                if (total_clauses > 0)
+                {
+                    match_score = (float)matching_clauses / (float)total_clauses;
+                }                
+                match_scores[i][j] = match_score;
             }
-
             ++j;
         }
         if (j < k)
