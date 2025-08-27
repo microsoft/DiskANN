@@ -25,7 +25,6 @@
 #include "program_options_utils.hpp"
 #include "index_factory.h"
 #include "normalization.h"
-#include "normalization.h"
 
 namespace po = boost::program_options;
 
@@ -391,48 +390,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
 
             recalls.reserve(1);
-            double overall_recall = 0;
 
-            for (size_t i = 0; i < query_num; i++)
+            for (uint32_t curr_recall = recall_at; curr_recall <= recall_at; curr_recall++)
             {
-                std::set<uint32_t> gt, res;
-                uint32_t *gt_vec = gt_ids + gt_dim * i;
-                uint32_t *res_vec = query_result_ids[test_id].data() + K_or_L * i;
-                size_t tie_breaker = recall_at;
-                if (gt_dists != nullptr)
-                {
-                    tie_breaker = recall_at - 1;
-                    float *gt_dist_vec = gt_dists + gt_dim * i;
-                    while (tie_breaker < gt_dim && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
-                        tie_breaker++;
-                }
-
-                gt.insert(gt_vec, gt_vec + tie_breaker);
-                res.insert(res_vec,
-                           res_vec + recall_at); // change to recall_at for recall k@k
-                                                 // or dim_or for k@dim_or
-                uint32_t cur_recall = 0;
-                for (auto &v : gt)
-                {
-                    if (res.find(v) != res.end())
-                    {
-                        cur_recall++;
-                    }
-                }
-                switch (query_result_class[test_id][i])
-                {
-                case 0:
-                    brute_recalls[test_id] += cur_recall;
-                    break;
-                case 1:
-                    graph_recalls[test_id] += cur_recall;
-                    break;
-                }
-                overall_recall += cur_recall;
+                recalls.push_back(diskann::calculate_recall((uint32_t)query_num, gt_ids, gt_dists, (uint32_t)gt_dim,
+                                                            query_result_ids[test_id].data(), K_or_L, curr_recall, K_or_L));
             }
-
-            float recall_val = (overall_recall * 100.0) / (query_num * recall_at * 1.0);
-            recalls.push_back(recall_val);
         }
 
         std::sort(latency_stats.begin(), latency_stats.end());
