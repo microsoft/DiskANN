@@ -9,6 +9,7 @@
 #include "label_helper.h"
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
+#include "color_helper.h"
 #include <limits>
 
 #ifdef _WINDOWS
@@ -562,7 +563,7 @@ template <typename T, typename LabelT> int PQFlashIndex<T, LabelT>::load(uint32_
     std::string labels_to_medoids = std::string(index_prefix) + "_labels_to_medoids.txt";
     std::string labels_map_file = std::string(index_prefix) + "_labels_map.txt";
     std::string univ_label_file = std::string(index_prefix) + "_universal_label.txt";
-    std::string seller_file = std::string(index_prefix) + "_sellers.txt";
+    std::string seller_file = std::string(index_prefix) + "_sellers.bin";
 
 #ifdef EXEC_ENV_OLS
     return load_from_separate_paths(files, num_threads, disk_index_file.c_str(), pq_table_bin.c_str(),
@@ -828,8 +829,15 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     if (file_exists(seller_filepath))
     {
-        uint64_t nrows_seller_file;
-        parse_seller_file(seller_filepath, nrows_seller_file);
+        //uint64_t nrows_seller_file;
+        //parse_seller_file(seller_filepath, nrows_seller_file);
+        if (!color_helper().load_color_binfile(seller_filepath, _location_to_seller)
+            || _location_to_seller.size() != _num_points)
+        {
+            std::stringstream stream;
+                stream << "Error loading seller file. Exiting." << std::endl;
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
         _diverse_index = true;
     }
 
