@@ -11,6 +11,7 @@
 #include "cosine_similarity.h"
 #include "color_helper.h"
 #include <limits>
+#include <filesystem>
 
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
@@ -829,15 +830,30 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
     if (file_exists(seller_filepath))
     {
-        //uint64_t nrows_seller_file;
-        //parse_seller_file(seller_filepath, nrows_seller_file);
-        if (!color_helper().load_color_binfile(seller_filepath, _location_to_seller)
-            || _location_to_seller.size() != _num_points)
+        std::filesystem::path seller_path(seller_filepath);
+        std::string extension = seller_path.extension().string();
+        if (extension != ".bin")
         {
-            std::stringstream stream;
+            uint64_t nrows_seller_file;
+            parse_seller_file(seller_filepath, nrows_seller_file);
+            if (nrows_seller_file != _num_points)
+            {
+                std::stringstream stream;
                 stream << "Error loading seller file. Exiting." << std::endl;
-            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+                throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
         }
+        else
+        {
+            if (!color_helper().load_color_binfile(seller_filepath, _location_to_seller)
+                || _location_to_seller.size() != _num_points)
+            {
+                std::stringstream stream;
+                stream << "Error loading seller file. Exiting." << std::endl;
+                throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+        }
+        
         _diverse_index = true;
     }
 

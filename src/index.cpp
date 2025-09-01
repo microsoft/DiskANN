@@ -627,7 +627,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     }
 
     std::string index_seller_file = std::string(filename) + "_sellers.bin";
-    if (file_exists(index_seller_file)) 
+    std::string old_index_seller_file = std::string(filename) + "_sellers.txt";
+    if (file_exists(index_seller_file))
     {
         //uint64_t nrows_seller_file;
         //parse_seller_file(index_seller_file, nrows_seller_file);
@@ -640,6 +641,20 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
         }
 
+        _diverse_index = true;
+    }
+    else if (file_exists(old_index_seller_file))
+    {
+        uint64_t nrows_seller_file;
+        parse_seller_file(old_index_seller_file, nrows_seller_file);
+        if (nrows_seller_file != data_file_num_pts)
+        {
+            std::stringstream stream;
+            stream << "ERROR: When loading old seller file " << old_index_seller_file << " found " << nrows_seller_file
+                   << " rows, expected " << data_file_num_pts << std::endl;
+            diskann::cerr << stream.str() << std::endl;
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
         _diverse_index = true;
     }
 
