@@ -1119,6 +1119,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     // std::cout << "DEBUG: Starting with " << init_ids.size() << " initial candidates" << std::endl;
     uint32_t candidates_added = 0;
     uint32_t candidates_filtered = 0;
+    uint32_t hops = 0;
+    uint32_t cmps = 0;
     
     for (auto id : init_ids)
     {
@@ -1211,6 +1213,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
             Neighbor nn = Neighbor(id, distance);
             best_L_nodes.insert(nn);
+            cmps++;
         }
     }
 
@@ -1220,9 +1223,6 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     for (size_t i = 0; i < best_L_nodes.size(); ++i) {
         auto nbr = best_L_nodes[i];
     }
-
-    uint32_t hops = 0;
-    uint32_t cmps = 0;
 
     if (print_qstats)
     {
@@ -4426,3 +4426,4 @@ template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> Index<int8_t, uint32_t,
               uint32_t *indices, float *distances);
 
 } // namespace diskann
+
