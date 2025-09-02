@@ -1206,7 +1206,8 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     std::string mem_univ_label_file = mem_index_path + "_universal_label.txt";
     std::string disk_univ_label_file = disk_index_path + "_universal_label.txt";
     std::string disk_labels_int_map_file = disk_index_path + "_labels_map.txt";
-    std::string disk_seller_file = disk_index_path + "_sellers.txt";
+    std::string old_disk_seller_file = disk_index_path + "_sellers.txt";
+    std::string disk_seller_file = disk_index_path + "_sellers.bin";
     std::string dummy_remap_file = disk_index_path + "_dummy_remap.txt"; // remap will be used if we break-up points of
                                                                          // high label-density to create copies
 
@@ -1392,7 +1393,14 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         std::remove(labels_file_to_use.c_str());
     }
     
-    std::string seller_mem_file = std::string(mem_index_path) + "_sellers.txt";
+    std::string old_seller_mem_file = std::string(mem_index_path) + "_sellers.txt";
+    if (file_exists(old_seller_mem_file))
+    {
+        copy_file(old_seller_mem_file, old_disk_seller_file);
+        std::remove(old_seller_mem_file.c_str());
+    }
+
+    std::string seller_mem_file = std::string(mem_index_path) + "_sellers.bin";
     if (file_exists(seller_mem_file))
     {
         copy_file(seller_mem_file, disk_seller_file);

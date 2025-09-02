@@ -15,6 +15,7 @@
 #include "windows_customizations.h"
 #include "tag_uint128.h"
 #include "label_helper.h"
+#include "color_helper.h"
 #if defined(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
@@ -290,8 +291,12 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     if (!_save_as_one_file)
     {
         if (_diverse_index) {
-            std::string index_seller_file = std::string(filename) + "_sellers.txt";
-            std::filesystem::copy(_seller_file, index_seller_file);
+            std::string index_seller_file = std::string(filename) + "_sellers.bin";
+            color_helper().write_color_binfile(index_seller_file, _location_to_seller, _num_unique_sellers);
+            
+            // will remove after new format loaded
+            std::string old_seller_file = std::string(filename) + "_sellers.txt";
+            std::filesystem::copy(_seller_file, old_seller_file);
         }
 
         if (_filtered_index)
@@ -621,11 +626,35 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    std::string index_seller_file = std::string(filename) + "_sellers.txt";
-    if (file_exists(index_seller_file)) 
+    std::string index_seller_file = std::string(filename) + "_sellers.bin";
+    std::string old_index_seller_file = std::string(filename) + "_sellers.txt";
+    if (file_exists(index_seller_file))
+    {
+        //uint64_t nrows_seller_file;
+        //parse_seller_file(index_seller_file, nrows_seller_file);
+        if (!color_helper().load_color_binfile(index_seller_file, _location_to_seller, _num_unique_sellers)
+            || _location_to_seller.size() != data_file_num_pts)
+        {
+            std::stringstream stream;
+            stream << "ERROR: When loading seller file " << index_seller_file << std::endl;
+            diskann::cerr << stream.str() << std::endl;
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        _diverse_index = true;
+    }
+    else if (file_exists(old_index_seller_file))
     {
         uint64_t nrows_seller_file;
-        parse_seller_file(index_seller_file, nrows_seller_file);
+        parse_seller_file(old_index_seller_file, nrows_seller_file);
+        if (nrows_seller_file != data_file_num_pts)
+        {
+            std::stringstream stream;
+            stream << "ERROR: When loading old seller file " << old_index_seller_file << " found " << nrows_seller_file
+                   << " rows, expected " << data_file_num_pts << std::endl;
+            diskann::cerr << stream.str() << std::endl;
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
         _diverse_index = true;
     }
 
