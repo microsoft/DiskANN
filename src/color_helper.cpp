@@ -57,12 +57,6 @@ bool color_helper::load_color_binfile(const std::string& filepath, std::vector<u
     
     infile.close();
 
-    // seller id is sequentially assigned from 1 to num_unique_sellers
-    if (location_to_seller.back() != num_unique_sellers)
-    {
-        return false;
-    }
-
     return true;
 }
 
