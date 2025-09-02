@@ -292,7 +292,7 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     {
         if (_diverse_index) {
             std::string index_seller_file = std::string(filename) + "_sellers.bin";
-            color_helper().write_color_binfile(index_seller_file, _location_to_seller);
+            color_helper().write_color_binfile(index_seller_file, _location_to_seller, _num_unique_sellers);
             
             // will remove after new format loaded
             std::string old_seller_file = std::string(filename) + "_sellers.txt";
@@ -632,7 +632,7 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
     {
         //uint64_t nrows_seller_file;
         //parse_seller_file(index_seller_file, nrows_seller_file);
-        if (!color_helper().load_color_binfile(index_seller_file, _location_to_seller)
+        if (!color_helper().load_color_binfile(index_seller_file, _location_to_seller, _num_unique_sellers)
             || _location_to_seller.size() != data_file_num_pts)
         {
             std::stringstream stream;

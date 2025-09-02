@@ -5,9 +5,9 @@
 namespace diskann
 {
 
-void color_helper::write_color_binfile(const std::string& filepath, const std::vector<uint32_t>& location_to_seller)
+void color_helper::write_color_binfile(const std::string& filepath, const std::vector<uint32_t>& location_to_seller, std::uint32_t num_unique_sellers)
 {
-    // format: num_points, bitmask_size, bitmask content
+    // format: num_points, color_size, unique color count, color content
     std::ofstream outfile(filepath, std::ios::binary);
     if (outfile.fail())
     {
@@ -18,11 +18,12 @@ void color_helper::write_color_binfile(const std::string& filepath, const std::v
     std::uint32_t color_size = static_cast<std::uint32_t>(sizeof(uint32_t));
     outfile.write((char*)(&num_points), sizeof(std::uint32_t));
     outfile.write((char*)(&color_size), sizeof(std::uint32_t));
+    outfile.write((char *)(&num_unique_sellers), sizeof(std::uint32_t));
     outfile.write((char*)location_to_seller.data(), location_to_seller.size() * color_size);
     outfile.close();
 }
 
-bool color_helper::load_color_binfile(const std::string& filepath, std::vector<uint32_t>& location_to_seller)
+bool color_helper::load_color_binfile(const std::string& filepath, std::vector<uint32_t>& location_to_seller, std::uint32_t& num_unique_sellers)
 {
     std::ifstream infile(filepath, std::ios::binary);
     if (infile.fail())
@@ -39,14 +40,14 @@ bool color_helper::load_color_binfile(const std::string& filepath, std::vector<u
     std::uint32_t color_size = 0;
     infile.read((char*)(&num_points_in_file), sizeof(std::uint32_t));
     infile.read((char*)(&color_size), sizeof(std::uint32_t));
-
+    infile.read((char *)(&num_unique_sellers), sizeof(std::uint32_t));
     if (color_size != sizeof(uint32_t))
     {
         return false;
     }
 
     size_t color_data_size = num_points_in_file * color_size;
-    if (file_size != (sizeof(std::uint32_t) * 2 + color_data_size))
+    if (file_size != (sizeof(std::uint32_t) * 3 + color_data_size))
     {
         return false;
     }
@@ -55,6 +56,12 @@ bool color_helper::load_color_binfile(const std::string& filepath, std::vector<u
     infile.read((char *)location_to_seller.data(), color_data_size);
     
     infile.close();
+
+    // seller id is sequentially assigned from 1 to num_unique_sellers
+    if (location_to_seller.back() != num_unique_sellers)
+    {
+        return false;
+    }
 
     return true;
 }

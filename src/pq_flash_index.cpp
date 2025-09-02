@@ -845,7 +845,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         }
         else
         {
-            if (!color_helper().load_color_binfile(seller_filepath, _location_to_seller)
+            if (!color_helper().load_color_binfile(seller_filepath, _location_to_seller, _num_unique_sellers)
                 || _location_to_seller.size() != _num_points)
             {
                 std::stringstream stream;
