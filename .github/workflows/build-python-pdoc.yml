@@ -43,13 +43,13 @@ jobs:
           EOF
           )" >> $GITHUB_ENV
       - name: Archive documentation version artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: dependencies
           path: |
             dependencies_documentation.txt
       - name: Archive documentation artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: documentation-site
           path: |
