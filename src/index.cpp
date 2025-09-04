@@ -576,6 +576,8 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
 
     _has_built = true;
 
+    diskann::Timer link_timer;
+
     size_t tags_file_num_pts = 0, graph_num_pts = 0, data_file_num_pts = 0, label_num_pts = 0;
 
     std::string mem_index_file(filename);
@@ -593,6 +595,11 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         std::string delete_set_file = std::string(filename) + ".del";
         std::string graph_file = std::string(filename);
         data_file_num_pts = load_data(data_file);
+
+        diskann::cout << filename << ":load embedding data time: "
+            << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+            << std::endl;
+
         this->_table_stats.node_count = data_file_num_pts;
         this->_table_stats.node_mem_usage = this->_data_store->get_data_size();
 
@@ -605,6 +612,11 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             tags_file_num_pts = load_tags(tags_file);
         }
         graph_num_pts = load_graph(graph_file, data_file_num_pts);
+
+        diskann::cout << filename << ":load graph data time: "
+            << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+            << std::endl;
+
         this->_table_stats.graph_mem_usage = _graph_store->get_graph_size();
 #endif
     }
@@ -658,11 +670,19 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         _diverse_index = true;
     }
 
+    diskann::cout << filename << ":load seller data time: "
+        << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+        << std::endl;
+
     if (file_exists(labels_file))
     {
         _label_map = load_label_map(labels_map_file);
         this->_table_stats.label_count = _label_map.size();
         
+        diskann::cout << filename << ":load label map data time: "
+            << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+            << std::endl;
+
         if (_enable_tags)
         {
             // resize bitmask buffer to max points
@@ -693,6 +713,10 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             }
         }
         
+        diskann::cout << filename << ":load label data time: "
+            << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+            << std::endl;
+
         assert(label_num_pts == data_file_num_pts);
         this->_table_stats.label_mem_usage = _bitmask_buf._buf.size() * sizeof(std::uint64_t);
         if (file_exists(labels_to_medoids))
@@ -725,6 +749,11 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             }
         }
 
+        diskann::cout << filename << ":load medoids data time: "
+            << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+            << std::endl;
+
+
         std::string universal_label_file(filename);
         universal_label_file += "_universal_label.txt";
         if (file_exists(universal_label_file))
@@ -735,6 +764,10 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
             universal_label_reader.close();
         }
     }
+
+    diskann::cout << filename << ":load universal label data time: "
+        << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+        << std::endl;
 
     _nd = data_file_num_pts;
     _empty_slots.clear();
@@ -763,6 +796,10 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         initialize_query_scratch(num_threads, search_l, search_l, (uint32_t)_graph_store->get_max_range_of_graph(), _indexingMaxC,
                                  _dim, _bitmask_buf._bitmask_size);
     }
+
+    diskann::cout << filename << ":load all data time: "
+        << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+        << std::endl;
 }
 
 #ifdef EXEC_ENV_OLS
