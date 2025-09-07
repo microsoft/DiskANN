@@ -12,11 +12,12 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
     size_t num_points;
     size_t file_offset = 0; // will need this for single file format support
 
-    size_t check_file_size = get_file_size(filename);
-
     std::ifstream in;
     in.exceptions(std::ios::badbit | std::ios::failbit);
     in.open(filename, std::ios::binary);
+    // get file size
+    size_t check_file_size = in.tellg();
+    
     in.seekg(file_offset, in.beg);
     in.read((char*)&expected_file_size, sizeof(size_t));
     in.read((char*)&_max_observed_degree, sizeof(uint32_t));
