@@ -986,10 +986,17 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
     npts = (unsigned)npts_i32;
     dim = (unsigned)dim_i32;
 
-    for (size_t i = 0; i < npts; i++)
+    if (dim != rounded_dim)
     {
-        reader.read((char *)(data + i * rounded_dim), dim * sizeof(T));
-        memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
+        for (size_t i = 0; i < npts; i++)
+        {
+            reader.read((char*)(data + i * rounded_dim), dim * sizeof(T));
+            memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
+        }
+    }
+    else
+    {
+        reader.read((char *)data, npts * dim * sizeof(T));
     }
 }
 
