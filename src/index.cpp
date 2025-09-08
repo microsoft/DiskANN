@@ -492,44 +492,44 @@ size_t Index<T, TagT, LabelT>::load_data(AlignedFileReader &reader)
 size_t Index<T, TagT, LabelT>::load_data(std::string filename)
 {
 #endif
-    size_t file_dim, file_num_points;
-#ifdef EXEC_ENV_OLS
-    diskann::get_bin_metadata(reader, file_num_points, file_dim);
-#else
-    if (!file_exists(filename))
-    {
-        std::stringstream stream;
-        stream << "ERROR: data file " << filename << " does not exist." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-    diskann::get_bin_metadata(filename, file_num_points, file_dim);
-#endif
-
-    // since we are loading a new dataset, _empty_slots must be cleared
-    _empty_slots.clear();
-
-    if (file_dim != _dim)
-    {
-        std::stringstream stream;
-        stream << "ERROR: Driver requests loading " << _dim << " dimension,"
-               << "but file has " << file_dim << " dimension." << std::endl;
-        diskann::cerr << stream.str() << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
-    if (file_num_points > _max_points)
-    {
-        // update and tag lock acquired in load() before calling load_data
-        resize(file_num_points);
-    }
+    size_t file_num_points;
+//#ifdef EXEC_ENV_OLS
+//    diskann::get_bin_metadata(reader, file_num_points, file_dim);
+//#else
+//    if (!file_exists(filename))
+//    {
+//        std::stringstream stream;
+//        stream << "ERROR: data file " << filename << " does not exist." << std::endl;
+//        diskann::cerr << stream.str() << std::endl;
+//        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+//    }
+//    diskann::get_bin_metadata(filename, file_num_points, file_dim);
+//#endif
+//
+//    // since we are loading a new dataset, _empty_slots must be cleared
+//    _empty_slots.clear();
+//
+//    if (file_dim != _dim)
+//    {
+//        std::stringstream stream;
+//        stream << "ERROR: Driver requests loading " << _dim << " dimension,"
+//               << "but file has " << file_dim << " dimension." << std::endl;
+//        diskann::cerr << stream.str() << std::endl;
+//        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+//    }
+//
+//    if (file_num_points > _max_points)
+//    {
+//        // update and tag lock acquired in load() before calling load_data
+//        resize(file_num_points);
+//    }
 
 #ifdef EXEC_ENV_OLS
     // REFACTOR TODO: Must figure out how to support aligned reader in a clean
     // manner.
     copy_aligned_data_from_file<T>(reader, _data, file_num_points, file_dim, _data_store->get_aligned_dim());
 #else
-    _data_store->load(filename); // offset == 0.
+    file_num_points = _data_store->load(filename); // offset == 0.
 #endif
     return file_num_points;
 }
