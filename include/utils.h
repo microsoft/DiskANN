@@ -1029,7 +1029,7 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
         size_t dst_row_idx = 0;
         
         // Read data in chunks using the fixed buffer
-        while (bytes_read < total_bytes_to_read) {
+        while (bytes_read < total_bytes_to_read && dst_row_idx < npts) {
             size_t chunk_size = std::min(BUFFER_SIZE, ROUND_UP(total_bytes_to_read - bytes_read, SECTOR_SIZE));
             size_t current_offset = aligned_data_offset + bytes_read;
             

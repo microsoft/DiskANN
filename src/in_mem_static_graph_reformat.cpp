@@ -85,8 +85,8 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
     // Read node index in chunks
     size_t node_bytes_read = 0;
     size_t node_elements_copied = 0;
-    
-    while (node_bytes_read < total_node_bytes_to_read) {
+
+    while (node_bytes_read < total_node_bytes_to_read && node_elements_copied < _node_index.size()) {
         size_t chunk_size = std::min(BUFFER_SIZE, ROUND_UP(total_node_bytes_to_read - node_bytes_read, SECTOR_SIZE));
         size_t current_offset = aligned_node_offset + node_bytes_read;
         
@@ -132,8 +132,8 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
     // Read graph data in chunks
     size_t graph_bytes_read = 0;
     size_t graph_elements_copied = 0;
-    
-    while (graph_bytes_read < total_graph_bytes_to_read) {
+
+    while (graph_bytes_read < total_graph_bytes_to_read && graph_elements_copied < _graph.size()) {
         size_t chunk_size = std::min(BUFFER_SIZE, ROUND_UP(total_graph_bytes_to_read - graph_bytes_read, SECTOR_SIZE));
         size_t current_offset = aligned_graph_offset + graph_bytes_read;
         
