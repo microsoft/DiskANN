@@ -5,6 +5,8 @@
 #include "abstract_scratch.h"
 #include "in_mem_data_store.h"
 
+#include "timer.h"
+
 #include "utils.h"
 
 namespace diskann

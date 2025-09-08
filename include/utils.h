@@ -29,7 +29,7 @@ typedef int FileHandle;
 #include "types.h"
 #include "tag_uint128.h"
 #include <any>
-#include "timer.h"
+//#include "timer.h"
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"

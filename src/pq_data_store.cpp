@@ -3,6 +3,7 @@
 #include "pq_data_store.h"
 #include "pq.h"
 #include "pq_scratch.h"
+#include "timer.h"
 #include "utils.h"
 #include "distance.h"
 
