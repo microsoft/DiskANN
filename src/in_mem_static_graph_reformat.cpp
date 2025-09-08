@@ -13,8 +13,8 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
     size_t file_offset = 0; // will need this for single file format support
 
     std::ifstream in;
-    in.exceptions(std::ios::badbit | std::ios::failbit | std::ios::ate);
-    in.open(filename, std::ios::binary);
+    in.exceptions(std::ios::badbit | std::ios::failbit);
+    in.open(filename, std::ios::binary | std::ios::ate);
     // get file size
     size_t check_file_size = in.tellg();
     
