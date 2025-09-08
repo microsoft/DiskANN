@@ -986,7 +986,7 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
     npts = (unsigned)npts_i32;
     dim = (unsigned)dim_i32;
 
-    if (dim != rounded_dim)
+    if (rounded_dim != dim)
     {
         for (size_t i = 0; i < npts; i++)
         {
