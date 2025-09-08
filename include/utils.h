@@ -29,6 +29,7 @@ typedef int FileHandle;
 #include "types.h"
 #include "tag_uint128.h"
 #include <any>
+#include "timer.h"
 
 #ifdef EXEC_ENV_OLS
 #include "content_buf.h"
@@ -975,16 +976,26 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
         throw diskann::ANNException("Null pointer passed to copy_aligned_data_from_file function", -1, __FUNCSIG__,
                                     __FILE__, __LINE__);
     }
+    diskann::Timer link_timer;
+
     std::ifstream reader;
     reader.exceptions(std::ios::badbit | std::ios::failbit);
     reader.open(bin_file, std::ios::binary);
     reader.seekg(offset, reader.beg);
+
+    diskann::cout << bin_file << ":load embedding data open file: "
+        << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+        << std::endl;
 
     int npts_i32, dim_i32;
     reader.read((char *)&npts_i32, sizeof(int));
     reader.read((char *)&dim_i32, sizeof(int));
     npts = (unsigned)npts_i32;
     dim = (unsigned)dim_i32;
+
+    diskann::cout << bin_file << ":load embedding data read header: "
+        << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+        << std::endl;
 
     if (rounded_dim != dim)
     {
@@ -998,6 +1009,10 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
     {
         reader.read((char *)data, npts * dim * sizeof(T));
     }
+
+    diskann::cout << bin_file << ":load embedding data complete: "
+        << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
+        << std::endl;
 }
 
 // NOTE :: good efficiency when total_vec_size is integral multiple of 64
