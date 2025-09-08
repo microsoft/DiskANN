@@ -12,18 +12,26 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
     size_t num_points;
     size_t file_offset = 0; // will need this for single file format support
 
-    std::ifstream in;
-    in.exceptions(std::ios::badbit | std::ios::failbit);
-    in.open(filename, std::ios::binary | std::ios::ate);
+    FileReader file_reader;
+    if (!file_reader.Open(filename))
+    {
+        throw diskann::ANNException("fail to open file ", -1, __FUNCSIG__,
+            __FILE__, __LINE__);
+    }
+
     // get file size
-    size_t check_file_size = in.tellg();
-    
-    in.seekg(file_offset, in.beg);
-    in.read((char*)&expected_file_size, sizeof(size_t));
-    in.read((char*)&_max_observed_degree, sizeof(uint32_t));
-    in.read((char*)&start, sizeof(uint32_t));
-    in.read((char*)&file_frozen_pts, sizeof(size_t));
-    in.read((char*)&num_points, sizeof(size_t));
+    size_t check_file_size = file_reader.GetFileSize();
+
+    file_reader.Read(file_offset, sizeof(size_t), (char*)&expected_file_size);
+    file_offset += sizeof(size_t);
+    file_reader.Read(file_offset, sizeof(uint32_t), (char*)&_max_observed_degree);
+    file_offset += sizeof(uint32_t);
+    file_reader.Read(file_offset, sizeof(uint32_t), (char*)&start);
+    file_offset += sizeof(uint32_t);
+    file_reader.Read(file_offset, sizeof(size_t), (char*)&file_frozen_pts);
+    file_offset += sizeof(size_t);
+    file_reader.Read(file_offset, sizeof(size_t), (char*)&num_points);
+    file_offset += sizeof(size_t);
 
     // max observed degree is the max degree of the graph
     _max_range_of_graph = _max_observed_degree;
@@ -46,7 +54,8 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
     diskann::cout << "Loading vamana graph " << filename << "..." << std::flush;
 
     _node_index.resize(num_points + 1);
-    in.read((char*)_node_index.data(), _node_index.size() * sizeof(size_t));
+    file_reader.Read(file_offset, _node_index.size() * sizeof(size_t), (char *)_node_index.data());
+    file_offset += _node_index.size() * sizeof(size_t);
 
     _graph_size = _node_index[num_points] * sizeof(std::uint32_t);
     
@@ -54,9 +63,8 @@ std::tuple<uint32_t, uint32_t, size_t> InMemStaticGraphReformatStore::load_impl(
     // add one more slot than actually need to avoid read invaild address
     // while the last point is no neighbor
     _graph.resize(total_neighbors + 1);
-    in.read((char*)_graph.data(), _graph_size);
-    in.close();
-    
+    file_reader.Read(file_offset, _graph_size, (char *)_graph.data());
+
     diskann::cout << "done. Index has " << num_points << " nodes and " << total_neighbors << " out-edges, _start is set to " << start
         << std::endl;
     return std::make_tuple(static_cast<std::uint32_t>(num_points), start, file_frozen_pts);

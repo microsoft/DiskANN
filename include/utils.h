@@ -28,6 +28,7 @@ typedef int FileHandle;
 #include "tsl/robin_set.h"
 #include "types.h"
 #include "tag_uint128.h"
+#include "file_reader.h"
 #include <any>
 //#include "timer.h"
 
@@ -978,18 +979,25 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
     }
     diskann::Timer link_timer;
 
-    std::ifstream reader;
-    reader.exceptions(std::ios::badbit | std::ios::failbit);
-    reader.open(bin_file, std::ios::binary);
-    reader.seekg(offset, reader.beg);
+    FileReader file_reader;
+    if (!file_reader.Open(bin_file))
+    {
+        throw diskann::ANNException("fail to open file ", -1, __FUNCSIG__,
+            __FILE__, __LINE__);
+        return;
+    }
 
     diskann::cout << bin_file << ":load embedding data open file: "
         << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
         << std::endl;
 
+    offset = 0;
     int npts_i32, dim_i32;
-    reader.read((char *)&npts_i32, sizeof(int));
-    reader.read((char *)&dim_i32, sizeof(int));
+    file_reader.Read(offset, sizeof(int), (char *)&npts_i32);
+    offset += sizeof(int);
+    file_reader.Read(offset, sizeof(int), (char *)&dim_i32);
+    offset += sizeof(int);
+
     npts = (unsigned)npts_i32;
     dim = (unsigned)dim_i32;
 
@@ -997,18 +1005,9 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
         << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
         << std::endl;
 
-    if (rounded_dim != dim)
-    {
-        for (size_t i = 0; i < npts; i++)
-        {
-            reader.read((char*)(data + i * rounded_dim), dim * sizeof(T));
-            memset(data + i * rounded_dim + dim, 0, (rounded_dim - dim) * sizeof(T));
-        }
-    }
-    else
-    {
-        reader.read((char *)data, npts * dim * sizeof(T));
-    }
+    size_t embedding_data_size = npts * dim * sizeof(T);
+    file_reader.Read(offset, embedding_data_size, (char *)data);
+
 
     diskann::cout << bin_file << ":load embedding data complete: "
         << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
