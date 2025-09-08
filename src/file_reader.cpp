@@ -41,15 +41,26 @@ namespace diskann
     {
         std::uint32_t bytesRead;
 
-        OVERLAPPED overlapped;
-        overlapped.Pointer = (PVOID)offset;
+        // For FILE_FLAG_NO_BUFFERING, offset and size must be aligned to sector boundaries
+        DWORD sectorSize = 4096; // Common sector size, but should ideally get actual sector size
+        
+        // Ensure offset is aligned to sector boundary
+        std::uint64_t alignedOffset = (offset / sectorSize) * sectorSize;
+        
+        // Ensure size is aligned to sector boundary
+        std::uint64_t alignedSize = ((sizeToRead + sectorSize - 1) / sectorSize) * sectorSize;
+
+        OVERLAPPED overlapped = {0};
+        overlapped.Offset = static_cast<DWORD>(alignedOffset & 0xFFFFFFFF);
+        overlapped.OffsetHigh = static_cast<DWORD>(alignedOffset >> 32);
         overlapped.hEvent = nullptr;
 
-        auto readSuccess = ReadFile(m_handle, buffer, (std::uint32_t)sizeToRead, reinterpret_cast<LPDWORD>(&bytesRead), &overlapped);
+        auto readSuccess = ReadFile(m_handle, buffer, static_cast<DWORD>(alignedSize), reinterpret_cast<LPDWORD>(&bytesRead), &overlapped);
 
         if (!readSuccess)
         {
-            std::cout << "ReadFile failed with error: " << GetLastError() << std::endl;
+            DWORD error = GetLastError();
+            std::cout << "ReadFile failed with error: " << error << std::endl;
             return false;
         }
 
