@@ -1,6 +1,7 @@
 #include "file_reader.h"
 #include <exception>
 #include <stdexcept>
+#include <iostream>
 
 namespace diskann
 {
@@ -21,7 +22,7 @@ namespace diskann
 
         m_handle = CreateFileA(
             m_path.c_str(),
-            GENERIC_READ | GENERIC_WRITE,
+            GENERIC_READ,
             FILE_SHARE_READ,
             NULL,
             creationDisposition,
@@ -48,6 +49,7 @@ namespace diskann
 
         if (!readSuccess)
         {
+            std::cout << "ReadFile failed with error: " << GetLastError() << std::endl;
             return false;
         }
 
