@@ -225,10 +225,15 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     // If not compacted, saving the whole data as the points may be spread around.
     const unsigned node_count = _data_compacted ? _nd + _num_frozen_pts : _max_points + _num_frozen_pts;
 
-#ifdef USE_MAP_OF_FILE
+#if USE_MAP_OF_FILE
+    // Number of bytes in just the _data array.
+    // TODO: this should probably be _aligned_dim, but the code in save_data_in_base_dimensions
+    // is using _dim.
+    const size_t size_of_data = node_count * _dim * sizeof(T);
 
-    const size_t size_of_data = node_count * _aligned_dim * sizeof(T);
+    // Total size of the file, as we also output some metadata like node_count and _dim.
     const size_t total_size = 2 * sizeof(uint32_t) + size_of_data;
+
     Log(logging::Info, 
         "save_data", 
         "Saving data using windows map-of-file, file size: %.1f MB",
@@ -236,16 +241,14 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
 
     PagedBinaryWriter writer(data_file, total_size);
 
-    writer.Write(node_count);
-    writer.Write(_dim);
+    writer.Write((int)node_count);
+    writer.Write((int)_dim);
 
     writer.WriteBytes(_data, size_of_data);
 
-    return size_of_data;
+    return total_size;
 #else
-    Log(logging::Info, 
-        "save_data", 
-        "Saving data using ofstream");
+    Log(logging::Info, "save_data", "Saving data using ofstream");
 
     return save_data_in_base_dimensions(data_file, _data, node_count, _dim, _aligned_dim);
 #endif
@@ -257,7 +260,6 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
 template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT>::save_graph(const std::string& graph_file) const
 {
 #if USE_MAP_OF_FILE
-
     Log(logging::Info, "save_graph", "Saving graph data using file map");
 
     // Estimate the total file size.
@@ -326,7 +328,6 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
         max_degree);
 
     return index_size;
-
 #else
     Log(logging::Info, "save_graph", "Saving graph data using ofstream");
 
