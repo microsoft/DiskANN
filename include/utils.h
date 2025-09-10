@@ -997,6 +997,8 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
         throw diskann::ANNException("Failed to read file header", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
+    npts = header.npts;
+    dim = header.dim;
     size_t data_size = npts * dim * sizeof(T);
     if (rounded_dim > dim)
     {
