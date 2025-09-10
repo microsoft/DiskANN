@@ -19,4 +19,12 @@ using TagVector = AnyWrapper::AnyVector;
 using DataVector = AnyWrapper::AnyVector;
 using Labelvector = AnyWrapper::AnyVector;
 using TagRobinSet = AnyWrapper::AnyRobinSet;
+
+#pragma pack(push, 1)
+struct CommonFileHeader
+{
+    unsigned npts;
+    unsigned dim;
+};
+#pragma pack(pop)
 } // namespace diskann

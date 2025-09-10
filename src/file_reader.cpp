@@ -18,6 +18,7 @@ namespace diskann
     bool FileReader::Open(const std::string& path)
     {
         m_path = path;
+        m_mask = ~static_cast<uint64_t>(m_sectorSize - 1);
         std::uint32_t creationDisposition = OPEN_EXISTING;
 
         m_handle = CreateFileA(
@@ -37,25 +38,49 @@ namespace diskann
         return true;
     }
 
-    bool FileReader::Read(std::uint64_t offset, std::uint64_t sizeToRead, char* buffer)
+    std::uint64_t FileReader::Read(std::uint64_t offset, std::uint64_t sizeToRead, char* buffer)
+    {
+        auto endOffsetToRead = offset + sizeToRead;
+        uint64_t beginAddr = offset & m_mask;
+        uint64_t endAddr = endOffsetToRead & m_mask;
+        if (endAddr != endOffsetToRead)
+        {
+            endAddr += m_sectorSize;
+        }
+        uint64_t diskReadSize = endAddr - beginAddr;
+
+        if (diskReadSize > 0)
+        {
+            auto allocatedBuffer = std::make_unique<uint8_t[]>(diskReadSize);
+            void* alignBufferAddress = allocatedBuffer.get();
+            size_t bufferSize = 0;
+
+            std::align(m_sectorSize, diskReadSize, alignBufferAddress, bufferSize);
+
+            auto alignedBuffer = (std::uint8_t*)alignBufferAddress;
+
+            if (!ReadData(beginAddr, alignedBuffer, (std::uint32_t)diskReadSize))
+            {
+                return 0;
+            }
+
+            memcpy_s(buffer, sizeToRead, alignedBuffer + offset - beginAddr, sizeToRead);
+
+            return sizeToRead;
+        }
+        
+        return 0;
+    }
+
+    bool FileReader::ReadData(std::uint64_t offset, std::uint8_t* buffer, std::uint32_t sizeToRead)
     {
         std::uint32_t bytesRead;
 
-        // For FILE_FLAG_NO_BUFFERING, offset and size must be aligned to sector boundaries
-        DWORD sectorSize = 4096; // Common sector size, but should ideally get actual sector size
-        
-        // Ensure offset is aligned to sector boundary
-        std::uint64_t alignedOffset = (offset / sectorSize) * sectorSize;
-        
-        // Ensure size is aligned to sector boundary
-        std::uint64_t alignedSize = ((sizeToRead + sectorSize - 1) / sectorSize) * sectorSize;
-
-        OVERLAPPED overlapped = {0};
-        overlapped.Offset = static_cast<DWORD>(alignedOffset & 0xFFFFFFFF);
-        overlapped.OffsetHigh = static_cast<DWORD>(alignedOffset >> 32);
+        OVERLAPPED overlapped;
+        overlapped.Pointer = (PVOID)offset;
         overlapped.hEvent = nullptr;
 
-        auto readSuccess = ReadFile(m_handle, buffer, static_cast<DWORD>(alignedSize), reinterpret_cast<LPDWORD>(&bytesRead), &overlapped);
+        auto readSuccess = ReadFile(m_handle, buffer, sizeToRead, reinterpret_cast<LPDWORD>(&bytesRead), &overlapped);
 
         if (!readSuccess)
         {
@@ -69,7 +94,7 @@ namespace diskann
 
     std::uint64_t FileReader::GetFileSize()
     {
-                if (m_handle == INVALID_HANDLE_VALUE)
+        if (m_handle == INVALID_HANDLE_VALUE)
         {
             throw std::runtime_error("File not opened");
         }

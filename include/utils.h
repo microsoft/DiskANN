@@ -991,93 +991,37 @@ inline void copy_aligned_data_from_file(const char *bin_file, T *&data, size_t &
         << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
         << std::endl;
 
-    // Create fixed-size aligned buffer for 100,000 sectors
-    const size_t SECTOR_SIZE = 4096;
-    const size_t BUFFER_SECTORS = 100000;
-    const size_t BUFFER_SIZE = BUFFER_SECTORS * SECTOR_SIZE; // ~409.6 MB
-    
-    char* aligned_buffer = nullptr;
-    alloc_aligned((void**)&aligned_buffer, BUFFER_SIZE, SECTOR_SIZE);
-    
-    try {
-        // Read header first (aligned to sector boundary)
-        if (!file_reader.Read(0, SECTOR_SIZE, aligned_buffer)) {
-            throw diskann::ANNException("Failed to read file header", -1, __FUNCSIG__, __FILE__, __LINE__);
-        }
-        
-        int npts_i32 = *reinterpret_cast<int*>(aligned_buffer);
-        int dim_i32 = *reinterpret_cast<int*>(aligned_buffer + sizeof(int));
-        
-        npts = static_cast<unsigned>(npts_i32);
-        dim = static_cast<unsigned>(dim_i32);
+    CommonFileHeader header;
+    size_t header_bytes = sizeof(CommonFileHeader);
+    if (file_reader.Read(0, header_bytes, (char*)&header) != header_bytes) {
+        throw diskann::ANNException("Failed to read file header", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
 
-        diskann::cout << bin_file << ":load embedding data read header: "
-            << ((double)link_timer.elapsed() / (double)1000000) << " seconds"
-            << std::endl;
-
-        // Calculate data parameters
-        size_t data_start_offset = 2 * sizeof(int); // 8 bytes header
-        size_t actual_data_size = npts * dim * sizeof(T);
-        size_t row_size = dim * sizeof(T);
-        
-        // Align data start to sector boundary
-        size_t aligned_data_offset = ROUND_DOWN(data_start_offset, SECTOR_SIZE);
-        size_t offset_adjustment = data_start_offset - aligned_data_offset;
-        
-        size_t total_bytes_to_read = actual_data_size + offset_adjustment;
-        size_t bytes_read = 0;
-        size_t dst_row_idx = 0;
-        
-        // Read data in chunks using the fixed buffer
-        while (bytes_read < total_bytes_to_read && dst_row_idx < npts) {
-            size_t chunk_size = std::min(BUFFER_SIZE, ROUND_UP(total_bytes_to_read - bytes_read, SECTOR_SIZE));
-            size_t current_offset = aligned_data_offset + bytes_read;
-            
-            if (!file_reader.Read(current_offset, chunk_size, aligned_buffer)) {
-                throw diskann::ANNException("Failed to read embedding data chunk", -1, __FUNCSIG__, __FILE__, __LINE__);
-            }
-            
-            // Process the data in this chunk
-            const char* chunk_data_start = aligned_buffer;
-            if (bytes_read == 0) {
-                // First chunk - account for header offset
-                chunk_data_start += offset_adjustment;
-            }
-            
-            size_t available_data_in_chunk = chunk_size;
-            if (bytes_read == 0) {
-                available_data_in_chunk -= offset_adjustment;
-            }
-            
-            // Copy complete rows from this chunk
-            size_t rows_in_chunk = std::min(available_data_in_chunk / row_size, npts - dst_row_idx);
-            
-            for (size_t r = 0; r < rows_in_chunk; r++) {
-                const T* src_row = reinterpret_cast<const T*>(chunk_data_start + r * row_size);
-                T* dst_row = data + dst_row_idx * rounded_dim;
-                
-                // Copy actual dimensions
-                std::memcpy(dst_row, src_row, dim * sizeof(T));
-                
-                // Zero-pad to rounded_dim if necessary
-                if (rounded_dim > dim) {
-                    std::memset(dst_row + dim, 0, (rounded_dim - dim) * sizeof(T));
-                }
-                
-                dst_row_idx++;
-            }
-            
-            bytes_read += (rows_in_chunk * row_size);
-            if (bytes_read == 0 && offset_adjustment > 0) {
-                bytes_read = offset_adjustment; // Account for first chunk offset
-            }
+    size_t data_size = npts * dim * sizeof(T);
+    if (rounded_dim > dim)
+    {
+        std::vector<char> tmp_buffer(data_size);
+        if (file_reader.Read(header_bytes, data_size, tmp_buffer.data()) != data_size)
+        {
+            throw diskann::ANNException("Failed to read embedding data", -1, __FUNCSIG__, __FILE__, __LINE__);
         }
-        
-        aligned_free(aligned_buffer);
-        
-    } catch (...) {
-        aligned_free(aligned_buffer);
-        throw;
+        // Copy data with padding
+        for (size_t i = 0; i < npts; i++)
+        {
+            const T* src_row = reinterpret_cast<const T*>(tmp_buffer.data() + i * dim * sizeof(T));
+            T* dst_row = data + i * rounded_dim;
+            // Copy actual dimensions
+            std::memcpy(dst_row, src_row, dim * sizeof(T));
+            // Zero-pad to rounded_dim if necessary
+            std::memset(dst_row + dim, 0, (rounded_dim - dim) * sizeof(T));
+        }
+    }
+    else
+    {
+        if (file_reader.Read(header_bytes, data_size, (char*)data) != data_size)
+        {
+            throw diskann::ANNException("Failed to read embedding data", -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
     }
 
     diskann::cout << bin_file << ":load embedding data complete: "

@@ -4,6 +4,17 @@
 namespace diskann
 {
 
+#pragma pack(push, 1)
+struct GraphHeader
+{
+    size_t expected_file_size;
+    uint32_t max_observed_degree;
+    uint32_t start;
+    size_t file_frozen_pts;
+    size_t num_points;
+};
+#pragma pack(pop)
+
 class InMemStaticGraphReformatStore : public InMemStaticGraphStore
 {
 public:
