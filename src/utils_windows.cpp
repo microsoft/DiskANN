@@ -74,6 +74,13 @@ HANDLE& FileWriterMap::GetMap()
 //
 static const size_t PAGE_SIZE = 256 * 1024 * 1024; // 256 MB
 
+// Periodically flush data to disk after writing this many bytes to avoid memory writing outpacing flushing to disk
+// and leading to temporary memory spikes.
+static const size_t FLUSH_SIZE = 1024 * 1024 * 1024; // 1024 MB
+
+// Ensure FLUSH_SIZE is a multiple of PAGE_SIZE for simplicity.
+static_assert(FLUSH_SIZE % PAGE_SIZE == 0, "FLUSH_SIZE must be a multiple of PAGE_SIZE");
+
 namespace
 {
     // Align the requested page size to the system's allocation granularity.
@@ -91,7 +98,8 @@ PagedBinaryWriter::PagedBinaryWriter(const std::string& fileName, size_t fileSiz
       m_pageOffset(0), 
       m_pageView(nullptr), 
       m_pageSize(AlignPageSize(PAGE_SIZE)),
-      m_maxFileSize(fileSize)
+      m_maxFileSize(fileSize),
+      m_nextFlushPosition(FLUSH_SIZE)
 {
     OpenNextPage();
 }
@@ -145,6 +153,19 @@ void PagedBinaryWriter::CloseCurrentPage()
 {
     if (m_pageView)
     {
+        if (m_position >= m_nextFlushPosition)
+        {
+            // Flush the view to disk.
+            if (!FlushViewOfFile(m_pageView, 0))
+            {
+                throw std::runtime_error("Failed to flush view of file. Error: " + std::to_string(GetLastError()));
+            }
+
+            FlushFileBuffers(m_file.GetMap());
+
+            m_nextFlushPosition = m_position + FLUSH_SIZE;
+        }
+
         UnmapViewOfFile(m_pageView);
         m_pageView = nullptr;
     }

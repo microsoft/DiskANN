@@ -108,6 +108,10 @@ public:
 
     const size_t m_maxFileSize;
 
+    // When reaching this position, ensure to flush the buffers to disk before more writing.
+    // Calculated from FLUSH_SIZE.
+    size_t m_nextFlushPosition;
+
     void CloseCurrentPage();
 
     void OpenNextPage();
