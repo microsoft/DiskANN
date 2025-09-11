@@ -264,11 +264,11 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
 
     // Estimate the total file size.
     _u32 max_degree = 0;
-    _u64 index_size = 0; 
+    _u64 index_size = 0;
     const size_t data_compacted_output = _data_compacted ? 1 : 0;
 
     const _u64 header_size = sizeof(index_size) + sizeof(_max_observed_degree) + sizeof(_start) +
-                             sizeof(_num_frozen_pts) + sizeof(data_compacted_output);
+                                sizeof(_num_frozen_pts) + sizeof(data_compacted_output);
 
     index_size = header_size;
 
@@ -339,7 +339,7 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
 
     // The following two will be updated after the graph is written out.
     _u32 max_degree = 0;
-    _u64 index_size = 0; 
+    _u64 index_size = 0;
     out.write((char *)&index_size, sizeof(index_size));
     out.write((char *)&_max_observed_degree, sizeof(_max_observed_degree));
 
@@ -350,7 +350,7 @@ template <typename T, typename TagT, typename LabelT> _u64 Index<T, TagT, LabelT
     out.write((char *)&data_compacted_output, sizeof(data_compacted_output));
 
     const _u64 header_size = sizeof(index_size) + sizeof(_max_observed_degree) + sizeof(_start) +
-                             sizeof(_num_frozen_pts) + sizeof(data_compacted_output);
+                                sizeof(_num_frozen_pts) + sizeof(data_compacted_output);
 
     index_size = header_size;
 
