@@ -24,7 +24,7 @@
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
-#define USE_MAP_OF_FILE 1
+//#define USE_MAP_OF_FILE 1
 
 namespace diskann
 {

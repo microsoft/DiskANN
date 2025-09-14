@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
   <metadata>
     <id>DiskANN-preview.win-x64</id>
-    <version>0.13.910.3</version>
+    <version>0.13.913.1</version>
     <authors>DiskANN team</authors>
     <owners>DiskANN team</owners>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
