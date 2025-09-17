@@ -399,9 +399,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
             double overall_recall = 0;
 
-
-            // std::wcout << "[DEBUG] Will calclate brute and graph recall now..." << std::endl;
-
             for (size_t i = 0; i < query_num; i++)
             {
                 std::set<uint32_t> gt, res;
@@ -835,3 +832,4 @@ int main(int argc, char **argv)
         return -1;
     }
 }
+
