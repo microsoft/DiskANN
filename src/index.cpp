@@ -44,6 +44,10 @@ namespace diskann
     uint32_t num_paged = 0;
     uint32_t min_inter_size = 1;
     bool print_qstats = false;
+    bool use_optimized_label_lookup = true; // Temporarily disable the optimization to debug
+    bool use_flattened_labels = false; // Use flattened labels for label intersection
+    uint64_t vector_label_lookups = 0;      // Count of vector-based lookups
+    uint64_t map_label_lookups = 0;         // Count of map-based lookups
     int64_t curr_query = -1;
     double curr_intersection_time = 0.0;
     double curr_jaccard_time = 0.0;
@@ -919,48 +923,40 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::brute_force_filters(const 
     return std::make_pair(hops, cmps);
 }
 
+template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::point_has_label(const uint32_t point_id, const LabelT label) const {
+    // if (use_optimized_label_lookup && std::is_integral<LabelT>::value &&
+    //     !_labels_to_points_vec.empty() && static_cast<size_t>(label) < _labels_to_points_vec.size()) {
+    //     vector_label_lookups++;
+    //     return _labels_to_points_vec[static_cast<size_t>(label)].count(point_id) > 0;
+    if (use_optimized_label_lookup && !_location_to_labels.empty()) {
+        vector_label_lookups++;
+        if (std::find(_location_to_labels[point_id].begin(), _location_to_labels[point_id].end(), label) != _location_to_labels[point_id].end()) {
+            return true;
+        }
+
+        // if (binary_search(_location_to_labels[point_id].begin(), _location_to_labels[point_id].end(), label)) {
+        //     return true;
+        // }
+        else return false;
+    } else {
+        map_label_lookups++;
+        auto it = _labels_to_points_set.find(label);
+        return (it != _labels_to_points_set.end() && it->second.count(point_id) > 0);
+    }
+}
+
 
 template <typename T, typename TagT, typename LabelT>
 inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::vector<LabelT> &set1, const std::vector<LabelT> &set2) {
     // Early exit optimizations
     if (set1.empty() || set2.empty()) return 0.0f;
     
-    // // Cache profiling start
-    // static bool enable_cache_profiling = getenv("CACHE_PROFILE") != nullptr;
-    // static uint64_t call_count = 0;
-    // auto profile_start = g_cache_profiler.start_profile();
-    
-    // // Calculate access times for cumulative stats
-    // double access_time_set1 = 0.0;
-    // double access_time_set2 = 0.0;
-    // if (enable_cache_profiling) {
-    //     access_time_set1 = g_cache_profiler.time_memory_access(set1.data(), set1.size());
-    //     access_time_set2 = g_cache_profiler.time_memory_access(set2.data(), set2.size());
-    // }
-    
-    // if (enable_cache_profiling && (call_count % 1000 == 0)) {
-    //     diskann::cout << "\n=== Jaccard Similarity Cache Analysis (Call #" << call_count << ") ===" << std::endl;
-    //     diskann::cout << "Set1 size: " << set1.size() << ", Set2 size: " << set2.size() << std::endl;
-        
-    //     // Estimate cache behavior for input data
-    //     g_cache_profiler.estimate_cache_behavior(set1.data(), set1.size(), "Set1 (filter_labels)");
-    //     g_cache_profiler.estimate_cache_behavior(set2.data(), set2.size(), "Set2 (vector_labels)");
-    // }
-    
-    // Two-pointer approach for sorted arrays - cache-friendly version
     // Note: _location_to_labels vectors are already sorted in parse_label_file()
     size_t intersection_count = 0;
-    
     size_t i = 0, j = 0;
     
-    // // Track memory access patterns
-    // uint64_t memory_accesses = 0;
-    // auto access_start = std::chrono::high_resolution_clock::now();
-    
-    // Two-pointer merge to count intersection (no manual prefetching)
     while (i < set1.size() && j < set2.size()) {
-        // memory_accesses += 2; // Two array accesses per comparison
-        
         if (set1[i] == set2[j]) {
             // Element in both sets
             intersection_count++;
@@ -975,42 +971,7 @@ inline float Index<T, TagT, LabelT>:: calculate_jaccard_similarity(const std::ve
         }
     }
     
-    // auto access_end = std::chrono::high_resolution_clock::now();
-    // auto profile_end = g_cache_profiler.end_profile(profile_start);
-    
-    // // Add to cumulative statistics
-    // if (enable_cache_profiling) {
-    //     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(access_end - access_start);
-    //     bool high_access_warning = (access_time_set1 > 20.0 || access_time_set2 > 20.0);
-        
-    //     g_cache_profiler.add_to_cumulative_stats(
-    //         memory_accesses, 
-    //         profile_end.cycles, 
-    //         duration.count(),
-    //         intersection_count,
-    //         set1.size(),
-    //         set2.size(),
-    //         access_time_set1,
-    //         access_time_set2,
-    //         high_access_warning
-    //     );
-    // }
-    
-    // if (enable_cache_profiling && (call_count % 1000 == 0)) {
-    //     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(access_end - access_start);
-    //     diskann::cout << "Memory accesses: " << memory_accesses << ", Time: " << duration.count() 
-    //                   << " ns, Avg: " << (memory_accesses > 0 ? (double)duration.count() / memory_accesses : 0.0) 
-    //                   << " ns/access" << std::endl;
-    //     diskann::cout << "Cycles spent: " << profile_end.cycles << ", Cycles/access: " 
-    //                   << (memory_accesses > 0 ? (double)profile_end.cycles / memory_accesses : 0.0) << std::endl;
-    //     diskann::cout << "Intersection count: " << intersection_count << ", Result: " 
-    //                   << static_cast<float>(intersection_count) / static_cast<float>(set1.size()) << std::endl;
-    //     diskann::cout << "===============================================" << std::endl << std::endl;
-    // }
-    
-    // call_count++;
-    
-    // Return intersection / |set1| (where set1 is typically the query/incoming labels)
+    // Return intersection / |set1| (where set1 is the query/incoming labels)
     return static_cast<float>(intersection_count) / static_cast<float>(set1.size());
 }
 
@@ -1048,34 +1009,40 @@ inline void Index<T, TagT, LabelT>::calculate_jaccard_similarity_batch(
     const std::vector<std::vector<LabelT>>& filter_labels,
     std::vector<float>& results) {
     
-    results.resize(point_ids.size());
-    const uint32_t num_clauses = static_cast<uint32_t>(filter_labels.size());
-    
-    for (size_t i = 0; i < point_ids.size(); ++i) {
-        uint32_t point_id = point_ids[i];
-        uint32_t matching_clauses = 0;
-        
-        // Use the same data structure as non-batched version for consistency
-        const auto& point_labels = _location_to_labels[point_id];
-        
-        // Check each filter clause
-        for (uint32_t j = 0; j < num_clauses; ++j) {
-            const auto& clause = filter_labels[j];
-            
-            // Check if any label in this clause matches the point
-            for (const auto& label : clause) {
-                auto it = _labels_to_points_set.find(label);
-                if (it != _labels_to_points_set.end() && it->second.count(point_id)) {
-                // if (std::find(point_labels.begin(), point_labels.end(), label) != point_labels.end()) {
-                    matching_clauses++;
-                    break; // Found match, move to next clause
+    if (use_flattened_labels) {
+        // Flatten all filter_labels into a single vector for two-pointer Jaccard
+        // Precompute total size to avoid repeated reallocations
+        size_t total_size = 0;
+        for (const auto& clause : filter_labels) {
+            total_size += clause.size();
+        }
+        std::vector<LabelT> flat_filters;
+        flat_filters.reserve(total_size);
+        for (const auto& clause : filter_labels) {
+            flat_filters.insert(flat_filters.end(), clause.begin(), clause.end());
+        }
+        std::sort(flat_filters.begin(), flat_filters.end());
+        for (size_t i = 0; i < point_ids.size(); ++i) {
+            results[i] = calculate_jaccard_similarity(flat_filters, _location_to_labels[point_ids[i]]);
+        }
+    }
+    else {
+        const uint32_t num_clauses = static_cast<uint32_t>(filter_labels.size());
+        for (size_t i = 0; i < point_ids.size(); ++i) {
+            uint32_t matching_clauses = 0;
+            for (uint32_t j = 0; j < num_clauses; ++j) {
+                const auto& clause = filter_labels[j];
+                for (const auto& label : clause) {
+                    if (point_has_label(point_ids[i], label)) {
+                        matching_clauses++;
+                        break; // No need to check more labels for this clause
+                    }
                 }
             }
+            results[i] = static_cast<float>(matching_clauses) / static_cast<float>(num_clauses);
         }
-        
-        // Return fraction of clauses that have intersection
-        results[i] = static_cast<float>(matching_clauses) / static_cast<float>(num_clauses);
     }
+    
 }
 
 // Keep the original function for compatibility, but use batch processing internally
@@ -2368,8 +2335,47 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
     _location_to_labels.resize(line_cnt, std::vector<LabelT>());
     _location_to_labels_robin.resize(line_cnt, tsl::robin_set<LabelT>());
     _location_to_labels_bitmap.resize(line_cnt, roaring::Roaring());
-    _location_to_labels_robin.resize(line_cnt, tsl::robin_set<LabelT>());
-    _location_to_labels_bitmap.resize(line_cnt, roaring::Roaring());
+    _point_to_labels_set.resize(line_cnt, tsl::robin_set<LabelT>());
+    
+    // First pass to find the maximum label ID to determine the vector size
+    LabelT max_label_id = 0;
+    
+    // We need to scan the file first to find the maximum label ID
+    std::ifstream max_label_scan(label_file);
+    if (max_label_scan.fail()) {
+        throw diskann::ANNException(std::string("Failed to open file for max label scan ") + label_file, -1);
+    }
+    
+    std::string scan_line, scan_token;
+    while (std::getline(max_label_scan, scan_line)) {
+        std::istringstream scan_iss(scan_line);
+        getline(scan_iss, scan_token, '\t');
+        std::istringstream scan_new_iss(scan_token);
+        while (getline(scan_new_iss, scan_token, ',')) {
+            scan_token.erase(std::remove(scan_token.begin(), scan_token.end(), '\n'), scan_token.end());
+            scan_token.erase(std::remove(scan_token.begin(), scan_token.end(), '\r'), scan_token.end());
+            
+            try {
+                LabelT token_as_num = (LabelT)std::stoul(scan_token);
+                if (token_as_num > max_label_id) {
+                    max_label_id = token_as_num;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Error converting label to number: " << e.what() << std::endl;
+            }
+        }
+    }
+    
+    // Initialize vector-based label-to-points lookup structure for faster access
+    // Only resize if using numeric labels and max label ID is reasonable (to avoid excessive memory usage)
+    constexpr size_t MAX_VECTOR_SIZE = 1000000; // Limit vector size to avoid excessive memory usage
+    if (std::is_integral<LabelT>::value && max_label_id < MAX_VECTOR_SIZE) {
+        _labels_to_points_vec.resize(max_label_id + 1, tsl::robin_set<uint32_t>());
+    } else {
+        // If using non-integral labels or the range is too large, keep the vector empty
+        // and we'll fall back to map-based lookups
+        _labels_to_points_vec.clear();
+    }
 
     infile.clear();
     infile.seekg(0, std::ios::beg);
@@ -2388,9 +2394,15 @@ void Index<T, TagT, LabelT>::parse_label_file(const std::string &label_file, siz
             lbls.push_back(token_as_num);
             _location_to_labels_bitmap[line_cnt].add(token_as_num);
             _location_to_labels_robin[line_cnt].insert(token_as_num);
-            _location_to_labels_bitmap[line_cnt].add(token_as_num);
-            _location_to_labels_robin[line_cnt].insert(token_as_num);
             _labels_to_points_set[token_as_num].insert(line_cnt);
+            _point_to_labels_set[line_cnt].insert(token_as_num); // Populate the new structure
+            
+            // Populate the new vector-based labels-to-points structure
+            // Update the new vector-based label-to-points mapping if available
+            if (!_labels_to_points_vec.empty() && token_as_num < _labels_to_points_vec.size()) {
+                _labels_to_points_vec[token_as_num].insert(line_cnt);
+            } 
+            
             _labels.insert(token_as_num);
             try
             {

@@ -53,6 +53,11 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     _valid_init_candidates_scratch.reserve(max_batch_size);
     _filtered_ids_scratch.reserve(max_batch_size);
 
+    _jaccard_similarities_scratch.resize(max_batch_size);
+    _init_penalties_scratch.resize(max_batch_size);
+    _valid_init_candidates_scratch.resize(max_batch_size);
+    _filtered_ids_scratch.resize(max_batch_size);
+
     resize_for_new_L(std::max(search_l, indexing_l));
 }
 

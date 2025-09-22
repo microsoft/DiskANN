@@ -48,6 +48,10 @@ DISKANN_DLLEXPORT extern uint32_t num_graphs;
 DISKANN_DLLEXPORT extern uint32_t num_paged;
 DISKANN_DLLEXPORT extern uint32_t min_inter_size;
 DISKANN_DLLEXPORT extern bool print_qstats;
+DISKANN_DLLEXPORT extern bool use_optimized_label_lookup; // Flag to control label lookup method
+DISKANN_DLLEXPORT extern bool use_flattened_labels; // Flag for query filter structure during Jaccard similarity
+DISKANN_DLLEXPORT extern uint64_t vector_label_lookups;   // Count of vector-based lookups
+DISKANN_DLLEXPORT extern uint64_t map_label_lookups;      // Count of map-based lookups
 DISKANN_DLLEXPORT extern int64_t curr_query;
 DISKANN_DLLEXPORT extern double curr_intersection_time;
 DISKANN_DLLEXPORT extern double curr_jaccard_time;
@@ -447,6 +451,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::unordered_map<LabelT, uint32_t> _label_to_start_id;
     std::vector<roaring::Roaring> _labels_to_points;
     std::unordered_map<LabelT, tsl::robin_set<uint32_t>> _labels_to_points_set;
+    std::vector<tsl::robin_set<uint32_t>> _labels_to_points_vec; // Vector-based label-to-points mapping for faster lookup
+    std::vector<tsl::robin_set<LabelT>> _point_to_labels_set; // For faster Jaccard similarity calculation
     std::vector<roaring::Roaring> _labels_to_points_sample;
     uint32_t *_sample_map = nullptr;
     float _sample_prob = 0;
@@ -459,6 +465,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     uint32_t _bruteforce_threshold = 0;
     float _prob = 0.1;
     std::unordered_map<std::string, LabelT> _label_map;
+
+    // Helper function to quickly check if a point has a given label
+    bool point_has_label(const uint32_t point_id, const LabelT label) const;
 
     // Indexing parameters
     uint32_t _indexingQueueSize;

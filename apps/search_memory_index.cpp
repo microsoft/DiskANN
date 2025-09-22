@@ -117,6 +117,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         index->optimize_index_layout();
 
     std::cout << "Using " << num_threads << " threads to search" << std::endl;
+    std::cout << "Vector-based label lookup: " << (diskann::use_optimized_label_lookup ? "ENABLED" : "DISABLED") << std::endl;
+    std::cout << "Flattened query filters during jaccard: " << (diskann::use_flattened_labels ? "ENABLED" : "DISABLED") << std::endl;
     std::cout.setf(std::ios_base::fixed, std::ios_base::floatfield);
     std::cout.precision(2);
     const std::string qps_title = show_qps_per_thread ? "QPS/thread" : "QPS";
@@ -193,6 +195,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
      //query_num = 4;
     //query_num = 1;
     double best_recall = 0.0;
+
+    // std::cout << "[PERF] About to start search_with_filters. Press Enter to continue..." << std::endl;
+    // std::cin.get(); // Wait for user input
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
@@ -517,6 +522,16 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         std::cout << "Get intersection time: " << avg_intersection_time << " mus/query" << std::endl;
         std::cout << "Jaccard similarity time: " << avg_jaccard_time << " mus/query" << std::endl;
         
+        // Print label lookup statistics
+        std::cout << "\n=== LABEL LOOKUP STATISTICS ===" << std::endl;
+        std::cout << "Vector-based lookups: " << diskann::vector_label_lookups << std::endl;
+        std::cout << "Map-based lookups: " << diskann::map_label_lookups << std::endl;
+        if (diskann::vector_label_lookups + diskann::map_label_lookups > 0) {
+            double vector_lookup_percent = 100.0 * diskann::vector_label_lookups / 
+                                          (diskann::vector_label_lookups + diskann::map_label_lookups);
+            std::cout << "Vector-based lookup usage: " << vector_lookup_percent << "%" << std::endl;
+        }
+        
         // double total_filter_overhead = (time_to_get_valid + time_to_detect_penalty + time_to_intersect + time_to_filter_check_and_compare) * 1000000.0 / query_num;
         // total_filter_overhead += avg_intersection_time;  // Add the new intersection timing
         // std::cout << "Total filter overhead: " << total_filter_overhead << " μs/query" << std::endl;
@@ -648,6 +663,12 @@ int main(int argc, char **argv)
         optional_configs.add_options()("normalization_factors",
                                        po::value<std::string>()->default_value(""),
                                        "Path to normalization factors text file (format: scale_factor shift_factor)");
+        optional_configs.add_options()("disable_vector_label_lookup",
+                                       po::bool_switch()->default_value(false)->notifier(
+                                           [](bool val) { diskann::use_optimized_label_lookup = !val; }),
+                                       "Disable vector-based label lookup and use only map-based lookup");
+        optional_configs.add_options()("flattened_labels", po::bool_switch(&diskann::use_flattened_labels),
+                                       "Use flattened query filters during jaccard similarity computation");
 
         // Output controls
         po::options_description output_controls("Output controls");
