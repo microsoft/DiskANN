@@ -28,7 +28,7 @@
 // block size for reading/ processing large files and matrices in blocks
 #define BLOCK_SIZE 5000000
 
-// #define SAVE_INFLATED_PQ true
+
 
 template <typename T>
 void gen_random_slice(const std::string base_file, const std::string output_prefix, double sampling_rate)

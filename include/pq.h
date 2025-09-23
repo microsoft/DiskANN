@@ -63,6 +63,17 @@ DISKANN_DLLEXPORT int generate_pq_pivots(const float *const train_data, size_t n
                                          unsigned num_centers, unsigned num_pq_chunks, unsigned max_k_means_reps,
                                          std::string pq_pivots_path, bool make_zero_mean = false);
 
+// Variant of generate_pq_pivots which accepts pre-computed chunk offsets instead of
+// computing a partitioning internally. The chunk_offsets vector must:
+//   * have size num_chunks + 1
+//   * be strictly non-decreasing
+//   * begin with 0 and end with dim
+// Each consecutive pair defines the half-open interval [offset[i], offset[i+1]) for a chunk.
+DISKANN_DLLEXPORT int generate_pq_pivots_with_offsets(const float *const train_data, size_t num_train, unsigned dim,
+                                                      unsigned num_centers, std::vector<uint32_t> &chunk_offsets,
+                                                      unsigned max_k_means_reps, std::string pq_pivots_path,
+                                                      bool make_zero_mean = false);
+
 DISKANN_DLLEXPORT int generate_opq_pivots(const float *train_data, size_t num_train, unsigned dim, unsigned num_centers,
                                           unsigned num_pq_chunks, std::string opq_pivots_path,
                                           bool make_zero_mean = false);

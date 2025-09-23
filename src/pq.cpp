@@ -12,6 +12,7 @@
 
 // block size for reading/processing large files and matrices in blocks
 #define BLOCK_SIZE 5000000
+#define SAVE_INFLATED_PQ true
 
 namespace diskann
 {
@@ -557,6 +558,126 @@ int generate_pq_pivots(const float *const passed_train_data, size_t num_train, u
     diskann::cout << "Saved pq pivot data to " << pq_pivots_path << " of size " << cumul_bytes[cumul_bytes.size() - 1]
                   << "B." << std::endl;
 
+    return 0;
+}
+
+// Same as generate_pq_pivots, but chunk partitioning is provided explicitly via chunk_offsets.
+// chunk_offsets must satisfy:
+//   * size == num_chunks + 1
+//   * chunk_offsets[0] == 0
+//   * chunk_offsets.back() == dim
+//   * strictly non-decreasing
+// This allows callers to control arbitrary (possibly unbalanced) dimensional groupings.
+int generate_pq_pivots_with_offsets(const float *const passed_train_data, size_t num_train, uint32_t dim,
+                                    uint32_t num_centers, std::vector<uint32_t> &chunk_offsets,
+                                    uint32_t max_k_means_reps, std::string pq_pivots_path, bool make_zero_mean)
+{
+    if (chunk_offsets.size() < 2)
+    {
+        diskann::cout << " Error: chunk_offsets must have at least 2 entries" << std::endl;
+        return -1;
+    }
+    if (chunk_offsets.front() != 0 || chunk_offsets.back() != dim)
+    {
+        diskann::cout << " Error: chunk_offsets must start at 0 and end at dim" << std::endl;
+        return -1;
+    }
+    for (size_t i = 1; i < chunk_offsets.size(); i++)
+    {
+        if (chunk_offsets[i] <= chunk_offsets[i - 1] || chunk_offsets[i] > dim)
+        {
+            diskann::cout << " Error: chunk_offsets must be non-decreasing within [0,dim]" << std::endl;
+            return -1;
+        }
+    }
+    uint32_t num_pq_chunks = static_cast<uint32_t>(chunk_offsets.size() - 1);
+    if (num_pq_chunks > dim)
+    {
+        diskann::cout << " Error: number of chunks more than dimension" << std::endl;
+        return -1;
+    }
+
+    std::unique_ptr<float[]> train_data = std::make_unique<float[]>(num_train * dim);
+    std::memcpy(train_data.get(), passed_train_data, num_train * dim * sizeof(float));
+
+    std::unique_ptr<float[]> full_pivot_data;
+
+    if (file_exists(pq_pivots_path))
+    {
+        size_t file_dim, file_num_centers;
+        diskann::load_bin<float>(pq_pivots_path, full_pivot_data, file_num_centers, file_dim, METADATA_SIZE);
+        if (file_dim == dim && file_num_centers == num_centers)
+        {
+            diskann::cout << "PQ pivot file exists. Not generating again" << std::endl;
+            return -1;
+        }
+    }
+
+    // Calculate centroid and center the training data (optional)
+    std::unique_ptr<float[]> centroid = std::make_unique<float[]>(dim);
+    for (uint64_t d = 0; d < dim; d++)
+        centroid[d] = 0;
+    if (make_zero_mean)
+    {
+        for (uint64_t d = 0; d < dim; d++)
+        {
+            for (uint64_t p = 0; p < num_train; p++)
+                centroid[d] += train_data[p * dim + d];
+            centroid[d] /= num_train;
+        }
+        for (uint64_t d = 0; d < dim; d++)
+            for (uint64_t p = 0; p < num_train; p++)
+                train_data[p * dim + d] -= centroid[d];
+    }
+
+    full_pivot_data.reset(new float[num_centers * dim]);
+
+    for (size_t i = 0; i < num_pq_chunks; i++)
+    {
+        size_t cur_chunk_size = chunk_offsets[i + 1] - chunk_offsets[i];
+        if (cur_chunk_size == 0)
+            continue;
+
+        std::unique_ptr<float[]> cur_pivot_data = std::make_unique<float[]>(num_centers * cur_chunk_size);
+        std::unique_ptr<float[]> cur_data = std::make_unique<float[]>(num_train * cur_chunk_size);
+        std::unique_ptr<uint32_t[]> closest_center = std::make_unique<uint32_t[]>(num_train);
+
+        diskann::cout << "Processing (provided) chunk " << i << " with dimensions [" << chunk_offsets[i] << ", "
+                      << chunk_offsets[i + 1] << ")" << std::endl;
+
+#pragma omp parallel for schedule(static, 65536)
+        for (int64_t j = 0; j < (int64_t)num_train; j++)
+        {
+            std::memcpy(cur_data.get() + j * cur_chunk_size, train_data.get() + j * dim + chunk_offsets[i],
+                        cur_chunk_size * sizeof(float));
+        }
+
+        kmeans::kmeanspp_selecting_pivots(cur_data.get(), num_train, cur_chunk_size, cur_pivot_data.get(),
+                                          num_centers);
+        kmeans::run_lloyds(cur_data.get(), num_train, cur_chunk_size, cur_pivot_data.get(), num_centers,
+                           max_k_means_reps, NULL, closest_center.get());
+        for (uint64_t j = 0; j < num_centers; j++)
+        {
+            std::memcpy(full_pivot_data.get() + j * dim + chunk_offsets[i],
+                        cur_pivot_data.get() + j * cur_chunk_size, cur_chunk_size * sizeof(float));
+        }
+    }
+
+    // Persist pivot data, centroid and chunk offsets
+    std::vector<size_t> cumul_bytes(4, 0);
+    cumul_bytes[0] = METADATA_SIZE;
+    cumul_bytes[1] = cumul_bytes[0] +
+                     diskann::save_bin<float>(pq_pivots_path.c_str(), full_pivot_data.get(), (size_t)num_centers, dim,
+                                              cumul_bytes[0]);
+    cumul_bytes[2] = cumul_bytes[1] +
+                     diskann::save_bin<float>(pq_pivots_path.c_str(), centroid.get(), (size_t)dim, 1,
+                                              cumul_bytes[1]);
+    cumul_bytes[3] = cumul_bytes[2] + diskann::save_bin<uint32_t>(pq_pivots_path.c_str(), chunk_offsets.data(),
+                                                                  chunk_offsets.size(), 1, cumul_bytes[2]);
+    diskann::save_bin<size_t>(pq_pivots_path.c_str(), cumul_bytes.data(), cumul_bytes.size(), 1, 0);
+
+    diskann::cout << "Saved pq pivot data (with provided offsets) to " << pq_pivots_path << " of size "
+                  << cumul_bytes.back() << "B." << std::endl;
     return 0;
 }
 
