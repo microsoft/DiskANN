@@ -109,6 +109,8 @@ class IterRecord:
     bytes_per_vec: int
     prefix: str
     improved: bool
+    tag: str
+    artifacts: List[Path] = dataclasses.field(default_factory=list)
 
 class CommandError(RuntimeError):
     pass
@@ -160,8 +162,9 @@ def write_offsets_file(offsets: List[int], path: Path):
         f.write("\n")
 
 
-def train_and_quantize(cfg: Config, allocation: List[int], tag: str) -> Tuple[Path, Path, Path]:
-    """Run PQ training + compression for a given allocation and return (prefix_path, compressed_file, inflated_file)."""
+def train_and_quantize(cfg: Config, allocation: List[int], tag: str) -> Tuple[Path, Path, Path, Path]:
+    """Run PQ training + compression for a given allocation and return
+    (prefix_path, compressed_file, inflated_file, offsets_file)."""
     offsets = build_chunk_offsets(cfg, allocation)
     offsets_file = cfg.work_dir / f"offsets_{tag}.txt"
     write_offsets_file(offsets, offsets_file)
@@ -171,7 +174,7 @@ def train_and_quantize(cfg: Config, allocation: List[int], tag: str) -> Tuple[Pa
     run_cmd(cmd, timeout=cfg.timeout_train, verbose=cfg.verbose)
     compressed = Path(str(prefix_path) + "_pq_compressed.bin")
     inflated = Path(str(compressed) + "_inflated.bin")  # naming from pq.cpp
-    return prefix_path, compressed, inflated
+    return prefix_path, compressed, inflated, offsets_file
 
 def compute_quantized_gt(cfg: Config, inflated_file: Path, tag: str) -> Path:
     gt_out = cfg.work_dir / f"quantized_gt_{tag}.bin"
@@ -191,14 +194,33 @@ def compute_recall(cfg: Config, quantized_gt: Path) -> float:
     return float(m.group(1))
 
 def evaluate_allocation(cfg: Config, allocation: List[int], tag: str) -> Tuple[float, IterRecord]:
-    prefix_path, compressed, inflated = train_and_quantize(cfg, allocation, tag)
+    prefix_path, compressed, inflated, offsets_file = train_and_quantize(cfg, allocation, tag)
     if not inflated.exists():
         # If build not compiled with SAVE_INFLATED_PQ we cannot proceed.
         raise FileNotFoundError(f"Inflated file not found: {inflated}. Rebuild with SAVE_INFLATED_PQ defined.")
     quant_gt = compute_quantized_gt(cfg, inflated, tag)
     recall = compute_recall(cfg, quant_gt)
-    return recall, IterRecord(iteration=-1, allocation=allocation.copy(), recall=recall,
-                              bytes_per_vec=sum(allocation), prefix=str(prefix_path), improved=False)
+    if cfg.verbose:
+        # Structured single-line log for filtering later
+        print(
+            "PQ_GREEDY_EVAL",
+            f"tag={tag}",
+            f"alloc={allocation}",
+            f"bytes={sum(allocation)}",
+            f"recall={recall:.6f}",
+            flush=True,
+        )
+    artifacts = [compressed, inflated, quant_gt, offsets_file, prefix_path.with_name(prefix_path.name + "_pq_pivots.bin")]
+    return recall, IterRecord(
+        iteration=-1,
+        allocation=allocation.copy(),
+        recall=recall,
+        bytes_per_vec=sum(allocation),
+        prefix=str(prefix_path),
+        improved=False,
+        tag=tag,
+        artifacts=artifacts,
+    )
 
 def greedy_search(cfg: Config) -> Dict[str, Any]:
     cfg.work_dir.mkdir(parents=True, exist_ok=True)
@@ -210,13 +232,16 @@ def greedy_search(cfg: Config) -> Dict[str, Any]:
     history.append(rec)
     if cfg.verbose:
         print(f"Initial allocation {current_alloc} => recall={best_recall:.6f}")
+    # Track artifacts from the previous iteration (candidates) for cleanup.
+    prev_iteration_records: List[IterRecord] = [rec]
     for it in range(1, cfg.max_iters + 1):
         candidates: List[Tuple[float, List[int], IterRecord]] = []
         improved = False
         for b in range(cfg.num_buckets):
             if current_alloc[b] + cfg.increment > cfg.max_per_bucket:
-                continue
+                print(f"Iter {it}: Bucket {b} exceeded max_per_bucket")
             if cfg.max_total_bytes is not None and sum(current_alloc) + cfg.increment > cfg.max_total_bytes:
+                print(f"Iter {it}: Total allocation exceeded max_total_bytes")
                 continue
             cand_alloc = current_alloc.copy()
             cand_alloc[b] += cfg.increment
@@ -249,7 +274,15 @@ def greedy_search(cfg: Config) -> Dict[str, Any]:
             history.append(best_cand_rec)
             if cfg.verbose:
                 print(f"Iter {it}: no improvement (best candidate recall={best_cand_recall:.6f}); stopping.")
+            # Final cleanup of previous iteration candidates if needed
+            if not cfg.keep_all:
+                _cleanup_iteration(prev_iteration_records, preserve_allocation=current_alloc, verbose=cfg.verbose)
             break
+        # After completing this iteration and deciding to continue, cleanup artifacts from previous iteration
+        if not cfg.keep_all:
+            _cleanup_iteration(prev_iteration_records, preserve_allocation=current_alloc, verbose=cfg.verbose)
+        # Prepare for next iteration: current iteration's candidate records become previous
+        prev_iteration_records = [cand[2] for cand in candidates]
     result = {
         "final_allocation": current_alloc,
         "final_recall": best_recall,
@@ -327,6 +360,38 @@ def _infer_dimension_and_buckets(cfg: Config):
     cfg.bucket_sizes = [base_bucket + (1 if i < rem else 0) for i in range(cfg.num_buckets)]
     if cfg.verbose:
         print(f"Inferred dim={cfg.dim}; bucket_sizes={cfg.bucket_sizes}")
+
+def _cleanup_iteration(records: List[IterRecord], preserve_allocation: List[int], verbose: bool):
+    """Delete artifact files for a completed iteration except those matching preserve_allocation.
+
+    We match on allocation list equality. Only executed when keep_all is False to save disk space.
+    """
+    preserved = preserve_allocation
+    for rec in records:
+        if rec.allocation == preserved:
+            continue
+        for path in rec.artifacts:
+            try:
+                if path and path.exists():
+                    path.unlink()
+            except Exception:
+                pass
+        # Also remove any file patterns based on prefix if directory is flat
+        try:
+            prefix = Path(rec.prefix)
+            base = prefix.name
+            parent = prefix.parent
+            if parent.exists():
+                for f in parent.glob(base + "*"):
+                    if f.is_file():
+                        try:
+                            f.unlink()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    if verbose:
+        print("[CLEANUP] Removed artifacts for completed iteration (except current best).")
 
 def main(argv: List[str]) -> int:
     cfg = parse_args(argv)

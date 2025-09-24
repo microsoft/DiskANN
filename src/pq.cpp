@@ -609,7 +609,7 @@ int generate_pq_pivots_with_offsets(const float *const passed_train_data, size_t
         if (file_dim == dim && file_num_centers == num_centers)
         {
             diskann::cout << "PQ pivot file exists. Not generating again" << std::endl;
-            return -1;
+            return 0;
         }
     }
 
