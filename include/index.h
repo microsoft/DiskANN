@@ -154,6 +154,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                               float *distances, std::vector<T *> &res_vectors);
+    // Initialize space for res_vectors before calling.
+    DISKANN_DLLEXPORT size_t search_with_callback(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
+                                                  float *distances, std::vector<T *> &res_vectors,
+                                                  const std::function<bool(const uint32_t&, float&)> callback);
+
+    //// Initialize space for res_vectors before calling.
+    //DISKANN_DLLEXPORT size_t search_with_callback(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
+    //                                          float *distances, std::vector<T *> &res_vectors,
+    //                                          const std::function<bool(const uint32_t &, float &)> &callback);
 
     // Filter support search
     template <typename IndexType>
@@ -247,6 +256,11 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
                                      float *distances, DataVector &res_vectors) override;
+    virtual size_t _search_with_callback(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
+                                         float *distances, DataVector &res_vectors, const std::function<bool(const uint32_t&, float&)> callback) override;
+
+    //virtual size_t _search_with_callback(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
+    //                                 float *distances, DataVector &res_vectors, const std::function<bool(const uint32_t &, float &)> &callback) override;
 
     virtual void _set_universal_label(const LabelType universal_label) override;
 

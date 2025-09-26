@@ -143,6 +143,11 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
 
     double best_recall = 0.0;
+    std::uint32_t value = 2;
+    std::function<bool(const uint32_t&, float&)> callback_func = [value](const uint32_t &id, float &reRankScore) -> bool {
+        diskann::cout << "check values for ID: " << id << std::endl;
+        return id != value;
+    };
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
     {
@@ -181,6 +186,16 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             {
                 index->search_with_tags(query + i * query_aligned_dim, recall_at, L,
                                         query_result_tags.data() + i * recall_at, nullptr, res);
+                for (int64_t r = 0; r < (int64_t)recall_at; r++)
+                {
+                    query_result_ids[test_id][recall_at * i + r] = query_result_tags[recall_at * i + r];
+                }
+            }
+            else if (callback_func)
+            {
+
+                index->search_with_callback(query + i * query_aligned_dim, recall_at, L,
+                                        query_result_tags.data() + i * recall_at, nullptr, res, callback_func);
                 for (int64_t r = 0; r < (int64_t)recall_at; r++)
                 {
                     query_result_ids[test_id][recall_at * i + r] = query_result_tags[recall_at * i + r];
@@ -320,6 +335,9 @@ int main(int argc, char **argv)
         optional_configs.add_options()("fail_if_recall_below",
                                        po::value<float>(&fail_if_recall_below)->default_value(0.0f),
                                        program_options_utils::FAIL_IF_RECALL_BELOW);
+        //optional_configs.add_options()("callback_func",
+        //                               po::value<std::function<bool(const uint32_t&, float&)>>(&callback_func)->default_value(nullptr),
+        //                               program_options_utils::FAIL_IF_CALLBACK_FAIL);
 
         // Output controls
         po::options_description output_controls("Output controls");
@@ -441,7 +459,7 @@ int main(int argc, char **argv)
             else if (data_type == std::string("uint8"))
             {
                 return search_memory_index<uint8_t>(metric, index_path_prefix, result_path, query_file, gt_file,
-                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags,
+                                                    num_threads, K, print_all_recalls, Lvec, dynamic, tags, 
                                                     show_qps_per_thread, query_filters, fail_if_recall_below);
             }
             else if (data_type == std::string("float"))

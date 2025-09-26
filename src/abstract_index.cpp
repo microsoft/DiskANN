@@ -32,6 +32,28 @@ size_t AbstractIndex::search_with_tags(const data_type *query, const uint64_t K,
     return this->_search_with_tags(any_query, K, L, any_tags, distances, any_res_vectors);
 }
 
+template <typename data_type, typename tag_type>
+size_t AbstractIndex::search_with_callback(const data_type *query, const uint64_t K, const uint32_t L, tag_type *tags,
+                                           float *distances, std::vector<data_type *> &res_vectors,
+                                           const std::function<bool(const uint32_t&, float&)> callback)
+{
+    auto any_query = std::any(query);
+    auto any_tags = std::any(tags);
+    auto any_res_vectors = DataVector(res_vectors);
+    return this->_search_with_callback(any_query, K, L, any_tags, distances, any_res_vectors, callback);
+}
+
+//template <typename data_type, typename tag_type>
+//size_t AbstractIndex::search_with_callback(const data_type *query, const uint64_t K, const uint32_t L, tag_type *tags,
+//                                           float *distances, std::vector<data_type *> &res_vectors,
+//                                           const std::function<bool(const uint32_t&, float&)> &callback)
+//{
+//    auto any_query = std::any(query);
+//    auto any_tags = std::any(tags);
+//    auto any_res_vectors = DataVector(res_vectors);
+//    return this->_search_with_callback(any_query, K, L, any_tags, distances, any_res_vectors, callback);
+//}
+
 template <typename IndexType>
 std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters(const DataType &query, const std::string &raw_label,
                                                                  const size_t K, const uint32_t L, IndexType *indices,
@@ -217,6 +239,133 @@ template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_tags<int8_t, uint64
                                                                                     const uint64_t K, const uint32_t L,
                                                                                     uint64_t *tags, float *distances,
                                                                                     std::vector<int8_t *> &res_vectors);
+
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<float, int32_t>(const float *query, const uint64_t K,
+                                                                                  const uint32_t L, int32_t *tags,
+                                                                                  float *distances,
+                                                                                  std::vector<float *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<uint8_t, int32_t>(
+    const uint8_t *query, const uint64_t K, const uint32_t L,
+                                                  int32_t *tags, float *distances, std::vector<uint8_t *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<int8_t, int32_t>(
+    const int8_t *query,
+                                                                                   const uint64_t K, const uint32_t L,
+                                                                                   int32_t *tags, float *distances,
+                                                                                   std::vector<int8_t *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<float, uint32_t>(
+    const float *query, const uint64_t K,
+                                                                                   const uint32_t L, uint32_t *tags,
+                                                                                   float *distances,
+                                                                                   std::vector<float *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<uint8_t, uint32_t>(
+    const uint8_t *query, const uint64_t K, const uint32_t L, uint32_t *tags, float *distances,
+    std::vector<uint8_t *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<int8_t, uint32_t>(
+    const int8_t *query,
+                                                                                    const uint64_t K, const uint32_t L,
+                                                                                    uint32_t *tags, float *distances,
+                                                                                    std::vector<int8_t *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t
+AbstractIndex::search_with_callback<float, int64_t>(const float *query, const uint64_t K,
+                                                                                  const uint32_t L, int64_t *tags,
+                                                                                  float *distances,
+                                                                                  std::vector<float *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<uint8_t, int64_t>(
+    const uint8_t *query, const uint64_t K, const uint32_t L,
+                                                  int64_t *tags, float *distances, std::vector<uint8_t *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<int8_t, int64_t>(
+    const int8_t *query,
+                                                                                   const uint64_t K, const uint32_t L,
+                                                                                   int64_t *tags, float *distances,
+                                                                                   std::vector<int8_t *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<float, uint64_t>(
+    const float *query, const uint64_t K,
+                                                                                   const uint32_t L, uint64_t *tags,
+                                                                                   float *distances,
+                                                                                   std::vector<float *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<uint8_t, uint64_t>(
+    const uint8_t *query, const uint64_t K, const uint32_t L, uint64_t *tags, float *distances,
+    std::vector<uint8_t *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<int8_t, uint64_t>(
+    const int8_t *query,
+                                                                                    const uint64_t K, const uint32_t L,
+                                                                                    uint64_t *tags, float *distances,
+                                                                                    std::vector<int8_t *> &res_vectors, const std::function<bool(const uint32_t&, float&)> callback);
+
+
+
+////-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<float, int32_t>(const float *query, const uint64_t K,
+//                                                                                  const uint32_t L, int32_t *tags,
+//                                                                                  float *distances,
+//                                                                                  std::vector<float *> &res_vectors,const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<uint8_t, int32_t>(
+//    const uint8_t *query, const uint64_t K, const uint32_t L, int32_t *tags, float *distances,
+//    std::vector<uint8_t *> &res_vectors, const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<int8_t, int32_t>(const int8_t *query,
+//                                                                                   const uint64_t K, const uint32_t L,
+//                                                                                   int32_t *tags, float *distances,
+//                                                                                   std::vector<int8_t *> &res_vectors,const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<float, uint32_t>(const float *query, const uint64_t K,
+//                                                                                   const uint32_t L, uint32_t *tags,
+//                                                                                   float *distances,
+//                                                                                   std::vector<float *> &res_vectors,const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<uint8_t, uint32_t>(
+//    const uint8_t *query, const uint64_t K, const uint32_t L, uint32_t *tags, float *distances,
+//    std::vector<uint8_t *> &res_vectors,const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<int8_t, uint32_t>(const int8_t *query,
+//                                                                                    const uint64_t K, const uint32_t L,
+//                                                                                    uint32_t *tags, float *distances,
+//                                                                                    std::vector<int8_t *> &res_vectors,const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<float, int64_t>(const float *query, const uint64_t K,
+//                                                                                  const uint32_t L, int64_t *tags,
+//                                                                                  float *distances,
+//                                                                                  std::vector<float *> &res_vectors,const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t
+//AbstractIndex::search_with_callback<uint8_t, int64_t>(const uint8_t *query, const uint64_t K, const uint32_t L, int64_t *tags, float *distances,
+//    std::vector<uint8_t *> &res_vectors, const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<int8_t, int64_t>(const int8_t *query,
+//                                                                                   const uint64_t K, const uint32_t L,
+//                                                                                   int64_t *tags, float *distances,
+//    std::vector<int8_t *> &res_vectors, const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<float, uint64_t>(const float *query, const uint64_t K,
+//                                                                                   const uint32_t L, uint64_t *tags,
+//                                                                                   float *distances,
+//    std::vector<float *> &res_vectors, const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<uint8_t, uint64_t>(
+//    const uint8_t *query, const uint64_t K, const uint32_t L, uint64_t *tags, float *distances,
+//    std::vector<uint8_t *> &res_vectors, const std::function<bool(const uint32_t &, float &)> &callback);
+//
+//template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_callback<int8_t, uint64_t>(const int8_t *query,
+//                                                                                    const uint64_t K, const uint32_t L,
+//                                                                                    uint64_t *tags, float *distances,
+//                                                                                    std::vector<int8_t *> &res_vectors, const std::function<bool(const uint32_t &, float &)> &callback);
+
+//-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+
 
 template DISKANN_DLLEXPORT void AbstractIndex::search_with_optimized_layout<float>(const float *query, size_t K,
                                                                                    size_t L, uint32_t *indices);

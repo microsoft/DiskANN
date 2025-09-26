@@ -2500,6 +2500,94 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     return pos;
 }
 
+template <typename T, typename TagT, typename LabelT>
+size_t Index<T, TagT, LabelT>::_search_with_callback(const DataType &query, const uint64_t K, const uint32_t L,
+                                                     const TagType &tags, float *distances, DataVector &res_vectors,
+                                                     const std::function<bool(const uint32_t&, float&)> callback)
+{
+    try
+    {
+        return this->search_with_callback(std::any_cast<const T *>(query), K, L, std::any_cast<TagT *>(tags), distances,
+                                      res_vectors.get<std::vector<T *>>(), callback);
+    }
+    catch (const std::bad_any_cast &e)
+    {
+        throw ANNException("Error: bad any cast while performing _search_with_tags() " + std::string(e.what()), -1);
+    }
+    catch (const std::exception &e)
+    {
+        throw ANNException("Error: " + std::string(e.what()), -1);
+    }
+}
+
+template <typename T, typename TagT, typename LabelT>
+size_t Index<T, TagT, LabelT>::search_with_callback(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
+                                                    float *distances, std::vector<T *> &res_vectors,
+                                                    const std::function<bool(const uint32_t&, float&)> callback)
+{
+    if (K > (uint64_t)L)
+    {
+        throw ANNException("Set L to a value of at least K", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+    ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);
+    auto scratch = manager.scratch_space();
+
+    if (L > scratch->get_L())
+    {
+        diskann::cout << "Attempting to expand query scratch_space. Was created "
+                      << "with Lsize: " << scratch->get_L() << " but search L is: " << L << std::endl;
+        scratch->resize_for_new_L(L);
+        diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
+    }
+
+    std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
+
+    const std::vector<uint32_t> init_ids = get_init_ids();
+    const std::vector<LabelT> unused_filter_label;
+
+    //_distance->preprocess_query(query, _data_store->get_dims(),
+    // scratch->aligned_query());
+    _data_store->get_dist_fn()->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
+    iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
+
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    assert(best_L_nodes.size() <= L);
+
+    std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
+
+    size_t pos = 0;
+    for (size_t i = 0; i < best_L_nodes.size(); ++i)
+    {
+        auto node = best_L_nodes[i];
+
+        TagT tag;
+        if (_location_to_tag.try_get(node.id, tag))
+        {
+            tags[pos] = tag;
+
+            if (res_vectors.size() > 0)
+            {
+                _data_store->get_vector(node.id, res_vectors[pos]);
+            }
+
+            if (distances != nullptr)
+            {
+#ifdef EXEC_ENV_OLS
+                distances[pos] = node.distance; // DLVS expects negative distances
+#else
+                distances[pos] = _dist_metric == INNER_PRODUCT ? -1 * node.distance : node.distance;
+#endif
+            }
+            pos++;
+            // If res_vectors.size() < k, clip at the value.
+            if (pos == K || pos == res_vectors.size())
+                break;
+        }
+    }
+
+    return pos;
+}
+
 template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, LabelT>::get_num_points()
 {
     std::shared_lock<std::shared_timed_mutex> tl(_tag_lock);
