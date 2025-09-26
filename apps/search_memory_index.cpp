@@ -143,8 +143,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
 
     double best_recall = 0.0;
-    std::uint32_t value = 2;
-    std::function<bool(const uint32_t&, float&)> callback_func = [value](const uint32_t &id, float &reRankScore) -> bool {
+    std::int64_t value = 2;
+    std::function<bool(const int64_t&, float&)> callback_func = [value](const int64_t &id,
+                                                                          float &reRankScore) -> bool {
         diskann::cout << "check values for ID: " << id << std::endl;
         return id != value;
     };
@@ -335,9 +336,6 @@ int main(int argc, char **argv)
         optional_configs.add_options()("fail_if_recall_below",
                                        po::value<float>(&fail_if_recall_below)->default_value(0.0f),
                                        program_options_utils::FAIL_IF_RECALL_BELOW);
-        //optional_configs.add_options()("callback_func",
-        //                               po::value<std::function<bool(const uint32_t&, float&)>>(&callback_func)->default_value(nullptr),
-        //                               program_options_utils::FAIL_IF_CALLBACK_FAIL);
 
         // Output controls
         po::options_description output_controls("Output controls");

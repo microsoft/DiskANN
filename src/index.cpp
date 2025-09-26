@@ -2503,7 +2503,7 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
 template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::_search_with_callback(const DataType &query, const uint64_t K, const uint32_t L,
                                                      const TagType &tags, float *distances, DataVector &res_vectors,
-                                                     const std::function<bool(const uint32_t&, float&)> callback)
+                                                     const std::function<bool(const int64_t&, float&)> callback)
 {
     try
     {
@@ -2523,7 +2523,7 @@ size_t Index<T, TagT, LabelT>::_search_with_callback(const DataType &query, cons
 template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::search_with_callback(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                                     float *distances, std::vector<T *> &res_vectors,
-                                                    const std::function<bool(const uint32_t&, float&)> callback)
+                                                    const std::function<bool(const int64_t&, float&)> callback)
 {
     if (K > (uint64_t)L)
     {
