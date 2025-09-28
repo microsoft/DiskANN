@@ -26,6 +26,8 @@ struct Neighbor
     {
     }
 
+    virtual ~Neighbor() = default;
+
     inline bool operator<(const Neighbor& other) const
     {
         return distance < other.distance || (distance == other.distance && id < other.id);
@@ -49,6 +51,8 @@ struct NeighborExtendColor : public Neighbor
     {
     }
 
+    ~NeighborExtendColor() = default;
+
     inline bool operator<(const NeighborExtendColor& other) const
     {
         return distance < other.distance || (distance == other.distance && id < other.id);
@@ -65,6 +69,8 @@ struct NeighborExtendColor : public Neighbor
 class NeighborVectorBase
 {
 public:
+    virtual ~NeighborVectorBase() = default;
+
     virtual Neighbor& operator[](size_t i) = 0;
 
     virtual Neighbor operator[](size_t i) const = 0;
@@ -86,6 +92,8 @@ public:
         , _data(capacity + 1, Neighbor(std::numeric_limits<uint32_t>::max(), std::numeric_limits<float>::max()))
     {
     }
+
+    ~NeighborVector() = default;
 
     virtual Neighbor& operator[](size_t i) override
     {
@@ -153,6 +161,8 @@ public:
             _color_to_info = std::move(color_to_info);
         }
     }
+
+    ~NeighborExtendColorVector() = default;
 
     virtual Neighbor& operator[](size_t i) override
     {
@@ -354,6 +364,8 @@ public:
     {
     }
 
+    virtual ~NeighborPriorityQueueBase() = default;
+
     virtual void insert(const Neighbor& nbr) = 0;
     virtual Neighbor closest_unexpanded() = 0;
     virtual Neighbor& operator[](size_t i) = 0;
@@ -470,6 +482,8 @@ public:
     {
     }
 
+    ~NeighborPriorityQueue() = default;
+
     void setup(uint32_t capacity) {
         _data.resize(capacity);
         _capacity = capacity;
@@ -522,6 +536,8 @@ public:
     {
         _capacity = capacity;
     }
+
+    ~NeighborPriorityQueueExtendColor() = default;
 
     void setup(uint32_t capacity, uint32_t maxLperSeller, uint32_t uniqueSellerCount) {
         _data.resize(capacity, maxLperSeller, uniqueSellerCount);
