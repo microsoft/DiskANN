@@ -284,6 +284,19 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
 
+    // Callback variant: callback(doc_id (int64_t), distance (in/out), early_terminate (out))
+    // Return value of callback == true -> accept node, false -> skip adding node.
+    // If early_terminate is set to true by callback the search stops early.
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point_callback(
+        const T *query,
+        uint32_t Lsize,
+        const std::vector<uint32_t> &init_ids,
+        InMemQueryScratch<T> *scratch,
+        bool use_filter,
+        const std::vector<LabelT> &filter_labels,
+        bool search_invocation,
+        const std::function<bool(const int64_t&, float&, bool&)> &callback);
+
     void search_for_point_and_prune(int location, uint32_t Lindex, std::vector<uint32_t> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false,
                                     uint32_t filteredLindex = 0);

@@ -1244,6 +1244,229 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     return std::make_pair(hops, cmps);
 }
 
+
+// ADD IMPLEMENTATION FOR CALLBACK BASED ITERATE TO FIXED POINT
+
+template <typename T, typename TagT, typename LabelT>
+std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_callback(
+    const T *query, uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
+    bool use_filter, const std::vector<LabelT> &filter_labels, bool search_invocation,
+    const std::function<bool(const int64_t &, float &, bool &)> &callback)
+{
+    if (!callback)
+    {
+        return iterate_to_fixed_point(query, Lsize, init_ids, scratch, use_filter, filter_labels, search_invocation);
+    }
+
+    std::vector<Neighbor> &expanded_nodes = scratch->pool();
+    NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
+    best_L_nodes.reserve(Lsize);
+    tsl::robin_set<uint32_t> &inserted_into_pool_rs = scratch->inserted_into_pool_rs();
+    boost::dynamic_bitset<> &inserted_into_pool_bs = scratch->inserted_into_pool_bs();
+    std::vector<uint32_t> &id_scratch = scratch->id_scratch();
+    std::vector<float> &dist_scratch = scratch->dist_scratch();
+    assert(id_scratch.empty());
+
+    T *aligned_query = scratch->aligned_query();
+
+    float *query_float = nullptr;
+    float *query_rotated = nullptr;
+    float *pq_dists = nullptr;
+    uint8_t *pq_coord_scratch = nullptr;
+    if (_pq_dist)
+    {
+        PQScratch<T> *pq_query_scratch = scratch->pq_scratch();
+        query_float = pq_query_scratch->aligned_query_float;
+        query_rotated = pq_query_scratch->rotated_query;
+        pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
+        for (size_t d = 0; d < _dim; d++)
+            query_float[d] = (float)aligned_query[d];
+        pq_query_scratch->initialize(_dim, aligned_query);
+        _pq_table.preprocess_query(query_rotated);
+        _pq_table.populate_chunk_distances(query_rotated, pq_dists);
+        pq_coord_scratch = pq_query_scratch->aligned_pq_coord_scratch;
+    }
+
+    if (!expanded_nodes.empty() || !id_scratch.empty())
+        throw ANNException("ERROR: Clear scratch space before passing.", -1, __FUNCSIG__, __FILE__, __LINE__);
+
+    auto total_num_points = _max_points + _num_frozen_pts;
+    bool fast_iterate = total_num_points <= MAX_POINTS_FOR_USING_BITSET;
+    if (fast_iterate && inserted_into_pool_bs.size() < total_num_points)
+    {
+        auto resize_size =
+            2 * total_num_points > MAX_POINTS_FOR_USING_BITSET ? MAX_POINTS_FOR_USING_BITSET : 2 * total_num_points;
+        inserted_into_pool_bs.resize(resize_size);
+    }
+
+    auto is_not_visited = [fast_iterate, &inserted_into_pool_bs, &inserted_into_pool_rs](uint32_t id) {
+        return fast_iterate ? inserted_into_pool_bs[id] == 0
+                            : inserted_into_pool_rs.find(id) == inserted_into_pool_rs.end();
+    };
+
+    auto compute_dists = [this, pq_coord_scratch, pq_dists](const std::vector<uint32_t> &ids,
+                                                            std::vector<float> &dists_out) {
+        diskann::aggregate_coords(ids, this->_pq_data, this->_num_pq_chunks, pq_coord_scratch);
+        diskann::pq_dist_lookup(pq_coord_scratch, ids.size(), this->_num_pq_chunks, pq_dists, dists_out);
+    };
+
+    auto add_candidate = [&](uint32_t id) -> bool {
+        if (id >= _max_points + _num_frozen_pts)
+            return false;
+        if (use_filter && !detect_common_filters(id, search_invocation, filter_labels))
+            return false;
+
+        if (!is_not_visited(id))
+            return false;
+
+        if (fast_iterate)
+            inserted_into_pool_bs[id] = 1;
+        else
+            inserted_into_pool_rs.insert(id);
+
+        float distance;
+        if (_pq_dist)
+            pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists, &distance);
+        else
+            distance = _data_store->get_distance(aligned_query, id);
+
+        // Map node id to doc id (if tags enabled use tag value, else use id)
+        int64_t doc_id;
+        if (_enable_tags)
+        {
+            TagT tag_val;
+            if (_location_to_tag.try_get(id, tag_val))
+                doc_id = static_cast<int64_t>(tag_val);
+            else
+                doc_id = static_cast<int64_t>(id);
+        }
+        else
+        {
+            doc_id = static_cast<int64_t>(id);
+        }
+
+        bool early_terminate = false;
+        float dist_ref = distance;
+        bool accept = callback(doc_id, dist_ref, early_terminate);
+        if (early_terminate)
+        {
+            if (accept)
+            {
+                Neighbor nn{id, dist_ref};
+                best_L_nodes.insert(nn);
+            }
+            return false; // signal
+        }
+        if (accept)
+        {
+            Neighbor nn{id, dist_ref};
+            best_L_nodes.insert(nn);
+        }
+        return true;
+    };
+
+    // Seed
+    for (auto id : init_ids)
+    {
+        if (add_candidate(id))
+            return std::make_pair(0u, 0u);
+    }
+
+    uint32_t hops = 0;
+    uint32_t cmps = 0;
+    bool terminate = false;
+
+    while (!terminate && best_L_nodes.has_unexpanded_node())
+    {
+        auto nbr = best_L_nodes.closest_unexpanded();
+        auto n = nbr.id;
+
+        if (!search_invocation)
+        {
+            if (!use_filter)
+                expanded_nodes.emplace_back(nbr);
+            else if (std::find(expanded_nodes.begin(), expanded_nodes.end(), nbr) == expanded_nodes.end())
+                expanded_nodes.emplace_back(nbr);
+        }
+
+        id_scratch.clear();
+        dist_scratch.clear();
+        {
+            if (_dynamic_index)
+                _locks[n].lock();
+            for (auto id : _graph_store->get_neighbours(n))
+            {
+                if (use_filter && !detect_common_filters(id, search_invocation, filter_labels))
+                    continue;
+                if (is_not_visited(id))
+                    id_scratch.push_back(id);
+            }
+            if (_dynamic_index)
+                _locks[n].unlock();
+        }
+
+        for (auto id : id_scratch)
+        {
+            if (fast_iterate)
+                inserted_into_pool_bs[id] = 1;
+            else
+                inserted_into_pool_rs.insert(id);
+        }
+
+        if (_pq_dist)
+        {
+            assert(dist_scratch.capacity() >= id_scratch.size());
+            compute_dists(id_scratch, dist_scratch);
+        }
+        else
+        {
+            for (size_t m = 0; m < id_scratch.size(); ++m)
+            {
+                uint32_t id = id_scratch[m];
+                if (m + 1 < id_scratch.size())
+                    _data_store->prefetch_vector(id_scratch[m + 1]);
+                dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
+            }
+        }
+        cmps += (uint32_t)id_scratch.size();
+
+        for (size_t m = 0; m < id_scratch.size(); ++m)
+        {
+            uint32_t id = id_scratch[m];
+
+            // compute / override distance if PQ or normal already computed
+            float &dist_ref = _pq_dist ? dist_scratch[m] : dist_scratch[m];
+
+            int64_t doc_id;
+            if (_enable_tags)
+            {
+                TagT tag_val;
+                if (_location_to_tag.try_get(id, tag_val))
+                    doc_id = static_cast<int64_t>(tag_val);
+                else
+                    doc_id = static_cast<int64_t>(id);
+            }
+            else
+            {
+                doc_id = static_cast<int64_t>(id);
+            }
+
+            bool early_terminate = false;
+            bool accept = callback(doc_id, dist_ref, early_terminate);
+            if (accept)
+                best_L_nodes.insert(Neighbor(id, dist_ref));
+            if (early_terminate)
+            {
+                terminate = true;
+                break;
+            }
+        }
+        ++hops;
+    }
+
+    return std::make_pair(hops, cmps);
+}
+
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t Lindex,
                                                         std::vector<uint32_t> &pruned_list,
@@ -2548,8 +2771,8 @@ size_t Index<T, TagT, LabelT>::search_with_callback(const T *query, const uint64
     //_distance->preprocess_query(query, _data_store->get_dims(),
     // scratch->aligned_query());
     _data_store->get_dist_fn()->preprocess_query(query, _data_store->get_dims(), scratch->aligned_query());
-    iterate_to_fixed_point(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true);
-
+    iterate_to_fixed_point_callback(scratch->aligned_query(), L, init_ids, scratch, false, unused_filter_label, true,
+                                    callback);
     NeighborPriorityQueue &best_L_nodes = scratch->best_l_nodes();
     assert(best_L_nodes.size() <= L);
 
