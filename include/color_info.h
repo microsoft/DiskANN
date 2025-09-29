@@ -168,6 +168,8 @@ public:
             it = end();
     }
 
+    ~ColorInfoMap() = default;
+
 private:
     tsl::robin_map<uint32_t, ColorInfo> _color_to_info;
 };
@@ -260,7 +262,9 @@ public:
         return _color_info_vector.size(); // Return size if no valid location found
     }
 
-private:
+    ~ColorInfoVector() = default;
+
+  private:
     std::vector<ColorInfo> _color_info_vector;
     simple_bitmask_buf _bitmask_buf;
     simple_bitmask _slot_mask;
