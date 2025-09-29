@@ -164,6 +164,14 @@ public:
 
     ~NeighborExtendColorVector() = default;
 
+    // Delete copy constructor and copy assignment operator due to unique_ptr member
+    NeighborExtendColorVector(const NeighborExtendColorVector&) = delete;
+    NeighborExtendColorVector& operator=(const NeighborExtendColorVector&) = delete;
+
+    // Allow move constructor and move assignment operator
+    NeighborExtendColorVector(NeighborExtendColorVector&&) = default;
+    NeighborExtendColorVector& operator=(NeighborExtendColorVector&&) = default;
+
     virtual Neighbor& operator[](size_t i) override
     {
         return _data[i];
@@ -538,6 +546,14 @@ public:
     }
 
     ~NeighborPriorityQueueExtendColor() = default;
+
+    // Delete copy constructor and copy assignment operator due to unique_ptr member in _data
+    NeighborPriorityQueueExtendColor(const NeighborPriorityQueueExtendColor&) = delete;
+    NeighborPriorityQueueExtendColor& operator=(const NeighborPriorityQueueExtendColor&) = delete;
+
+    // Allow move constructor and move assignment operator
+    NeighborPriorityQueueExtendColor(NeighborPriorityQueueExtendColor&&) = default;
+    NeighborPriorityQueueExtendColor& operator=(NeighborPriorityQueueExtendColor&&) = default;
 
     void setup(uint32_t capacity, uint32_t maxLperSeller, uint32_t uniqueSellerCount) {
         _data.resize(capacity, maxLperSeller, uniqueSellerCount);
