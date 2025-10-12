@@ -30,7 +30,7 @@ class WindowsAlignedFileReader : public AlignedFileReader
     // virtual IOContext createContext();
 
   public:
-    DISKANN_DLLEXPORT WindowsAlignedFileReader(){};
+    DISKANN_DLLEXPORT WindowsAlignedFileReader() {};
     DISKANN_DLLEXPORT virtual ~WindowsAlignedFileReader(){};
 
     // Open & close ops
