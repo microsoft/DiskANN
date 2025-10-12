@@ -37,8 +37,7 @@ template <typename T> int analyze_norm(std::string base_file)
     std::sort(norms.begin(), norms.end());
     for (int p = 0; p < 100; p += 5)
         std::cout << "percentile " << p << ": " << norms[(uint64_t)(std::floor((p / 100.0) * npts))] << std::endl;
-    std::cout << "percentile 100"
-              << ": " << norms[npts - 1] << std::endl;
+    std::cout << "percentile 100" << ": " << norms[npts - 1] << std::endl;
     delete[] data;
     return 0;
 }
