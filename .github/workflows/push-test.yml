@@ -35,16 +35,28 @@ jobs:
         with:
           fetch-depth: 1
           submodules: true
+
+      # Set up Python 3.11 on both platforms, ensuring diskannpy is installable
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
       - name: Build diskannpy dependency tree
         run: |
           pip install diskannpy pipdeptree
           echo "dependencies" > dependencies_${{ matrix.os }}.txt
           pipdeptree >> dependencies_${{ matrix.os }}.txt
+
       - name: Archive diskannpy dependencies artifact
         uses: actions/upload-artifact@v4
         with:
           name: dependencies_${{ matrix.os }}
           path: |
             dependencies_${{ matrix.os }}.txt
+
       - name: DiskANN Build CLI Applications
         uses: ./.github/actions/build
