@@ -1368,8 +1368,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
     // Seed
     for (auto id : init_ids)
     {
-        if (add_candidate(id))
-            return std::make_pair(0u, 0u);
+        if (!add_candidate(id)) break;
     }
 
     uint32_t hops = 0;

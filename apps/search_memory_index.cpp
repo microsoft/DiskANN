@@ -145,8 +145,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     double best_recall = 0.0;
     std::int64_t value = 2;
     std::function<bool(const int64_t&, float&, bool&)> callback_func = [value](const int64_t &id, float &reRankScore, bool &earlystop) -> bool {
-        diskann::cout << "check values for ID: " << id << std::endl;
-        return id != value;
+        //diskann::cout << "check values for ID: " << id << std::endl;
+        return id % value == 0;
     };
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
@@ -184,18 +184,12 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             }
             else if (tags)
             {
-                index->search_with_tags(query + i * query_aligned_dim, recall_at, L,
-                                        query_result_tags.data() + i * recall_at, nullptr, res);
-                for (int64_t r = 0; r < (int64_t)recall_at; r++)
-                {
-                    query_result_ids[test_id][recall_at * i + r] = query_result_tags[recall_at * i + r];
+                if (callback_func){
+                    index->search_with_callback(query + i * query_aligned_dim, recall_at, L, query_result_tags.data() + i * recall_at, nullptr, res, callback_func);
+                }else{
+                    index->search_with_tags(query + i * query_aligned_dim, recall_at, L, query_result_tags.data() + i * recall_at, nullptr, res);
                 }
-            }
-            else if (callback_func)
-            {
 
-                index->search_with_callback(query + i * query_aligned_dim, recall_at, L,
-                                        query_result_tags.data() + i * recall_at, nullptr, res, callback_func);
                 for (int64_t r = 0; r < (int64_t)recall_at; r++)
                 {
                     query_result_ids[test_id][recall_at * i + r] = query_result_tags[recall_at * i + r];
