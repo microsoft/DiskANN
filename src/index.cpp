@@ -1310,13 +1310,13 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
         diskann::pq_dist_lookup(pq_coord_scratch, ids.size(), this->_num_pq_chunks, pq_dists, dists_out);
     };
 
-    auto add_candidate = [&](uint32_t id) -> bool {
+    // Add candidate (used both for initial seeds and neighbor expansions)
+    auto add_candidate = [&](uint32_t id, bool force_insert_for_navigation = false) -> bool {
         if (id >= _max_points + _num_frozen_pts)
             return false;
-        if (use_filter && !detect_common_filters(id, search_invocation, filter_labels))
+        if (use_filter && !detect_common_filters(id, search_invocation, filter_labels) && !force_insert_for_navigation)
             return false;
-
-        if (!is_not_visited(id))
+        if (!is_not_visited(id) && !force_insert_for_navigation)
             return false;
 
         if (fast_iterate)
@@ -1347,28 +1347,30 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
 
         bool early_terminate = false;
         float dist_ref = distance;
-        bool accept = callback(doc_id, dist_ref, early_terminate);
-        if (early_terminate)
-        {
-            if (accept)
-            {
-                Neighbor nn{id, dist_ref};
-                best_L_nodes.insert(nn);
-            }
-            return false; // signal
-        }
-        if (accept)
+        bool accept = force_insert_for_navigation ? true : callback(doc_id, dist_ref, early_terminate);
+
+        // Even if not accepted, we may need the node for navigation to avoid empty frontier.
+        if (accept || force_insert_for_navigation)
         {
             Neighbor nn{id, dist_ref};
             best_L_nodes.insert(nn);
         }
+
+        if (early_terminate)
+            return false;
         return true;
     };
 
-    // Seed
+    // Seed initial ids via callback
     for (auto id : init_ids)
     {
         if (!add_candidate(id)) break;
+    }
+
+    // Fallback: if no seed accepted, forcibly insert first init id to allow traversal
+    if (best_L_nodes.size() == 0 && !init_ids.empty())
+    {
+        add_candidate(init_ids[0], true);
     }
 
     uint32_t hops = 0;

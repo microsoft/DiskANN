@@ -143,7 +143,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     }
 
     double best_recall = 0.0;
-    std::int64_t value = 2;
+    std::int64_t value = 3;
     std::function<bool(const int64_t&, float&, bool&)> callback_func = [value](const int64_t &id, float &reRankScore, bool &earlystop) -> bool {
         //diskann::cout << "check values for ID: " << id << std::endl;
         return id % value == 0;
