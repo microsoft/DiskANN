@@ -2559,12 +2559,12 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
 template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::_search_with_tags(const DataType &query, const uint64_t K, const uint32_t L,
                                                  const TagType &tags, float *distances, DataVector &res_vectors,
-                                                 bool use_filters, const std::string filter_label)
+                                                 bool use_filters, const std::vector<std::string>& filter_labels)
 {
     try
     {
         return this->search_with_tags(std::any_cast<const T *>(query), K, L, std::any_cast<TagT *>(tags), distances,
-                                      res_vectors.get<std::vector<T *>>(), use_filters, filter_label);
+                                      res_vectors.get<std::vector<T *>>(), use_filters, filter_labels);
     }
     catch (const std::bad_any_cast &e)
     {
@@ -2579,7 +2579,7 @@ size_t Index<T, TagT, LabelT>::_search_with_tags(const DataType &query, const ui
 template <typename T, typename TagT, typename LabelT>
 size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
                                                 float *distances, std::vector<T *> &res_vectors, bool use_filters,
-                                                const std::string filter_label)
+                                                const std::vector<std::string>& filter_labels)
 {
     if (K > (uint64_t)L)
     {
@@ -2611,20 +2611,24 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     else
     {
         std::vector<LabelT> filter_vec;
-        auto converted_label = this->get_converted_label(filter_label);
-
-        if (_label_to_start_id.find(converted_label) != _label_to_start_id.end())
+        for (const auto& filter_label : filter_labels)
         {
-            init_ids.emplace_back(_label_to_start_id[converted_label]);
-        }
-        else
-        {
-            diskann::cout << "No filtered medoid found. exitting "
-                << std::endl; // RKNOTE: If universal label found start there
-            throw diskann::ANNException("No filtered medoid found. exitting ", -1);
-        }
+            auto converted_label = this->get_converted_label(filter_label);
 
-        filter_vec.push_back(converted_label);
+            if (_label_to_start_id.find(converted_label) != _label_to_start_id.end())
+            {
+                init_ids.emplace_back(_label_to_start_id[converted_label]);
+            }
+            else
+            {
+                diskann::cout << "No filtered medoid found. exitting "
+                    << std::endl; // RKNOTE: If universal label found start there
+                throw diskann::ANNException("No filtered medoid found. exitting ", -1);
+            }
+
+            filter_vec.push_back(converted_label);
+        }
+        
         iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
     }
 

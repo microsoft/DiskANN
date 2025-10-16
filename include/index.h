@@ -144,8 +144,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
-                                              float *distances, std::vector<T *> &res_vectors, bool use_filters = false,
-                                              const std::string filter_label = "");
+                                              float *distances, std::vector<T *> &res_vectors, bool use_filters,
+                                              const std::vector<std::string>& filter_labels);
 
     virtual std::pair<uint32_t, uint32_t> _diverse_search(const DataType& query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
         std::any& indices, float* distances = nullptr) override;
@@ -237,8 +237,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) override;
 
     virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
-                                     float *distances, DataVector &res_vectors, bool use_filters = false,
-                                     const std::string filter_label = "") override;
+                                     float *distances, DataVector &res_vectors, bool use_filters,
+                                     const std::vector<std::string>& filter_labels) override;
 
     virtual void _set_universal_label(const LabelType universal_label) override;
 
