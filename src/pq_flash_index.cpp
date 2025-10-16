@@ -1140,18 +1140,18 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  QueryStats *stats)
 {
     cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, std::numeric_limits<uint32_t>::max(),
-        maxLperSeller, use_reorder_data, stats);
+        maxLperSeller, use_reorder_data, nullptr, stats);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const bool use_filter, const LabelT &filter_label,
+                                                 const bool use_filter, const std::vector<LabelT> &filter_labels,
                                                  uint32_t maxLperSeller, const bool use_reorder_data,
                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
-    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_label,
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, use_filter, filter_labels,
                        std::numeric_limits<uint32_t>::max(), maxLperSeller, use_reorder_data, rerank_fn, stats);
 }
 
@@ -1163,15 +1163,15 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn,
                                                  QueryStats *stats)
 {
-    LabelT dummy_filter = 0;
-    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filter, io_limit,
+    std::vector<LabelT> dummy_filters;
+    cached_beam_search(query1, k_search, l_search, indices, distances, beam_width, false, dummy_filters, io_limit,
         maxLperSeller, use_reorder_data, rerank_fn, stats);
 }
 
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t k_search, const uint64_t l_search,
                                                  uint64_t *indices, float *distances, const uint64_t beam_width,
-                                                 const bool use_filter, const LabelT &filter_label,
+                                                 const bool use_filter, const std::vector<LabelT> &filter_labels,
                                                  const uint32_t io_limit, uint32_t maxLperSeller, 
                                                  const bool use_reorder_data,
                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn,
@@ -1212,8 +1212,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         query_bitmask_buf.resize(_bitmask_buf._bitmask_size, 0);
         bitmask_full_val._mask = query_bitmask_buf.data();
 
-        auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label);
-        bitmask_full_val.merge_bitmask_val(bitmask_val);
+        for (const auto& filter_label : filter_labels)
+        {
+            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label);
+            bitmask_full_val.merge_bitmask_val(bitmask_val);
+        }
 
         if (_use_universal_label)
         {
@@ -1312,34 +1315,41 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 best_dist = cur_expanded_dist;
             }
         }
+
+        compute_dists(&best_medoid, 1, dist_scratch);
+        retset->insert(Neighbor(best_medoid, dist_scratch[0]));
+        visited.insert(best_medoid);
     }
     else
     {
-        if (_filter_to_medoid_ids.find(filter_label) != _filter_to_medoid_ids.end())
+        for (const auto& filter_label : filter_labels)
         {
-            const auto &medoid_ids = _filter_to_medoid_ids[filter_label];
-            for (uint64_t cur_m = 0; cur_m < medoid_ids.size(); cur_m++)
+            if (_filter_to_medoid_ids.find(filter_label) != _filter_to_medoid_ids.end())
             {
-                // for filtered index, we dont store global centroid data as for unfiltered index, so we use PQ distance
-                // as approximation to decide closest medoid matching the query filter.
-                compute_dists(&medoid_ids[cur_m], 1, dist_scratch);
-                float cur_expanded_dist = dist_scratch[0];
-                if (cur_expanded_dist < best_dist)
+                const auto& medoid_ids = _filter_to_medoid_ids[filter_label];
+                for (uint64_t cur_m = 0; cur_m < medoid_ids.size(); cur_m++)
                 {
-                    best_medoid = medoid_ids[cur_m];
-                    best_dist = cur_expanded_dist;
+                    // for filtered index, we dont store global centroid data as for unfiltered index, so we use PQ distance
+                    // as approximation to decide closest medoid matching the query filter.
+                    compute_dists(&medoid_ids[cur_m], 1, dist_scratch);
+                    float cur_expanded_dist = dist_scratch[0];
+                    if (cur_expanded_dist < best_dist)
+                    {
+                        best_medoid = medoid_ids[cur_m];
+                        best_dist = cur_expanded_dist;
+                    }
                 }
             }
-        }
-        else
-        {
-            throw ANNException("Cannot find medoid for specified filter.", -1, __FUNCSIG__, __FILE__, __LINE__);
+            else
+            {
+                throw ANNException("Cannot find medoid for specified filter.", -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+
+            compute_dists(&best_medoid, 1, dist_scratch);
+            retset->insert(Neighbor(best_medoid, dist_scratch[0]));
+            visited.insert(best_medoid);
         }
     }
-
-    compute_dists(&best_medoid, 1, dist_scratch);
-    retset->insert(Neighbor(best_medoid, dist_scratch[0]));
-    visited.insert(best_medoid);
 
     uint32_t cmps = 0;
     uint32_t hops = 0;
