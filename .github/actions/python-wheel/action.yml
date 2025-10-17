@@ -16,7 +16,8 @@ runs:
       env:
         CIBW_BUILD: ${{inputs.cibw-identifier}}
       shell: bash
-    - uses: actions/upload-artifact@v4
+    - name: Upload wheel artifact
+      uses: actions/upload-artifact@v4
       with:
-        name: wheels
+        name: wheel-${{ github.run_id }}-${{ github.job }}
         path: ./dist/*.whl
