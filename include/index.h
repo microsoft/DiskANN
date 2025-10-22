@@ -162,6 +162,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const unsigned L, TagT *tags,
                                               float *distances, std::vector<T *> &res_vectors);
 
+    DISKANN_DLLEXPORT size_t search_with_callback(const T *query, const uint64_t K, const unsigned L, TagT *tags,
+                                              float *distances, std::vector<T *> &res_vectors, const std::function<bool(const int64_t&, float&, bool&)> callback);
+
     // Filter support search
     template <typename IndexType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
@@ -248,6 +251,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                                          const std::vector<unsigned> &init_ids,
                                                          InMemQueryScratch<T> *scratch, bool use_filter,
                                                          const std::vector<LabelT> &filters, bool search_invocation);
+    // Callback variant: callback(doc_id (int64_t), distance (in/out), early_terminate (out))
+    // Return value of callback == true -> accept node, false -> skip adding node.
+    // If early_terminate is set to true by callback the search stops early.
+    std::pair<uint32_t, uint32_t> iterate_to_fixed_point_callback(const T *node_coords, const unsigned Lindex,
+                                                         const std::vector<unsigned> &init_ids,
+                                                         InMemQueryScratch<T> *scratch, bool use_filter,
+                                                         const std::vector<LabelT> &filters, bool search_invocation,
+                                                         const std::function<bool(const int64_t &, float &, bool &)> &callback);
 
     void search_for_point_and_prune(int location, _u32 Lindex, std::vector<unsigned> &pruned_list,
                                     InMemQueryScratch<T> *scratch, bool use_filter = false, _u32 filteredLindex = 0);
