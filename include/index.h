@@ -42,16 +42,17 @@ DISKANN_DLLEXPORT extern double time_to_filter_check_and_compare;
 DISKANN_DLLEXPORT extern double time_to_get_valid;
 DISKANN_DLLEXPORT extern double time_to_detect_penalty;
 DISKANN_DLLEXPORT extern double time_to_estimate;
-DISKANN_DLLEXPORT extern uint32_t num_brutes;
+DISKANN_DLLEXPORT extern std::atomic<uint32_t> num_brutes;
 DISKANN_DLLEXPORT extern uint32_t num_paged_search;
-DISKANN_DLLEXPORT extern uint32_t num_graphs;
+DISKANN_DLLEXPORT extern std::atomic<uint32_t> num_graphs;
 DISKANN_DLLEXPORT extern uint32_t num_paged;
 DISKANN_DLLEXPORT extern uint32_t min_inter_size;
 DISKANN_DLLEXPORT extern bool print_qstats;
 DISKANN_DLLEXPORT extern bool use_optimized_label_lookup; // Flag to control label lookup method
 DISKANN_DLLEXPORT extern bool use_flattened_labels; // Flag for query filter structure during Jaccard similarity
-DISKANN_DLLEXPORT extern uint64_t vector_label_lookups;   // Count of vector-based lookups
-DISKANN_DLLEXPORT extern uint64_t map_label_lookups;      // Count of map-based lookups
+DISKANN_DLLEXPORT extern uint64_t vector_label_lookups;   // Global accumulator for vector-based lookups
+DISKANN_DLLEXPORT extern uint64_t map_label_lookups;      // Global accumulator for map-based lookups
+DISKANN_DLLEXPORT void collect_thread_local_stats();      // Collect thread-local stats into globals
 DISKANN_DLLEXPORT extern int64_t curr_query;
 DISKANN_DLLEXPORT extern double curr_intersection_time;
 DISKANN_DLLEXPORT extern double curr_jaccard_time;

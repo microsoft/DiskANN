@@ -38,16 +38,34 @@ namespace diskann
     double time_to_get_valid = 0.0;
     double time_to_detect_penalty = 0.0;
     double time_to_estimate = 0.0;
-    uint32_t num_brutes = 0;
+    std::atomic<uint32_t> num_brutes{0};
     uint32_t num_paged_search = 0;
-    uint32_t num_graphs = 0;
+    std::atomic<uint32_t> num_graphs{0};
     uint32_t num_paged = 0;
     uint32_t min_inter_size = 1;
     bool print_qstats = false;
     bool use_optimized_label_lookup = true; // Temporarily disable the optimization to debug
     bool use_flattened_labels = false; // Use flattened labels for label intersection
-    uint64_t vector_label_lookups = 0;      // Count of vector-based lookups
-    uint64_t map_label_lookups = 0;         // Count of map-based lookups
+    // High-frequency counters: use thread-local for zero-overhead
+    thread_local uint64_t thread_vector_label_lookups = 0;
+    thread_local uint64_t thread_map_label_lookups = 0;
+    
+    // Global accumulators (set by collecting thread-local counts)
+    uint64_t vector_label_lookups = 0;
+    uint64_t map_label_lookups = 0;
+    
+    // Function to collect thread-local statistics (call before printing stats)
+    void collect_thread_local_stats() {
+        vector_label_lookups = 0;
+        map_label_lookups = 0;
+        
+        #pragma omp parallel reduction(+:vector_label_lookups,map_label_lookups)
+        {
+            vector_label_lookups += thread_vector_label_lookups;
+            map_label_lookups += thread_map_label_lookups;
+        }
+    }
+    
     int64_t curr_query = -1;
     double curr_intersection_time = 0.0;
     double curr_jaccard_time = 0.0;
@@ -930,7 +948,7 @@ bool Index<T, TagT, LabelT>::point_has_label(const uint32_t point_id, const Labe
     //     vector_label_lookups++;
     //     return _labels_to_points_vec[static_cast<size_t>(label)].count(point_id) > 0;
     if (use_optimized_label_lookup && !_location_to_labels.empty()) {
-        vector_label_lookups++;
+        thread_vector_label_lookups++;  // ← 1 CPU cycle, zero contention!
         if (std::find(_location_to_labels[point_id].begin(), _location_to_labels[point_id].end(), label) != _location_to_labels[point_id].end()) {
             return true;
         }
@@ -940,7 +958,7 @@ bool Index<T, TagT, LabelT>::point_has_label(const uint32_t point_id, const Labe
         // }
         else return false;
     } else {
-        map_label_lookups++;
+        thread_map_label_lookups++;      // ← 1 CPU cycle, zero contention!
         auto it = _labels_to_points_set.find(label);
         return (it != _labels_to_points_set.end() && it->second.count(point_id) > 0);
     }

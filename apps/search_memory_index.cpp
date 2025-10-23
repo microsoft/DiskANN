@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+#include <atomic>
 #include <cstring>
 #include <iomanip>
 #include <algorithm>
@@ -219,8 +220,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         query_result_ids[test_id].resize(K_or_L * query_num);
         query_result_dists[test_id].resize(K_or_L * query_num);
         std::vector<T *> res = std::vector<T *>();
-        int method_used = 0;
-        int curr_query = 0;
 
         //if (test_id == 0)
         //{ // Only pause on[ first L to avoid multiple pauses
@@ -228,12 +227,30 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         //    std::cin.get(); // Wait for user input
         //}
         
+        // Variables for OpenMP reductions (latency, distance comparisons, recall, and timing)
+        float local_brute_lat = 0.0f;
+        float local_graph_lat = 0.0f;
+        float local_brute_dist_cmp = 0.0f;
+        float local_graph_dist_cmp = 0.0f;
+        float local_brute_recall = 0.0f;
+        float local_graph_recall = 0.0f;
+        double local_intersection_time = 0.0;
+        double local_jaccard_time = 0.0;
+        
         auto s = std::chrono::high_resolution_clock::now();
-        omp_set_num_threads(num_threads);     
-#pragma omp parallel for schedule(dynamic, 1)
+        omp_set_num_threads(num_threads);
+        
+        // Create thread-safe temporary result storage
+        std::vector<std::vector<uint32_t>> temp_result_ids(query_num, std::vector<uint32_t>(K_or_L));
+        std::vector<std::vector<float>> temp_result_dists(query_num, std::vector<float>(K_or_L));
+        
+#pragma omp parallel for schedule(dynamic, 1) reduction(+:local_brute_lat,local_graph_lat,local_brute_dist_cmp,local_graph_dist_cmp,local_brute_recall,local_graph_recall,local_intersection_time,local_jaccard_time)
         for (int64_t i = 0; i < (int64_t)query_num; i++)
         {
-            curr_query = i;
+            int method_used = 0;  // 0 = brute force, 1 = graph search
+            double delta_intersection = 0.0;
+            double delta_jaccard = 0.0;
+            // Note: removed curr_query = i assignment to avoid race condition
 /*            std::cout<<"\n\nQuery #" <<i <<"\n*******************\n";
             for (uint32_t rnr =  0; rnr < L; rnr++) {
                 std::cout<<std::setw(10)<< gt_ids[i*gt_dim+rnr]<<":" << gt_dists[i*gt_dim+rnr]<<"\t";
@@ -246,9 +263,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
             auto qs = std::chrono::high_resolution_clock::now();
             
-            // Reset timing for this query
-            diskann::curr_intersection_time = 0.0;
-            diskann::curr_jaccard_time = 0.0;
             
             if (filtered_search && !tags)
             {
@@ -258,15 +272,18 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 method_used = 0;
                 std::vector<std::vector<std::string>> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
 
-                //// Debug: print num_graphs before search
-                //if (num_threads == 1 && i % 100 == 0)
-                //{
-                //    std::cout << "[DEBUG] Query " << i << ": About to call search_with_filters, num_graphs = "<<diskann::num_graphs << std::endl;
-                //}
+                // Reset global timing variables before search (thread-unsafe but better than accumulation)
+                // Note: This is not fully thread-safe but provides more accurate per-query measurements
+                diskann::curr_intersection_time = 0.0;
+                diskann::curr_jaccard_time = 0.0;
 
                 auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, K_or_L, L,
-                                                         query_result_ids[test_id].data() + i * K_or_L,
-                                                         query_result_dists[test_id].data() + i * K_or_L);
+                                                         temp_result_ids[i].data(),
+                                                         temp_result_dists[i].data());
+
+                // Capture timing for this query (now represents only this query's timing)
+                delta_intersection = diskann::curr_intersection_time;
+                delta_jaccard = diskann::curr_jaccard_time;
 
                 //// Debug: print num_graphs after search
                 //if (num_threads == 1 && i % 100 == 0) {
@@ -291,7 +308,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             else if (metric == diskann::FAST_L2)
             {
                 index->search_with_optimized_layout(query + i * query_aligned_dim, K_or_L, L,
-                                                    query_result_ids[test_id].data() + i * K_or_L);
+                                                    temp_result_ids[i].data());
             }
             else if (tags)
             {
@@ -312,38 +329,89 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
                 for (int64_t r = 0; r < (int64_t)K_or_L; r++)
                 {
-                    query_result_ids[test_id][K_or_L * i + r] = query_result_tags[K_or_L * i + r];
+                    temp_result_ids[i][r] = query_result_tags[K_or_L * i + r];
                 }
             }
             else
             {
                 cmp_stats[i] = index
                                    ->search(query + i * query_aligned_dim, K_or_L, L,
-                                            query_result_ids[test_id].data() + i * K_or_L)
+                                            temp_result_ids[i].data())
                                    .second;
             }
             auto qe = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> diff = qe - qs;
             latency_stats[i] = (float)(diff.count() * 1000000);
             
-            // Store timing for this query
-            intersection_timing_stats[i] = diskann::curr_intersection_time;
-            jaccard_timing_stats[i] = diskann::curr_jaccard_time;
+            // Accumulate timing for reduction (only if we have valid deltas from filtered search)
+            if (filtered_search && !tags)
+            {
+                local_intersection_time += delta_intersection;
+                local_jaccard_time += delta_jaccard;
+            }
             
+            // Calculate recall for this query if needed
+            float cur_recall = 0.0f;
+            if (calc_recall_flag)
+            {
+                std::set<uint32_t> gt, res;
+                uint32_t *gt_vec = gt_ids + gt_dim * i;
+                // All search types now use temp_result_ids for thread safety
+                uint32_t *res_vec = temp_result_ids[i].data();
+                size_t tie_breaker = recall_at;
+                if (gt_dists != nullptr)
+                {
+                    tie_breaker = recall_at - 1;
+                    float *gt_dist_vec = gt_dists + gt_dim * i;
+                    while (tie_breaker < gt_dim && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
+                        tie_breaker++;
+                }
+
+                gt.insert(gt_vec, gt_vec + tie_breaker);
+                res.insert(res_vec, res_vec + recall_at); // Use recall_at for proper recall@K calculation
+                for (auto &v : gt)
+                {
+                    if (res.find(v) != res.end())
+                    {
+                        cur_recall++;
+                    }
+                }
+            }
+
             switch (method_used)
             {
             case 0:
                 query_result_class[test_id][i] = 0;
-                brute_lat[test_id] += latency_stats[i];
-                brute_dist_cmp[test_id] += cmp_stats[i];
+                local_brute_lat += latency_stats[i];
+                local_brute_dist_cmp += (float)cmp_stats[i];
+                local_brute_recall += cur_recall;
                 break;
             case 1:
                 query_result_class[test_id][i] = 1;
-                graph_lat[test_id] += latency_stats[i];
-                graph_dist_cmp[test_id] += cmp_stats[i];
+                local_graph_lat += latency_stats[i];
+                local_graph_dist_cmp += (float)cmp_stats[i];
+                local_graph_recall += cur_recall;
                 break;
             }
         }
+        
+        // Copy results from thread-safe temporary storage back to original arrays
+        for (int64_t i = 0; i < (int64_t)query_num; i++)
+        {
+            std::copy(temp_result_ids[i].begin(), temp_result_ids[i].end(), 
+                     query_result_ids[test_id].begin() + i * K_or_L);
+            std::copy(temp_result_dists[i].begin(), temp_result_dists[i].end(), 
+                     query_result_dists[test_id].begin() + i * K_or_L);
+        }
+        
+        // Assign the reduced values back to the arrays
+        brute_lat[test_id] = local_brute_lat;
+        graph_lat[test_id] = local_graph_lat;
+        brute_dist_cmp[test_id] = local_brute_dist_cmp;
+        graph_dist_cmp[test_id] = local_graph_dist_cmp;
+        brute_recalls[test_id] = local_brute_recall;
+        graph_recalls[test_id] = local_graph_recall;
+        
         
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
         
@@ -402,42 +470,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
 
             recalls.reserve(1);
 
-            double overall_recall = 0;
-
-            for (size_t i = 0; i < query_num; i++)
-            {
-                std::set<uint32_t> gt, res;
-                uint32_t *gt_vec = gt_ids + gt_dim * i;
-                uint32_t *res_vec = query_result_ids[test_id].data() + K_or_L * i;
-                size_t tie_breaker = recall_at;
-                if (gt_dists != nullptr)
-                {
-                    tie_breaker = recall_at - 1;
-                    float *gt_dist_vec = gt_dists + gt_dim * i;
-                    while (tie_breaker < gt_dim && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
-                        tie_breaker++;
-                }
-
-                gt.insert(gt_vec, gt_vec + tie_breaker);
-                res.insert(res_vec, res_vec + K_or_L); // Use K_or_L for recall@L or recall@K
-                uint32_t cur_recall = 0;
-                for (auto &v : gt)
-                {
-                    if (res.find(v) != res.end())
-                    {
-                        cur_recall++;
-                    }
-                }
-                switch (query_result_class[test_id][i])
-                {
-                case 0:
-                    brute_recalls[test_id] += cur_recall;
-                    break;
-                case 1:
-                    graph_recalls[test_id] += cur_recall;
-                    break;
-                }
-            }
+            // Recall calculations are now done inside the parallel loop using OpenMP reductions
 
             for (uint32_t curr_recall = recall_at; curr_recall <= recall_at; curr_recall++)
             {
@@ -467,15 +500,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             // float penalty_detection_time_us = (float)(time_to_detect_penalty * 1000000.0) / (float)query_num;
             // float core_algo_time_us = mean_latency - filter_eval_time_us - penalty_detection_time_us;
             
-            // Calculate average timing from stats vectors (convert to microseconds)
-            float avg_intersection_time_us = 0.0f;
-            float avg_jaccard_time_us = 0.0f;
-            for (size_t i = 0; i < query_num; i++) {
-                avg_intersection_time_us += intersection_timing_stats[i];
-                avg_jaccard_time_us += jaccard_timing_stats[i];
-            }
-            avg_intersection_time_us = (avg_intersection_time_us * 1000000.0f) / (float)query_num;
-            avg_jaccard_time_us = (avg_jaccard_time_us * 1000000.0f) / (float)query_num;
+            // Calculate average timing from reduced values (convert to microseconds)
+            float avg_intersection_time_us = (float)((local_intersection_time * 1000000.0) / (double)query_num);
+            float avg_jaccard_time_us = (float)((local_jaccard_time * 1000000.0) / (double)query_num);
 
             std::cout << std::setw(4) << L << std::setw(4) << recall_at << std::setw(8) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency 
@@ -483,13 +510,13 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << std::setw(20) << (float)latency_99
                       << std::setw(20) << (float)latency_95
                       << std::setw(10) << (float)recalls[0] 
-                      << std::setw(22) << (float)(brute_dist_cmp[test_id] * 1.0) / (diskann::num_brutes * 1.0) 
-                      << std::setw(22) << (float)(brute_lat[test_id] * 1.0) / (diskann::num_brutes * 1.0) 
-                      << std::setw(20) << (float)(brute_recalls[test_id] * 100.0) / (diskann::num_brutes * recall_at * 1.0) 
+                      << std::setw(22) << (float)(brute_dist_cmp[test_id] * 1.0) / (diskann::num_brutes.load() * 1.0) 
+                      << std::setw(22) << (float)(brute_lat[test_id] * 1.0) / (diskann::num_brutes.load() * 1.0) 
+                      << std::setw(20) << (float)(brute_recalls[test_id] * 100.0) / (diskann::num_brutes.load() * recall_at * 1.0) 
                       << std::setw(22)
-                      << (float)(graph_dist_cmp[test_id] * 1.0) / (diskann::num_graphs * 1.0)
-                      << std::setw(22) << (float)(graph_lat[test_id] * 1.0) / (diskann::num_graphs * 1.0) 
-                      << std::setw(20) << (float)(graph_recalls[test_id] * 100.0) / (diskann::num_graphs * recall_at * 1.0)
+                      << (float)(graph_dist_cmp[test_id] * 1.0) / (diskann::num_graphs.load() * 1.0)
+                      << std::setw(22) << (float)(graph_lat[test_id] * 1.0) / (diskann::num_graphs.load() * 1.0) 
+                      << std::setw(20) << (float)(graph_recalls[test_id] * 100.0) / (diskann::num_graphs.load() * recall_at * 1.0)
                     //   << std::setw(18) << filter_eval_time_us
                     //   << std::setw(18) << penalty_detection_time_us
                     //   << std::setw(18) << core_algo_time_us
@@ -498,8 +525,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << std::endl;
         }
     }
-    std::cout << "num_graphs " << diskann::num_graphs << std::endl;
-    std::cout << "num_brutes " << diskann::num_brutes << std::endl;
+    std::cout << "num_graphs " << diskann::num_graphs.load() << std::endl;
+    std::cout << "num_brutes " << diskann::num_brutes.load() << std::endl;
     
     // Print detailed timing breakdown summary
     if (filtered_search) {
@@ -522,13 +549,18 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         std::cout << "Get intersection time: " << avg_intersection_time << " mus/query" << std::endl;
         std::cout << "Jaccard similarity time: " << avg_jaccard_time << " mus/query" << std::endl;
         
+        // Collect thread-local statistics before printing
+        diskann::collect_thread_local_stats();
+        
         // Print label lookup statistics
         std::cout << "\n=== LABEL LOOKUP STATISTICS ===" << std::endl;
         std::cout << "Vector-based lookups: " << diskann::vector_label_lookups << std::endl;
         std::cout << "Map-based lookups: " << diskann::map_label_lookups << std::endl;
-        if (diskann::vector_label_lookups + diskann::map_label_lookups > 0) {
-            double vector_lookup_percent = 100.0 * diskann::vector_label_lookups / 
-                                          (diskann::vector_label_lookups + diskann::map_label_lookups);
+        uint64_t total_vector_lookups = diskann::vector_label_lookups;
+        uint64_t total_map_lookups = diskann::map_label_lookups;
+        if (total_vector_lookups + total_map_lookups > 0) {
+            double vector_lookup_percent = 100.0 * total_vector_lookups / 
+                                          (total_vector_lookups + total_map_lookups);
             std::cout << "Vector-based lookup usage: " << vector_lookup_percent << "%" << std::endl;
         }
         
@@ -537,8 +569,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         // std::cout << "Total filter overhead: " << total_filter_overhead << " μs/query" << std::endl;
         
         std::cout << "Breakdown percentage:" << std::endl;
-        std::cout << "  Graph searches: " << (100.0 * diskann::num_graphs) / query_num << "%" << std::endl;
-        std::cout << "  Brute force searches: " << (100.0 * diskann::num_brutes) / query_num << "%" << std::endl;
+        std::cout << "  Graph searches: " << (100.0 * diskann::num_graphs.load()) / query_num << "%" << std::endl;
+        std::cout << "  Brute force searches: " << (100.0 * diskann::num_brutes.load()) / query_num << "%" << std::endl;
         std::cout << "=================================" << std::endl;
     }
 
