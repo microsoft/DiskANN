@@ -112,6 +112,9 @@ class AbstractIndex
 
     template <typename label_type> void set_universal_label(const label_type universal_label);
 
+    virtual void enable_integer_label() = 0;
+    virtual bool integer_label_enabled() const = 0;
+
     virtual bool is_label_valid(const std::string &raw_label) const = 0;
     virtual bool is_set_universal_label() const = 0;
     virtual TableStats get_table_stats() const = 0;

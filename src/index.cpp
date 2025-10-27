@@ -2073,7 +2073,7 @@ void Index<T, TagT, LabelT>::enable_integer_label()
 }
 
 template <typename T, typename TagT, typename LabelT>
-bool Index<T, TagT, LabelT>::integer_label_enabled()
+bool Index<T, TagT, LabelT>::integer_label_enabled() const
 {
     return _use_integer_labels;
 }

@@ -119,9 +119,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT bool is_set_universal_label() const override;
 
-    DISKANN_DLLEXPORT void enable_integer_label();
+    DISKANN_DLLEXPORT void enable_integer_label() override;
     
-    DISKANN_DLLEXPORT bool integer_label_enabled();
+    DISKANN_DLLEXPORT bool integer_label_enabled() const override;
 
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.
