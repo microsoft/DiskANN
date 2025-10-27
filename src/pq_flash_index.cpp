@@ -10,6 +10,7 @@
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
 #include "color_helper.h"
+#include "filter_match_proxy.h"
 #include <limits>
 #include <filesystem>
 
@@ -591,7 +592,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
                                                       const char *pivots_filepath, const char *compressed_filepath,
                                                       const char* labels_filepath, const char* labels_to_medoids_filepath,
                                                       const char* labels_map_filepath, const char* unv_label_filepath, 
-                                                      const char* seller_filepath, bool load_bitmask_label)
+                                                      const char* seller_filepath, LabelFormatType label_format_type)
 {
 #endif
     std::string pq_table_bin = pivots_filepath;
@@ -645,19 +646,15 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     {
         FileContent &content_labels = files.getContent(labels_file);
         std::stringstream infile(std::string((const char *)content_labels._content, content_labels._size));
+        _label_map = load_label_map(infile);
 #else
     if (file_exists(labels_file))
     {
-    std::ifstream map_reader(labels_map_file);
 #endif
-    _label_map = load_label_map(map_reader);
+        label_helper().load_label_map(labels_to_medoids, _label_map);
     this->_table_stats.label_count = _label_map.size();
 
-#ifndef EXEC_ENV_OLS
-    map_reader.close();
-#endif
-
-    if (!load_bitmask_label)
+    if (label_format_type == LabelFormatType::String)
     {
         label_helper().parse_label_file_in_bitset(
             labels_file,
@@ -666,7 +663,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             _bitmask_buf,
             _table_stats);
     }
-    else
+    else if (label_format_type == LabelFormatType::BitMask)
     {
         if (label_helper().read_bitmask_from_file(labels_file, _bitmask_buf, num_pts_in_label_file))
         {
@@ -678,6 +675,23 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             throw diskann::ANNException(std::string("Failed to load bitmask labels from ") + labels_file,
                 -1);
         }
+    }
+    else if (label_format_type == LabelFormatType::Integer)
+    {
+        if (_label_vector.initialize_from_file(labels_file, num_pts_in_label_file))
+        {
+            diskann::cout << "Integer labels loaded from " << labels_file << std::endl;
+            _use_integer_labels = true;
+        }
+        else
+        {
+            diskann::cerr << "Failed to load integer labels from " << labels_file << std::endl;
+            throw diskann::ANNException(std::string("Failed to load integer labels from ") + labels_file,
+                -1);
+        }
+
+        this->_table_stats.label_mem_usage = _label_vector.get_memory_usage();
+
     }
 
 #ifdef EXEC_ENV_OLS
@@ -1204,26 +1218,15 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     float *query_float = pq_query_scratch->aligned_query_float;
     float *query_rotated = pq_query_scratch->rotated_query;
 
-    simple_bitmask_full_val bitmask_full_val;
-
     std::vector<std::uint64_t>& query_bitmask_buf = query_scratch->query_label_bitmask();
-    if (use_filter)
-    {
-        query_bitmask_buf.resize(_bitmask_buf._bitmask_size, 0);
-        bitmask_full_val._mask = query_bitmask_buf.data();
 
-        for (const auto& filter_label : filter_labels)
-        {
-            auto bitmask_val = simple_bitmask::get_bitmask_val(filter_label);
-            bitmask_full_val.merge_bitmask_val(bitmask_val);
-        }
-
-        if (_use_universal_label)
-        {
-            auto bitmask_val = simple_bitmask::get_bitmask_val(_universal_filter_label);
-            bitmask_full_val.merge_bitmask_val(bitmask_val);
-        }
-    }
+    label_filter_match_holder match_proxy(
+        _bitmask_buf, 
+        query_bitmask_buf,
+        _label_vector, 
+        filter_labels, 
+        _universal_filter_label,
+        _use_integer_labels);
 
     // normalization step. for cosine, we simply normalize the query
     // for mips, we normalize the first d-1 dims, and add a 0 for last dim, since an extra coordinate was used to
@@ -1476,12 +1479,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
                     if (use_filter)
                     {
-                        simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
-
-                        if (!bm.test_full_mask_val(bitmask_full_val))
-                        {
+                        if (!match_proxy.contain_filtered_label(id))
                             continue;
-                        }
                     }
 
                     cmps++;
@@ -1546,12 +1545,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
                     if (use_filter)
                     {
-                        simple_bitmask bm(_bitmask_buf.get_bitmask(id), _bitmask_buf._bitmask_size);
-
-                        if (!bm.test_full_mask_val(bitmask_full_val))
-                        {
+                        if (!match_proxy.contain_filtered_label(id))
                             continue;
-                        }
                     }
 
                     cmps++;
