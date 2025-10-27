@@ -79,7 +79,7 @@ DISKANN_DLLEXPORT int build_merged_vamana_index(std::string base_file, diskann::
                                                 uint32_t R, double sampling_rate, double ram_budget,
                                                 std::string mem_index_path, std::string medoids_file,
                                                 std::string centroids_file, size_t build_pq_bytes, bool use_opq,
-                                                uint32_t num_threads, bool use_filters = false,
+                                                uint32_t num_threads, bool use_filters = false, bool use_integer_labels = false,
                                                 const std::string &label_file = std::string(""),
                                                 const std::string &labels_to_medoids_file = std::string(""),
                                                 const std::string &universal_label = "", const uint32_t Lf = 0);
@@ -95,7 +95,7 @@ DISKANN_DLLEXPORT int build_disk_index(
     const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters,
     diskann::Metric _compareMetric, bool use_opq = false,
     const std::string &codebook_prefix = "", // default is empty for no codebook pass in
-    bool use_filters = false,
+    bool use_filters = false, bool use_integer_labels = false,
     const std::string &label_file = std::string(""), // default is empty string for no label_file
     const std::string &universal_label = "", const uint32_t filter_threshold = 0,
     const uint32_t Lf = 0,
