@@ -1201,6 +1201,19 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         maxLperSeller = static_cast<uint32_t>(l_search);
     }
 
+    thread_local std::vector<LabelT> local_filter_labels;
+    local_filter_labels.clear();
+    local_filter_labels.reserve(filter_labels.size());
+    for (const auto& label : filter_labels)
+    {
+        local_filter_labels.push_back(label);
+    }
+
+    if (local_filter_labels.size() > 0)
+    {
+        std::sort(local_filter_labels.begin(), local_filter_labels.end());
+    }
+
     ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
     auto data = manager.scratch_space();
     IOContext &ctx = data->ctx;
@@ -1223,7 +1236,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         _bitmask_buf, 
         query_bitmask_buf,
         _label_vector, 
-        filter_labels, 
+        local_filter_labels,
         _universal_filter_label,
         _use_integer_labels);
 
@@ -1324,7 +1337,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     }
     else
     {
-        for (const auto& filter_label : filter_labels)
+        for (const auto& filter_label : local_filter_labels)
         {
             if (_filter_to_medoid_ids.find(filter_label) != _filter_to_medoid_ids.end())
             {

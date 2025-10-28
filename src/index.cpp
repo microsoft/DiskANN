@@ -2550,7 +2550,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
         diskann::cout << "Resize completed. New scratch->L is " << scratch->get_L() << std::endl;
     }
 
-    std::vector<LabelT> filter_vec;
+    thread_local std::vector<LabelT> filter_vec;
+    filter_vec.clear();
     filter_vec.reserve(filter_labels.size());
 
     std::vector<uint32_t> init_ids = get_init_ids();
@@ -2581,6 +2582,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     {
         filter_vec.emplace_back(filter_label);
     }
+
+    std::sort(filter_vec.begin(), filter_vec.end());
 
     _data_store->preprocess_query(query, scratch);
     auto retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true, maxLperSeller);
