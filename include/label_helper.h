@@ -129,6 +129,56 @@ public:
         return true;
     }
 
+    // duplicate of above to fit ssd index API, NEED TO UNIFY LATER
+    template <typename LabelT>
+    bool load_label_medoids(
+        const std::string& label_medoids_file,
+        std::unordered_map<LabelT, std::vector<uint32_t>>& label_to_start_ids)
+    {
+        std::ifstream infile(label_medoids_file, std::ios::binary);
+        if (infile.fail())
+        {
+            throw diskann::ANNException(std::string("Failed to open file ") + label_medoids_file, -1);
+        }
+        infile.seekg(0, std::ios::end);
+        size_t file_size = infile.tellg();
+
+        std::string buffer(file_size, ' ');
+
+        infile.seekg(0, std::ios::beg);
+        infile.read(&buffer[0], file_size);
+        infile.close();
+
+        unsigned line_cnt = 0;
+
+        size_t cur_pos = 0;
+        size_t next_pos = 0;
+        size_t lbl_pos = 0;
+        std::string token;
+        while (cur_pos < file_size && cur_pos != std::string::npos)
+        {
+            next_pos = buffer.find('\n', cur_pos);
+            if (next_pos == std::string::npos)
+            {
+                break;
+            }
+
+            lbl_pos = search_string_range(buffer, ',', cur_pos, next_pos);
+            token.assign(buffer.c_str() + cur_pos, lbl_pos - cur_pos);
+            LabelT label_num = (LabelT)std::stoul(token);
+
+            token.assign(buffer.c_str() + lbl_pos + 1, next_pos - lbl_pos - 1);
+            uint32_t medoid = (uint32_t)std::stoul(token);
+
+            label_to_start_ids[label_num].push_back(medoid);
+
+            cur_pos = next_pos + 1;
+
+            line_cnt++;
+        }
+
+        return true;
+    }
   private:
     size_t search_string_range(const std::string& str, char ch, size_t start, size_t end);
 };

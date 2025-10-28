@@ -651,7 +651,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     if (file_exists(labels_file))
     {
 #endif
-        label_helper().load_label_map(labels_to_medoids, _label_map);
+        label_helper().load_label_map(labels_map_file, _label_map);
     this->_table_stats.label_count = _label_map.size();
 
     if (label_format_type == LabelFormatType::String)
@@ -700,12 +700,6 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
             FileContent &content_labels_to_meoids = files.getContent(labels_to_medoids);
             std::stringstream medoid_stream(
                 std::string((const char *)content_labels_to_meoids._content, content_labels_to_meoids._size));
-#else
-        if (file_exists(labels_to_medoids))
-        {
-            std::ifstream medoid_stream(labels_to_medoids);
-            assert(medoid_stream.is_open());
-#endif
             std::string line, token;
 
             _filter_to_medoid_ids.clear();
@@ -728,11 +722,16 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
                     _filter_to_medoid_ids[label].swap(medoids);
                 }
             }
-            catch (std::system_error &e)
+            catch (std::system_error& e)
             {
                 throw FileException(labels_to_medoids, e, __FUNCSIG__, __FILE__, __LINE__);
             }
         }
+#else
+    _filter_to_medoid_ids.clear();
+    label_helper().load_label_medoids(labels_to_medoids, _filter_to_medoid_ids);
+#endif
+            
         std::string univ_label_file = (unv_label_filepath == nullptr ? "" : unv_label_filepath);
 
 #ifdef EXEC_ENV_OLS
