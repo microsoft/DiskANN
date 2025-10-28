@@ -1,5 +1,4 @@
 #include "integer_label_vector.h"
-#include "ann_exception.h"
 #include <algorithm>
 #include <fstream>
 
@@ -24,15 +23,13 @@ bool integer_label_vector::initialize_from_file(const std::string& label_file, s
     std::ifstream infile(label_file, std::ios::binary);
     if (infile.fail())
     {
-        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+        return false;
     }
     uint8_t format_version = 0;
     infile.read((char*)(&format_version), sizeof(uint8_t));
     if (format_version != 1)
     {
-        throw diskann::ANNException(std::string("Unsupported label file format version ") +
-            std::to_string(format_version),
-            -1);
+        return false;
     }
     uint32_t num_points_in_file = 0;
     infile.read((char*)(&num_points_in_file), sizeof(uint32_t));
@@ -54,8 +51,7 @@ bool integer_label_vector::add_labels(uint32_t point_id, std::vector<LabelT> &la
     {
         return false;
     }
-    
-    auto start = _offset[point_id];
+
     for (const auto &label : labels) {
         _data.push_back(static_cast<uint32_t>(label));
     }
@@ -166,7 +162,7 @@ bool integer_label_vector::write_to_file(const std::string& label_file) const
     std::ofstream outfile(label_file, std::ios::binary);
     if (outfile.fail())
     {
-        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+        return false;
     }
     outfile.write((char*)(&format_version), sizeof(uint8_t));
     
