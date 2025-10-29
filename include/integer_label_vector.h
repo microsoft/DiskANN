@@ -22,8 +22,6 @@ public:
     template <typename LabelT>
     bool check_label_exists(uint32_t point_id, const std::vector<LabelT> &labels);
 
-    bool check_label_full_contain(uint32_t point_id, const std::vector<uint32_t> &labels);
-
     bool check_label_full_contain(uint32_t source_point, uint32_t target_point);
 
     const std::vector<size_t> &get_offset_vector() const;

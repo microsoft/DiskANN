@@ -2699,6 +2699,7 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
             filter_vec.push_back(converted_label);
         }
         
+        std::sort(filter_vec.begin(), filter_vec.end());
         iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true);
     }
 

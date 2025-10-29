@@ -88,25 +88,6 @@ bool integer_label_vector::check_label_exists(uint32_t point_id, const std::vect
     return false;
 }
 
-bool integer_label_vector::check_label_full_contain(uint32_t point_id, const std::vector<uint32_t>& labels)
-{
-    if (point_id >= _offset.size() - 1) return false;
-
-    auto start = _offset[point_id];
-    auto end = _offset[point_id + 1];
-
-    
-    for (const auto &label : labels) {
-        size_t last_check = 0;
-        if (!binary_search(start, end, label, last_check)) {
-            return false;
-        }
-        start = last_check;
-    }
-
-    return true;
-}
-
 bool integer_label_vector::check_label_full_contain(uint32_t source_point, uint32_t target_point)
 {
     if (source_point >= _offset.size() - 1 || target_point >= _offset.size() - 1) return false;
