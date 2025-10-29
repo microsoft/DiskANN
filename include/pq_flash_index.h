@@ -16,6 +16,7 @@
 #include "tsl/robin_map.h"
 #include "tsl/robin_set.h"
 #include "label_bitmask.h"
+#include "integer_label_vector.h"
 
 #define FULL_PRECISION_REORDER_MULTIPLIER 3
 
@@ -47,7 +48,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                                     const char* labels_filepath, const char* labels_to_medoids_filepath,
                                                     const char* labels_map_filepath, const char* unv_label_filepath,
                                                     const char* seller_filepath,
-                                                    bool load_bitmask_label = false);
+                                                    LabelFormatType label_format_type = LabelFormatType::String);
 #endif
 
     DISKANN_DLLEXPORT void load_cache_list(std::vector<uint32_t> &node_list);
@@ -64,7 +65,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_filter, const LabelT &filter_label,
+                                              const bool use_filter, const std::vector<LabelT> &filter_labels,
                                               uint32_t maxLperSeller = 0,
                                               const bool use_reorder_data = false,
                                               std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr,
@@ -79,7 +80,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_filter, const LabelT &filter_label,
+                                              const bool use_filter, const std::vector<LabelT> &filter_labels,
                                               const uint32_t io_limit, uint32_t maxLperSeller = 0, 
                                               const bool use_reorder_data = false,
                                               std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr,
@@ -234,9 +235,12 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     // filter support
     simple_bitmask_buf _bitmask_buf;
 
+    bool _use_integer_labels = false;
+    integer_label_vector _label_vector;
+
     std::unordered_map<LabelT, std::vector<uint32_t>> _filter_to_medoid_ids;
     bool _use_universal_label = false;
-    LabelT _universal_filter_label;
+    LabelT _universal_filter_label = 0;
     tsl::robin_set<uint32_t> _dummy_pts;
     tsl::robin_set<uint32_t> _has_dummy_pts;
     tsl::robin_map<uint32_t, uint32_t> _dummy_to_real_map;

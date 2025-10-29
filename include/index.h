@@ -24,6 +24,7 @@
 #include "percentile_stats.h"
 #include <bitset>
 #include "label_bitmask.h"
+#include "integer_label_vector.h"
 
 #include "quantized_distance.h"
 #include "pq_data_store.h"
@@ -80,7 +81,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l);
 #else
-    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads, uint32_t search_l, bool loadBitmaskLabelFile = false);
+    DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads, uint32_t search_l, LabelFormatType label_format_type = LabelFormatType::String);
 #endif
 
     // get some private variables
@@ -118,6 +119,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     DISKANN_DLLEXPORT bool is_set_universal_label() const override;
 
+    DISKANN_DLLEXPORT void enable_integer_label() override;
+    
+    DISKANN_DLLEXPORT bool integer_label_enabled() const override;
+
     // Set starting point of an index before inserting any points incrementally.
     // The data count should be equal to _num_frozen_pts * _aligned_dim.
     DISKANN_DLLEXPORT void set_start_points(const T *data, size_t data_count);
@@ -144,15 +149,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
-                                              float *distances, std::vector<T *> &res_vectors, bool use_filters = false,
-                                              const std::string filter_label = "");
+                                              float *distances, std::vector<T *> &res_vectors, bool use_filters,
+                                              const std::vector<std::string>& filter_labels);
 
     virtual std::pair<uint32_t, uint32_t> _diverse_search(const DataType& query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
         std::any& indices, float* distances = nullptr) override;
 
     // Filter support search
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const LabelT &filter_label,
+    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const std::vector<LabelT> &filter_labels,
                                                                         const size_t K, const uint32_t L, const uint32_t maxLperSeller,
                                                                         IndexType *indices, float *distances);
 
@@ -217,7 +222,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) override;
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query,
-                                                               const std::string &filter_label_raw, const size_t K,
+                                                               const std::vector<std::string> &filter_labels_raw, const size_t K,
                                                                const uint32_t L, const uint32_t maxLperSeller, std::any &indices,
                                                                float *distances) override;
 
@@ -237,8 +242,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) override;
 
     virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
-                                     float *distances, DataVector &res_vectors, bool use_filters = false,
-                                     const std::string filter_label = "") override;
+                                     float *distances, DataVector &res_vectors, bool use_filters,
+                                     const std::vector<std::string>& filter_labels) override;
 
     virtual void _set_universal_label(const LabelType universal_label) override;
 
@@ -253,10 +258,17 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // determines navigating node of the graph by calculating medoid of datafopt
     uint32_t calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
+    void parse_label_file(const std::string &label_file, size_t &num_pts_labels, size_t& total_labels);
     void parse_seller_file(const std::string& label_file, size_t& num_pts_labels);
 
     void convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels);
+
+    void convert_pts_label_to_integer_vector(std::vector<std::vector<LabelT>> &pts_to_labels,
+        integer_label_vector &int_label_vector, size_t total_labels);
+    
+    void aggregate_points_by_bitmask_label(std::unordered_map<LabelT, std::vector<uint32_t>>& label_to_points, size_t num_points_to_load);
+
+    void aggregate_points_by_integer_label(std::unordered_map<LabelT, std::vector<uint32_t>>& label_to_points, size_t num_points_to_load);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
 
@@ -462,6 +474,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::vector<non_recursive_mutex> _locks;
 
     simple_bitmask_buf _bitmask_buf;
+
+    bool _use_integer_labels = false;
+    integer_label_vector _label_vector;
 
     TableStats _table_stats;
 

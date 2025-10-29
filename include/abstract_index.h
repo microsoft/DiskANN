@@ -53,7 +53,7 @@ class AbstractIndex
 #ifdef EXEC_ENV_OLS
     virtual void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l) = 0;
 #else
-    virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l, bool loadBitmaskLabelFile = false) = 0;
+    virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l, LabelFormatType label_format_type = LabelFormatType::String) = 0;
 #endif
 
     // For FastL2 search on optimized layout
@@ -63,8 +63,8 @@ class AbstractIndex
     // Initialize space for res_vectors before calling.
     template <typename data_type, typename tag_type>
     size_t search_with_tags(const data_type *query, const uint64_t K, const uint32_t L, tag_type *tags,
-                            float *distances, std::vector<data_type *> &res_vectors, bool use_filters = false,
-                            const std::string filter_label = "");
+                            float *distances, std::vector<data_type *> &res_vectors, bool use_filters,
+                            const std::vector<std::string>& filter_labels);
 
     // Added search overload that takes L as parameter, so that we
     // can customize L on a per-query basis without tampering with "Parameters"
@@ -80,7 +80,7 @@ class AbstractIndex
     // Filter support search
     // IndexType is either uint32_t or uint64_t
     template <typename IndexType>
-    std::pair<uint32_t, uint32_t> search_with_filters(const DataType &query, const std::string &raw_label,
+    std::pair<uint32_t, uint32_t> search_with_filters(const DataType &query, const std::vector<std::string> &raw_labels,
                                                       const size_t K, const uint32_t L, const uint32_t maxLperSeller,
                                                       IndexType *indices,
                                                       float *distances);
@@ -112,6 +112,9 @@ class AbstractIndex
 
     template <typename label_type> void set_universal_label(const label_type universal_label);
 
+    virtual void enable_integer_label() = 0;
+    virtual bool integer_label_enabled() const = 0;
+
     virtual bool is_label_valid(const std::string &raw_label) const = 0;
     virtual bool is_set_universal_label() const = 0;
     virtual TableStats get_table_stats() const = 0;
@@ -122,7 +125,7 @@ class AbstractIndex
                                                   std::any &indices, float *distances = nullptr) = 0;
     virtual std::pair<uint32_t, uint32_t> _diverse_search(const DataType& query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
         std::any& indices, float* distances = nullptr) = 0;
-    virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::string &filter_label,
+    virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::vector<std::string> &filter_labels,
                                                                const size_t K, const uint32_t L, const uint32_t maxLperSeller, std::any &indices,
                                                                float *distances) = 0;
     virtual int _insert_point(const DataType &data_point, const TagType tag, const std::vector<std::string> &labels) = 0;
@@ -133,8 +136,8 @@ class AbstractIndex
     virtual void _set_start_points_at_random(DataType radius, uint32_t random_seed = 0) = 0;
     virtual int _get_vector_by_tag(TagType &tag, DataType &vec) = 0;
     virtual size_t _search_with_tags(const DataType &query, const uint64_t K, const uint32_t L, const TagType &tags,
-                                     float *distances, DataVector &res_vectors, bool use_filters = false,
-                                     const std::string filter_label = "") = 0;
+                                     float *distances, DataVector &res_vectors, bool use_filters,
+                                     const std::vector<std::string>& filter_labels) = 0;
     virtual void _search_with_optimized_layout(const DataType &query, size_t K, size_t L, uint32_t *indices) = 0;
     virtual void _set_universal_label(const LabelType universal_label) = 0;
 };

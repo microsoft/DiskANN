@@ -12,6 +12,13 @@
 namespace diskann
 {
 
+enum class LabelFormatType :uint8_t
+{
+    String = 0,
+    BitMask = 1,
+    Integer = 2
+};
+
 class IndexWriteParameters
 
 {

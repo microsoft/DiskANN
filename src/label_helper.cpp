@@ -195,4 +195,116 @@ size_t label_helper::search_string_range(const std::string& str, char ch, size_t
     return std::string::npos;
 }
 
+bool label_helper::parse_label_file_in_integer(
+    const std::string& label_file,
+    size_t& num_points,
+    integer_label_vector& integer_vector,
+    tsl::robin_set<uint32_t>& labels, TableStats& table_stats)
+{
+    std::ifstream infile(label_file, std::ios::binary);
+    if (infile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+    infile.seekg(0, std::ios::end);
+    size_t file_size = infile.tellg();
+
+    std::string buffer(file_size, ' ');
+
+    infile.seekg(0, std::ios::beg);
+    infile.read(&buffer[0], file_size);
+    infile.close();
+
+    unsigned line_cnt = 0;
+
+    size_t cur_pos = 0;
+    size_t next_pos = 0;
+    while (cur_pos < file_size && cur_pos != std::string::npos)
+    {
+        next_pos = buffer.find('\n', cur_pos);
+        if (next_pos == std::string::npos)
+        {
+            break;
+        }
+
+        cur_pos = next_pos + 1;
+
+        line_cnt++;
+    }
+
+    const size_t rough_avg_labels_per_point = 10;
+
+    if (num_points > line_cnt)
+    {
+        size_t rough_total_labels = num_points * rough_avg_labels_per_point;
+        integer_vector.initialize(num_points, rough_total_labels);
+    }
+    else
+    {
+        size_t rough_total_labels = line_cnt * rough_avg_labels_per_point;
+        integer_vector.initialize(line_cnt, rough_total_labels);
+    }
+
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
+
+    std::string label_str;
+    std::vector<uint32_t> current_labels;
+
+    cur_pos = 0;
+    next_pos = 0;
+    while (cur_pos < file_size && cur_pos != std::string::npos)
+    {
+        next_pos = buffer.find('\n', cur_pos);
+        if (next_pos == std::string::npos)
+        {
+            break;
+        }
+
+        current_labels.clear();
+
+        size_t lbl_pos = cur_pos;
+        size_t next_lbl_pos = 0;
+        while (lbl_pos < next_pos && lbl_pos != std::string::npos)
+        {
+            next_lbl_pos = search_string_range(buffer, ',', lbl_pos, next_pos);
+            if (next_lbl_pos == std::string::npos) // the last label in the whole file
+            {
+                next_lbl_pos = next_pos;
+            }
+
+            if (next_lbl_pos > next_pos) // the last label in one line
+            {
+                next_lbl_pos = next_pos;
+            }
+
+            label_str.assign(buffer.c_str() + lbl_pos, next_lbl_pos - lbl_pos);
+            if (label_str[label_str.length() - 1] == '\t')
+            {
+                label_str.erase(label_str.length() - 1);
+            }
+
+            size_t token_as_num = std::stoul(label_str);
+            current_labels.push_back(static_cast<uint32_t>(token_as_num));
+
+            labels.insert(static_cast<uint32_t>(token_as_num));
+            table_stats.label_total_count++;
+
+            lbl_pos = next_lbl_pos + 1;
+        }
+
+        integer_vector.add_labels(line_cnt, current_labels);
+
+        cur_pos = next_pos + 1;
+
+        line_cnt++;
+    }
+
+    num_points = (size_t)line_cnt;
+    diskann::cout << "Identified " << labels.size() << " distinct label(s)" << std::endl;
+
+    return true;
+}
+
 }
