@@ -190,7 +190,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                               const std::string filter_label = "");
 
     template <typename IndexType>
-    DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query,
+    DISKANN_DLLEXPORT std::tuple<uint32_t, uint32_t, uint32_t> search_with_filters(const T *query,
                                                                         const std::vector<std::vector<LabelT>> &filter_label,
                                                                         const size_t K, const uint32_t L,
                                                                         IndexType *indices, float *distances);
@@ -256,7 +256,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
                                                   std::any &indices, float *distances = nullptr) override;
-    virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query,
+    virtual std::tuple<uint32_t, uint32_t, uint32_t> _search_with_filters(const DataType &query,
                                                                const std::vector<std::vector<std::string>> &filter_label_raw,
                                                                const size_t K, const uint32_t L, std::any &indices,
                                                                float *distances) override;
