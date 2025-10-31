@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
-#include <atomic>
 #include <cstring>
 #include <iomanip>
 #include <algorithm>
@@ -197,6 +196,10 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     //query_num = 1;
     double best_recall = 0.0;
 
+    // Declare per-test method counters
+    std::vector<uint32_t> test_num_brutes(Lvec.size(), 0);
+    std::vector<uint32_t> test_num_graphs(Lvec.size(), 0);
+
     // std::cout << "[PERF] About to start search_with_filters. Press Enter to continue..." << std::endl;
     // std::cin.get(); // Wait for user input
 
@@ -227,7 +230,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         //    std::cin.get(); // Wait for user input
         //}
         
-        // Variables for OpenMP reductions (latency, distance comparisons, recall, and timing)
+        // Variables for OpenMP reductions (latency, distance comparisons, recall, timing, and method counts)
         float local_brute_lat = 0.0f;
         float local_graph_lat = 0.0f;
         float local_brute_dist_cmp = 0.0f;
@@ -236,6 +239,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         float local_graph_recall = 0.0f;
         double local_intersection_time = 0.0;
         double local_jaccard_time = 0.0;
+        uint32_t local_num_brutes = 0;
+        uint32_t local_num_graphs = 0;
         
         auto s = std::chrono::high_resolution_clock::now();
         omp_set_num_threads(num_threads);
@@ -244,7 +249,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         std::vector<std::vector<uint32_t>> temp_result_ids(query_num, std::vector<uint32_t>(K_or_L));
         std::vector<std::vector<float>> temp_result_dists(query_num, std::vector<float>(K_or_L));
         
-#pragma omp parallel for schedule(dynamic, 1) reduction(+:local_brute_lat,local_graph_lat,local_brute_dist_cmp,local_graph_dist_cmp,local_brute_recall,local_graph_recall,local_intersection_time,local_jaccard_time)
+#pragma omp parallel for schedule(dynamic, 1) reduction(+:local_brute_lat,local_graph_lat,local_brute_dist_cmp,local_graph_dist_cmp,local_brute_recall,local_graph_recall,local_intersection_time,local_jaccard_time,local_num_brutes,local_num_graphs)
         for (int64_t i = 0; i < (int64_t)query_num; i++)
         {
             int method_used = 0;  // 0 = brute force, 1 = graph search
@@ -266,10 +271,6 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             
             if (filtered_search && !tags)
             {
-                uint32_t old_b, old_g, old_c;
-                old_b = diskann::num_brutes;
-                old_g = diskann::num_graphs;
-                method_used = 0;
                 std::vector<std::vector<std::string>> raw_filter = query_filters.size() == 1 ? query_filters[0] : query_filters[i];
 
                 // Reset global timing variables before search (thread-unsafe but better than accumulation)
@@ -277,7 +278,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 diskann::curr_intersection_time = 0.0;
                 diskann::curr_jaccard_time = 0.0;
 
-                auto retval = index->search_with_filters(query + i * query_aligned_dim, raw_filter, K_or_L, L,
+                auto [num_candidates, distance_comparisons, method_type] = index->search_with_filters(query + i * query_aligned_dim, raw_filter, K_or_L, L,
                                                          temp_result_ids[i].data(),
                                                          temp_result_dists[i].data());
 
@@ -285,23 +286,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 delta_intersection = diskann::curr_intersection_time;
                 delta_jaccard = diskann::curr_jaccard_time;
 
-                //// Debug: print num_graphs after search
-                //if (num_threads == 1 && i % 100 == 0) {
-                //    std::cout << "[DEBUG] Query " << i << ": search_with_filters completed, num_graphs = "<< diskann::num_graphs << std::endl;
-                //}
-                ////std::cout << "[DEBUG] After search_with_filters: num_graphs = " << diskann::num_graphs << std::endl;
-
-                if (diskann::num_graphs > old_g) {
-                    method_used = 1;  // Graph search
-                    // Debug the classifications
-                    // if (i < 5) std::cout << "[DEBUG] Query " << i << ": classified as GRAPH search" << std::endl;
-                }
-                else {
-                    method_used = 0;  // Brute force
-                    // Debug the classifications
-                    // if (i < 5) std::cout << "[DEBUG] Query " << i << ": classified as BRUTE FORCE search" << std::endl;
-                }
-                cmp_stats[i] = retval.second;
+                // Method information is now directly available from the search function - no race condition!
+                method_used = method_type;
+                cmp_stats[i] = distance_comparisons;
 //                                filter_match_time[i] = time_to_get_valid*1000000;
                 //                dist_cmp_time[i] = time_to_compare*1000000;
             }
@@ -385,12 +372,20 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 local_brute_lat += latency_stats[i];
                 local_brute_dist_cmp += (float)cmp_stats[i];
                 local_brute_recall += cur_recall;
+                local_num_brutes++;
+                if (i < 10) { // Only debug first 10 queries to avoid spam
+
+                }
                 break;
             case 1:
                 query_result_class[test_id][i] = 1;
                 local_graph_lat += latency_stats[i];
                 local_graph_dist_cmp += (float)cmp_stats[i];
                 local_graph_recall += cur_recall;
+                local_num_graphs++;
+                if (i < 10) { // Only debug first 10 queries to avoid spam
+
+                }
                 break;
             }
         }
@@ -412,6 +407,18 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         brute_recalls[test_id] = local_brute_recall;
         graph_recalls[test_id] = local_graph_recall;
         
+        // DEBUG: Print final values after OpenMP loop
+
+
+
+
+
+
+
+        
+        // Store method counts for this specific test
+        test_num_brutes[test_id] = local_num_brutes;
+        test_num_graphs[test_id] = local_num_graphs;
         
         std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
         
@@ -504,19 +511,29 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
             float avg_intersection_time_us = (float)((local_intersection_time * 1000000.0) / (double)query_num);
             float avg_jaccard_time_us = (float)((local_jaccard_time * 1000000.0) / (double)query_num);
 
+            // DEBUG: Print recall calculation values
+
+
+
+
+
+
+
+
+
             std::cout << std::setw(4) << L << std::setw(4) << recall_at << std::setw(8) << displayed_qps << std::setw(18) << avg_cmps
                       << std::setw(20) << (float)mean_latency 
                       << std::setw(20) << (float)latency_999
                       << std::setw(20) << (float)latency_99
                       << std::setw(20) << (float)latency_95
                       << std::setw(10) << (float)recalls[0] 
-                      << std::setw(22) << (float)(brute_dist_cmp[test_id] * 1.0) / (diskann::num_brutes.load() * 1.0) 
-                      << std::setw(22) << (float)(brute_lat[test_id] * 1.0) / (diskann::num_brutes.load() * 1.0) 
-                      << std::setw(20) << (float)(brute_recalls[test_id] * 100.0) / (diskann::num_brutes.load() * recall_at * 1.0) 
+                      << std::setw(22) << (float)(brute_dist_cmp[test_id] * 1.0) / (test_num_brutes[test_id] * 1.0) 
+                      << std::setw(22) << (float)(brute_lat[test_id] * 1.0) / (test_num_brutes[test_id] * 1.0) 
+                      << std::setw(20) << (float)(brute_recalls[test_id] * 100.0) / (test_num_brutes[test_id] * recall_at * 1.0) 
                       << std::setw(22)
-                      << (float)(graph_dist_cmp[test_id] * 1.0) / (diskann::num_graphs.load() * 1.0)
-                      << std::setw(22) << (float)(graph_lat[test_id] * 1.0) / (diskann::num_graphs.load() * 1.0) 
-                      << std::setw(20) << (float)(graph_recalls[test_id] * 100.0) / (diskann::num_graphs.load() * recall_at * 1.0)
+                      << (float)(graph_dist_cmp[test_id] * 1.0) / (test_num_graphs[test_id] * 1.0)
+                      << std::setw(22) << (float)(graph_lat[test_id] * 1.0) / (test_num_graphs[test_id] * 1.0) 
+                      << std::setw(20) << (float)(graph_recalls[test_id] * 100.0) / (test_num_graphs[test_id] * recall_at * 1.0)
                     //   << std::setw(18) << filter_eval_time_us
                     //   << std::setw(18) << penalty_detection_time_us
                     //   << std::setw(18) << core_algo_time_us
@@ -525,8 +542,9 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                       << std::endl;
         }
     }
-    std::cout << "num_graphs " << diskann::num_graphs.load() << std::endl;
-    std::cout << "num_brutes " << diskann::num_brutes.load() << std::endl;
+    // Show per-L method counts (should be same for each L)
+    std::cout << "num_graphs " << test_num_graphs[0] << std::endl;
+    std::cout << "num_brutes " << test_num_brutes[0] << std::endl;
     
     // Print detailed timing breakdown summary
     if (filtered_search) {
@@ -569,8 +587,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         // std::cout << "Total filter overhead: " << total_filter_overhead << " μs/query" << std::endl;
         
         std::cout << "Breakdown percentage:" << std::endl;
-        std::cout << "  Graph searches: " << (100.0 * diskann::num_graphs.load()) / query_num << "%" << std::endl;
-        std::cout << "  Brute force searches: " << (100.0 * diskann::num_brutes.load()) / query_num << "%" << std::endl;
+        std::cout << "  Graph searches: " << (100.0 * test_num_graphs[0]) / query_num << "%" << std::endl;
+        std::cout << "  Brute force searches: " << (100.0 * test_num_brutes[0]) / query_num << "%" << std::endl;
         std::cout << "=================================" << std::endl;
     }
 
