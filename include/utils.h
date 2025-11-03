@@ -635,8 +635,7 @@ inline void load_range_truthset(const std::string &bin_file, std::vector<std::ve
     for (uint32_t p = 0; p < 100; p += 5)
         std::cout << "percentile " << p << ": " << gt_stats[static_cast<size_t>(std::floor((p / 100.0) * gt_num))]
                   << std::endl;
-    std::cout << "percentile 100"
-              << ": " << gt_stats[gt_num - 1] << std::endl;
+    std::cout << "percentile 100" << ": " << gt_stats[gt_num - 1] << std::endl;
 
     for (uint32_t i = 0; i < gt_num; i++)
     {
