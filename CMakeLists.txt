@@ -261,6 +261,7 @@ endif()
 
 if (NOT MSVC)
     set(DISKANN_ASYNC_LIB aio)
+    set(DISKANN_ASYNC_LIB_URING uring)
 endif()
 
 #Main compiler/linker settings 
