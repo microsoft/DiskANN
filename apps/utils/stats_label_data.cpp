@@ -94,16 +94,13 @@ void stats_analysis(const std::string labels_file, std::string univeral_label, u
                   << " with count=" << label_count_vec[(size_t)(p * label_count_vec.size())].second << std::endl;
     }
 
-    std::cout << "Most common label "
-              << "\t" << label_count_vec[label_count_vec.size() - 1].first
+    std::cout << "Most common label " << "\t" << label_count_vec[label_count_vec.size() - 1].first
               << " with count=" << label_count_vec[label_count_vec.size() - 1].second << std::endl;
     if (label_count_vec.size() > 1)
-        std::cout << "Second common label "
-                  << "\t" << label_count_vec[label_count_vec.size() - 2].first
+        std::cout << "Second common label " << "\t" << label_count_vec[label_count_vec.size() - 2].first
                   << " with count=" << label_count_vec[label_count_vec.size() - 2].second << std::endl;
     if (label_count_vec.size() > 2)
-        std::cout << "Third common label "
-                  << "\t" << label_count_vec[label_count_vec.size() - 3].first
+        std::cout << "Third common label " << "\t" << label_count_vec[label_count_vec.size() - 3].first
                   << " with count=" << label_count_vec[label_count_vec.size() - 3].second << std::endl;
     avg_labels_per_pt = sum / (float)point_cnt;
     mean_label_size = sum / (float)label_counts.size();
