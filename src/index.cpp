@@ -105,6 +105,8 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _diverse_index = index_config.index_write_params->diverse_index;
         _seller_file = index_config.index_write_params->seller_file;
         _num_diverse_build = index_config.index_write_params->num_diverse_build;
+        _attribute_diversity = index_config.index_write_params->attribute_diversity;
+        _attribute_file = index_config.index_write_params->attribute_file;
 
         if (index_config.index_search_params != nullptr)
         {
@@ -290,8 +292,14 @@ void Index<T, TagT, LabelT>::save(const char *filename, bool compact_before_save
     if (!_save_as_one_file)
     {
         if (_diverse_index) {
-            std::string index_seller_file = std::string(filename) + "_sellers.txt";
-            std::filesystem::copy(_seller_file, index_seller_file);
+            if(_attribute_diversity) {
+                std::string index_attribute_file = std::string(filename) + "_attributes.txt";
+                std::filesystem::copy(_attribute_file, index_attribute_file);
+            }
+            else {
+                std::string index_seller_file = std::string(filename) + "_sellers.txt";
+                std::filesystem::copy(_seller_file, index_seller_file);
+            }
         }
 
         if (_filtered_index)
@@ -627,6 +635,15 @@ void Index<T, TagT, LabelT>::load(const char *filename, uint32_t num_threads, ui
         uint64_t nrows_seller_file;
         parse_seller_file(index_seller_file, nrows_seller_file);
         _diverse_index = true;
+    }
+
+    std::string index_attribute_file = std::string(filename) + "_attributes.txt";
+    if (file_exists(index_attribute_file)) 
+    {
+        uint64_t nrows_seller_file;
+        parse_attribute_file(index_attribute_file, nrows_seller_file);
+        _diverse_index = true;
+        _attribute_diversity = true;
     }
 
     if (file_exists(labels_file))
@@ -1210,6 +1227,24 @@ void Index<T, TagT, LabelT>::prune_search_result(int location, std::vector<uint3
     assert(!pruned_list.empty());
 }
 
+
+// #include <vector>
+// #include <algorithm>
+// #include <execution>
+
+
+double attribute_distance(std::vector<uint32_t> &a, std::vector <uint32_t> &b)
+{
+    std::vector<int> result(a.size());
+    
+    std::transform(a.begin(), a.end(), b.begin(), result.begin(),
+                   [](int x, int y) { return x == y ? 1 : 0; });
+
+    int sum = std::accumulate(result.begin(), result.end(), 0);
+    double distance = sum * 1.0 / result.size();
+    return 1 - distance;
+}
+
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha,
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
@@ -1256,15 +1291,21 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
             if (occlude_factor[cur_index] > cur_alpha)
             {
                 if (!_diverse_index
-                    || blockers[cur_index].size() >= _num_diverse_build)
+                    || (blockers[cur_index].size() >= _num_diverse_build))
                 {
                     continue;
                 }
                 auto iter_seller = _location_to_seller[iter->id];
-                if (blockers[cur_index].find(iter_seller) != blockers[cur_index].end())
+                if (blockers[cur_index].find(iter_seller) != blockers[cur_index].end() && !_attribute_diversity)
                 {
                     continue;
                 }
+
+                if (blockers[cur_index].find((uint32_t)cur_index) != blockers[cur_index].end() && _attribute_diversity)
+                {
+                    continue;
+                }
+                
             }
 
             // Set the entry to float::max so that is not considered again
@@ -1323,8 +1364,20 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     
                     if (_diverse_index && (iter2->distance / djk) > cur_alpha)
                     {
-                        auto iter_seller = _location_to_seller[iter->id];
-                        blockers[t].insert(iter_seller);
+                        if(!_attribute_diversity){
+                            auto iter_seller = _location_to_seller[iter->id];
+                            blockers[t].insert(iter_seller);
+                        }
+                        else{
+                            double attr_dist = attribute_distance(_location_to_attributes[iter2->id], _location_to_attributes[iter->id]);
+                            if(attr_dist > 0.5){ // attribute distance threshold
+                                blockers[t].insert(iter->id);
+                            }
+                            else{
+                                blockers[t].insert((uint32_t)t);
+                            }
+                        }
+                        
                     }
                 }
                 else if (_dist_metric == diskann::Metric::INNER_PRODUCT)
@@ -1730,9 +1783,15 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
     }
 
     if (_diverse_index) {
-        uint64_t nrows;
-        parse_seller_file(_seller_file, nrows);
-        std::cout << "Parsed seller file with " << nrows << " rows" << std::endl;
+        if(_attribute_diversity){
+            uint64_t nrows;
+            parse_attribute_file(_attribute_file, nrows);
+        }
+        else{
+            uint64_t nrows;
+            parse_seller_file(_seller_file, nrows);
+            std::cout << "Parsed seller file with " << nrows << " rows" << std::endl;
+        }
     }
 
     uint32_t index_R = _indexingRange;
@@ -2184,6 +2243,48 @@ void Index<T, TagT, LabelT>::parse_seller_file(const std::string& label_file, si
     _num_unique_sellers = static_cast<uint32_t>(sellers.size());
     num_points = (size_t)line_cnt;
     diskann::cout << "Identified " << sellers.size() << " distinct seller(s) across " << num_points << " points." << std::endl;
+}
+
+template <typename T, typename TagT, typename LabelT>
+void Index<T, TagT, LabelT>::parse_attribute_file(const std::string &label_file, size_t &num_points)
+{
+    // Format of Label txt file: filters with comma separators
+
+    std::ifstream infile(label_file);
+    if (infile.fail())
+    {
+        throw diskann::ANNException(std::string("Failed to open file ") + label_file, -1);
+    }
+
+    std::string line, token;
+    uint32_t line_cnt = 0;
+    while (std::getline(infile, line))
+    {
+        line_cnt++;
+    }
+
+    infile.clear();
+    infile.seekg(0, std::ios::beg);
+    line_cnt = 0;
+
+    while (std::getline(infile, line))
+    {
+        std::istringstream iss(line);
+        getline(iss, token, '\t');
+        std::istringstream new_iss(token);
+        std::vector<uint32_t> attributes;
+
+        while (getline(new_iss, token, ','))
+        {
+            token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
+            token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
+            uint32_t token_as_num = (uint32_t)std::stoul(token);
+            attributes.push_back(token_as_num);
+        }
+
+        _location_to_attributes.push_back(attributes);
+        line_cnt++;
+    }
 }
 
 template <typename T, typename TagT, typename LabelT>

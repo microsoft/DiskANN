@@ -256,6 +256,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void parse_label_file(const std::string &label_file, size_t &num_pts_labels);
     void parse_seller_file(const std::string& label_file, size_t& num_pts_labels);
 
+    void parse_attribute_file(const std::string& label_file, size_t& num_pts_labels);
+
     void convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels);
 
     std::unordered_map<std::string, LabelT> load_label_map(const std::string &map_file);
@@ -396,11 +398,14 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::unordered_map<uint32_t, uint32_t> _medoid_counts;
 
     bool _diverse_index = false;
+    bool _attribute_diversity = false;
     uint32_t _num_diverse_build = 1;
     uint32_t _max_L_per_seller = 0;
     std::vector<uint32_t> _location_to_seller;
+    std::vector<std::vector<uint32_t>> _location_to_attributes;
     uint32_t _num_unique_sellers = 0;
     std::string _seller_file;
+    std::string _attribute_file;
 
     bool _use_universal_label = false;
     LabelT _universal_label = 0;

@@ -34,5 +34,6 @@ const uint32_t SEARCH_LIST_SIZE = 100;
 const bool DIVERSE_INDEX = false;
 const std::string EMPTY_STRING = "";
 const bool NUM_DIVERSE_BUILD = 1;
+const bool ATTRIBUTE_DIVERSITY = false;
 } // namespace defaults
 } // namespace diskann
