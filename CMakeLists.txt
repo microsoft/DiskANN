@@ -19,6 +19,11 @@
 cmake_minimum_required(VERSION 3.15)
 project(diskann)
 
+# Set default build type to Debug for easier debugging setup
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Debug CACHE STRING "Choose the type of build (Debug, Release, etc.).")
+endif()
+
 set(CMAKE_STANDARD 17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

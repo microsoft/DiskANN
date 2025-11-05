@@ -1,0 +1,29 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-debug",
+            "type": "shell",
+            //"command": "rm -rf build && mkdir build && cd build && cmake .. && make -j",
+            "command": "cd build && cmake -DCMAKE_BUILD_TYPE=Debug .. && make -j",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "detail": "Clean, configure and build the DiskANN project for debugging."
+        },
+        {
+            "label": "generate-test-data",
+            "type": "shell",
+            "command": "${workspaceFolder}/build/apps/utils/generate_test_data test_data.bin 10000 128",
+            "dependsOn": [
+                "build-debug"
+            ],
+            "problemMatcher": [],
+            "detail": "Generate a binary data file for testing."
+        }
+    ]
+}

@@ -1,0 +1,97 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "(gdb) Debug build_memory_index",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/apps/build_memory_index",
+            "args": [
+                "--data_type",
+                "float",
+                "--dist_fn",
+                "l2",
+                "--data_path",
+                "data/sift/sift_learn.fbin",
+                "--index_path_prefix",
+                "data/sift/index_sift_learn_R32_L50_A1.2",
+                "-R",
+                "32",
+                "-L",
+                "50",
+                "--alpha",
+                "1.2"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build-debug"
+        },
+        {
+            "name": "(gdb) Launch simple_test",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/apps/simple_test",
+            "args": [
+                "${workspaceFolder}/test_data.bin"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "generate-test-data"
+        },
+        {
+            "name": "(gdb) Launch test_streaming_scenario",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/apps/test_streaming_scenario",
+            "args": [
+                "--data_type",
+                "float",
+                "--dist_fn",
+                "l2",
+                "--index_path_prefix",
+                "test_index",
+                "--data_path",
+                "YOUR_DATA_PATH.bin",
+                "--active_window",
+                "10000",
+                "--consolidate_interval",
+                "1000",
+                "--start_point_norm",
+                "1.0"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build-debug"
+        }
+    ]
+}
