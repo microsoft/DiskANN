@@ -64,9 +64,21 @@ void block_convert_uint8(std::ifstream &reader, std::ofstream &writer, size_t np
     delete[] read_buf;
 }
 
+size_t count_lines(const std::string &filename)
+{
+    std::ifstream file(filename);
+    size_t lines = 0;
+    std::string line;
+    while (std::getline(file, line))
+    {
+        ++lines;
+    }
+    return lines;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc != 6)
+    if (argc != 5)
     {
         std::cout << argv[0]
                   << "<float/int8/uint8> input_filename.tsv output_filename.bin "
@@ -82,7 +94,7 @@ int main(int argc, char **argv)
     }
 
     size_t ndims = atoi(argv[4]);
-    size_t npts = atoi(argv[5]);
+    size_t npts = count_lines(argv[2]);
 
     std::ifstream reader(argv[2], std::ios::binary | std::ios::ate);
     //  size_t          fsize = reader.tellg();

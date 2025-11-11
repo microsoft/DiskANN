@@ -866,7 +866,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     std::vector<Neighbor> &expanded_nodes = scratch->pool();
 
-    if (!_diverse_index)
+    if (!_diverse_index || _attribute_diversity)
     {
         NeighborPriorityQueue& best_L_nodes_ref = scratch->best_l_nodes();
         best_L_nodes_ref.reserve(Lsize);
@@ -1233,16 +1233,30 @@ void Index<T, TagT, LabelT>::prune_search_result(int location, std::vector<uint3
 // #include <execution>
 
 
-double attribute_distance(std::vector<uint32_t> &a, std::vector <uint32_t> &b)
-{
-    std::vector<int> result(a.size());
+// double attribute_distance(std::vector<std::string> &a, std::vector <std::string> &b)
+// {
+//     std::vector<int> result(a.size());
     
-    std::transform(a.begin(), a.end(), b.begin(), result.begin(),
-                   [](int x, int y) { return x == y ? 1 : 0; });
+//     std::transform(a.begin(), a.end(), b.begin(), result.begin(),
+//                    [](std::string x, std::string  y) { return x == y ? 1 : 0; });
 
-    int sum = std::accumulate(result.begin(), result.end(), 0);
-    double distance = sum * 1.0 / result.size();
-    return 1 - distance;
+//     int sum = std::accumulate(result.begin(), result.end(), 0);
+//     double distance = sum * 1.0 / result.size();
+//     return 1 - distance;
+// }
+double attribute_distance(const std::vector<std::string> &a, const std::vector<std::string> &b)
+{
+    // Use the smaller size to avoid out-of-bounds issues
+    size_t n = std::min(a.size(), b.size());
+    if(n == 0)
+        return 0.0; // or maybe 1.0 if you want full "distance" when both are empty
+
+    int matches = 0;
+    for(size_t i = 0; i < n; ++i)
+        if(a[i] == b[i]) matches++;
+
+    double similarity = static_cast<double>(matches) / n;
+    return 1.0 - similarity;
 }
 
 template <typename T, typename TagT, typename LabelT>
@@ -1295,10 +1309,13 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     continue;
                 }
-                auto iter_seller = _location_to_seller[iter->id];
-                if (blockers[cur_index].find(iter_seller) != blockers[cur_index].end() && !_attribute_diversity)
-                {
-                    continue;
+
+                if(!_attribute_diversity){
+                    auto iter_seller = _location_to_seller[iter->id];
+                    if (blockers[cur_index].find(iter_seller) != blockers[cur_index].end() && !_attribute_diversity)
+                    {
+                        continue;
+                    }
                 }
 
                 if (blockers[cur_index].find((uint32_t)cur_index) != blockers[cur_index].end() && _attribute_diversity)
@@ -1333,11 +1350,13 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     {
                         continue;
                     }
-
-                    auto iter2_seller = _location_to_seller[iter2->id];
-                    if (blockers[t].find(iter2_seller) != blockers[t].end())
-                    {
-                        continue;
+                    
+                    if(!_attribute_diversity){
+                        auto iter2_seller = _location_to_seller[iter2->id];
+                        if (blockers[t].find(iter2_seller) != blockers[t].end())
+                        {
+                            continue;
+                        }
                     }
                 }
 
@@ -1369,6 +1388,7 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                             blockers[t].insert(iter_seller);
                         }
                         else{
+                            //double attr_dist = 0.6;
                             double attr_dist = attribute_distance(_location_to_attributes[iter2->id], _location_to_attributes[iter->id]);
                             if(attr_dist > 0.5){ // attribute distance threshold
                                 blockers[t].insert(iter->id);
@@ -1388,7 +1408,7 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     if (y > cur_alpha * x)
                     {
                         occlude_factor[t] = std::max(occlude_factor[t], eps);
-                        if (_diverse_index)
+                        if (_diverse_index && !_attribute_diversity)
                         {
                             auto iter_seller = _location_to_seller[iter->id];
                             blockers[t].insert(iter_seller);
@@ -1553,7 +1573,9 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     diskann::Timer link_timer;
 
+try{
 #pragma omp parallel for schedule(dynamic, 2048)
+
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
         auto node = visit_order[node_ctr];
@@ -1567,8 +1589,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch, true, _filterIndexingQueueSize);
         }
         else
-        {
-            search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
+        {   try{
+                search_for_point_and_prune(node, _indexingQueueSize, pruned_list, scratch);
+        
+            } catch (const std::exception &e) {
+                diskann::cerr << "Exception caught during link for node " << node << " : " << e.what() << std::endl;
+            }
         }
         assert(pruned_list.size() > 0);
 
@@ -1586,6 +1612,8 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
             diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed."
                           << std::flush;
         }
+    }} catch (const std::exception &e) {
+        diskann::cerr << "Exception caught during link: " << e.what() << std::endl;
     }
 
     if (_nd > 0)
@@ -2272,14 +2300,14 @@ void Index<T, TagT, LabelT>::parse_attribute_file(const std::string &label_file,
         std::istringstream iss(line);
         getline(iss, token, '\t');
         std::istringstream new_iss(token);
-        std::vector<uint32_t> attributes;
+        std::vector<std::string> attributes;
 
         while (getline(new_iss, token, ','))
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            uint32_t token_as_num = (uint32_t)std::stoul(token);
-            attributes.push_back(token_as_num);
+            //uint32_t token_as_num = (uint32_t)std::stoul(token);
+            attributes.push_back(token);
         }
 
         _location_to_attributes.push_back(attributes);
@@ -2465,7 +2493,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     auto retval = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true, maxLperSeller);
 
     NeighborPriorityQueueBase* best_L_nodes;
-    if (!_diverse_index || maxLperSeller == 0) {
+    if (!_diverse_index || maxLperSeller == 0 || _attribute_diversity) {
         best_L_nodes = &(scratch->best_l_nodes());
     }
     else {
@@ -2575,7 +2603,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search_with_filters(const 
     auto retval = iterate_to_fixed_point(scratch, L, init_ids, true, filter_vec, true, maxLperSeller);
 
     NeighborPriorityQueueBase* best_L_nodes;
-    if (!_diverse_index) {
+    if (!_diverse_index || _attribute_diversity) {
         best_L_nodes = &(scratch->best_l_nodes());
     }
     else {

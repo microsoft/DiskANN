@@ -77,5 +77,11 @@ const char *UNIVERSAL_LABEL =
     "in the labels file instead of listing all labels for a node.  DiskANN will not automatically assign a "
     "universal label to a node.";
 const char *FILTERED_LBUILD = "Build complexity for filtered points, higher value results in better graphs";
+const char *DIVERSE_INDEX = "Build Diverse Index";
+const char *ATTRIBUTE_DIVERSE_INDEX = "Build Attribute Diverse Index";
+const char *NUM_DIVERSE = "Number of diverse edges needed per node in each local region";
+const char *DIVERSITY_FILE = "Seller diversity file for diverse index";
+const char *ATTRIBUTE_DIVERSITY_FILE = "Attribute diversity file for diverse index";
+
 
 } // namespace program_options_utils
