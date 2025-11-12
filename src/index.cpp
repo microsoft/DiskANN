@@ -1030,6 +1030,37 @@ bool Index<T, TagT, LabelT>::detect_common_filters(uint32_t point_id, bool searc
 }
 
 template <typename T, typename TagT, typename LabelT>
+bool Index<T, TagT, LabelT>::detect_common_callback(
+    uint32_t point_id, float &distance, const std::function<bool(const int64_t &, float &, bool &)> &callback,
+    bool &terminate_flag)
+{
+    if (!callback)
+    {
+        return true;
+    }
+
+    int64_t doc_id = static_cast<int64_t>(point_id);
+    if (_enable_tags)
+    {
+        TagT tag_val;
+        if (_location_to_tag.try_get(point_id, tag_val))
+        {
+            doc_id = static_cast<int64_t>(tag_val);
+        }
+    }
+
+    float distance_copy = distance;
+    bool early_terminate = false;
+    bool accept = callback(doc_id, distance_copy, early_terminate);
+    distance = distance_copy;
+    if (early_terminate)
+    {
+        terminate_flag = true;
+    }
+    return accept;
+}
+
+template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     const T *query, const uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
     bool use_filter, const std::vector<LabelT> &filter_labels, bool search_invocation)
@@ -1246,14 +1277,14 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
 
 // ADD IMPLEMENTATION FOR CALLBACK BASED ITERATE TO FIXED POINT
-
 template <typename T, typename TagT, typename LabelT>
 std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_callback(
     const T *query, uint32_t Lsize, const std::vector<uint32_t> &init_ids, InMemQueryScratch<T> *scratch,
     bool use_filter, const std::vector<LabelT> &filter_labels, bool search_invocation,
     const std::function<bool(const int64_t &, float &, bool &)> &callback)
 {
-    if (!callback)
+    const bool use_callback = static_cast<bool>(callback);
+    if (!use_callback)
     {
         return iterate_to_fixed_point(query, Lsize, init_ids, scratch, use_filter, filter_labels, search_invocation);
     }
@@ -1280,7 +1311,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
         query_rotated = pq_query_scratch->rotated_query;
         pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
         for (size_t d = 0; d < _dim; d++)
+        {
             query_float[d] = (float)aligned_query[d];
+        }
         pq_query_scratch->initialize(_dim, aligned_query);
         _pq_table.preprocess_query(query_rotated);
         _pq_table.populate_chunk_distances(query_rotated, pq_dists);
@@ -1288,15 +1321,21 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
     }
 
     if (!expanded_nodes.empty() || !id_scratch.empty())
+    {
         throw ANNException("ERROR: Clear scratch space before passing.", -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
 
     auto total_num_points = _max_points + _num_frozen_pts;
     bool fast_iterate = total_num_points <= MAX_POINTS_FOR_USING_BITSET;
-    if (fast_iterate && inserted_into_pool_bs.size() < total_num_points)
+
+    if (fast_iterate)
     {
-        auto resize_size =
-            2 * total_num_points > MAX_POINTS_FOR_USING_BITSET ? MAX_POINTS_FOR_USING_BITSET : 2 * total_num_points;
-        inserted_into_pool_bs.resize(resize_size);
+        if (inserted_into_pool_bs.size() < total_num_points)
+        {
+            auto resize_size =
+                2 * total_num_points > MAX_POINTS_FOR_USING_BITSET ? MAX_POINTS_FOR_USING_BITSET : 2 * total_num_points;
+            inserted_into_pool_bs.resize(resize_size);
+        }
     }
 
     auto is_not_visited = [fast_iterate, &inserted_into_pool_bs, &inserted_into_pool_rs](uint32_t id) {
@@ -1310,84 +1349,96 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
         diskann::pq_dist_lookup(pq_coord_scratch, ids.size(), this->_num_pq_chunks, pq_dists, dists_out);
     };
 
-    // Add candidate (used both for initial seeds and neighbor expansions)
-    auto add_candidate = [&](uint32_t id, bool force_insert_for_navigation = false) -> bool {
-        if (id >= _max_points + _num_frozen_pts)
-            return false;
-        if (use_filter && !detect_common_filters(id, search_invocation, filter_labels) && !force_insert_for_navigation)
-            return false;
-        if (!is_not_visited(id) && !force_insert_for_navigation)
-            return false;
+    bool callback_terminate = false;
 
-        if (fast_iterate)
-            inserted_into_pool_bs[id] = 1;
-        else
-            inserted_into_pool_rs.insert(id);
-
-        float distance;
-        if (_pq_dist)
-            pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists, &distance);
-        else
-            distance = _data_store->get_distance(aligned_query, id);
-
-        // Map node id to doc id (if tags enabled use tag value, else use id)
-        int64_t doc_id;
-        if (_enable_tags)
-        {
-            TagT tag_val;
-            if (_location_to_tag.try_get(id, tag_val))
-                doc_id = static_cast<int64_t>(tag_val);
-            else
-                doc_id = static_cast<int64_t>(id);
-        }
-        else
-        {
-            doc_id = static_cast<int64_t>(id);
-        }
-
-        bool early_terminate = false;
-        float dist_ref = distance;
-        bool accept = force_insert_for_navigation ? true : callback(doc_id, dist_ref, early_terminate);
-
-        // Even if not accepted, we may need the node for navigation to avoid empty frontier.
-        if (accept || force_insert_for_navigation)
-        {
-            Neighbor nn{id, dist_ref};
-            best_L_nodes.insert(nn);
-        }
-
-        if (early_terminate)
-            return false;
-        return true;
-    };
-
-    // Seed initial ids via callback
     for (auto id : init_ids)
     {
-        if (!add_candidate(id)) break;
+        if (id >= _max_points + _num_frozen_pts)
+        {
+            diskann::cerr << "Out of range loc found as an edge : " << id << std::endl;
+            throw diskann::ANNException(std::string("Wrong loc") + std::to_string(id), -1, __FUNCSIG__, __FILE__,
+                                        __LINE__);
+        }
+
+        if (use_filter)
+        {
+            if (!detect_common_filters(id, search_invocation, filter_labels))
+                continue;
+        }
+
+        if (use_callback)
+        {
+            if (float temp_distance = _data_store->get_distance(aligned_query, id);
+                !detect_common_callback(id, temp_distance, callback, callback_terminate))
+            {
+                continue;
+            }
+        }
+
+        if (is_not_visited(id))
+        {
+            if (fast_iterate)
+            {
+                inserted_into_pool_bs[id] = 1;
+            }
+            else
+            {
+                inserted_into_pool_rs.insert(id);
+            }
+
+            float distance;
+            if (_pq_dist)
+            {
+                pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists, &distance);
+            }
+            else
+            {
+                distance = _data_store->get_distance(aligned_query, id);
+            }
+            Neighbor nn = Neighbor(id, distance);
+            best_L_nodes.insert(nn);
+        }
     }
 
     // Fallback: if no seed accepted, forcibly insert first init id to allow traversal
     if (best_L_nodes.size() == 0 && !init_ids.empty())
     {
-        add_candidate(init_ids[0], true);
+        float distance;
+        if (_pq_dist)
+        {
+            pq_dist_lookup(pq_coord_scratch, 1, this->_num_pq_chunks, pq_dists, &distance);
+        }
+        else
+        {
+            distance = _data_store->get_distance(aligned_query, init_ids[0]);
+        }
+        Neighbor nn = Neighbor(init_ids[0], distance);
+        best_L_nodes.insert(nn);
     }
-
     uint32_t hops = 0;
     uint32_t cmps = 0;
-    bool terminate = false;
 
-    while (!terminate && best_L_nodes.has_unexpanded_node())
+    while (!callback_terminate && best_L_nodes.has_unexpanded_node())
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
 
         if (!search_invocation)
         {
-            if (!use_filter)
+            if (!use_filter && !use_callback)
+            {
                 expanded_nodes.emplace_back(nbr);
-            else if (std::find(expanded_nodes.begin(), expanded_nodes.end(), nbr) == expanded_nodes.end())
-                expanded_nodes.emplace_back(nbr);
+            }
+            else
+            {
+                // in filter based indexing, the same point might invoke
+                // multiple iterate_to_fixed_points, so need to be careful
+                // not to add the same item to pool multiple times
+                if (std::find(expanded_nodes.begin(), expanded_nodes.end(), nbr) == expanded_nodes.end())
+                {
+                    expanded_nodes.emplace_back(nbr);
+                }
+            }
         }
 
         id_scratch.clear();
@@ -1397,23 +1448,44 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
                 _locks[n].lock();
             for (auto id : _graph_store->get_neighbours(n))
             {
-                if (use_filter && !detect_common_filters(id, search_invocation, filter_labels))
-                    continue;
+                assert(id < _max_points + _num_frozen_pts);
+
+                if (use_filter)
+                {
+                    // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
+                    if (!detect_common_filters(id, search_invocation, filter_labels))
+                        continue;
+                }
+                if (use_callback)
+                {
+                    if (float temp_distance = _data_store->get_distance(aligned_query, id);
+                        !detect_common_callback(id, temp_distance, callback, callback_terminate))
+                        continue;
+                }
+
                 if (is_not_visited(id))
+                {
                     id_scratch.push_back(id);
+                }
             }
             if (_dynamic_index)
                 _locks[n].unlock();
         }
 
+        // Mark nodes visited
         for (auto id : id_scratch)
         {
             if (fast_iterate)
+            {
                 inserted_into_pool_bs[id] = 1;
+            }
             else
+            {
                 inserted_into_pool_rs.insert(id);
+            }
         }
 
+        // Compute distances to unvisited nodes in the expansion
         if (_pq_dist)
         {
             assert(dist_scratch.capacity() >= id_scratch.size());
@@ -1421,50 +1493,28 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
         }
         else
         {
+            assert(dist_scratch.size() == 0);
             for (size_t m = 0; m < id_scratch.size(); ++m)
             {
                 uint32_t id = id_scratch[m];
+
                 if (m + 1 < id_scratch.size())
-                    _data_store->prefetch_vector(id_scratch[m + 1]);
+                {
+                    auto nextn = id_scratch[m + 1];
+                    _data_store->prefetch_vector(nextn);
+                }
+
                 dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
             }
         }
         cmps += (uint32_t)id_scratch.size();
 
+        // Insert <id, dist> pairs into the pool of candidates
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
-            uint32_t id = id_scratch[m];
-
-            // compute / override distance if PQ or normal already computed
-            float &dist_ref = _pq_dist ? dist_scratch[m] : dist_scratch[m];
-
-            int64_t doc_id;
-            if (_enable_tags)
-            {
-                TagT tag_val;
-                if (_location_to_tag.try_get(id, tag_val))
-                    doc_id = static_cast<int64_t>(tag_val);
-                else
-                    doc_id = static_cast<int64_t>(id);
-            }
-            else
-            {
-                doc_id = static_cast<int64_t>(id);
-            }
-
-            bool early_terminate = false;
-            bool accept = callback(doc_id, dist_ref, early_terminate);
-            if (accept)
-                best_L_nodes.insert(Neighbor(id, dist_ref));
-            if (early_terminate)
-            {
-                terminate = true;
-                break;
-            }
+            best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
-        ++hops;
     }
-
     return std::make_pair(hops, cmps);
 }
 
