@@ -1426,18 +1426,9 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
         if (!search_invocation)
         {
             if (!use_filter && !use_callback)
-            {
                 expanded_nodes.emplace_back(nbr);
-            }
-            else
-            {
-                // in filter based indexing, the same point might invoke
-                // multiple iterate_to_fixed_points, so need to be careful
-                // not to add the same item to pool multiple times
-                if (std::find(expanded_nodes.begin(), expanded_nodes.end(), nbr) == expanded_nodes.end())
-                {
-                    expanded_nodes.emplace_back(nbr);
-                }
+            else if (std::find(expanded_nodes.begin(), expanded_nodes.end(), nbr) == expanded_nodes.end()){
+                expanded_nodes.emplace_back(nbr);
             }
         }
 
@@ -1452,40 +1443,31 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
 
                 if (use_filter)
                 {
-                    // NOTE: NEED TO CHECK IF THIS CORRECT WITH NEW LOCKS.
                     if (!detect_common_filters(id, search_invocation, filter_labels))
                         continue;
                 }
                 if (use_callback)
                 {
-                    if (float temp_distance = _data_store->get_distance(aligned_query, id);
-                        !detect_common_callback(id, temp_distance, callback, callback_terminate))
+                    float temp_distance = _data_store->get_distance(aligned_query, id);
+                    if(!detect_common_callback(id, temp_distance, callback, callback_terminate))
                         continue;
                 }
 
                 if (is_not_visited(id))
-                {
                     id_scratch.push_back(id);
-                }
             }
             if (_dynamic_index)
                 _locks[n].unlock();
         }
 
-        // Mark nodes visited
         for (auto id : id_scratch)
         {
             if (fast_iterate)
-            {
                 inserted_into_pool_bs[id] = 1;
-            }
             else
-            {
                 inserted_into_pool_rs.insert(id);
-            }
         }
 
-        // Compute distances to unvisited nodes in the expansion
         if (_pq_dist)
         {
             assert(dist_scratch.capacity() >= id_scratch.size());
@@ -1497,12 +1479,8 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point_cal
             for (size_t m = 0; m < id_scratch.size(); ++m)
             {
                 uint32_t id = id_scratch[m];
-
                 if (m + 1 < id_scratch.size())
-                {
-                    auto nextn = id_scratch[m + 1];
-                    _data_store->prefetch_vector(nextn);
-                }
+                    _data_store->prefetch_vector(id_scratch[m + 1]);
 
                 dist_scratch.push_back(_data_store->get_distance(aligned_query, id));
             }
