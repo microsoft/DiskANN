@@ -355,13 +355,12 @@ void PQFlashIndex<T, LabelT>::cache_bfs_levels(uint64_t num_nodes_to_cache, std:
 
     tsl::robin_set<uint32_t> node_set;
 
-    // Do not cache more than 10% of the nodes in the index
-    uint64_t tenp_nodes = (uint64_t)(std::round(this->_num_points * 0.1));
-    if (num_nodes_to_cache > tenp_nodes)
+    // If num_nodes_to_cache is more than total_nodes then reduce num_nodes_to_cache to total_nodes.
+    if (num_nodes_to_cache > this->_num_points)
     {
-        diskann::cout << "Reducing nodes to cache from: " << num_nodes_to_cache << " to: " << tenp_nodes
-                      << "(10 percent of total nodes:" << this->_num_points << ")" << std::endl;
-        num_nodes_to_cache = tenp_nodes == 0 ? 1 : tenp_nodes;
+        diskann::cout << "Reducing nodes to cache from: " << num_nodes_to_cache
+                      << " to total nodes:" << this->_num_points << std::endl;
+        num_nodes_to_cache = this->_num_points;
     }
     diskann::cout << "Caching " << num_nodes_to_cache << "..." << std::endl;
 
@@ -1276,7 +1275,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (beam_width > num_sector_per_nodes * defaults::MAX_N_SECTOR_READS)
         throw ANNException("Beamwidth can not be higher than defaults::MAX_N_SECTOR_READS", -1, __FUNCSIG__, __FILE__,
                            __LINE__);
-
+    Timer query_timer, io_timer, cpu_timer, pq_training_timer;
     ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
     auto data = manager.scratch_space();
     IOContext &ctx = data->ctx;
@@ -1334,11 +1333,18 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     const uint64_t num_sectors_per_node =
         _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
 
+    cpu_timer.reset();
+    pq_training_timer.reset();
     // query <-> PQ chunk centers distances
     _pq_table.preprocess_query(query_rotated); // center the query and rotate if
                                                // we have a rotation matrix
     float *pq_dists = pq_query_scratch->aligned_pqtable_dist_scratch;
     _pq_table.populate_chunk_distances(query_rotated, pq_dists);
+    if (stats != nullptr)
+    {
+        stats->pq_training_us = (float)pq_training_timer.elapsed();
+        stats->cpu_us += (float)cpu_timer.elapsed();
+    }
 
     // query <-> neighbor list
     float *dist_scratch = pq_query_scratch->aligned_dist_scratch;
@@ -1350,7 +1356,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         diskann::aggregate_coords(ids, n_ids, this->data, this->_n_chunks, pq_coord_scratch);
         diskann::pq_dist_lookup(pq_coord_scratch, n_ids, this->_n_chunks, pq_dists, dists_out);
     };
-    Timer query_timer, io_timer, cpu_timer;
 
     tsl::robin_set<uint64_t> &visited = query_scratch->visited;
     NeighborPriorityQueue &retset = query_scratch->retset;
