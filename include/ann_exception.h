@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 #pragma once
+#include <stdint.h>
 #include <string>
 #include <stdexcept>
 #include <system_error>
