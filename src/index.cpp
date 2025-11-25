@@ -2509,7 +2509,10 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::_search_with_filters(const
     for (const auto &raw_label : raw_labels)
     {
         auto converted_label = this->get_converted_label(raw_label);
-        converted_labels.push_back(converted_label);
+        if (converted_label != std::numeric_limits<LabelT>::max())
+        {
+            converted_labels.push_back(converted_label);
+        }
     }
 
     if (typeid(uint64_t *) == indices.type())
