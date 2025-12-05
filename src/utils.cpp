@@ -131,9 +131,9 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
                         uint32_t *our_results, uint32_t dim_or, uint32_t recall_at, float* algo_distances)
 {
     bool use_distances_to_break_ties = false;
-    if (algo_distances != nullptr) {
-        use_distances_to_break_ties = true;
-    }
+//    if (algo_distances != nullptr) {
+//        use_distances_to_break_ties = true;
+//    }
     double total_recall = 0;
     std::set<uint32_t> gt, res;
     for (size_t i = 0; i < num_queries; i++)
@@ -150,7 +150,7 @@ double calculate_recall(uint32_t num_queries, uint32_t *gold_std, float *gs_dist
             float *gt_dist_vec = gs_dist + dim_gs * i;
             while (tie_breaker < dim_gs && gt_dist_vec[tie_breaker] == gt_dist_vec[recall_at - 1])
                 tie_breaker++;
-        }
+        } 
 
         gt.insert(gt_vec, gt_vec + tie_breaker);
         res.insert(res_vec,

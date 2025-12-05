@@ -1342,7 +1342,8 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (max_k_per_seller != std::numeric_limits<uint32_t>::max())
     {
         diverse_search = true;
-        max_l_per_seller = max_k_per_seller * (l_search / k_search);
+        double ratio = static_cast<double>(l_search) / static_cast<double>(k_search);
+        max_l_per_seller = static_cast<uint32_t>(std::llround(static_cast<double>(max_k_per_seller) * ratio));
     }
 
     uint64_t num_sector_per_nodes = DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
@@ -1431,7 +1432,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     NeighborPriorityQueue* retset;
     if(diverse_search) {
-        best_diverse_nodes_ref.setup(l_search, max_l_per_seller);
+        best_diverse_nodes_ref.setup(static_cast<uint32_t>(l_search), max_l_per_seller);
         retset = &(best_diverse_nodes_ref.best_L_nodes);
     } else {
         retset = &(query_scratch->retset);
@@ -1766,12 +1767,18 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
 
     if (diverse_search) {
         best_diverse_nodes_ref.clear();
-        best_diverse_nodes_ref.setup(k_search, max_k_per_seller);
+        best_diverse_nodes_ref.setup(static_cast<uint32_t>(k_search), max_k_per_seller);
 
         for (auto &x : full_retset) {
             best_diverse_nodes_ref.insert(x.id, x.distance);
         }
-        full_retset = best_diverse_nodes_ref.best_L_nodes._data;
+        // Copy results from best_L_nodes to full_retset using operator[]
+        full_retset.clear();
+        size_t num_results = best_diverse_nodes_ref.best_L_nodes.size();
+        full_retset.reserve(num_results);
+        for (size_t i = 0; i < num_results; i++) {
+            full_retset.push_back(best_diverse_nodes_ref.best_L_nodes[i]);
+        }
     }
 
     // copy k_search values

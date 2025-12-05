@@ -219,7 +219,7 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
         //maxLperSeller = (maxLperSeller == 0)? 1 : maxLperSeller;
         uint32_t maxLperSeller = max_K_per_seller;
         if (diverse_search && scale_seller_limits) {
-            maxLperSeller = (1.0*L* max_K_per_seller)/(1.0*recall_at);
+            maxLperSeller = static_cast<uint32_t>((1.0*L* max_K_per_seller)/(1.0*recall_at));
    //         std::cout<<maxLperSeller<<std::endl;
         }
 
@@ -289,8 +289,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                     }
                                         
                     for (uint32_t ctr = 0; ctr < std::min(final_results.best_L_nodes.size(), (uint64_t)recall_at); ctr++) {
-                        query_result_ids[test_id][recall_at * i + ctr] = final_results.best_L_nodes._data[ctr].id;                        
-                        query_result_dists[test_id][recall_at * i + ctr] = final_results.best_L_nodes._data[ctr].distance;                        
+                        query_result_ids[test_id][recall_at * i + ctr] = final_results.best_L_nodes[ctr].id;                        
+                        query_result_dists[test_id][recall_at * i + ctr] = final_results.best_L_nodes[ctr].distance;                        
                     }
             } else {
                     for (uint32_t ctr = 0; ctr < std::min(results.size(),(uint64_t)recall_at); ctr++) {

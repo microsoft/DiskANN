@@ -266,7 +266,7 @@ void exact_knn(const size_t dim, const size_t k,
 //                point_dist.emplace(p, dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints]);
             for (size_t p = 0; p < npoints; p++)
             {
-                uint32_t cur_id = p + start_id;
+                uint32_t cur_id = static_cast<uint32_t>(p + start_id);
                 float cur_dist = dist_matrix[(ptrdiff_t)p + (ptrdiff_t)(q - q_b) * (ptrdiff_t)npoints];
                 cur_query_best_results.insert(cur_id, cur_dist);
             }
@@ -384,7 +384,7 @@ std::vector<std::vector<std::pair<uint32_t, float>>> processUnfilteredParts(cons
     float *base_data = nullptr;
     int num_parts = get_num_parts<T>(base_file.c_str());
     std::vector<std::vector<std::pair<uint32_t, float>>> res(nqueries);
-    std::vector<diskann::bestCandidates> running_results(nqueries, diskann::bestCandidates(k, kperseller, location_to_seller));
+    std::vector<diskann::bestCandidates> running_results(nqueries, diskann::bestCandidates(static_cast<uint32_t>(k), kperseller, location_to_seller));
     for (int p = 0; p < num_parts; p++)
     {
         size_t start_id = p * PARTSIZE;
@@ -495,7 +495,7 @@ int aux_main(const std::string &base_file, const std::string &query_file, const 
     parse_seller_file(seller_file, num_pts_seller_file, location_to_seller);
 
     std::vector<std::vector<std::pair<uint32_t, float>>> results =
-        processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag, location_to_seller, kperseller);
+        processUnfilteredParts<T>(base_file, nqueries, npoints, dim, k, query_data, metric, location_to_tag, location_to_seller, static_cast<uint32_t>(kperseller));
 
     for (size_t i = 0; i < nqueries; i++)
     {
