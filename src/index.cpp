@@ -107,6 +107,7 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _num_diverse_build = index_config.index_write_params->num_diverse_build;
         _attribute_diversity = index_config.index_write_params->attribute_diversity;
         _attribute_file = index_config.index_write_params->attribute_file;
+        _attr_dist_threshold = index_config.index_write_params->attr_dist_threshold;    
 
         if (index_config.index_search_params != nullptr)
         {
@@ -1251,11 +1252,24 @@ double attribute_distance(const std::vector<std::string> &a, const std::vector<s
     if(n == 0)
         return 0.0; // or maybe 1.0 if you want full "distance" when both are empty
 
-    int matches = 0;
-    for(size_t i = 0; i < n; ++i)
-        if(a[i] == b[i]) matches++;
+    int matches = 0, counts = 0;
+    std::string x = "", y = "";
+    
+    for(size_t i = 0; i < n; ++i){
+        
+        // x = x + "$" + (a[i] == "" ? "NA" : a[i]);
+        // y = y + "$" + (b[i] == "" ? "NA" : b[i]);
+        if(a[i] == "" || b[i] == "")
+            continue;
+        counts++;
+        if(a[i] == b[i]){
+            
+            matches++;
+            
+        }
+    }
 
-    double similarity = static_cast<double>(matches) / n;
+    double similarity = static_cast<double>(matches) / counts; // +4 to account for the extra weight given to the second attribute
     return 1.0 - similarity;
 }
 
@@ -1312,16 +1326,17 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
 
                 if(!_attribute_diversity){
                     auto iter_seller = _location_to_seller[iter->id];
-                    if (blockers[cur_index].find(iter_seller) != blockers[cur_index].end() && !_attribute_diversity)
+                    if (blockers[cur_index].find(iter_seller) != blockers[cur_index].end())
                     {
                         continue;
                     }
                 }
 
-                if (blockers[cur_index].find((uint32_t)cur_index) != blockers[cur_index].end() && _attribute_diversity)
+                if (blockers[cur_index].find(std::numeric_limits<uint32_t>::max()) != blockers[cur_index].end() && _attribute_diversity)
                 {
                     continue;
                 }
+
                 
             }
 
@@ -1380,21 +1395,24 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
                                                    : std::max(occlude_factor[t], iter2->distance / djk);
-                    
-                    if (_diverse_index && (iter2->distance / djk) > cur_alpha)
-                    {
+                 
+
+                    if (_diverse_index && ((iter2->distance / djk) > cur_alpha || djk == 0))
+                    {   
                         if(!_attribute_diversity){
                             auto iter_seller = _location_to_seller[iter->id];
                             blockers[t].insert(iter_seller);
+
                         }
                         else{
-                            //double attr_dist = 0.6;
                             double attr_dist = attribute_distance(_location_to_attributes[iter2->id], _location_to_attributes[iter->id]);
-                            if(attr_dist > 0.5){ // attribute distance threshold
+
+                            //std::cout << "Attribute distance between " << iter2->id << " and " << iter->id << " is " << attr_dist << std::endl;
+                            if(attr_dist > _attr_dist_threshold){ // attribute distance threshold
                                 blockers[t].insert(iter->id);
                             }
                             else{
-                                blockers[t].insert((uint32_t)t);
+                                blockers[t].insert(std::numeric_limits<uint32_t>::max());
                             }
                         }
                         

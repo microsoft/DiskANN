@@ -28,13 +28,14 @@ class IndexWriteParameters
     const std::string seller_file;
     const std::string attribute_file;
     const uint32_t num_diverse_build;
+    const float attr_dist_threshold;
 
     IndexWriteParameters(const uint32_t search_list_size, const uint32_t max_degree, const bool saturate_graph,
                          const uint32_t max_occlusion_size, const float alpha, const uint32_t num_threads,
-                         const uint32_t filter_list_size, bool diverse_index, const std::string& seller_file, uint32_t num_diverse_build, bool attribute_diversity, const std::string& attribute_file)
+                         const uint32_t filter_list_size, bool diverse_index, const std::string& seller_file, uint32_t num_diverse_build, bool attribute_diversity, const std::string& attribute_file, float attr_dist_threshold)
         : search_list_size(search_list_size), max_degree(max_degree), saturate_graph(saturate_graph),
           max_occlusion_size(max_occlusion_size), alpha(alpha), num_threads(num_threads),
-          filter_list_size(filter_list_size), diverse_index(diverse_index), seller_file(seller_file), num_diverse_build(num_diverse_build), attribute_diversity(attribute_diversity), attribute_file(attribute_file)
+          filter_list_size(filter_list_size), diverse_index(diverse_index), seller_file(seller_file), num_diverse_build(num_diverse_build), attribute_diversity(attribute_diversity), attribute_file(attribute_file), attr_dist_threshold(attr_dist_threshold)
     {
     }
 
@@ -96,6 +97,12 @@ class IndexWriteParametersBuilder
         return *this;
     }
 
+    IndexWriteParametersBuilder& with_attr_dist_threshold(const float attr_dist_threshold)
+    {
+        _attr_dist_threshold = attr_dist_threshold;
+        return *this;
+    }
+
     IndexWriteParametersBuilder& with_attribute_file(const std::string attribute_file)
     {
         _attribute_file = attribute_file;
@@ -130,7 +137,7 @@ class IndexWriteParametersBuilder
     IndexWriteParameters build() const
     {
         return IndexWriteParameters(_search_list_size, _max_degree, _saturate_graph, _max_occlusion_size, _alpha,
-                                    _num_threads, _filter_list_size, _diverse_index, _seller_file, _num_diverse_build, _attribute_diversity, _attribute_file);
+                                    _num_threads, _filter_list_size, _diverse_index, _seller_file, _num_diverse_build, _attribute_diversity, _attribute_file, _attr_dist_threshold);
     }
 
     IndexWriteParametersBuilder(const IndexWriteParameters &wp)
@@ -155,6 +162,7 @@ class IndexWriteParametersBuilder
     uint32_t _num_diverse_build{ defaults::NUM_DIVERSE_BUILD };
     bool _attribute_diversity{ defaults::ATTRIBUTE_DIVERSITY };
     std::string _attribute_file{ defaults::EMPTY_STRING };
+    float _attr_dist_threshold{ defaults::ATTR_DIST_THRESHOLD };
 };
 
 } // namespace diskann

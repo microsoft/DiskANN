@@ -26,7 +26,7 @@ int main(int argc, char **argv)
 {
     std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type, seller_file, attribute_file;
     uint32_t num_threads, R, L, Lf, build_PQ_bytes, num_diverse_build;
-    float alpha;
+    float alpha, attr_dist_threshold;
     bool use_pq_build, use_opq, diverse_index = false, attribute_diversity = false;
     
 
@@ -77,6 +77,8 @@ int main(int argc, char **argv)
                                        program_options_utils::ATTRIBUTE_DIVERSITY_FILE);
         optional_configs.add_options()("NumDiverse", po::value<uint32_t>(&num_diverse_build)->default_value(1),
                                        program_options_utils::NUM_DIVERSE);
+        optional_configs.add_options()("attr_dist_threshold", po::value<float>(&attr_dist_threshold)->default_value(0.2f),
+                                       program_options_utils::ATTR_DIST_THRESHOLD);
 
         // Merge required and optional parameters
         desc.add(required_configs).add(optional_configs);
@@ -146,6 +148,7 @@ int main(int argc, char **argv)
                                       .with_num_diverse_build(num_diverse_build)
                                       .with_attribute_diversity(attribute_diversity)
                                       .with_attribute_file(attribute_file)
+                                      .with_attr_dist_threshold(attr_dist_threshold)
                                       .build();
 
         auto filter_params = diskann::IndexFilterParamsBuilder()

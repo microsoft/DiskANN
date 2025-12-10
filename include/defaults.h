@@ -35,5 +35,6 @@ const bool DIVERSE_INDEX = false;
 const std::string EMPTY_STRING = "";
 const bool NUM_DIVERSE_BUILD = 1;
 const bool ATTRIBUTE_DIVERSITY = false;
+const float ATTR_DIST_THRESHOLD = 0.2f;
 } // namespace defaults
 } // namespace diskann

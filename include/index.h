@@ -400,6 +400,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     bool _diverse_index = false;
     bool _attribute_diversity = false;
     uint32_t _num_diverse_build = 1;
+    float _attr_dist_threshold = 0.2f;
     uint32_t _max_L_per_seller = 0;
     std::vector<uint32_t> _location_to_seller;
     std::vector<std::vector<std::string>> _location_to_attributes;

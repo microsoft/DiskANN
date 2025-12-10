@@ -82,6 +82,6 @@ const char *ATTRIBUTE_DIVERSE_INDEX = "Build Attribute Diverse Index";
 const char *NUM_DIVERSE = "Number of diverse edges needed per node in each local region";
 const char *DIVERSITY_FILE = "Seller diversity file for diverse index";
 const char *ATTRIBUTE_DIVERSITY_FILE = "Attribute diversity file for diverse index";
-
+const char *ATTR_DIST_THRESHOLD = "Attribute distance threshold for attribute diverse index";
 
 } // namespace program_options_utils
