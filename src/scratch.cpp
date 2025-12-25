@@ -38,6 +38,7 @@ InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, 
     _inserted_into_pool_bs = new boost::dynamic_bitset<>();
     _id_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
     _dist_scratch.reserve((size_t)std::ceil(1.5 * defaults::GRAPH_SLACK_FACTOR * _R));
+    _reranked_results.reserve(std::max(search_l, indexing_l));
 
     resize_for_new_L(std::max(search_l, indexing_l));
 
@@ -64,6 +65,7 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _expanded_nghrs_vec.clear();
     _occlude_list_output.clear();
     _query_label_bitmask.clear();
+    _reranked_results.clear();
 
     _best_diverse_nodes.clear();
 }

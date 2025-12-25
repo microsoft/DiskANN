@@ -141,11 +141,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // can customize L on a per-query basis without tampering with "Parameters"
     template <typename IDType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search(const T *query, const size_t K, const uint32_t L,
-                                                           IDType *indices, float *distances = nullptr, const uint32_t maxLperSeller = 0);
+                                                           IDType *indices, float *distances = nullptr, const uint32_t maxLperSeller = 0,
+                                                           std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
 
     template <typename IDType>
     std::pair<uint32_t, uint32_t> diverse_search(const T* query, const size_t K, const uint32_t L, const uint32_t maxLperSeller, IDType* indices,
-                                                           float* distances = nullptr);
+                                                           float* distances = nullptr,
+                                                           std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
 
     // Initialize space for res_vectors before calling.
     DISKANN_DLLEXPORT size_t search_with_tags(const T *query, const uint64_t K, const uint32_t L, TagT *tags,
@@ -153,13 +155,15 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                               const std::vector<std::string>& filter_labels);
 
     virtual std::pair<uint32_t, uint32_t> _diverse_search(const DataType& query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
-        std::any& indices, float* distances = nullptr) override;
+        std::any& indices, float* distances = nullptr,
+        std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr) override;
 
     // Filter support search
     template <typename IndexType>
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const std::vector<LabelT> &filter_labels,
                                                                         const size_t K, const uint32_t L, const uint32_t maxLperSeller,
-                                                                        IndexType *indices, float *distances);
+                                                                        IndexType *indices, float *distances,
+                                                                        std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
@@ -220,11 +224,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) override;
 
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
-                                                  std::any &indices, float *distances = nullptr) override;
+                                                  std::any &indices, float *distances = nullptr,
+                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr) override;
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query,
                                                                const std::vector<std::string> &filter_labels_raw, const size_t K,
                                                                const uint32_t L, const uint32_t maxLperSeller, std::any &indices,
-                                                               float *distances) override;
+                                                               float *distances,
+                                                               std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr) override;
 
     virtual int _insert_point(const DataType &data_point, const TagType tag) override;
     virtual int _insert_point(const DataType &data_point, const TagType tag, const std::vector<std::string> &labels) override;
@@ -327,6 +333,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // Resize the index when no slots are left for insertion.
     // Acquire exclusive _update_lock and _tag_lock before calling.
     void resize(size_t new_max_points);
+
+    template <typename IDType>
+    void post_process_search_results(InMemQueryScratch<T> *scratch, const size_t K, IDType *indices, float *distances,
+                                     std::function<float(const std::uint8_t *, size_t)> rerank_fn);
 
     // Acquire unique lock on _update_lock, _consolidate_lock, _tag_lock
     // and _delete_lock before calling these functions.
@@ -477,6 +487,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     bool _use_integer_labels = false;
     integer_label_vector _label_vector;
+    
+    bool _reorder_index = false;
+    uint32_t _search_dim = 0; // only used when _reorder_index = true
 
     TableStats _table_stats;
 

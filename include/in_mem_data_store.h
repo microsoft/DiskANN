@@ -1,5 +1,6 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
+#pragma once
 
 #include <shared_mutex>
 #include <memory>
@@ -72,7 +73,7 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
     virtual location_t load_impl(AlignedFileReader &reader);
 #endif
 
-  private:
+protected:
     data_t *_data = nullptr;
 
     size_t _aligned_dim;

@@ -15,20 +15,21 @@ void AbstractIndex::build(const data_type *data, const size_t num_points_to_load
 
 template <typename data_type, typename IDType>
 std::pair<uint32_t, uint32_t> AbstractIndex::search(const data_type *query, const size_t K, const uint32_t L,
-                                                    IDType *indices, float *distances)
+                                                    IDType *indices, float *distances,
+                                                    std::function<float(const std::uint8_t*, size_t)> rerank_fn)
 {
     auto any_indices = std::any(indices);
     auto any_query = std::any(query);
-    return _search(any_query, K, L, any_indices, distances);
+    return _search(any_query, K, L, any_indices, distances, std::move(rerank_fn));
 }
 
 template <typename data_type, typename IDType>
 std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search(const data_type* query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
-    IDType* indices, float* distances)
+    IDType* indices, float* distances, std::function<float(const std::uint8_t*, size_t)> rerank_fn)
 {
     auto any_indices = std::any(indices);
     auto any_query = std::any(query);
-    return _diverse_search(any_query, K, L, maxLperSeller, any_indices, distances);
+    return _diverse_search(any_query, K, L, maxLperSeller, any_indices, distances, std::move(rerank_fn));
 }
 
 template <typename data_type, typename tag_type>
@@ -45,10 +46,10 @@ size_t AbstractIndex::search_with_tags(const data_type *query, const uint64_t K,
 template <typename IndexType>
 std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters(const DataType &query, const std::vector<std::string> &raw_labels,
                                                                  const size_t K, const uint32_t L, const uint32_t maxLperSeller, IndexType *indices,
-                                                                 float *distances)
+                                                                 float *distances, std::function<float(const std::uint8_t*, size_t)> rerank_fn)
 {
     auto any_indices = std::any(indices);
-    return _search_with_filters(query, raw_labels, K, L, maxLperSeller, any_indices, distances);
+    return _search_with_filters(query, raw_labels, K, L, maxLperSeller, any_indices, distances, std::move(rerank_fn));
 }
 
 template <typename data_type>
@@ -159,40 +160,51 @@ template DISKANN_DLLEXPORT void AbstractIndex::build<uint8_t, tag_uint128>(const
     const std::vector<tag_uint128>& tags);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search<float, uint32_t>(
-    const float *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search<uint8_t, uint32_t>(
-    const uint8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search<int8_t, uint32_t>(
-    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint32_t *indices, float *distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search<float, uint64_t>(
-    const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
+    const float *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search<uint8_t, uint64_t>(
-    const uint8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
+    const uint8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search<int8_t, uint64_t>(
-    const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances);
+    const int8_t *query, const size_t K, const uint32_t L, uint64_t *indices, float *distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters<uint32_t>(
     const DataType &query, const std::vector<std::string> &raw_labels, const size_t K, const uint32_t L, const uint32_t maxLperSeller, uint32_t *indices,
-    float *distances);
+    float *distances, std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::search_with_filters<uint64_t>(
     const DataType &query, const std::vector<std::string>& raw_labels, const size_t K, const uint32_t L, const uint32_t maxLperSeller, uint64_t *indices,
-    float *distances);
-
+    float *distances, std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search<float, uint32_t>(
-    const float* query, const size_t K, const uint32_t L, const uint32_t maxL, uint32_t* indices, float* distances);
+    const float* query, const size_t K, const uint32_t L, const uint32_t maxL, uint32_t* indices, float* distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search<uint8_t, uint32_t>(
-    const uint8_t* query, const size_t K, const uint32_t L, const uint32_t maxL, uint32_t* indices, float* distances);
+    const uint8_t* query, const size_t K, const uint32_t L, const uint32_t maxL, uint32_t* indices, float* distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search<int8_t, uint32_t>(
-    const int8_t* query, const size_t K, const uint32_t L, const uint32_t maxL, uint32_t* indices, float* distances);
+    const int8_t* query, const size_t K, const uint32_t L, const uint32_t maxL, uint32_t* indices, float* distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search<float, uint64_t>(
-    const float* query, const size_t K, const uint32_t L, const uint32_t maxL, uint64_t* indices, float* distances);
+    const float* query, const size_t K, const uint32_t L, const uint32_t maxL, uint64_t* indices, float* distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search<uint8_t, uint64_t>(
-    const uint8_t* query, const size_t K, const uint32_t L, const uint32_t maxL, uint64_t* indices, float* distances);
+    const uint8_t* query, const size_t K, const uint32_t L, const uint32_t maxL, uint64_t* indices, float* distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 template DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> AbstractIndex::diverse_search<int8_t, uint64_t>(
-    const int8_t* query, const size_t K, const uint32_t L, const uint32_t maxL, uint64_t* indices, float* distances);
+    const int8_t* query, const size_t K, const uint32_t L, const uint32_t maxL, uint64_t* indices, float* distances,
+    std::function<float(const std::uint8_t*, size_t)> rerank_fn);
 
 template DISKANN_DLLEXPORT size_t AbstractIndex::search_with_tags<float, int32_t>(
     const float *query, const uint64_t K, const uint32_t L, int32_t *tags, float *distances,

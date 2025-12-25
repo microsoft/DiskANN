@@ -4,6 +4,7 @@
 #include "in_mem_static_graph_store.h"
 #include "in_mem_graph_reformat_store.h"
 #include "in_mem_static_graph_reformat_store.h"
+#include "in_mem_reorder_data_store.h"
 
 namespace diskann
 {
@@ -67,17 +68,30 @@ template <typename T> Distance<T> *IndexFactory::construct_inmem_distance_fn(Met
 }
 
 template <typename T>
-std::shared_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(DataStoreStrategy strategy,
-                                                                        size_t total_internal_points, size_t dimension,
-                                                                        Metric metric)
+std::shared_ptr<AbstractDataStore<T>> IndexFactory::construct_mem_datastore(size_t total_internal_points, size_t dimension,
+    Metric metric)
 {
     std::unique_ptr<Distance<T>> distance;
-    switch (strategy)
+    distance.reset(construct_inmem_distance_fn<T>(metric));
+    return std::make_shared<diskann::InMemDataStore<T>>((location_t)total_internal_points, dimension,
+        std::move(distance));
+}
+
+template <typename T>
+std::shared_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(const IndexConfig& index_config)
+{
+    std::unique_ptr<Distance<T>> distance;
+    switch (index_config.data_strategy)
     {
     case DataStoreStrategy::MEMORY:
-        distance.reset(construct_inmem_distance_fn<T>(metric));
-        return std::make_shared<diskann::InMemDataStore<T>>((location_t)total_internal_points, dimension,
+        distance.reset(construct_inmem_distance_fn<T>(index_config.metric));
+        return std::make_shared<diskann::InMemDataStore<T>>((location_t)index_config.max_points, index_config.dimension,
                                                             std::move(distance));
+    case DataStoreStrategy::REORDER_MEMORY:
+        distance.reset(construct_inmem_distance_fn<T>(index_config.metric));
+        return std::make_shared<diskann::InMemReorderDataStore<T>>((location_t)index_config.max_points,
+            index_config.index_write_params->search_dim, index_config.dimension,
+            std::move(distance));
     default:
         break;
     }
@@ -131,7 +145,7 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     size_t num_points = _config->max_points;
     size_t dim = _config->dimension;
     // auto graph_store = construct_graphstore(_config->graph_strategy, num_points);
-    auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
+    auto data_store = construct_datastore<data_type>(*_config);
     std::shared_ptr<AbstractDataStore<data_type>> pq_data_store = nullptr;
 
     if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
@@ -217,11 +231,11 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &
         throw ANNException("Error: unsupported label_type please choose from [uint/ushort]", -1);
 }
 
-// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<uint8_t>> IndexFactory::construct_datastore(
-//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
-// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<int8_t>> IndexFactory::construct_datastore(
-//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
-// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<float>> IndexFactory::construct_datastore(
-//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
+ template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<uint8_t>> IndexFactory::construct_mem_datastore(
+     size_t num_points, size_t dimension, Metric m);
+ template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<int8_t>> IndexFactory::construct_mem_datastore(
+     size_t num_points, size_t dimension, Metric m);
+ template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<float>> IndexFactory::construct_mem_datastore(
+     size_t num_points, size_t dimension, Metric m);
 
 } // namespace diskann

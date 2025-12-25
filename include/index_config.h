@@ -5,7 +5,8 @@ namespace diskann
 {
 enum class DataStoreStrategy
 {
-    MEMORY
+    MEMORY,
+    REORDER_MEMORY
 };
 
 enum class GraphStoreStrategy

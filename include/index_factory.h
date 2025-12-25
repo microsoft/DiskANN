@@ -15,9 +15,11 @@ class IndexFactory
         const GraphStoreStrategy stratagy, const size_t size, const size_t reserve_graph_degree);
 
     template <typename T>
-    DISKANN_DLLEXPORT static std::shared_ptr<AbstractDataStore<T>> construct_datastore(DataStoreStrategy stratagy,
-                                                                                       size_t num_points,
-                                                                                       size_t dimension, Metric m);
+    DISKANN_DLLEXPORT static std::shared_ptr<AbstractDataStore<T>> construct_datastore(const IndexConfig& index_config);
+    
+    template <typename T>
+    DISKANN_DLLEXPORT static std::shared_ptr<AbstractDataStore<T>> construct_mem_datastore(size_t total_internal_points, size_t dimension,
+        Metric metric);
     // For now PQDataStore incorporates within itself all variants of quantization that we support. In the
     // future it may be necessary to introduce an AbstractPQDataStore class to spearate various quantization
     // flavours.
