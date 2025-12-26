@@ -86,7 +86,7 @@ class AbstractIndex
                                                       const size_t K, const uint32_t L, const uint32_t maxLperSeller,
                                                       IndexType *indices,
                                                       float *distances,
-                                                      std::function<float(const std::uint8_t*, size_t)> rerank_fn);
+                                                      std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
 
     // insert points with labels, labels should be present for filtered index
     template <typename data_type, typename tag_type>

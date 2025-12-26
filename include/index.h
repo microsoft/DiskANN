@@ -163,7 +163,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     DISKANN_DLLEXPORT std::pair<uint32_t, uint32_t> search_with_filters(const T *query, const std::vector<LabelT> &filter_labels,
                                                                         const size_t K, const uint32_t L, const uint32_t maxLperSeller,
                                                                         IndexType *indices, float *distances,
-                                                                        std::function<float(const std::uint8_t*, size_t)> rerank_fn);
+                                                                        std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
 
     // Will fail if tag already in the index or if tag=0.
     DISKANN_DLLEXPORT int insert_point(const T *point, const TagT tag);
