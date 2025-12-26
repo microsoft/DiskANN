@@ -90,7 +90,7 @@ std::shared_ptr<AbstractDataStore<T>> IndexFactory::construct_datastore(const In
     case DataStoreStrategy::REORDER_MEMORY:
         distance.reset(construct_inmem_distance_fn<T>(index_config.metric));
         return std::make_shared<diskann::InMemReorderDataStore<T>>((location_t)index_config.max_points,
-            index_config.index_write_params->search_dim, index_config.dimension,
+            index_config.search_dim, index_config.dimension,
             std::move(distance));
     default:
         break;

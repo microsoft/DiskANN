@@ -40,6 +40,9 @@ struct IndexConfig
     std::string tag_type;
     std::string data_type;
 
+    bool reorder_index;
+    uint32_t search_dim;
+
     // Params for building index
     std::shared_ptr<IndexWriteParameters> index_write_params;
     // Params for searching index
@@ -50,6 +53,7 @@ struct IndexConfig
                 size_t max_points, size_t num_pq_chunks, size_t num_frozen_points, bool dynamic_index, bool enable_tags,
                 bool pq_dist_build, bool concurrent_consolidate, bool use_opq, bool filtered_index,
                 std::string &data_type, const std::string &tag_type, const std::string &label_type,
+                bool reorder_index, uint32_t search_dim,
                 std::shared_ptr<IndexWriteParameters> index_write_params,
                 std::shared_ptr<IndexSearchParams> index_search_params)
         : data_strategy(data_strategy), graph_strategy(graph_strategy), metric(metric), dimension(dimension),
@@ -164,6 +168,18 @@ class IndexConfigBuilder
         return *this;
     }
 
+    IndexConfigBuilder &with_reorder_index(bool reorder_index)
+    {
+        this->_reorder_index = reorder_index;
+        return *this;
+    }
+
+    IndexConfigBuilder &with_search_dim(uint32_t search_dim)
+    {
+        this->_search_dim = search_dim;
+        return *this;
+    }
+
     IndexConfigBuilder &with_index_write_params(IndexWriteParameters &index_write_params)
     {
         this->_index_write_params = std::make_shared<IndexWriteParameters>(index_write_params);
@@ -223,8 +239,8 @@ class IndexConfigBuilder
 
         return IndexConfig(_data_strategy, _graph_strategy, _metric, _dimension, _max_points, _num_pq_chunks,
                            _num_frozen_pts, _dynamic_index, _enable_tags, _pq_dist_build, _concurrent_consolidate,
-                           _use_opq, _filtered_index, _data_type, _tag_type, _label_type, _index_write_params,
-                           _index_search_params);
+                           _use_opq, _filtered_index, _data_type, _tag_type, _label_type, _reorder_index, _search_dim,
+                           _index_write_params, _index_search_params);
     }
 
     IndexConfigBuilder(const IndexConfigBuilder &) = delete;
@@ -251,6 +267,9 @@ class IndexConfigBuilder
     std::string _label_type{"uint32"};
     std::string _tag_type{"uint32"};
     std::string _data_type;
+
+    bool _reorder_index = false;
+    uint32_t _search_dim = 0;
 
     std::shared_ptr<IndexWriteParameters> _index_write_params;
     std::shared_ptr<IndexSearchParams> _index_search_params;

@@ -96,6 +96,9 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         }
     }
 
+    _reorder_index = index_config.reorder_index;
+    _search_dim = index_config.search_dim;
+
     if (index_config.index_write_params != nullptr)
     {
         _indexingQueueSize = index_config.index_write_params->search_list_size;
@@ -109,9 +112,6 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         _diverse_index = index_config.index_write_params->diverse_index;
         _seller_file = index_config.index_write_params->seller_file;
         _num_diverse_build = index_config.index_write_params->num_diverse_build;
-
-        _reorder_index = index_config.index_write_params->reorder_index;
-        _search_dim = index_config.index_write_params->search_dim;
 
         if (index_config.index_search_params != nullptr)
         {
