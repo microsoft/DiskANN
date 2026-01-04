@@ -88,22 +88,21 @@ if [[ "$PERF_MODE" == "memory" || "$PERF_MODE" == "both" ]]; then
 fi
 
 # Optional SSD/disk index perf (mixed RAM+SSD).
-# Note: build_disk_index/search_disk_index do not support bf16 currently.
 if [[ "$PERF_MODE" == "disk" || "$PERF_MODE" == "both" ]]; then
-  if [[ "$DATA_TYPE" != "float" ]]; then
-    echo "PERF_MODE includes disk but DATA_TYPE='$DATA_TYPE' is not supported for disk index; skipping disk tests."
-  else
-    DISK_R=${DISK_R:-32}
-    DISK_LBUILD=${DISK_LBUILD:-50}
-    DISK_SEARCH_DRAM_BUDGET_GB=${DISK_SEARCH_DRAM_BUDGET_GB:-0.5}
-    DISK_BUILD_DRAM_BUDGET_GB=${DISK_BUILD_DRAM_BUDGET_GB:-8}
-    DISK_PQ_DISK_BYTES=${DISK_PQ_DISK_BYTES:-0}
-    DISK_BUILD_PQ_BYTES=${DISK_BUILD_PQ_BYTES:-0}
-    DISK_NUM_NODES_TO_CACHE=${DISK_NUM_NODES_TO_CACHE:-10000}
-    DISK_BEAMWIDTH=${DISK_BEAMWIDTH:-2}
-    DISK_RECALL_AT=${DISK_RECALL_AT:-10}
-    DISK_SEARCH_LISTS=${DISK_SEARCH_LISTS:-"10 20 30 40 50 100"}
+  DISK_R=${DISK_R:-32}
+  DISK_LBUILD=${DISK_LBUILD:-50}
+  DISK_SEARCH_DRAM_BUDGET_GB=${DISK_SEARCH_DRAM_BUDGET_GB:-0.5}
+  DISK_BUILD_DRAM_BUDGET_GB=${DISK_BUILD_DRAM_BUDGET_GB:-8}
+  DISK_PQ_DISK_BYTES=${DISK_PQ_DISK_BYTES:-0}
+  DISK_BUILD_PQ_BYTES=${DISK_BUILD_PQ_BYTES:-0}
+  DISK_NUM_NODES_TO_CACHE=${DISK_NUM_NODES_TO_CACHE:-10000}
+  DISK_BEAMWIDTH=${DISK_BEAMWIDTH:-2}
+  DISK_RECALL_AT=${DISK_RECALL_AT:-10}
+  DISK_SEARCH_LISTS=${DISK_SEARCH_LISTS:-"10 20 30 40 50 100"}
 
+  mkdir -p temp
+
+  if [[ "$DATA_TYPE" == "float" ]]; then
     DISK_INDEX_L2_PREFIX="data/disk_index_l2_rand_${DATA_TYPE}_768D_1M_R${DISK_R}_L${DISK_LBUILD}_B${DISK_SEARCH_DRAM_BUDGET_GB}_M${DISK_BUILD_DRAM_BUDGET_GB}"
     DISK_INDEX_MIPS_PREFIX="data/disk_index_mips_rand_${DATA_TYPE}_768D_1M_R${DISK_R}_L${DISK_LBUILD}_B${DISK_SEARCH_DRAM_BUDGET_GB}_M${DISK_BUILD_DRAM_BUDGET_GB}"
     DISK_INDEX_COSINE_PREFIX="data/disk_index_cosine_rand_${DATA_TYPE}_768D_1M_R${DISK_R}_L${DISK_LBUILD}_B${DISK_SEARCH_DRAM_BUDGET_GB}_M${DISK_BUILD_DRAM_BUDGET_GB}"
@@ -116,6 +115,29 @@ if [[ "$PERF_MODE" == "disk" || "$PERF_MODE" == "both" ]]; then
 
     json_time $BASE_PATH/build_disk_index --data_type "$DATA_TYPE" --dist_fn cosine --data_path "$BASE_FILE" --index_path_prefix "$DISK_INDEX_COSINE_PREFIX" -R "$DISK_R" -L "$DISK_LBUILD" -B "$DISK_SEARCH_DRAM_BUDGET_GB" -M "$DISK_BUILD_DRAM_BUDGET_GB" --PQ_disk_bytes "$DISK_PQ_DISK_BYTES" --build_PQ_bytes "$DISK_BUILD_PQ_BYTES"
     json_time $BASE_PATH/search_disk_index --data_type "$DATA_TYPE" --dist_fn cosine --index_path_prefix "$DISK_INDEX_COSINE_PREFIX" --query_file "$QUERY_FILE" --gt_file "$GT_COSINE_FILE" -K "$DISK_RECALL_AT" -L $DISK_SEARCH_LISTS --result_path "temp/disk_cosine" --num_nodes_to_cache "$DISK_NUM_NODES_TO_CACHE" -W "$DISK_BEAMWIDTH"
+  elif [[ "$DATA_TYPE" == "bf16" ]]; then
+    # bf16 disk: run both full-precision and disk-PQ(+reorder) to cover true bf16-on-SSD workflows.
+    # Note: mips is not part of bf16 disk perf since the CLI advertises mips as float-only.
+    DISK_BF16_PQ_DISK_BYTES=${DISK_BF16_PQ_DISK_BYTES:-8}
+
+    DISK_INDEX_L2_PREFIX_FULL="data/disk_index_l2_rand_${DATA_TYPE}_768D_1M_full_R${DISK_R}_L${DISK_LBUILD}_B${DISK_SEARCH_DRAM_BUDGET_GB}_M${DISK_BUILD_DRAM_BUDGET_GB}"
+    DISK_INDEX_COSINE_PREFIX_FULL="data/disk_index_cosine_rand_${DATA_TYPE}_768D_1M_full_R${DISK_R}_L${DISK_LBUILD}_B${DISK_SEARCH_DRAM_BUDGET_GB}_M${DISK_BUILD_DRAM_BUDGET_GB}"
+    DISK_INDEX_L2_PREFIX_PQ="data/disk_index_l2_rand_${DATA_TYPE}_768D_1M_pq${DISK_BF16_PQ_DISK_BYTES}_R${DISK_R}_L${DISK_LBUILD}_B${DISK_SEARCH_DRAM_BUDGET_GB}_M${DISK_BUILD_DRAM_BUDGET_GB}"
+    DISK_INDEX_COSINE_PREFIX_PQ="data/disk_index_cosine_rand_${DATA_TYPE}_768D_1M_pq${DISK_BF16_PQ_DISK_BYTES}_R${DISK_R}_L${DISK_LBUILD}_B${DISK_SEARCH_DRAM_BUDGET_GB}_M${DISK_BUILD_DRAM_BUDGET_GB}"
+
+    # Full-precision bf16 on disk.
+    json_time $BASE_PATH/build_disk_index --data_type "$DATA_TYPE" --dist_fn l2 --data_path "$BASE_FILE" --index_path_prefix "$DISK_INDEX_L2_PREFIX_FULL" -R "$DISK_R" -L "$DISK_LBUILD" -B "$DISK_SEARCH_DRAM_BUDGET_GB" -M "$DISK_BUILD_DRAM_BUDGET_GB" --PQ_disk_bytes 0 --build_PQ_bytes "$DISK_BUILD_PQ_BYTES"
+    json_time $BASE_PATH/search_disk_index --data_type "$DATA_TYPE" --dist_fn l2 --index_path_prefix "$DISK_INDEX_L2_PREFIX_FULL" --query_file "$QUERY_FILE" --gt_file "$GT_L2_FILE" -K "$DISK_RECALL_AT" -L $DISK_SEARCH_LISTS --result_path "temp/disk_bf16_l2_full" --num_nodes_to_cache "$DISK_NUM_NODES_TO_CACHE" -W "$DISK_BEAMWIDTH"
+
+    json_time $BASE_PATH/build_disk_index --data_type "$DATA_TYPE" --dist_fn cosine --data_path "$BASE_FILE" --index_path_prefix "$DISK_INDEX_COSINE_PREFIX_FULL" -R "$DISK_R" -L "$DISK_LBUILD" -B "$DISK_SEARCH_DRAM_BUDGET_GB" -M "$DISK_BUILD_DRAM_BUDGET_GB" --PQ_disk_bytes 0 --build_PQ_bytes "$DISK_BUILD_PQ_BYTES"
+    json_time $BASE_PATH/search_disk_index --data_type "$DATA_TYPE" --dist_fn cosine --index_path_prefix "$DISK_INDEX_COSINE_PREFIX_FULL" --query_file "$QUERY_FILE" --gt_file "$GT_COSINE_FILE" -K "$DISK_RECALL_AT" -L $DISK_SEARCH_LISTS --result_path "temp/disk_bf16_cosine_full" --num_nodes_to_cache "$DISK_NUM_NODES_TO_CACHE" -W "$DISK_BEAMWIDTH"
+
+    # Disk-PQ + reorder (true bf16 reorder vectors on SSD).
+    json_time $BASE_PATH/build_disk_index --data_type "$DATA_TYPE" --dist_fn l2 --data_path "$BASE_FILE" --index_path_prefix "$DISK_INDEX_L2_PREFIX_PQ" -R "$DISK_R" -L "$DISK_LBUILD" -B "$DISK_SEARCH_DRAM_BUDGET_GB" -M "$DISK_BUILD_DRAM_BUDGET_GB" --PQ_disk_bytes "$DISK_BF16_PQ_DISK_BYTES" --build_PQ_bytes "$DISK_BUILD_PQ_BYTES" --append_reorder_data
+    json_time $BASE_PATH/search_disk_index --data_type "$DATA_TYPE" --dist_fn l2 --index_path_prefix "$DISK_INDEX_L2_PREFIX_PQ" --query_file "$QUERY_FILE" --gt_file "$GT_L2_FILE" -K "$DISK_RECALL_AT" -L $DISK_SEARCH_LISTS --result_path "temp/disk_bf16_l2_pq" --num_nodes_to_cache "$DISK_NUM_NODES_TO_CACHE" -W "$DISK_BEAMWIDTH" --use_reorder_data
+
+    json_time $BASE_PATH/build_disk_index --data_type "$DATA_TYPE" --dist_fn cosine --data_path "$BASE_FILE" --index_path_prefix "$DISK_INDEX_COSINE_PREFIX_PQ" -R "$DISK_R" -L "$DISK_LBUILD" -B "$DISK_SEARCH_DRAM_BUDGET_GB" -M "$DISK_BUILD_DRAM_BUDGET_GB" --PQ_disk_bytes "$DISK_BF16_PQ_DISK_BYTES" --build_PQ_bytes "$DISK_BUILD_PQ_BYTES" --append_reorder_data
+    json_time $BASE_PATH/search_disk_index --data_type "$DATA_TYPE" --dist_fn cosine --index_path_prefix "$DISK_INDEX_COSINE_PREFIX_PQ" --query_file "$QUERY_FILE" --gt_file "$GT_COSINE_FILE" -K "$DISK_RECALL_AT" -L $DISK_SEARCH_LISTS --result_path "temp/disk_bf16_cosine_pq" --num_nodes_to_cache "$DISK_NUM_NODES_TO_CACHE" -W "$DISK_BEAMWIDTH" --use_reorder_data
   fi
 fi
 

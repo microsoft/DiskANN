@@ -869,10 +869,12 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
 
     size_t BLOCK_SIZE = 100000;
     size_t block_size = npts <= BLOCK_SIZE ? npts : BLOCK_SIZE;
-    std::unique_ptr<T[]> in_block_data = std::make_unique<T[]>(block_size * in_dims);
-    std::unique_ptr<float[]> out_block_data = std::make_unique<float[]>(block_size * out_dims);
+    using OutT = std::conditional_t<std::is_same<T, diskann::bfloat16>::value, diskann::bfloat16, float>;
 
-    std::memset(out_block_data.get(), 0, sizeof(float) * block_size * out_dims);
+    std::unique_ptr<T[]> in_block_data = std::make_unique<T[]>(block_size * in_dims);
+    std::unique_ptr<OutT[]> out_block_data = std::make_unique<OutT[]>(block_size * out_dims);
+
+    std::memset(out_block_data.get(), 0, sizeof(OutT) * block_size * out_dims);
     uint64_t num_blocks = DIV_ROUND_UP(npts, block_size);
 
     std::vector<float> norms(npts, 0);
@@ -906,16 +908,81 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
         {
             for (uint64_t j = 0; j < in_dims; j++)
             {
-                out_block_data[p * out_dims + j] = in_block_data[p * in_dims + j] / max_norm;
+                out_block_data[p * out_dims + j] = (OutT)((float)in_block_data[p * in_dims + j] / max_norm);
             }
             float res = 1 - (norms[start_id + p] / (max_norm * max_norm));
             res = res <= 0 ? 0 : std::sqrt(res);
-            out_block_data[p * out_dims + out_dims - 1] = res;
+            out_block_data[p * out_dims + out_dims - 1] = (OutT)res;
         }
-        out_writer.write((char *)out_block_data.get(), block_pts * out_dims * sizeof(float));
+        out_writer.write((char *)out_block_data.get(), block_pts * out_dims * sizeof(OutT));
     }
     out_writer.close();
     return max_norm;
+}
+
+// Normalize vectors (for cosine) while preserving element type.
+// - For float: writes float payload
+// - For bfloat16: writes bfloat16 payload
+template <typename T> void normalize_data_file_typed(const std::string &inFileName, const std::string &outFileName)
+{
+    std::ifstream readr(inFileName, std::ios::binary);
+    std::ofstream writr(outFileName, std::ios::binary);
+
+    uint32_t npts_u32 = 0, ndims_u32 = 0;
+    readr.read((char *)&npts_u32, sizeof(uint32_t));
+    readr.read((char *)&ndims_u32, sizeof(uint32_t));
+    if (!readr)
+    {
+        throw diskann::ANNException("Failed to read header from " + inFileName, -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
+    writr.write((char *)&npts_u32, sizeof(uint32_t));
+    writr.write((char *)&ndims_u32, sizeof(uint32_t));
+
+    const uint64_t npts = npts_u32;
+    const uint64_t ndims = ndims_u32;
+
+    const uint64_t BLOCK_SIZE = 131072;
+    const uint64_t block_size = npts <= BLOCK_SIZE ? npts : BLOCK_SIZE;
+    const uint64_t num_blocks = DIV_ROUND_UP(npts, block_size);
+
+    std::unique_ptr<T[]> buf = std::make_unique<T[]>(block_size * ndims);
+
+    for (uint64_t b = 0; b < num_blocks; b++)
+    {
+        const uint64_t start_id = b * block_size;
+        const uint64_t end_id = ((b + 1) * block_size < npts) ? ((b + 1) * block_size) : npts;
+        const uint64_t block_pts = end_id - start_id;
+
+        readr.read((char *)buf.get(), block_pts * ndims * sizeof(T));
+        if (!readr)
+        {
+            throw diskann::ANNException("Failed to read payload from " + inFileName, -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+#pragma omp parallel for schedule(static, 1024)
+        for (int64_t i = 0; i < (int64_t)block_pts; i++)
+        {
+            float norm_pt = std::numeric_limits<float>::epsilon();
+            const uint64_t base = (uint64_t)i * ndims;
+            for (uint64_t d = 0; d < ndims; d++)
+            {
+                const float v = (float)buf[base + d];
+                norm_pt += v * v;
+            }
+            norm_pt = std::sqrt(norm_pt);
+            for (uint64_t d = 0; d < ndims; d++)
+            {
+                buf[base + d] = (T)((float)buf[base + d] / norm_pt);
+            }
+        }
+
+        writr.write((char *)buf.get(), block_pts * ndims * sizeof(T));
+        if (!writr)
+        {
+            throw diskann::ANNException("Failed to write payload to " + outFileName, -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+    }
 }
 
 // plain saves data as npts X ndims array into filename

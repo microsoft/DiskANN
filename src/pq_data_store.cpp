@@ -5,6 +5,7 @@
 #include "pq_scratch.h"
 #include "utils.h"
 #include "distance.h"
+#include "bfloat16.h"
 
 namespace diskann
 {
@@ -256,5 +257,6 @@ template <typename data_t> location_t PQDataStore<data_t>::load_impl(AlignedFile
 template DISKANN_DLLEXPORT class PQDataStore<int8_t>;
 template DISKANN_DLLEXPORT class PQDataStore<float>;
 template DISKANN_DLLEXPORT class PQDataStore<uint8_t>;
+template DISKANN_DLLEXPORT class PQDataStore<diskann::bfloat16>;
 
 } // namespace diskann

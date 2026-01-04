@@ -22,9 +22,6 @@
 // sector # beyond the end of graph where data for id is present for reordering
 #define VECTOR_SECTOR_NO(id) (((uint64_t)(id)) / _nvecs_per_sector + _reorder_data_start_sector)
 
-// sector # beyond the end of graph where data for id is present for reordering
-#define VECTOR_SECTOR_OFFSET(id) ((((uint64_t)(id)) % _nvecs_per_sector) * _data_dim * sizeof(float))
-
 namespace diskann
 {
 
@@ -35,7 +32,7 @@ PQFlashIndex<T, LabelT>::PQFlashIndex(std::shared_ptr<AlignedFileReader> &fileRe
     diskann::Metric metric_to_invoke = m;
     if (m == diskann::Metric::COSINE || m == diskann::Metric::INNER_PRODUCT)
     {
-        if (std::is_floating_point<T>::value)
+        if (diskann::is_floating_point_like_v<T>)
         {
             diskann::cout << "Since data is floating point, we assume that it has been appropriately pre-processed "
                              "(normalization for cosine, and convert-to-l2 by adding extra dimension for MIPS). So we "
@@ -1031,6 +1028,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     READ_U32(index_metadata, nr);
     READ_U32(index_metadata, nc);
 
+    const uint64_t metadata_u64_count = nr;
+
     uint64_t disk_nnodes;
     uint64_t disk_ndims; // can be disk PQ dim if disk_PQ is set to true
     READ_U64(index_metadata, disk_nnodes);
@@ -1083,6 +1082,17 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         READ_U64(index_metadata, this->_reorder_data_start_sector);
         READ_U64(index_metadata, this->_ndims_reorder_vecs);
         READ_U64(index_metadata, this->_nvecs_per_sector);
+
+        // Newer indexes may also store the element size of reorder vectors.
+        // Older indexes always used float reorder data.
+        if (metadata_u64_count >= 13)
+        {
+            READ_U64(index_metadata, this->_reorder_bytes_per_element);
+        }
+        else
+        {
+            this->_reorder_bytes_per_element = sizeof(float);
+        }
     }
 
     diskann::cout << "Disk-Index File Meta-data: ";
@@ -1305,7 +1315,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             query_norm += query1[i] * query1[i];
         }
         if (metric == diskann::Metric::INNER_PRODUCT)
-            aligned_query_T[this->_data_dim - 1] = 0;
+            aligned_query_T[this->_data_dim - 1] = (T)0.0f;
 
         query_norm = std::sqrt(query_norm);
 
@@ -1656,8 +1666,10 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         {
             auto id = full_retset[i].id;
             // MULTISECTORFIX
-            auto location = (sector_scratch + i * defaults::SECTOR_LEN) + VECTOR_SECTOR_OFFSET(id);
-            full_retset[i].distance = _dist_cmp->compare(aligned_query_T, (T *)location, (uint32_t)this->_data_dim);
+            const uint64_t elem_offset =
+                ((uint64_t)id % _nvecs_per_sector) * _ndims_reorder_vecs * _reorder_bytes_per_element;
+            auto location = (sector_scratch + i * defaults::SECTOR_LEN) + elem_offset;
+            full_retset[i].distance = _dist_cmp->compare(aligned_query_T, (T *)location, (uint32_t)_ndims_reorder_vecs);
         }
 
         std::sort(full_retset.begin(), full_retset.end());
@@ -1786,8 +1798,10 @@ template <typename T, typename LabelT> std::uint64_t PQFlashIndex<T, LabelT>::ge
 template class PQFlashIndex<uint8_t>;
 template class PQFlashIndex<int8_t>;
 template class PQFlashIndex<float>;
+template class PQFlashIndex<diskann::bfloat16>;
 template class PQFlashIndex<uint8_t, uint16_t>;
 template class PQFlashIndex<int8_t, uint16_t>;
 template class PQFlashIndex<float, uint16_t>;
+template class PQFlashIndex<diskann::bfloat16, uint16_t>;
 
 } // namespace diskann

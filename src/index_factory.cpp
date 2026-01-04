@@ -45,11 +45,7 @@ void IndexFactory::check_config()
                            -1);
     }
 
-    // Minimal initial bf16 support: full-precision build/search only.
-    if (is_bf16 && _config->pq_dist_build)
-    {
-        throw ANNException("ERROR: pq_dist_build is not supported for bf16 yet. Use build_PQ_bytes=0.", -1);
-    }
+    // bf16 now supports pq_dist_build via PQDataStore<bfloat16> (internally converts queries to float).
 
     if (_config->tag_type != "int32" && _config->tag_type != "uint32" && _config->tag_type != "int64" &&
         _config->tag_type != "uint64")
@@ -134,23 +130,18 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
     std::shared_ptr<AbstractDataStore<data_type>> pq_data_store = nullptr;
 
-    if constexpr (std::is_same<data_type, diskann::bfloat16>::value)
+    if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
     {
-        // bf16: do not compile/instantiate PQ datastore path yet.
-        pq_data_store = data_store;
+        pq_data_store = construct_pq_datastore<data_type>(_config->data_strategy,
+                                                          num_points + _config->num_frozen_pts,
+                                                          dim,
+                                                          _config->metric,
+                                                          _config->num_pq_chunks,
+                                                          _config->use_opq);
     }
     else
     {
-        if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
-        {
-            pq_data_store =
-                construct_pq_datastore<data_type>(_config->data_strategy, num_points + _config->num_frozen_pts, dim,
-                                                  _config->metric, _config->num_pq_chunks, _config->use_opq);
-        }
-        else
-        {
-            pq_data_store = data_store;
-        }
+        pq_data_store = data_store;
     }
     size_t max_reserve_degree =
         (size_t)(defaults::GRAPH_SLACK_FACTOR * 1.05 *

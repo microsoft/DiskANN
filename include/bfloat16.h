@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 
 namespace diskann
 {
@@ -15,6 +16,12 @@ struct bfloat16
     explicit constexpr bfloat16(uint16_t v) : value(v)
     {
     }
+
+    // Convenience constructor for generic code that does bfloat16(f).
+    explicit bfloat16(float f) : value(from_float(f).value) {}
+
+    // Convenience constructor for generic code that does static_cast<bfloat16>(double_expr).
+    explicit bfloat16(double f) : value(from_float(static_cast<float>(f)).value) {}
 
     static inline bfloat16 from_float(float f)
     {
@@ -40,5 +47,17 @@ struct bfloat16
         return to_float();
     }
 };
+
+// bfloat16 is not a built-in floating point type, but for most DiskANN code
+// paths it should be treated as "floating-point-like".
+template <typename T> struct is_floating_point_like : std::is_floating_point<T>
+{
+};
+
+template <> struct is_floating_point_like<diskann::bfloat16> : std::true_type
+{
+};
+
+template <typename T> inline constexpr bool is_floating_point_like_v = is_floating_point_like<T>::value;
 
 } // namespace diskann

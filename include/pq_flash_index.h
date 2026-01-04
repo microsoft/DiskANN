@@ -157,6 +157,7 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _ndims_reorder_vecs = 0;
     uint64_t _reorder_data_start_sector = 0;
     uint64_t _nvecs_per_sector = 0;
+    uint64_t _reorder_bytes_per_element = sizeof(float);
 
     diskann::Metric metric = diskann::Metric::L2;
 

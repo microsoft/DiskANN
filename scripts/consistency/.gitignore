@@ -1,0 +1,14 @@
+# Consistency harness outputs (default OUT_DIR)
+_out/
+
+# Common temp outputs if OUT_DIR is set inside this folder
+out/
+output/
+outputs/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Editor/OS junk
+.DS_Store
