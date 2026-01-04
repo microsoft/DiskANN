@@ -58,6 +58,9 @@ float DistanceCosineBFloat16::compare(const bfloat16 *a, const bfloat16 *b, uint
     }
 
     float magA = 0.0f, magB = 0.0f, scalarProduct = 0.0f;
+#ifndef _WINDOWS
+#pragma omp simd reduction(+ : magA, magB, scalarProduct) aligned(a, b : 8)
+#endif
     for (uint32_t i = 0; i < length; i++)
     {
         const float da = a[i].to_float();
@@ -77,6 +80,9 @@ float DistanceInnerProductBFloat16::compare(const bfloat16 *a, const bfloat16 *b
     }
 
     float dot = 0.0f;
+#ifndef _WINDOWS
+#pragma omp simd reduction(+ : dot) aligned(a, b : 8)
+#endif
     for (uint32_t i = 0; i < length; i++)
     {
         dot += a[i].to_float() * b[i].to_float();

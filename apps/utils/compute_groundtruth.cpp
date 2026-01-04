@@ -498,7 +498,8 @@ int main(int argc, char **argv)
 
         desc.add_options()("help,h", "Print information on arguments");
 
-        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
+        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                   "data type <int8/uint8/float/bf16>");
         desc.add_options()("dist_fn", po::value<std::string>(&dist_fn)->required(),
                            "distance function <l2/mips/cosine>");
         desc.add_options()("base_file", po::value<std::string>(&base_file)->required(),
@@ -531,9 +532,10 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    if (data_type != std::string("float") && data_type != std::string("int8") && data_type != std::string("uint8"))
+    if (data_type != std::string("float") && data_type != std::string("bf16") && data_type != std::string("int8") &&
+        data_type != std::string("uint8"))
     {
-        std::cout << "Unsupported type. float, int8 and uint8 types are supported." << std::endl;
+        std::cout << "Unsupported type. float, bf16, int8 and uint8 types are supported." << std::endl;
         return -1;
     }
 
@@ -560,6 +562,8 @@ int main(int argc, char **argv)
     {
         if (data_type == std::string("float"))
             aux_main<float>(base_file, query_file, gt_file, K, metric, tags_file);
+        if (data_type == std::string("bf16"))
+            aux_main<diskann::bfloat16>(base_file, query_file, gt_file, K, metric, tags_file);
         if (data_type == std::string("int8"))
             aux_main<int8_t>(base_file, query_file, gt_file, K, metric, tags_file);
         if (data_type == std::string("uint8"))
