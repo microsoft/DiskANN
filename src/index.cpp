@@ -145,14 +145,27 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                                              (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
                                                       defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
-    if (_pq_dist)
+    if constexpr (std::is_same<T, diskann::bfloat16>::value)
     {
-        _pq_data_store = IndexFactory::construct_pq_datastore<T>(DataStoreStrategy::MEMORY, max_points + num_frozen_pts,
-                                                                 dim, m, num_pq_chunks, use_opq);
+        if (_pq_dist)
+        {
+            throw ANNException("ERROR: pq_dist_build is not supported for bf16 yet.", -1, __FUNCSIG__, __FILE__,
+                               __LINE__);
+        }
+        _pq_data_store = _data_store;
     }
     else
     {
-        _pq_data_store = _data_store;
+        if (_pq_dist)
+        {
+            _pq_data_store = IndexFactory::construct_pq_datastore<T>(DataStoreStrategy::MEMORY,
+                                                                     max_points + num_frozen_pts, dim, m,
+                                                                     num_pq_chunks, use_opq);
+        }
+        else
+        {
+            _pq_data_store = _data_store;
+        }
     }
 }
 
@@ -3203,6 +3216,13 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                                     __FILE__, __LINE__);
     }
 
+    if constexpr (std::is_same<T, diskann::bfloat16>::value)
+    {
+        throw diskann::ANNException(
+            "Optimized index layout is only supported for float (FAST_L2). For bf16, disable optimized layout.", -1,
+            __FUNCSIG__, __FILE__, __LINE__);
+    }
+
     float *cur_vec = new float[_data_store->get_aligned_dim()];
     std::memset(cur_vec, 0, _data_store->get_aligned_dim() * sizeof(float));
     _data_len = (_data_store->get_aligned_dim() + 1) * sizeof(float);
@@ -3253,6 +3273,13 @@ void Index<T, TagT, LabelT>::_search_with_optimized_layout(const DataType &query
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
 {
+    if constexpr (std::is_same<T, diskann::bfloat16>::value)
+    {
+        throw diskann::ANNException(
+            "search_with_optimized_layout is only supported for float (FAST_L2). For bf16, disable optimized layout.",
+            -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)(_data_store->get_dist_fn());
 
     NeighborPriorityQueue retset(L);
@@ -3340,15 +3367,19 @@ template <typename T, typename TagT, typename LabelT> const float Index<T, TagT,
 template DISKANN_DLLEXPORT class Index<float, int32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, int32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, int32_t, uint32_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, int32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, uint32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint32_t, uint32_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, uint32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, int64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, int64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, int64_t, uint32_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, int64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, uint64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t, uint32_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, uint64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, tag_uint128, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, tag_uint128, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, tag_uint128, uint32_t>;
@@ -3356,15 +3387,19 @@ template DISKANN_DLLEXPORT class Index<uint8_t, tag_uint128, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, int32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, int32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, int32_t, uint16_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, int32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<float, uint32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint32_t, uint16_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, uint32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<float, int64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, int64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, int64_t, uint16_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, int64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<float, uint64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t, uint16_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, uint64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<float, tag_uint128, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, tag_uint128, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, tag_uint128, uint16_t>;

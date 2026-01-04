@@ -48,6 +48,31 @@ sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel -
 mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j 
 ```
 
+### AVX-512 BF16 (optional acceleration)
+
+DiskANN includes an optional AVX-512 BF16-accelerated kernel for `bf16` distance computations.
+
+- Compile-time: the AVX-512 BF16 kernel is enabled only when the compiler supports the required flags; it is compiled for a single source file (`src/bf16_simd_kernels.cpp`) so the rest of the project is not forced to use AVX-512.
+- Runtime: `bf16` distance code automatically dispatches to the AVX-512 BF16 kernel only when the running CPU/OS supports AVX-512 BF16; otherwise it falls back to the scalar implementation.
+
+You can control this with the following CMake options (non-MSVC builds):
+
+- Default (try to enable when supported):
+    ```bash
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISKANN_AVX512BF16=ON
+    cmake --build build -j
+    ```
+- Force disable:
+    ```bash
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISKANN_AVX512BF16=OFF
+    cmake --build build -j
+    ```
+- Force enable (fail configure if compiler does not support AVX-512 BF16 flags):
+    ```bash
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISKANN_FORCE_AVX512BF16=ON
+    cmake --build build -j
+    ```
+
 ## Windows build:
 
 The Windows version has been tested with Enterprise editions of Visual Studio 2022, 2019 and 2017. It should work with the Community and Professional editions as well without any changes. 

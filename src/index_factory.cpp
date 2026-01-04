@@ -1,6 +1,8 @@
 #include "index_factory.h"
 #include "pq_l2_distance.h"
 
+#include "bfloat16.h"
+
 namespace diskann
 {
 
@@ -34,11 +36,19 @@ void IndexFactory::check_config()
                                -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    if (_config->data_type != "float" && _config->data_type != "uint8" && _config->data_type != "int8")
+    const bool is_bf16 = (_config->data_type == "bf16" || _config->data_type == "bfloat16");
+    if (_config->data_type != "float" && _config->data_type != "uint8" && _config->data_type != "int8" &&
+        !is_bf16)
     {
         throw ANNException("ERROR: invalid data type : + " + _config->data_type +
-                               " is not supported. please select from [float, int8, uint8]",
+                               " is not supported. please select from [float, int8, uint8, bf16]",
                            -1);
+    }
+
+    // Minimal initial bf16 support: full-precision build/search only.
+    if (is_bf16 && _config->pq_dist_build)
+    {
+        throw ANNException("ERROR: pq_dist_build is not supported for bf16 yet. Use build_PQ_bytes=0.", -1);
     }
 
     if (_config->tag_type != "int32" && _config->tag_type != "uint32" && _config->tag_type != "int64" &&
@@ -124,15 +134,23 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     auto data_store = construct_datastore<data_type>(_config->data_strategy, num_points, dim, _config->metric);
     std::shared_ptr<AbstractDataStore<data_type>> pq_data_store = nullptr;
 
-    if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
+    if constexpr (std::is_same<data_type, diskann::bfloat16>::value)
     {
-        pq_data_store =
-            construct_pq_datastore<data_type>(_config->data_strategy, num_points + _config->num_frozen_pts, dim,
-                                              _config->metric, _config->num_pq_chunks, _config->use_opq);
+        // bf16: do not compile/instantiate PQ datastore path yet.
+        pq_data_store = data_store;
     }
     else
     {
-        pq_data_store = data_store;
+        if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
+        {
+            pq_data_store =
+                construct_pq_datastore<data_type>(_config->data_strategy, num_points + _config->num_frozen_pts, dim,
+                                                  _config->metric, _config->num_pq_chunks, _config->use_opq);
+        }
+        else
+        {
+            pq_data_store = data_store;
+        }
     }
     size_t max_reserve_degree =
         (size_t)(defaults::GRAPH_SLACK_FACTOR * 1.05 *
@@ -161,8 +179,12 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &
     {
         return create_instance<int8_t>(tag_type, label_type);
     }
+    else if (data_type == std::string("bf16") || data_type == std::string("bfloat16"))
+    {
+        return create_instance<diskann::bfloat16>(tag_type, label_type);
+    }
     else
-        throw ANNException("Error: unsupported data_type please choose from [float/int8/uint8]", -1);
+        throw ANNException("Error: unsupported data_type please choose from [float/int8/uint8/bf16]", -1);
 }
 
 template <typename data_type>

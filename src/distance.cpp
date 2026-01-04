@@ -15,12 +15,75 @@
 #include <iostream>
 
 #include "distance.h"
+#include "bf16_simd_kernels.h"
 #include "utils.h"
 #include "logger.h"
 #include "ann_exception.h"
 
 namespace diskann
 {
+
+float DistanceL2BFloat16::compare(const bfloat16 *a, const bfloat16 *b, uint32_t size) const
+{
+    if (Avx512Bf16SupportedCPU && avx512bf16_kernels_compiled())
+    {
+        const float aa = bf16_dot_f32_accum(a, a, size);
+        const float bb = bf16_dot_f32_accum(b, b, size);
+        const float ab = bf16_dot_f32_accum(a, b, size);
+        return aa + bb - 2.0f * ab;
+    }
+
+    float result = 0.0f;
+#ifndef _WINDOWS
+#pragma omp simd reduction(+ : result) aligned(a, b : 8)
+#endif
+    for (int32_t i = 0; i < (int32_t)size; i++)
+    {
+        const float da = a[i].to_float();
+        const float db = b[i].to_float();
+        const float diff = da - db;
+        result += diff * diff;
+    }
+    return result;
+}
+
+float DistanceCosineBFloat16::compare(const bfloat16 *a, const bfloat16 *b, uint32_t length) const
+{
+    if (Avx512Bf16SupportedCPU && avx512bf16_kernels_compiled())
+    {
+        const float magA = bf16_dot_f32_accum(a, a, length);
+        const float magB = bf16_dot_f32_accum(b, b, length);
+        const float scalarProduct = bf16_dot_f32_accum(a, b, length);
+        return 1.0f - (scalarProduct / (sqrt(magA) * sqrt(magB)));
+    }
+
+    float magA = 0.0f, magB = 0.0f, scalarProduct = 0.0f;
+    for (uint32_t i = 0; i < length; i++)
+    {
+        const float da = a[i].to_float();
+        const float db = b[i].to_float();
+        magA += da * da;
+        magB += db * db;
+        scalarProduct += da * db;
+    }
+    return 1.0f - (scalarProduct / (sqrt(magA) * sqrt(magB)));
+}
+
+float DistanceInnerProductBFloat16::compare(const bfloat16 *a, const bfloat16 *b, uint32_t length) const
+{
+    if (Avx512Bf16SupportedCPU && avx512bf16_kernels_compiled())
+    {
+        return -bf16_dot_f32_accum(a, b, length);
+    }
+
+    float dot = 0.0f;
+    for (uint32_t i = 0; i < length; i++)
+    {
+        dot += a[i].to_float() * b[i].to_float();
+    }
+    // Match DistanceInnerProduct semantics: return negative inner product as a distance.
+    return -dot;
+}
 
 //
 // Base Class Implementatons
@@ -714,6 +777,32 @@ template <> diskann::Distance<uint8_t> *get_distance_function(diskann::Metric m)
     }
 }
 
+template <> diskann::Distance<bfloat16> *get_distance_function(diskann::Metric m)
+{
+    if (m == diskann::Metric::L2)
+    {
+        diskann::cout << "L2: Using bf16 distance computation DistanceL2BFloat16" << std::endl;
+        return new diskann::DistanceL2BFloat16();
+    }
+    else if (m == diskann::Metric::COSINE)
+    {
+        diskann::cout << "Cosine: Using bf16 distance computation DistanceCosineBFloat16" << std::endl;
+        return new diskann::DistanceCosineBFloat16();
+    }
+    else if (m == diskann::Metric::INNER_PRODUCT)
+    {
+        diskann::cout << "Inner product: Using bf16 distance computation DistanceInnerProductBFloat16" << std::endl;
+        return new diskann::DistanceInnerProductBFloat16();
+    }
+    else
+    {
+        std::stringstream stream;
+        stream << "Only L2, cosine, and inner product supported for bf16 vectors." << std::endl;
+        diskann::cerr << stream.str() << std::endl;
+        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+}
+
 template DISKANN_DLLEXPORT class DistanceInnerProduct<float>;
 template DISKANN_DLLEXPORT class DistanceInnerProduct<int8_t>;
 template DISKANN_DLLEXPORT class DistanceInnerProduct<uint8_t>;
@@ -729,5 +818,6 @@ template DISKANN_DLLEXPORT class SlowDistanceL2<uint8_t>;
 template DISKANN_DLLEXPORT Distance<float> *get_distance_function(Metric m);
 template DISKANN_DLLEXPORT Distance<int8_t> *get_distance_function(Metric m);
 template DISKANN_DLLEXPORT Distance<uint8_t> *get_distance_function(Metric m);
+template DISKANN_DLLEXPORT Distance<bfloat16> *get_distance_function(Metric m);
 
 } // namespace diskann

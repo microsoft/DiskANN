@@ -27,6 +27,7 @@ typedef int FileHandle;
 #include "windows_customizations.h"
 #include "tsl/robin_set.h"
 #include "types.h"
+#include "bfloat16.h"
 #include "tag_uint128.h"
 #include <any>
 
@@ -1161,6 +1162,10 @@ template <> inline const char *diskann_type_to_name<int8_t>()
 {
     return "int8";
 }
+template <> inline const char *diskann_type_to_name<diskann::bfloat16>()
+{
+    return "bf16";
+}
 template <> inline const char *diskann_type_to_name<uint16_t>()
 {
     return "uint16";
@@ -1189,9 +1194,6 @@ template <> inline const char *diskann_type_to_name<int64_t>()
 #ifdef _WINDOWS
 #include <intrin.h>
 #include <Psapi.h>
-
-extern bool AvxSupportedCPU;
-extern bool Avx2SupportedCPU;
 
 inline size_t getMemoryUsage()
 {
@@ -1250,3 +1252,4 @@ inline size_t getMemoryUsage()
 
 extern bool AvxSupportedCPU;
 extern bool Avx2SupportedCPU;
+extern bool Avx512Bf16SupportedCPU;
