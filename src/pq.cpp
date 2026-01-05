@@ -1082,12 +1082,10 @@ void generate_disk_quantized_data(const std::string &data_file_to_use, const std
     std::cout << "Compressing base for disk-PQ into " << disk_pq_dims << " chunks " << std::endl;
     generate_pq_pivots(train_data, train_size, (uint32_t)train_dim, 256, (uint32_t)disk_pq_dims, NUM_KMEANS_REPS_PQ,
                        disk_pq_pivots_path, false);
-    if (compareMetric == diskann::Metric::INNER_PRODUCT)
-        generate_pq_data_from_pivots<float>(data_file_to_use, 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
-                                            disk_pq_compressed_vectors_path);
-    else
-        generate_pq_data_from_pivots<T>(data_file_to_use, 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
-                                        disk_pq_compressed_vectors_path);
+    // For INNER_PRODUCT we may preprocess the base vectors into a temp file. That temp file must be
+    // read using the same element type that was written (T). Historically this was always float.
+    generate_pq_data_from_pivots<T>(data_file_to_use, 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
+                                    disk_pq_compressed_vectors_path);
 
     delete[] train_data;
 }

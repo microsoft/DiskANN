@@ -869,7 +869,11 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
 
     size_t BLOCK_SIZE = 100000;
     size_t block_size = npts <= BLOCK_SIZE ? npts : BLOCK_SIZE;
-    using OutT = std::conditional_t<std::is_same<T, diskann::bfloat16>::value, diskann::bfloat16, float>;
+    // IMPORTANT: output must preserve the same element type as the input.
+    // Disk index build/search reads the preprocessed file using the same T,
+    // so writing float32 here would corrupt bf16/int8 paths and can cause NaNs
+    // downstream (e.g., kmeans++ hanging in pivot selection).
+    using OutT = T;
 
     std::unique_ptr<T[]> in_block_data = std::make_unique<T[]>(block_size * in_dims);
     std::unique_ptr<OutT[]> out_block_data = std::make_unique<OutT[]>(block_size * out_dims);
@@ -889,7 +893,8 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
         {
             for (uint64_t j = 0; j < in_dims; j++)
             {
-                norms[start_id + p] += in_block_data[p * in_dims + j] * in_block_data[p * in_dims + j];
+                const float v = (float)in_block_data[p * in_dims + j];
+                norms[start_id + p] += v * v;
             }
             max_norm = max_norm > norms[start_id + p] ? max_norm : norms[start_id + p];
         }
@@ -908,7 +913,8 @@ template <typename T> float prepare_base_for_inner_products(const std::string in
         {
             for (uint64_t j = 0; j < in_dims; j++)
             {
-                out_block_data[p * out_dims + j] = (OutT)((float)in_block_data[p * in_dims + j] / max_norm);
+                const float v = (float)in_block_data[p * in_dims + j];
+                out_block_data[p * out_dims + j] = (OutT)(v / max_norm);
             }
             float res = 1 - (norms[start_id + p] / (max_norm * max_norm));
             res = res <= 0 ? 0 : std::sqrt(res);
