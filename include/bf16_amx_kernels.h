@@ -24,4 +24,10 @@ float bf16_dot_f32_accum_amx(const bfloat16 *a, const bfloat16 *b, uint32_t leng
 void bf16_dot_f32_accum_amx_batch(const bfloat16 *base, const bfloat16 *query, uint32_t n_vecs, uint32_t dim,
 								 float *out);
 
+// Matrix of dot products: out[i * n_queries + j] = dot(base[i], queries[j]).
+// base is row-major [n_base x dim], queries is row-major [n_queries x dim].
+// If AMX BF16 is not available at runtime, this falls back to a scalar implementation.
+void bf16_dot_f32_accum_amx_matmul(const bfloat16 *base, const bfloat16 *queries, uint32_t n_base, uint32_t n_queries,
+                                  uint32_t dim, float *out);
+
 } // namespace diskann
