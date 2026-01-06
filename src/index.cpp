@@ -3,6 +3,7 @@
 
 #include <omp.h>
 
+#include <cmath>
 #include <type_traits>
 
 #include "boost/dynamic_bitset.hpp"
@@ -22,6 +23,7 @@
 #endif
 
 #include "index.h"
+#include "bf16_amx_kernels.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
@@ -1102,6 +1104,65 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
+    // AMX-only fast path for bf16 graph-build pruning:
+    // precompute an MxN matrix of pairwise dots for the candidate pool and use it
+    // to answer get_distance(iter2, iter) in O(1) during the nested loop.
+    // Non-AMX / non-bf16 / unsupported datastores fall back to the original logic.
+    const bool use_amx_mxn = [&]() {
+        if constexpr (!std::is_same_v<T, diskann::bfloat16>)
+        {
+            return false;
+        }
+        if (!((_dist_metric == diskann::Metric::L2) || (_dist_metric == diskann::Metric::COSINE)))
+        {
+            return false;
+        }
+        if (!(amxbf16_kernels_compiled() && amxbf16_runtime_available()))
+        {
+            return false;
+        }
+        if (_data_store == nullptr)
+        {
+            return false;
+        }
+        const T *raw = _data_store->get_raw_data();
+        return raw != nullptr;
+    }();
+
+    std::vector<uint32_t> candidate_ids;
+    std::vector<float> candidate_norms;
+    std::vector<float> candidate_dots;
+    size_t candidate_count = 0;
+    size_t aligned_dim = 0;
+
+    if (use_amx_mxn)
+    {
+        candidate_count = pool.size();
+        aligned_dim = _data_store->get_aligned_dim();
+        const diskann::bfloat16 *raw = reinterpret_cast<const diskann::bfloat16 *>(_data_store->get_raw_data());
+
+        candidate_ids.resize(candidate_count);
+        candidate_norms.resize(candidate_count);
+
+        for (size_t i = 0; i < candidate_count; ++i)
+        {
+            candidate_ids[i] = pool[i].id;
+            const diskann::bfloat16 *vec = raw + (static_cast<size_t>(candidate_ids[i]) * aligned_dim);
+            float norm = 0.0f;
+            for (size_t d = 0; d < aligned_dim; ++d)
+            {
+                const float v = vec[d].to_float();
+                norm += v * v;
+            }
+            candidate_norms[i] = norm;
+        }
+
+        candidate_dots.resize(candidate_count * candidate_count);
+        bf16_dot_f32_accum_amx_matmul_gather(raw, (uint32_t)aligned_dim, candidate_ids.data(), (uint32_t)candidate_count,
+                                             candidate_ids.data(), (uint32_t)candidate_count, (uint32_t)aligned_dim,
+                                             candidate_dots.data());
+    }
+
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree)
     {
@@ -1155,7 +1216,30 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 if (!prune_allowed)
                     continue;
 
-                float djk = _data_store->get_distance(iter2->id, iter->id);
+                float djk = 0.0f;
+                if (use_amx_mxn)
+                {
+                    const size_t i = (size_t)(iter - pool.begin());
+                    const size_t j = (size_t)(iter2 - pool.begin());
+                    const float dot = candidate_dots[j * candidate_count + i];
+
+                    if (_dist_metric == diskann::Metric::L2)
+                    {
+                        djk = candidate_norms[i] + candidate_norms[j] - 2.0f * dot;
+                        if (djk < 0.0f)
+                            djk = 0.0f;
+                    }
+                    else
+                    {
+                        const float denom = std::sqrt(candidate_norms[i]) * std::sqrt(candidate_norms[j]);
+                        const float cos_sim = (denom > 0.0f) ? (dot / denom) : 0.0f;
+                        djk = 1.0f - cos_sim;
+                    }
+                }
+                else
+                {
+                    djk = _data_store->get_distance(iter2->id, iter->id);
+                }
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()

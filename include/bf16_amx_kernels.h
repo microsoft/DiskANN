@@ -30,4 +30,12 @@ void bf16_dot_f32_accum_amx_batch(const bfloat16 *base, const bfloat16 *query, u
 void bf16_dot_f32_accum_amx_matmul(const bfloat16 *base, const bfloat16 *queries, uint32_t n_base, uint32_t n_queries,
                                   uint32_t dim, float *out);
 
+// Matrix of dot products over gathered rows:
+// out[i * n_queries + j] = dot(data[base_ids[i]], data[query_ids[j]])
+// where each vector is length `dim` and consecutive vectors are `data_stride` elements apart.
+// If AMX BF16 is not available at runtime, this falls back to a scalar implementation.
+void bf16_dot_f32_accum_amx_matmul_gather(const bfloat16 *data, uint32_t data_stride, const uint32_t *base_ids,
+										 uint32_t n_base, const uint32_t *query_ids, uint32_t n_queries, uint32_t dim,
+										 float *out);
+
 } // namespace diskann

@@ -109,6 +109,12 @@ template <typename data_t> class AbstractDataStore
     // how to align the query vector in a consistent manner
     virtual size_t get_alignment_factor() const = 0;
 
+    // Optional: return a direct pointer to the underlying aligned, row-major data buffer.
+    // This is used for performance-sensitive paths (e.g., graph-build pruning) where
+    // callers can batch computations without repeatedly calling get_vector().
+    // Implementations that do not keep full-precision vectors in memory should return nullptr.
+    virtual const data_t *get_raw_data() const { return nullptr; }
+
   protected:
     // Expand the datastore to new_num_points. Returns the new capacity created,
     // which should be == new_num_points in the normal case. Implementers can also

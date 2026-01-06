@@ -413,4 +413,144 @@ void bf16_dot_f32_accum_amx_matmul(const bfloat16 *base,
 #endif
 }
 
+void bf16_dot_f32_accum_amx_matmul_gather(const bfloat16 *data,
+                                         uint32_t data_stride,
+                                         const uint32_t *base_ids,
+                                         uint32_t n_base,
+                                         const uint32_t *query_ids,
+                                         uint32_t n_queries,
+                                         uint32_t dim,
+                                         float *out)
+{
+    if (n_base == 0 || n_queries == 0)
+        return;
+
+#if defined(__AMX_TILE__) && defined(__AMX_BF16__)
+    if (!amxbf16_runtime_available() || dim < 256)
+    {
+        for (uint32_t i = 0; i < n_base; ++i)
+        {
+            const bfloat16 *a = data + (size_t)base_ids[i] * (size_t)data_stride;
+            for (uint32_t j = 0; j < n_queries; ++j)
+            {
+                const bfloat16 *b = data + (size_t)query_ids[j] * (size_t)data_stride;
+                out[i * n_queries + j] = bf16_dot_scalar(a, b, dim);
+            }
+        }
+        return;
+    }
+
+    constexpr uint32_t kStep = 32;
+    const uint32_t blockCount = dim / kStep;
+    const uint32_t tailCount = dim % kStep;
+
+    constexpr uint32_t kMaxMb = 16;
+    constexpr uint32_t kMaxNb = 16;
+
+    alignas(64) static thread_local unsigned char cfg[64];
+    static thread_local int prevMb = -1;
+    static thread_local int prevNb = -1;
+
+    alignas(64) static thread_local uint8_t apack[16 * 64];
+    alignas(64) static thread_local uint8_t bpack[16 * 64];
+    alignas(64) static thread_local float cbuf[16 * 16];
+
+    for (uint32_t i0 = 0; i0 < n_base; i0 += kMaxMb)
+    {
+        const uint32_t Mb = std::min<uint32_t>(kMaxMb, n_base - i0);
+        const int A_rows = static_cast<int>(Mb);
+        const int A_colsb = static_cast<int>(kStep * sizeof(bfloat16)); // 64
+
+        for (uint32_t j0 = 0; j0 < n_queries; j0 += kMaxNb)
+        {
+            const uint32_t Nb = std::min<uint32_t>(kMaxNb, n_queries - j0);
+            const int N = static_cast<int>(Nb);
+            const int B_colsb = N * 4;
+            const int B_rows = static_cast<int>(kStep / 2); // 16
+            const int C_rows = A_rows;
+            const int C_colsb = N * 4;
+
+            if (prevMb != A_rows || prevNb != N)
+            {
+                std::memset(cfg, 0, sizeof(cfg));
+                cfg[0] = 1;
+                // tile0: A
+                cfg[16] = (unsigned char)A_colsb;
+                cfg[48] = (unsigned char)A_rows;
+                // tile1: B
+                cfg[18] = (unsigned char)B_colsb;
+                cfg[49] = (unsigned char)B_rows;
+                // tile2: C
+                cfg[20] = (unsigned char)C_colsb;
+                cfg[50] = (unsigned char)C_rows;
+
+                _tile_loadconfig((void *)cfg);
+                prevMb = A_rows;
+                prevNb = N;
+            }
+
+            _tile_zero(2);
+
+            for (uint32_t blk = 0; blk < blockCount; ++blk)
+            {
+                const uint32_t elem_off = blk * kStep;
+
+                // Pack A rows for this block: apack[row][0..63] = 32 bf16
+                for (uint32_t r = 0; r < Mb; ++r)
+                {
+                    const bfloat16 *src = data + (size_t)base_ids[i0 + r] * (size_t)data_stride + elem_off;
+                    std::memcpy(apack + r * 64, src, 64);
+                }
+
+                // Pack B for this block.
+                for (uint32_t r = 0; r < 16; ++r)
+                {
+                    uint8_t *dst_row = bpack + r * 64;
+                    for (uint32_t q = 0; q < Nb; ++q)
+                    {
+                        const bfloat16 *srcq =
+                            data + (size_t)query_ids[j0 + q] * (size_t)data_stride + elem_off + (r * 2);
+                        const uint16_t *src16 = reinterpret_cast<const uint16_t *>(srcq);
+                        std::memcpy(dst_row + q * 4, src16, 4);
+                    }
+                }
+
+                _tile_loadd(0, (const void *)apack, 64);
+                _tile_loadd(1, (const void *)bpack, 64);
+                _tile_dpbf16ps(2, 0, 1);
+            }
+
+            _tile_stored(2, (void *)cbuf, (int)(Nb * sizeof(float)));
+
+            for (uint32_t ii = 0; ii < Mb; ++ii)
+            {
+                const bfloat16 *a_full = data + (size_t)base_ids[i0 + ii] * (size_t)data_stride;
+                for (uint32_t jj = 0; jj < Nb; ++jj)
+                {
+                    float v = cbuf[ii * Nb + jj];
+                    if (tailCount != 0)
+                    {
+                        const uint32_t base_elem = blockCount * kStep;
+                        const bfloat16 *b_full = data + (size_t)query_ids[j0 + jj] * (size_t)data_stride;
+                        v += bf16_dot_scalar(a_full + base_elem, b_full + base_elem, tailCount);
+                    }
+                    out[(i0 + ii) * n_queries + (j0 + jj)] = v;
+                }
+            }
+        }
+    }
+#else
+    (void)data_stride;
+    for (uint32_t i = 0; i < n_base; ++i)
+    {
+        const bfloat16 *a = data + (size_t)base_ids[i] * (size_t)data_stride;
+        for (uint32_t j = 0; j < n_queries; ++j)
+        {
+            const bfloat16 *b = data + (size_t)query_ids[j] * (size_t)data_stride;
+            out[i * n_queries + j] = bf16_dot_scalar(a, b, dim);
+        }
+    }
+#endif
+}
+
 } // namespace diskann
