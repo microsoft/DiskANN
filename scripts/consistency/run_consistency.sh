@@ -5,8 +5,17 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 cd "$REPO_ROOT"
 
-if [ -d "build/apps" ]; then
-  BASE_PATH="build/apps"
+# if [ -d "build/apps" ]; then
+#   BASE_PATH="build/apps"
+# elif [ -d "build/tests" ]; then
+#   BASE_PATH="build/tests"
+# else
+#   echo "Error: could not find build outputs under build/apps or build/tests" >&2
+#   exit 2
+# fi
+
+if [ -d "build-amx/apps" ]; then
+  BASE_PATH="build-amx/apps"
 elif [ -d "build/tests" ]; then
   BASE_PATH="build/tests"
 else

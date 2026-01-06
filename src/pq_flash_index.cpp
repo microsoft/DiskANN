@@ -9,6 +9,16 @@
 #include "pq_flash_index.h"
 #include "cosine_similarity.h"
 
+#include "bf16_amx_kernels.h"
+
+#include <mutex>
+
+namespace
+{
+std::once_flag g_reorder_amx_msg_once;
+std::once_flag g_reorder_std_msg_once;
+} // namespace
+
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
 #else
@@ -1662,14 +1672,64 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             stats->io_us += io_timer.elapsed();
         }
 
-        for (size_t i = 0; i < full_retset.size(); ++i)
+        // Fast-path for bf16 + INNER_PRODUCT: compute negative dot as distance in batch.
+        // This matches the rest of the MIPS code path which treats "distance" as -inner_product.
+        if (metric == diskann::Metric::INNER_PRODUCT && std::is_same<T, diskann::bfloat16>::value &&
+            _reorder_bytes_per_element == sizeof(diskann::bfloat16) && amxbf16_kernels_compiled() &&
+            amxbf16_runtime_available())
         {
-            auto id = full_retset[i].id;
-            // MULTISECTORFIX
-            const uint64_t elem_offset =
-                ((uint64_t)id % _nvecs_per_sector) * _ndims_reorder_vecs * _reorder_bytes_per_element;
-            auto location = (sector_scratch + i * defaults::SECTOR_LEN) + elem_offset;
-            full_retset[i].distance = _dist_cmp->compare(aligned_query_T, (T *)location, (uint32_t)_ndims_reorder_vecs);
+            const uint32_t dim = static_cast<uint32_t>(_ndims_reorder_vecs);
+            constexpr uint32_t kBatch = 16;
+
+            std::call_once(g_reorder_amx_msg_once, [&]() {
+                printf("Using AMX bf16 batched dot product for reordering distance computation (%zu vectors).\n",
+                       full_retset.size());
+                fflush(stdout);
+            });
+
+            std::vector<diskann::bfloat16> base_batch;
+            base_batch.resize(kBatch * dim);
+            alignas(64) float dots[kBatch];
+
+            for (size_t i = 0; i < full_retset.size(); i += kBatch)
+            {
+                const uint32_t cur = static_cast<uint32_t>(std::min<size_t>(kBatch, full_retset.size() - i));
+
+                for (uint32_t j = 0; j < cur; ++j)
+                {
+                    auto id = full_retset[i + j].id;
+                    const uint64_t elem_offset =
+                        ((uint64_t)id % _nvecs_per_sector) * _ndims_reorder_vecs * _reorder_bytes_per_element;
+                    auto location = (sector_scratch + (i + j) * defaults::SECTOR_LEN) + elem_offset;
+                    std::memcpy(base_batch.data() + j * dim, location, static_cast<size_t>(dim) * sizeof(diskann::bfloat16));
+                }
+
+                bf16_dot_f32_accum_amx_batch(base_batch.data(), (const diskann::bfloat16 *)aligned_query_T, cur, dim,
+                                             dots);
+
+                for (uint32_t j = 0; j < cur; ++j)
+                {
+                    full_retset[i + j].distance = -dots[j];
+                }
+            }
+        }
+        else
+        {
+            std::call_once(g_reorder_std_msg_once, [&]() {
+                printf("Using standard distance computation for reordering distance(%zu vectors).\n",
+                       full_retset.size());
+                fflush(stdout);
+            });
+            for (size_t i = 0; i < full_retset.size(); ++i)
+            {
+                auto id = full_retset[i].id;
+                // MULTISECTORFIX
+                const uint64_t elem_offset =
+                    ((uint64_t)id % _nvecs_per_sector) * _ndims_reorder_vecs * _reorder_bytes_per_element;
+                auto location = (sector_scratch + i * defaults::SECTOR_LEN) + elem_offset;
+                full_retset[i].distance =
+                    _dist_cmp->compare(aligned_query_T, (T *)location, (uint32_t)_ndims_reorder_vecs);
+            }
         }
 
         std::sort(full_retset.begin(), full_retset.end());

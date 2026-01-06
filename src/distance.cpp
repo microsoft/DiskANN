@@ -16,6 +16,7 @@
 
 #include "distance.h"
 #include "bf16_simd_kernels.h"
+#include "bf16_amx_kernels.h"
 #include "utils.h"
 #include "logger.h"
 #include "ann_exception.h"
@@ -74,6 +75,11 @@ float DistanceCosineBFloat16::compare(const bfloat16 *a, const bfloat16 *b, uint
 
 float DistanceInnerProductBFloat16::compare(const bfloat16 *a, const bfloat16 *b, uint32_t length) const
 {
+    if (amxbf16_kernels_compiled() && amxbf16_runtime_available())
+    {
+        return -bf16_dot_f32_accum_amx(a, b, length);
+    }
+
     if (Avx512Bf16SupportedCPU && avx512bf16_kernels_compiled())
     {
         return -bf16_dot_f32_accum(a, b, length);

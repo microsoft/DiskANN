@@ -73,6 +73,53 @@ You can control this with the following CMake options (non-MSVC builds):
     cmake --build build -j
     ```
 
+### AMX BF16 (optional acceleration)
+
+DiskANN includes an optional AMX BF16-accelerated kernel for `bf16` inner-product computations.
+
+- Compile-time: the AMX BF16 kernel is enabled only when the compiler supports the required flags; it is compiled for a single source file (`src/bf16_amx_kernels.cpp`) so the rest of the project is not forced to use AMX.
+- Runtime: `bf16` distance code automatically dispatches to the AMX kernel only when the running CPU/OS supports AMX and the current thread is permitted to use AMX tile state (Linux `arch_prctl` request). If unavailable, it falls back to AVX-512 BF16 (if enabled) and then scalar.
+
+You can control this with the following CMake options (non-MSVC builds):
+
+- Default (try to enable when supported):
+    ```bash
+    cmake -S . -B build-amx -DCMAKE_BUILD_TYPE=Release -DDISKANN_AMXBF16=ON
+    cmake --build build-amx -j
+    ```
+- Force disable:
+    ```bash
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISKANN_AMXBF16=OFF
+    cmake --build build -j
+    ```
+- Force enable (fail configure if compiler does not support AMX flags):
+    ```bash
+    cmake -S . -B build-amx -DCMAKE_BUILD_TYPE=Release -DDISKANN_FORCE_AMXBF16=ON
+    cmake --build build-amx -j
+    ```
+
+### AVX-512 vs AMX (build one or the other)
+
+If you want to do a strict A/B build where only one ISA path is compiled/used, configure two separate build directories.
+
+- AVX-512 BF16 only (no AMX codegen):
+        ```bash
+        cmake -S . -B build-avx512 -DCMAKE_BUILD_TYPE=Release \
+            -DDISKANN_FORCE_AVX512BF16=ON \
+            -DDISKANN_AMXBF16=OFF
+        cmake --build build-avx512 -j
+        ```
+
+- AMX BF16 only (no AVX-512 BF16 code path):
+        ```bash
+        cmake -S . -B build-amx -DCMAKE_BUILD_TYPE=Release \
+            -DDISKANN_FORCE_AMXBF16=ON \
+            -DDISKANN_AVX512BF16=OFF
+        cmake --build build-amx -j
+        ```
+
+Note: some toolchains/build scripts add global `-march=native`. When AMX is disabled (`-DDISKANN_AMXBF16=OFF`), DiskANN explicitly compiles the AMX translation unit with `-mno-amx-tile`/`-mno-amx-bf16` (when supported) to avoid accidentally emitting AMX instructions.
+
 ## Windows build:
 
 The Windows version has been tested with Enterprise editions of Visual Studio 2022, 2019 and 2017. It should work with the Community and Professional editions as well without any changes. 
