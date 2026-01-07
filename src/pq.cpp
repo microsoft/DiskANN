@@ -259,6 +259,7 @@ void FixedChunkPQTable::populate_chunk_inner_products(const float *query_vec, fl
 {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
+
     for (size_t chunk = 0; chunk < n_chunks; chunk++)
     {
         // sum (q-c)^2 for the dimensions associated with this chunk
