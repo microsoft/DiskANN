@@ -403,7 +403,7 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     float _attr_dist_threshold = 0.2f;
     uint32_t _max_L_per_seller = 0;
     std::vector<uint32_t> _location_to_seller;
-    std::vector<std::vector<std::string>> _location_to_attributes;
+    std::vector<std::vector<std::uint32_t>> _location_to_attributes;
     uint32_t _num_unique_sellers = 0;
     std::string _seller_file;
     std::string _attribute_file;

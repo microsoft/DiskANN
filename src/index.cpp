@@ -1228,38 +1228,18 @@ void Index<T, TagT, LabelT>::prune_search_result(int location, std::vector<uint3
     assert(!pruned_list.empty());
 }
 
-
-// #include <vector>
-// #include <algorithm>
-// #include <execution>
-
-
-// double attribute_distance(std::vector<std::string> &a, std::vector <std::string> &b)
-// {
-//     std::vector<int> result(a.size());
-    
-//     std::transform(a.begin(), a.end(), b.begin(), result.begin(),
-//                    [](std::string x, std::string  y) { return x == y ? 1 : 0; });
-
-//     int sum = std::accumulate(result.begin(), result.end(), 0);
-//     double distance = sum * 1.0 / result.size();
-//     return 1 - distance;
-// }
-double attribute_distance(const std::vector<std::string> &a, const std::vector<std::string> &b)
+double attribute_distance(const std::vector<std::uint32_t> &a, const std::vector<std::uint32_t> &b)
 {
     // Use the smaller size to avoid out-of-bounds issues
     size_t n = std::min(a.size(), b.size());
     if(n == 0)
-        return 0.0; // or maybe 1.0 if you want full "distance" when both are empty
-
+        return 0.0; 
     int matches = 0, counts = 0;
-    std::string x = "", y = "";
     
     for(size_t i = 0; i < n; ++i){
         
-        // x = x + "$" + (a[i] == "" ? "NA" : a[i]);
-        // y = y + "$" + (b[i] == "" ? "NA" : b[i]);
-        if(a[i] == "" || b[i] == "")
+    
+        if(a[i] == 0 || b[i] == 0)
             continue;
         counts++;
         if(a[i] == b[i]){
@@ -1269,7 +1249,7 @@ double attribute_distance(const std::vector<std::string> &a, const std::vector<s
         }
     }
 
-    double similarity = static_cast<double>(matches) / counts; // +4 to account for the extra weight given to the second attribute
+    double similarity = static_cast<double>(matches) / counts; 
     return 1.0 - similarity;
 }
 
@@ -2318,14 +2298,14 @@ void Index<T, TagT, LabelT>::parse_attribute_file(const std::string &label_file,
         std::istringstream iss(line);
         getline(iss, token, '\t');
         std::istringstream new_iss(token);
-        std::vector<std::string> attributes;
+        std::vector<std::uint32_t> attributes;
 
         while (getline(new_iss, token, ','))
         {
             token.erase(std::remove(token.begin(), token.end(), '\n'), token.end());
             token.erase(std::remove(token.begin(), token.end(), '\r'), token.end());
-            //uint32_t token_as_num = (uint32_t)std::stoul(token);
-            attributes.push_back(token);
+            uint32_t token_as_num = (uint32_t)std::stoul(token);
+            attributes.push_back(token_as_num);
         }
 
         _location_to_attributes.push_back(attributes);
