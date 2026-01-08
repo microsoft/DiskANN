@@ -1,0 +1,3 @@
+build --client_env=CC=g++
+build --client_env=CXX=g++
+build --client_env=BAZEL_CXXOPTS=-std=c++17
