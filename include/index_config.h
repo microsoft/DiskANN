@@ -59,7 +59,7 @@ struct IndexConfig
         : data_strategy(data_strategy), graph_strategy(graph_strategy), metric(metric), dimension(dimension),
           max_points(max_points), dynamic_index(dynamic_index), enable_tags(enable_tags), pq_dist_build(pq_dist_build),
           concurrent_consolidate(concurrent_consolidate), use_opq(use_opq), filtered_index(filtered_index),
-          num_pq_chunks(num_pq_chunks), num_frozen_pts(num_frozen_points), label_type(label_type), tag_type(tag_type),
+          num_pq_chunks(num_pq_chunks), num_frozen_pts(num_frozen_points), reorder_index(reorder_index), search_dim(search_dim), label_type(label_type), tag_type(tag_type),
           data_type(data_type), index_write_params(index_write_params), index_search_params(index_search_params)
     {
     }
