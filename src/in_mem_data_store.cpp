@@ -160,7 +160,7 @@ template <typename data_t> void InMemDataStore<data_t>::populate_data(const std:
 template <typename data_t>
 void InMemDataStore<data_t>::extract_data_to_bin(const std::string &filename, const location_t num_points)
 {
-    save_data_in_base_dimensions(filename, _data, num_points, this->_dim, _aligned_dim, 0U);
+    save_data_in_base_dimensions(filename, _data, num_points, this->_dim, this->_aligned_dim, 0U);
 }
 
 template <typename data_t> void InMemDataStore<data_t>::get_vector(const location_t i, data_t *dest) const
