@@ -112,7 +112,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
 
 template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string &filename, const location_t num_points)
 {
-    return save_data_in_base_dimensions(filename, _data, num_points, this->_dim, _aligned_dim, 0U);
+    return save_data_in_base_dimensions(filename, _data, num_points, this->_dim, this->_aligned_dim, 0U);
 }
 
 template <typename data_t> void InMemDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
