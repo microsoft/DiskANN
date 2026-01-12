@@ -106,6 +106,10 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     {
         return _query_label_bitmask;
     }
+    inline std::vector<Neighbor>& reranked_results()
+    {
+        return _reranked_results;
+    }
 
   private:
     uint32_t _L;
@@ -149,6 +153,8 @@ template <typename T> class InMemQueryScratch : public AbstractScratch<T>
     std::vector<uint32_t> _occlude_list_output;
     // bitmask buffer in searching time
     std::vector<std::uint64_t> _query_label_bitmask;
+    // Buffer for reranking results to avoid repeated allocations
+    std::vector<Neighbor> _reranked_results;
 };
 
 //

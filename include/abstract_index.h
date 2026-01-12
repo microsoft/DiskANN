@@ -71,11 +71,13 @@ class AbstractIndex
     // IDtype is either uint32_t or uint64_t
     template <typename data_type, typename IDType>
     std::pair<uint32_t, uint32_t> search(const data_type *query, const size_t K, const uint32_t L, IDType *indices,
-                                         float *distances = nullptr);
+                                         float *distances = nullptr,
+                                         std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
 
     template <typename data_type, typename IDType>
     std::pair<uint32_t, uint32_t> diverse_search(const data_type* query, const size_t K, const uint32_t L, const uint32_t maxLperSeller, IDType* indices,
-        float* distances = nullptr);
+        float* distances = nullptr,
+        std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
 
     // Filter support search
     // IndexType is either uint32_t or uint64_t
@@ -83,7 +85,8 @@ class AbstractIndex
     std::pair<uint32_t, uint32_t> search_with_filters(const DataType &query, const std::vector<std::string> &raw_labels,
                                                       const size_t K, const uint32_t L, const uint32_t maxLperSeller,
                                                       IndexType *indices,
-                                                      float *distances);
+                                                      float *distances,
+                                                      std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr);
 
     // insert points with labels, labels should be present for filtered index
     template <typename data_type, typename tag_type>
@@ -122,12 +125,15 @@ class AbstractIndex
   private:
     virtual void _build(const DataType &data, const size_t num_points_to_load, TagVector &tags) = 0;
     virtual std::pair<uint32_t, uint32_t> _search(const DataType &query, const size_t K, const uint32_t L,
-                                                  std::any &indices, float *distances = nullptr) = 0;
+                                                  std::any &indices, float *distances = nullptr,
+                                                  std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr) = 0;
     virtual std::pair<uint32_t, uint32_t> _diverse_search(const DataType& query, const size_t K, const uint32_t L, const uint32_t maxLperSeller,
-        std::any& indices, float* distances = nullptr) = 0;
+        std::any& indices, float* distances = nullptr,
+        std::function<float(const std::uint8_t*, size_t)> rerank_fn = nullptr) = 0;
     virtual std::pair<uint32_t, uint32_t> _search_with_filters(const DataType &query, const std::vector<std::string> &filter_labels,
                                                                const size_t K, const uint32_t L, const uint32_t maxLperSeller, std::any &indices,
-                                                               float *distances) = 0;
+                                                               float *distances,
+                                                               std::function<float(const std::uint8_t*, size_t)> rerank_fn) = 0;
     virtual int _insert_point(const DataType &data_point, const TagType tag, const std::vector<std::string> &labels) = 0;
     virtual int _insert_point(const DataType &data_point, const TagType tag) = 0;
     virtual int _lazy_delete(const TagType &tag) = 0;

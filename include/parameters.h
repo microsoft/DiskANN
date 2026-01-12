@@ -20,7 +20,6 @@ enum class LabelFormatType :uint8_t
 };
 
 class IndexWriteParameters
-
 {
   public:
     const uint32_t search_list_size; // L

@@ -112,7 +112,7 @@ template <typename data_t> location_t InMemDataStore<data_t>::load_impl(const st
 
 template <typename data_t> size_t InMemDataStore<data_t>::save(const std::string &filename, const location_t num_points)
 {
-    return save_data_in_base_dimensions(filename, _data, num_points, this->get_dims(), this->get_aligned_dim(), 0U);
+    return save_data_in_base_dimensions(filename, _data, num_points, this->_dim, this->_aligned_dim, 0U);
 }
 
 template <typename data_t> void InMemDataStore<data_t>::populate_data(const data_t *vectors, const location_t num_pts)
@@ -143,11 +143,11 @@ template <typename data_t> void InMemDataStore<data_t>::populate_data(const std:
         throw diskann::ANNException(ss.str(), -1);
     }
 
-    if ((location_t)ndim != this->get_dims())
+    if ((location_t)ndim != this->_dim)
     {
         std::stringstream ss;
         ss << "Number of dimensions of a point in the file: " << filename
-           << " is not equal to dimensions of data store: " << this->capacity() << "." << std::endl;
+           << " is not equal to dimensions of data store: " << this->_dim << "." << std::endl;
         throw diskann::ANNException(ss.str(), -1);
     }
 
@@ -160,7 +160,7 @@ template <typename data_t> void InMemDataStore<data_t>::populate_data(const std:
 template <typename data_t>
 void InMemDataStore<data_t>::extract_data_to_bin(const std::string &filename, const location_t num_points)
 {
-    save_data_in_base_dimensions(filename, _data, num_points, this->get_dims(), this->get_aligned_dim(), 0U);
+    save_data_in_base_dimensions(filename, _data, num_points, this->_dim, this->_aligned_dim, 0U);
 }
 
 template <typename data_t> void InMemDataStore<data_t>::get_vector(const location_t i, data_t *dest) const
