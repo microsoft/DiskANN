@@ -81,7 +81,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 #ifdef EXEC_ENV_OLS
     DISKANN_DLLEXPORT void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l);
 #else
+    DISKANN_DLLEXPORT void load(const IndexLoadParams& load_params);
+
     DISKANN_DLLEXPORT void load(const char *index_file, uint32_t num_threads, uint32_t search_l, LabelFormatType label_format_type = LabelFormatType::String);
+    
 #endif
 
     // get some private variables
