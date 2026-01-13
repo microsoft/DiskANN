@@ -16,8 +16,128 @@
 #include "percentile_stats.h"
 #include "partition.h"
 #include "pq_flash_index.h"
+#include "rabitq.h"
 #include "timer.h"
 #include "tsl/robin_set.h"
+
+namespace
+{
+#pragma pack(push, 1)
+struct RaBitQReorderHeader
+{
+    char magic[8];
+    uint32_t version;
+    uint32_t metric;
+    uint32_t nb_bits;
+    uint32_t dim;
+    uint64_t num_points;
+    uint64_t code_size;
+};
+#pragma pack(pop)
+
+static void write_rabitq_reorder_header(std::ofstream &out, uint32_t metric, uint32_t nb_bits, uint32_t dim,
+                                       uint64_t num_points, uint64_t code_size)
+{
+    RaBitQReorderHeader hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.magic[0] = 'D';
+    hdr.magic[1] = 'A';
+    hdr.magic[2] = 'R';
+    hdr.magic[3] = 'B';
+    hdr.magic[4] = 'Q';
+    hdr.magic[5] = '1';
+    hdr.magic[6] = '\0';
+    hdr.magic[7] = '\0';
+    hdr.version = 1;
+    hdr.metric = metric;
+    hdr.nb_bits = nb_bits;
+    hdr.dim = dim;
+    hdr.num_points = num_points;
+    hdr.code_size = code_size;
+    out.write(reinterpret_cast<const char *>(&hdr), sizeof(hdr));
+}
+
+template <typename T>
+static void generate_rabitq_reorder_codes_from_bin(const std::string &data_file_to_use, const std::string &output_file,
+                                                   diskann::rabitq::Metric metric, uint32_t nb_bits)
+{
+    std::ifstream in(data_file_to_use, std::ios::binary);
+    if (!in)
+    {
+        throw diskann::ANNException("Failed to open data file for RaBitQ code generation: " + data_file_to_use, -1);
+    }
+
+    uint32_t npts_u32 = 0, dim_u32 = 0;
+    in.read(reinterpret_cast<char *>(&npts_u32), sizeof(uint32_t));
+    in.read(reinterpret_cast<char *>(&dim_u32), sizeof(uint32_t));
+    if (!in)
+    {
+        throw diskann::ANNException("Failed reading header from data file for RaBitQ code generation: " +
+                                        data_file_to_use,
+                                    -1);
+    }
+
+    const uint64_t npts = npts_u32;
+    const uint64_t dim = dim_u32;
+    const uint64_t code_size =
+        diskann::rabitq::compute_code_size(static_cast<size_t>(dim), static_cast<size_t>(nb_bits));
+
+    std::ofstream out(output_file, std::ios::binary);
+    if (!out)
+    {
+        throw diskann::ANNException("Failed to open output file for RaBitQ code generation: " + output_file, -1);
+    }
+
+    write_rabitq_reorder_header(out, static_cast<uint32_t>(metric), nb_bits, dim_u32, npts, code_size);
+
+    if (npts == 0)
+        return;
+
+    const uint64_t kBlockPts = 100000;
+    const uint64_t block_pts = std::min<uint64_t>(kBlockPts, npts);
+    std::vector<T> in_block;
+    in_block.resize(static_cast<size_t>(block_pts * dim));
+
+    std::vector<uint8_t> out_codes;
+    out_codes.resize(static_cast<size_t>(block_pts * code_size));
+
+    std::vector<float> tmp;
+    tmp.resize(static_cast<size_t>(dim));
+
+    const uint64_t num_blocks = DIV_ROUND_UP(npts, block_pts);
+    for (uint64_t b = 0; b < num_blocks; ++b)
+    {
+        const uint64_t start_id = b * block_pts;
+        const uint64_t end_id = std::min<uint64_t>(npts, start_id + block_pts);
+        const uint64_t cur_pts = end_id - start_id;
+
+        in.read(reinterpret_cast<char *>(in_block.data()), static_cast<std::streamsize>(cur_pts * dim * sizeof(T)));
+        if (!in)
+        {
+            throw diskann::ANNException("Failed reading data payload from: " + data_file_to_use, -1);
+        }
+
+        for (uint64_t i = 0; i < cur_pts; ++i)
+        {
+            const T *row = in_block.data() + i * dim;
+            for (uint64_t j = 0; j < dim; ++j)
+            {
+                tmp[static_cast<size_t>(j)] = static_cast<float>(row[j]);
+            }
+            uint8_t *code = out_codes.data() + i * code_size;
+            diskann::rabitq::encode_vector(tmp.data(), static_cast<size_t>(dim), metric, static_cast<size_t>(nb_bits),
+                                           code);
+        }
+
+        out.write(reinterpret_cast<const char *>(out_codes.data()), static_cast<std::streamsize>(cur_pts * code_size));
+        if (!out)
+        {
+            throw diskann::ANNException("Failed writing RaBitQ codes to: " + output_file, -1);
+        }
+    }
+}
+
+} // namespace
 
 namespace diskann
 {
@@ -1132,7 +1252,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     {
         param_list.push_back(cur_param);
     }
-    if (param_list.size() < 5 || param_list.size() > 9)
+    if (param_list.size() < 5 || param_list.size() > 12)
     {
         diskann::cout << "Correct usage of parameters is R (max degree)\n"
                          "L (indexing list size, better if >= R)\n"
@@ -1145,7 +1265,10 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
                          ": optional paramter, use only when using disk PQ\n"
                          "build_PQ_byte (number of PQ bytes for inde build; set 0 to use "
                          "full precision vectors)\n"
-                         "QD Quantized Dimension to overwrite the derived dim from B "
+                         "QD Quantized Dimension to overwrite the derived dim from B\n"
+                         "build_rabitq_reorder_codes (0/1, optional; generates <index>_disk.index_rabitq_reorder.bin)\n"
+                         "build_rabitq_main_codes (0/1, optional; generates <index>_disk.index_rabitq_main.bin)\n"
+                         "rabitq_nb_bits (1..9, optional; default 4)"
                       << std::endl;
         return -1;
     }
@@ -1187,6 +1310,28 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     if (param_list.size() >= 8)
     {
         build_pq_bytes = atoi(param_list[7].c_str());
+    }
+
+    bool build_rabitq_reorder_codes = false;
+    bool build_rabitq_main_codes = false;
+    uint32_t rabitq_nb_bits = 4;
+    if (param_list.size() >= 10)
+    {
+        if (1 == atoi(param_list[9].c_str()))
+        {
+            build_rabitq_reorder_codes = true;
+        }
+    }
+    if (param_list.size() >= 11)
+    {
+        if (1 == atoi(param_list[10].c_str()))
+        {
+            build_rabitq_main_codes = true;
+        }
+    }
+    if (param_list.size() >= 12)
+    {
+        rabitq_nb_bits = static_cast<uint32_t>(atoi(param_list[11].c_str()));
     }
 
     std::string base_file(dataFilePath);
@@ -1363,6 +1508,61 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
                                                     data_file_to_use.c_str());
     }
     diskann::cout << timer.elapsed_seconds_for_step("generating disk layout") << std::endl;
+
+    if (build_rabitq_reorder_codes)
+    {
+        if (rabitq_nb_bits < 1 || rabitq_nb_bits > 9)
+        {
+            throw diskann::ANNException("rabitq_nb_bits must be in [1,9]", -1);
+        }
+        if (!reorder_data)
+        {
+            throw diskann::ANNException(
+                "Requested build_rabitq_reorder_codes but reorder flag is not enabled. "
+                "Enable append_reorder_data (reorder=1) to store reorder vectors.",
+                -1);
+        }
+        if (compareMetric != diskann::Metric::INNER_PRODUCT)
+        {
+            throw diskann::ANNException("RaBitQ reorder code generation is currently supported only for MIPS/IP.", -1);
+        }
+        if (!diskann::is_floating_point_like_v<T>)
+        {
+            throw diskann::ANNException("RaBitQ reorder code generation requires floating point data.", -1);
+        }
+
+        const std::string rabitq_codes_path = disk_index_path + "_rabitq_reorder.bin";
+        Timer rabitq_timer;
+        diskann::cout << "Generating RaBitQ reorder codes to " << rabitq_codes_path << " (nb_bits=" << rabitq_nb_bits
+                      << ")" << std::endl;
+        generate_rabitq_reorder_codes_from_bin<T>(data_file_to_use, rabitq_codes_path,
+                                                  diskann::rabitq::Metric::INNER_PRODUCT, rabitq_nb_bits);
+        diskann::cout << rabitq_timer.elapsed_seconds_for_step("generating rabitq reorder codes") << std::endl;
+    }
+
+    if (build_rabitq_main_codes)
+    {
+        if (rabitq_nb_bits < 1 || rabitq_nb_bits > 9)
+        {
+            throw diskann::ANNException("rabitq_nb_bits must be in [1,9]", -1);
+        }
+        if (compareMetric != diskann::Metric::INNER_PRODUCT)
+        {
+            throw diskann::ANNException("RaBitQ main code generation is currently supported only for MIPS/IP.", -1);
+        }
+        if (!diskann::is_floating_point_like_v<T>)
+        {
+            throw diskann::ANNException("RaBitQ main code generation requires floating point data.", -1);
+        }
+
+        const std::string rabitq_codes_path = disk_index_path + "_rabitq_main.bin";
+        Timer rabitq_timer;
+        diskann::cout << "Generating RaBitQ main codes to " << rabitq_codes_path << " (nb_bits=" << rabitq_nb_bits
+                      << ")" << std::endl;
+        generate_rabitq_reorder_codes_from_bin<T>(data_file_to_use, rabitq_codes_path,
+                                                  diskann::rabitq::Metric::INNER_PRODUCT, rabitq_nb_bits);
+        diskann::cout << rabitq_timer.elapsed_seconds_for_step("generating rabitq main codes") << std::endl;
+    }
 
     double ten_percent_points = std::ceil(points_num * 0.1);
     double num_sample_points =

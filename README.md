@@ -120,6 +120,60 @@ If you want to do a strict A/B build where only one ISA path is compiled/used, c
 
 Note: some toolchains/build scripts add global `-march=native`. When AMX is disabled (`-DDISKANN_AMXBF16=OFF`), DiskANN explicitly compiles the AMX translation unit with `-mno-amx-tile`/`-mno-amx-bf16` (when supported) to avoid accidentally emitting AMX instructions.
 
+### RaBitQ multi-bit reorder prefilter (optional, runtime-gated)
+
+DiskANN includes an optional RaBitQ multi-bit–based *prefilter* to reduce IO during SSD reordering (the `use_reorder_data` path in `PQFlashIndex`) for **inner product** search.
+
+- Compile-time: the RaBitQ prefilter code is compiled into the DiskANN library and the helper tool is built as part of the normal build.
+    - Tool: `build_rabitq_reorder_codes`
+- Runtime: the prefilter is **disabled by default**. It is enabled only when all of the following are true:
+    - Environment variable `DISKANN_USE_RABITQ_REORDER_PREFILTER=1`
+    - Search metric is `INNER_PRODUCT`
+    - A RaBitQ reorder code file exists and loads successfully next to the disk index file
+
+#### Code file format and naming
+
+To use the prefilter, generate a sidecar file named:
+
+```text
+<index_filepath>_rabitq_reorder.bin
+```
+
+For example, if your SSD index file is `foo_disk.index`, the RaBitQ reorder code file should be `foo_disk.index_rabitq_reorder.bin`.
+
+Generate it with:
+
+```bash
+./build/apps/build_rabitq_reorder_codes \
+    --data_file <base_vectors.bin> \
+    --output_file <index_filepath>_rabitq_reorder.bin \
+    --metric ip \
+    --nb_bits 4
+```
+
+Alternatively, you can generate the sidecar automatically as part of disk index build (recommended for `mips`, since it guarantees the codes match the exact reorder vector space after any preprocessing/augmentation):
+
+```bash
+./build/apps/build_disk_index \
+    ... \
+    --dist_fn mips \
+    --PQ_disk_bytes <bytes> \
+    --append_reorder_data \
+    --build_rabitq_reorder_codes \
+    --rabitq_nb_bits 4
+```
+
+Note: the input vectors used to build these codes must match the vector space used for reordering (dimension and any preprocessing).
+
+#### Tuning
+
+- Enable/disable:
+    - Enable: `DISKANN_USE_RABITQ_REORDER_PREFILTER=1`
+    - Disable (default): unset or set to `0`
+- Candidate multiplier after prefilter (smaller = fewer IOs, potentially lower recall):
+    - `DISKANN_RABITQ_REORDER_PREFILTER_MULT=<int>`
+    - Default: uses the same multiplier as the standard reorder path (`FULL_PRECISION_REORDER_MULTIPLIER`, currently 3)
+
 ## Windows build:
 
 The Windows version has been tested with Enterprise editions of Visual Studio 2022, 2019 and 2017. It should work with the Community and Professional editions as well without any changes. 

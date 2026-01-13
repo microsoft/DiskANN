@@ -14,6 +14,7 @@ else()
         in_mem_data_store.cpp in_mem_graph_store.cpp
         natural_number_set.cpp memory_mapper.cpp partition.cpp pq.cpp
         pq_flash_index.cpp scratch.cpp logger.cpp utils.cpp filter_utils.cpp index_factory.cpp abstract_index.cpp pq_l2_distance.cpp pq_data_store.cpp)
+    list(APPEND CPP_SOURCES rabitq.cpp)
     list(APPEND CPP_SOURCES bf16_simd_kernels.cpp)
     list(APPEND CPP_SOURCES bf16_amx_kernels.cpp)
 

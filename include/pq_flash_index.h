@@ -159,6 +159,27 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _nvecs_per_sector = 0;
     uint64_t _reorder_bytes_per_element = sizeof(float);
 
+    // Optional: RaBitQ multi-bit codes for reorder prefiltering.
+    // When present and enabled, we can prune reorder IO by scoring candidates
+    // using codes in memory before reading reorder vectors from disk.
+    bool _rabitq_reorder_codes_exist = false;
+    uint8_t *_rabitq_reorder_codes = nullptr;
+    uint64_t _rabitq_reorder_code_size = 0;
+    uint64_t _rabitq_reorder_dim = 0;
+    uint32_t _rabitq_reorder_nb_bits = 0;
+    uint32_t _rabitq_reorder_metric = 0;
+
+    // Optional: RaBitQ multi-bit codes for *main-search* approximate scoring.
+    // When enabled (runtime-gated), neighbor expansion scoring uses RaBitQ
+    // instead of PQ distance lookup, while preserving the PQ path as default.
+    bool _rabitq_main_codes_exist = false;
+    uint8_t *_rabitq_main_codes = nullptr;
+    uint64_t _rabitq_main_code_size = 0;
+    uint64_t _rabitq_main_dim = 0;
+    uint32_t _rabitq_main_nb_bits = 0;
+    uint32_t _rabitq_main_metric = 0;
+    bool _rabitq_main_codes_alias_reorder = false;
+
     diskann::Metric metric = diskann::Metric::L2;
 
     // used only for inner product search to re-scale the result value
