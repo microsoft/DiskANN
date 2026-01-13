@@ -13,6 +13,7 @@
 #include "timer.h"
 #include "percentile_stats.h"
 #include "program_options_utils.hpp"
+#include "bfloat16.h"
 
 #ifndef _WINDOWS
 #include <sys/mman.h>
@@ -30,6 +31,57 @@
 #define WARMUP false
 
 namespace po = boost::program_options;
+
+static int convert_bf16_bin_to_f32_bin(const std::string &bf16_path, const std::string &f32_path)
+{
+    std::ifstream reader(bf16_path, std::ios::binary);
+    if (!reader)
+    {
+        diskann::cerr << "Error: could not open input file " << bf16_path << std::endl;
+        return -1;
+    }
+    std::ofstream writer(f32_path, std::ios::binary);
+    if (!writer)
+    {
+        diskann::cerr << "Error: could not open output file " << f32_path << std::endl;
+        return -1;
+    }
+
+    uint32_t npts = 0, dim = 0;
+    reader.read(reinterpret_cast<char *>(&npts), sizeof(uint32_t));
+    reader.read(reinterpret_cast<char *>(&dim), sizeof(uint32_t));
+    if (!reader)
+    {
+        diskann::cerr << "Error: failed to read header from " << bf16_path << std::endl;
+        return -1;
+    }
+    writer.write(reinterpret_cast<const char *>(&npts), sizeof(uint32_t));
+    writer.write(reinterpret_cast<const char *>(&dim), sizeof(uint32_t));
+
+    constexpr size_t kBlockElems = 1u << 20;
+    std::vector<diskann::bfloat16> in_buf(kBlockElems);
+    std::vector<float> out_buf(kBlockElems);
+
+    const uint64_t total_elems = static_cast<uint64_t>(npts) * static_cast<uint64_t>(dim);
+    uint64_t done = 0;
+    while (done < total_elems)
+    {
+        const size_t this_block = static_cast<size_t>(std::min<uint64_t>(kBlockElems, total_elems - done));
+        reader.read(reinterpret_cast<char *>(in_buf.data()), this_block * sizeof(diskann::bfloat16));
+        if (!reader)
+        {
+            diskann::cerr << "Error: failed reading bf16 payload from " << bf16_path << std::endl;
+            return -1;
+        }
+        for (size_t i = 0; i < this_block; i++)
+        {
+            out_buf[i] = static_cast<float>(in_buf[i]);
+        }
+        writer.write(reinterpret_cast<const char *>(out_buf.data()), this_block * sizeof(float));
+        done += this_block;
+    }
+    return 0;
+}
 
 void print_stats(std::string category, std::vector<float> percentiles, std::vector<float> results)
 {
@@ -155,7 +207,15 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
             {
                 for (uint32_t d = 0; d < warmup_dim; d++)
                 {
-                    warmup[i * warmup_aligned_dim + d] = (T)dis(gen);
+                    const auto sample = dis(gen);
+                    if constexpr (std::is_same_v<T, diskann::bfloat16>)
+                    {
+                        warmup[i * warmup_aligned_dim + d] = T(static_cast<float>(sample));
+                    }
+                    else
+                    {
+                        warmup[i * warmup_aligned_dim + d] = static_cast<T>(sample);
+                    }
                 }
             }
         }
@@ -396,6 +456,8 @@ int main(int argc, char **argv)
         return -1;
     }
 
+    const bool is_bf16 = (data_type == std::string("bf16") || data_type == std::string("bfloat16"));
+
     diskann::Metric metric;
     if (dist_fn == std::string("mips"))
     {
@@ -417,16 +479,16 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    if ((data_type != std::string("float")) && (metric == diskann::Metric::INNER_PRODUCT))
+    if ((data_type != std::string("float")) && !is_bf16 && (metric == diskann::Metric::INNER_PRODUCT))
     {
         std::cout << "Currently support only floating point data for Inner Product." << std::endl;
         return -1;
     }
 
-    if (use_reorder_data && data_type != std::string("float"))
+    if (use_reorder_data && data_type != std::string("float") && !is_bf16)
     {
         std::cout << "Error: Reorder data for reordering currently only "
-                     "supported for float data type."
+                     "supported for float/bf16 data type."
                   << std::endl;
         return -1;
     }
@@ -452,7 +514,12 @@ int main(int argc, char **argv)
         if (!query_filters.empty() && label_type == "ushort")
         {
             if (data_type == std::string("float"))
-                return search_disk_index<float, uint16_t>(
+                return search_disk_index<float, uint16_t>(metric, index_path_prefix, result_path_prefix, query_file,
+                                                          gt_file, num_threads, K, W, num_nodes_to_cache,
+                                                          search_io_limit, Lvec, fail_if_recall_below, query_filters,
+                                                          use_reorder_data);
+            else if (is_bf16)
+                return search_disk_index<diskann::bfloat16, uint16_t>(
                     metric, index_path_prefix, result_path_prefix, query_file, gt_file, num_threads, K, W,
                     num_nodes_to_cache, search_io_limit, Lvec, fail_if_recall_below, query_filters, use_reorder_data);
             else if (data_type == std::string("int8"))
@@ -465,7 +532,7 @@ int main(int argc, char **argv)
                     num_nodes_to_cache, search_io_limit, Lvec, fail_if_recall_below, query_filters, use_reorder_data);
             else
             {
-                std::cerr << "Unsupported data type. Use float or int8 or uint8" << std::endl;
+                std::cerr << "Unsupported data type. Use float, bf16, int8 or uint8" << std::endl;
                 return -1;
             }
         }
@@ -475,6 +542,11 @@ int main(int argc, char **argv)
                 return search_disk_index<float>(metric, index_path_prefix, result_path_prefix, query_file, gt_file,
                                                 num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
                                                 fail_if_recall_below, query_filters, use_reorder_data);
+            else if (is_bf16)
+                return search_disk_index<diskann::bfloat16>(metric, index_path_prefix, result_path_prefix, query_file,
+                                                            gt_file, num_threads, K, W, num_nodes_to_cache,
+                                                            search_io_limit, Lvec, fail_if_recall_below, query_filters,
+                                                            use_reorder_data);
             else if (data_type == std::string("int8"))
                 return search_disk_index<int8_t>(metric, index_path_prefix, result_path_prefix, query_file, gt_file,
                                                  num_threads, K, W, num_nodes_to_cache, search_io_limit, Lvec,
@@ -485,7 +557,7 @@ int main(int argc, char **argv)
                                                   fail_if_recall_below, query_filters, use_reorder_data);
             else
             {
-                std::cerr << "Unsupported data type. Use float or int8 or uint8" << std::endl;
+                std::cerr << "Unsupported data type. Use float, bf16, int8 or uint8" << std::endl;
                 return -1;
             }
         }

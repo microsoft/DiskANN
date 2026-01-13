@@ -222,8 +222,10 @@ template <typename data_t>
 void InMemDataStore<data_t>::get_distance(const data_t *preprocessed_query, const std::vector<location_t> &ids,
                                           std::vector<float> &distances, AbstractScratch<data_t> *scratch_space) const
 {
+    // printf("---->InMemDataStore<data_t>::get_distance ids.size: %ld\n", ids.size());
     for (int i = 0; i < ids.size(); i++)
     {
+        // printf("ids[i]:%d\n",ids[i]);
         distances[i] =
             _distance_fn->compare(preprocessed_query, _data + ids[i] * _aligned_dim, (uint32_t)this->_aligned_dim);
     }
@@ -397,5 +399,6 @@ template <typename data_t> Distance<data_t> *InMemDataStore<data_t>::get_dist_fn
 template DISKANN_DLLEXPORT class InMemDataStore<float>;
 template DISKANN_DLLEXPORT class InMemDataStore<int8_t>;
 template DISKANN_DLLEXPORT class InMemDataStore<uint8_t>;
+template DISKANN_DLLEXPORT class InMemDataStore<diskann::bfloat16>;
 
 } // namespace diskann

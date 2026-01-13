@@ -44,6 +44,43 @@ int block_write_float(std::ofstream &writer, size_t ndims, size_t npts, bool nor
     return 0;
 }
 
+int block_write_bf16(std::ofstream &writer, size_t ndims, size_t npts, bool normalization, float norm, float rand_scale)
+{
+    auto vec = new float[ndims];
+    auto vec_bf16 = new diskann::bfloat16[ndims];
+
+    std::random_device rd{};
+    std::mt19937 gen{rd()};
+    std::normal_distribution<> normal_rand{0, 1};
+    std::uniform_real_distribution<> unif_dis(1.0, rand_scale);
+
+    for (size_t i = 0; i < npts; i++)
+    {
+        float sum = 0;
+        float scale = 1.0f;
+        if (rand_scale > 1.0f)
+            scale = (float)unif_dis(gen);
+        for (size_t d = 0; d < ndims; ++d)
+            vec[d] = scale * (float)normal_rand(gen);
+        if (normalization)
+        {
+            for (size_t d = 0; d < ndims; ++d)
+                sum += vec[d] * vec[d];
+            for (size_t d = 0; d < ndims; ++d)
+                vec[d] = vec[d] * norm / std::sqrt(sum);
+        }
+
+        for (size_t d = 0; d < ndims; ++d)
+            vec_bf16[d] = diskann::bfloat16::from_float(vec[d]);
+
+        writer.write((char *)vec_bf16, ndims * sizeof(diskann::bfloat16));
+    }
+
+    delete[] vec;
+    delete[] vec_bf16;
+    return 0;
+}
+
 int block_write_int8(std::ofstream &writer, size_t ndims, size_t npts, float norm)
 {
     auto vec = new float[ndims];
@@ -120,7 +157,8 @@ int main(int argc, char **argv)
 
         desc.add_options()("help,h", "Print information on arguments");
 
-        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(), "data type <int8/uint8/float>");
+        desc.add_options()("data_type", po::value<std::string>(&data_type)->required(),
+                   "data type <int8/uint8/float/bf16>");
         desc.add_options()("output_file", po::value<std::string>(&output_file)->required(),
                            "File name for saving the random vectors");
         desc.add_options()("ndims,D", po::value<uint64_t>(&ndims)->required(), "Dimensoinality of the vector");
@@ -145,9 +183,10 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    if (data_type != std::string("float") && data_type != std::string("int8") && data_type != std::string("uint8"))
+    if (data_type != std::string("float") && data_type != std::string("bf16") && data_type != std::string("int8") &&
+        data_type != std::string("uint8"))
     {
-        std::cout << "Unsupported type. float, int8 and uint8 types are supported." << std::endl;
+        std::cout << "Unsupported type. float, bf16, int8 and uint8 types are supported." << std::endl;
         return -1;
     }
 
@@ -185,6 +224,12 @@ int main(int argc, char **argv)
         }
     }
 
+    if (data_type == std::string("bf16"))
+    {
+        // bf16 follows floating-point generation rules.
+        // (Scaling is allowed only when not normalized, same as float.)
+    }
+
     try
     {
         std::ofstream writer;
@@ -206,6 +251,10 @@ int main(int argc, char **argv)
             if (data_type == std::string("float"))
             {
                 ret = block_write_float(writer, ndims, cblk_size, normalization, norm, rand_scaling);
+            }
+            else if (data_type == std::string("bf16"))
+            {
+                ret = block_write_bf16(writer, ndims, cblk_size, normalization, norm, rand_scaling);
             }
             else if (data_type == std::string("int8"))
             {

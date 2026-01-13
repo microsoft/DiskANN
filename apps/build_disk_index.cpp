@@ -10,8 +10,62 @@
 #include "index.h"
 #include "partition.h"
 #include "program_options_utils.hpp"
+#include "bfloat16.h"
 
 namespace po = boost::program_options;
+
+static int convert_bf16_bin_to_f32_bin(const std::string &bf16_path, const std::string &f32_path)
+{
+    std::ifstream reader(bf16_path, std::ios::binary);
+    if (!reader)
+    {
+        diskann::cerr << "Error: could not open input file " << bf16_path << std::endl;
+        return -1;
+    }
+    std::ofstream writer(f32_path, std::ios::binary);
+    if (!writer)
+    {
+        diskann::cerr << "Error: could not open output file " << f32_path << std::endl;
+        return -1;
+    }
+
+    uint32_t npts = 0, dim = 0;
+    reader.read(reinterpret_cast<char *>(&npts), sizeof(uint32_t));
+    reader.read(reinterpret_cast<char *>(&dim), sizeof(uint32_t));
+    if (!reader)
+    {
+        diskann::cerr << "Error: failed to read header from " << bf16_path << std::endl;
+        return -1;
+    }
+    writer.write(reinterpret_cast<const char *>(&npts), sizeof(uint32_t));
+    writer.write(reinterpret_cast<const char *>(&dim), sizeof(uint32_t));
+
+    constexpr size_t kBlockElems = 1u << 20; // 1M elements (~2MB bf16, ~4MB float)
+    std::vector<diskann::bfloat16> in_buf;
+    std::vector<float> out_buf;
+    in_buf.resize(kBlockElems);
+    out_buf.resize(kBlockElems);
+
+    const uint64_t total_elems = static_cast<uint64_t>(npts) * static_cast<uint64_t>(dim);
+    uint64_t done = 0;
+    while (done < total_elems)
+    {
+        const size_t this_block = static_cast<size_t>(std::min<uint64_t>(kBlockElems, total_elems - done));
+        reader.read(reinterpret_cast<char *>(in_buf.data()), this_block * sizeof(diskann::bfloat16));
+        if (!reader)
+        {
+            diskann::cerr << "Error: failed reading bf16 payload from " << bf16_path << std::endl;
+            return -1;
+        }
+        for (size_t i = 0; i < this_block; i++)
+        {
+            out_buf[i] = static_cast<float>(in_buf[i]);
+        }
+        writer.write(reinterpret_cast<const char *>(out_buf.data()), this_block * sizeof(float));
+        done += this_block;
+    }
+    return 0;
+}
 
 int main(int argc, char **argv)
 {
@@ -21,6 +75,8 @@ int main(int argc, char **argv)
     float B, M;
     bool append_reorder_data = false;
     bool use_opq = false;
+    bool build_rabitq_main_codes = false;
+    uint32_t rabitq_nb_bits = 4;
 
     po::options_description desc{
         program_options_utils::make_program_description("build_disk_index", "Build a disk-based index.")};
@@ -63,6 +119,14 @@ int main(int argc, char **argv)
         optional_configs.add_options()("append_reorder_data", po::bool_switch()->default_value(false),
                                        "Include full precision data in the index. Use only in "
                                        "conjuction with compressed data on SSD.");
+
+        optional_configs.add_options()(
+            "build_rabitq_main_codes", po::bool_switch()->default_value(false),
+            "Generate RaBitQ main-search codes sidecar file (<index>_disk.index_rabitq_main.bin). "
+            "Only meaningful for dist_fn=mips.");
+
+        optional_configs.add_options()("rabitq_nb_bits", po::value<uint32_t>(&rabitq_nb_bits)->default_value(4),
+                                       "Bits per dimension for RaBitQ codes (1..9)");
         optional_configs.add_options()("build_PQ_bytes", po::value<uint32_t>(&build_PQ)->default_value(0),
                                        program_options_utils::BUIlD_GRAPH_PQ_BYTES);
         optional_configs.add_options()("use_opq", po::bool_switch()->default_value(false),
@@ -94,6 +158,8 @@ int main(int argc, char **argv)
             append_reorder_data = true;
         if (vm["use_opq"].as<bool>())
             use_opq = true;
+        if (vm["build_rabitq_main_codes"].as<bool>())
+            build_rabitq_main_codes = true;
     }
     catch (const std::exception &ex)
     {
@@ -124,10 +190,11 @@ int main(int argc, char **argv)
                       << std::endl;
             return -1;
         }
-        if (data_type != std::string("float"))
+        if (data_type != std::string("float") && data_type != std::string("bf16") &&
+            data_type != std::string("bfloat16"))
         {
             std::cout << "Error: Appending data for reordering currently only "
-                         "supported for float data type."
+                         "supported for float/bf16 data type."
                       << std::endl;
             return -1;
         }
@@ -137,7 +204,9 @@ int main(int argc, char **argv)
                          std::string(std::to_string(B)) + " " + std::string(std::to_string(M)) + " " +
                          std::string(std::to_string(num_threads)) + " " + std::string(std::to_string(disk_PQ)) + " " +
                          std::string(std::to_string(append_reorder_data)) + " " +
-                         std::string(std::to_string(build_PQ)) + " " + std::string(std::to_string(QD));
+                         std::string(std::to_string(build_PQ)) + " " + std::string(std::to_string(QD)) + " " +
+                         std::string(std::to_string(build_rabitq_main_codes)) + " " +
+                         std::string(std::to_string(rabitq_nb_bits));
 
     try
     {
@@ -155,6 +224,12 @@ int main(int argc, char **argv)
                 return diskann::build_disk_index<float, uint16_t>(
                     data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric, use_opq, codebook_prefix,
                     use_filters, label_file, universal_label, filter_threshold, Lf);
+            else if (data_type == std::string("bf16") || data_type == std::string("bfloat16"))
+            {
+                return diskann::build_disk_index<diskann::bfloat16, uint16_t>(
+                    data_path.c_str(), index_path_prefix.c_str(), params.c_str(), metric, use_opq, codebook_prefix,
+                    use_filters, label_file, universal_label, filter_threshold, Lf);
+            }
             else
             {
                 diskann::cerr << "Error. Unsupported data type" << std::endl;
@@ -175,6 +250,13 @@ int main(int argc, char **argv)
                 return diskann::build_disk_index<float>(data_path.c_str(), index_path_prefix.c_str(), params.c_str(),
                                                         metric, use_opq, codebook_prefix, use_filters, label_file,
                                                         universal_label, filter_threshold, Lf);
+            else if (data_type == std::string("bf16") || data_type == std::string("bfloat16"))
+            {
+                return diskann::build_disk_index<diskann::bfloat16>(data_path.c_str(), index_path_prefix.c_str(),
+                                                                    params.c_str(), metric, use_opq, codebook_prefix,
+                                                                    use_filters, label_file, universal_label,
+                                                                    filter_threshold, Lf);
+            }
             else
             {
                 diskann::cerr << "Error. Unsupported data type" << std::endl;

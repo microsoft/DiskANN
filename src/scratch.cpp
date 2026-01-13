@@ -6,6 +6,7 @@
 
 #include "scratch.h"
 #include "pq_scratch.h"
+#include "bfloat16.h"
 
 namespace diskann
 {
@@ -166,17 +167,21 @@ template <typename T> void PQScratch<T>::initialize(size_t dim, const T *query, 
 template DISKANN_DLLEXPORT class InMemQueryScratch<int8_t>;
 template DISKANN_DLLEXPORT class InMemQueryScratch<uint8_t>;
 template DISKANN_DLLEXPORT class InMemQueryScratch<float>;
+template DISKANN_DLLEXPORT class InMemQueryScratch<bfloat16>;
 
 template DISKANN_DLLEXPORT class SSDQueryScratch<int8_t>;
 template DISKANN_DLLEXPORT class SSDQueryScratch<uint8_t>;
 template DISKANN_DLLEXPORT class SSDQueryScratch<float>;
+template DISKANN_DLLEXPORT class SSDQueryScratch<bfloat16>;
 
 template DISKANN_DLLEXPORT class PQScratch<int8_t>;
 template DISKANN_DLLEXPORT class PQScratch<uint8_t>;
 template DISKANN_DLLEXPORT class PQScratch<float>;
+template DISKANN_DLLEXPORT class PQScratch<bfloat16>;
 
 template DISKANN_DLLEXPORT class SSDThreadData<int8_t>;
 template DISKANN_DLLEXPORT class SSDThreadData<uint8_t>;
 template DISKANN_DLLEXPORT class SSDThreadData<float>;
+template DISKANN_DLLEXPORT class SSDThreadData<bfloat16>;
 
 } // namespace diskann

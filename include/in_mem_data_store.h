@@ -62,6 +62,8 @@ template <typename data_t> class InMemDataStore : public AbstractDataStore<data_
 
     virtual size_t get_alignment_factor() const override;
 
+    virtual const data_t *get_raw_data() const override { return _data; }
+
   protected:
     virtual location_t expand(const location_t new_size) override;
     virtual location_t shrink(const location_t new_size) override;
