@@ -174,6 +174,59 @@ Note: the input vectors used to build these codes must match the vector space us
     - `DISKANN_RABITQ_REORDER_PREFILTER_MULT=<int>`
     - Default: uses the same multiplier as the standard reorder path (`FULL_PRECISION_REORDER_MULTIPLIER`, currently 3)
 
+### RaBitQ main-search approximate scoring (optional, runtime-gated)
+
+DiskANN also supports using RaBitQ multi-bit codes as the *main traversal approximate scorer* in SSD search (inside `PQFlashIndex::cached_beam_search`).
+
+- Default behavior is unchanged: traversal uses the existing PQ distance lookup.
+- When enabled, traversal scoring uses RaBitQ approximate inner product (converted to a “distance” as `-ip`) while keeping the rest of the search logic intact.
+
+#### Runtime enable
+
+Set:
+
+```bash
+export DISKANN_USE_RABITQ_MAIN_APPROX=1
+```
+
+If the environment variable is set but RaBitQ main codes are missing or incompatible, DiskANN prints a one-time message and automatically falls back to PQ.
+
+#### Main code file naming and fallback
+
+Preferred sidecar file name:
+
+```text
+<index_filepath>_rabitq_main.bin
+```
+
+For example, if your SSD index file is `foo_disk.index`, the RaBitQ main code file should be `foo_disk.index_rabitq_main.bin`.
+
+If the main code file does **not** exist, DiskANN will attempt to use the reorder-code sidecar (`<index_filepath>_rabitq_reorder.bin`) as a fallback **when compatible** (and will alias the already-loaded reorder buffer to avoid double-loading memory).
+
+#### Generating main codes during disk index build
+
+You can generate the main-search sidecar automatically as part of disk index build:
+
+```bash
+./build/apps/build_disk_index \
+    ... \
+    --dist_fn mips \
+    --build_rabitq_main_codes \
+    --rabitq_nb_bits 4
+```
+
+This produces:
+
+```text
+<index_path_prefix>_disk.index_rabitq_main.bin
+```
+
+#### Constraints
+
+- Currently supported only for `dist_fn=mips` / `Metric::INNER_PRODUCT`.
+- The RaBitQ code `dim` must match the index `_data_dim` (post any preprocessing/augmentation), otherwise main-search RaBitQ is disabled and the search falls back to PQ.
+- Ensure you run the updated `search_disk_index`/`build_disk_index` binaries from the same build directory that contains this feature.
+
 ## Windows build:
 
 The Windows version has been tested with Enterprise editions of Visual Studio 2022, 2019 and 2017. It should work with the Community and Professional editions as well without any changes. 
