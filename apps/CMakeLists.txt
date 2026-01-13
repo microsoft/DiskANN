@@ -22,8 +22,6 @@ target_link_libraries(search_disk_index ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${D
 add_executable(range_search_disk_index range_search_disk_index.cpp)
 target_link_libraries(range_search_disk_index ${PROJECT_NAME} ${DISKANN_ASYNC_LIB} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
-add_executable(build_rabitq_reorder_codes build_rabitq_reorder_codes.cpp)
-target_link_libraries(build_rabitq_reorder_codes ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
 
 add_executable(test_streaming_scenario test_streaming_scenario.cpp)
 target_link_libraries(test_streaming_scenario ${PROJECT_NAME} ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS} Boost::program_options)
@@ -38,7 +36,6 @@ if (NOT MSVC)
             build_disk_index
             search_disk_index
             range_search_disk_index
-            build_rabitq_reorder_codes
             test_streaming_scenario
             test_insert_deletes_consolidate
             RUNTIME

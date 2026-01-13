@@ -75,8 +75,7 @@ int main(int argc, char **argv)
     float B, M;
     bool append_reorder_data = false;
     bool use_opq = false;
-    bool build_rabitq_reorder_codes = false;
-        bool build_rabitq_main_codes = false;
+    bool build_rabitq_main_codes = false;
     uint32_t rabitq_nb_bits = 4;
 
     po::options_description desc{
@@ -121,18 +120,13 @@ int main(int argc, char **argv)
                                        "Include full precision data in the index. Use only in "
                                        "conjuction with compressed data on SSD.");
 
-            optional_configs.add_options()(
-                "build_rabitq_main_codes", po::bool_switch()->default_value(false),
-                "Generate RaBitQ main-search codes sidecar file (<index>_disk.index_rabitq_main.bin). "
-                "Only meaningful for dist_fn=mips.");
-
         optional_configs.add_options()(
-            "build_rabitq_reorder_codes", po::bool_switch()->default_value(false),
-            "Generate RaBitQ reorder codes sidecar file (<index>_disk.index_rabitq_reorder.bin). "
-            "Only meaningful for dist_fn=mips with PQ_disk_bytes>0 and append_reorder_data.");
+            "build_rabitq_main_codes", po::bool_switch()->default_value(false),
+            "Generate RaBitQ main-search codes sidecar file (<index>_disk.index_rabitq_main.bin). "
+            "Only meaningful for dist_fn=mips.");
 
         optional_configs.add_options()("rabitq_nb_bits", po::value<uint32_t>(&rabitq_nb_bits)->default_value(4),
-                                       "Bits per dimension for RaBitQ reorder codes (1..9)");
+                                       "Bits per dimension for RaBitQ codes (1..9)");
         optional_configs.add_options()("build_PQ_bytes", po::value<uint32_t>(&build_PQ)->default_value(0),
                                        program_options_utils::BUIlD_GRAPH_PQ_BYTES);
         optional_configs.add_options()("use_opq", po::bool_switch()->default_value(false),
@@ -164,10 +158,8 @@ int main(int argc, char **argv)
             append_reorder_data = true;
         if (vm["use_opq"].as<bool>())
             use_opq = true;
-        if (vm["build_rabitq_reorder_codes"].as<bool>())
-            build_rabitq_reorder_codes = true;
-            if (vm["build_rabitq_main_codes"].as<bool>())
-                build_rabitq_main_codes = true;
+        if (vm["build_rabitq_main_codes"].as<bool>())
+            build_rabitq_main_codes = true;
     }
     catch (const std::exception &ex)
     {
@@ -213,7 +205,6 @@ int main(int argc, char **argv)
                          std::string(std::to_string(num_threads)) + " " + std::string(std::to_string(disk_PQ)) + " " +
                          std::string(std::to_string(append_reorder_data)) + " " +
                          std::string(std::to_string(build_PQ)) + " " + std::string(std::to_string(QD)) + " " +
-                         std::string(std::to_string(build_rabitq_reorder_codes)) + " " +
                          std::string(std::to_string(build_rabitq_main_codes)) + " " +
                          std::string(std::to_string(rabitq_nb_bits));
 

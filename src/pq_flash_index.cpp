@@ -107,13 +107,7 @@ template <typename T, typename LabelT> PQFlashIndex<T, LabelT>::~PQFlashIndex()
         delete[] _medoids;
     }
 
-    if (_rabitq_reorder_codes != nullptr)
-    {
-        aligned_free(_rabitq_reorder_codes);
-        _rabitq_reorder_codes = nullptr;
-    }
-
-    if (_rabitq_main_codes != nullptr && !_rabitq_main_codes_alias_reorder)
+    if (_rabitq_main_codes != nullptr)
     {
         aligned_free(_rabitq_main_codes);
         _rabitq_main_codes = nullptr;
@@ -812,10 +806,6 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string medoids_file = std::string(_disk_index_file) + "_medoids.bin";
     std::string centroids_file = std::string(_disk_index_file) + "_centroids.bin";
 
-    // Optional: RaBitQ codes for reorder prefiltering. Stored alongside the disk index file.
-    // File name convention: <index_filepath>_rabitq_reorder.bin
-    std::string rabitq_reorder_file = std::string(_disk_index_file) + "_rabitq_reorder.bin";
-
     // Optional: RaBitQ codes for main-search approximate scoring. Stored alongside the disk index file.
     // File name convention: <index_filepath>_rabitq_main.bin
     std::string rabitq_main_file = std::string(_disk_index_file) + "_rabitq_main.bin";
@@ -847,200 +837,7 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     this->_disk_bytes_per_point = this->_data_dim * sizeof(T);
     this->_aligned_dim = ROUND_UP(pq_file_dim, 8);
 
-    size_t npts_u64, nchunks_u64;
 #ifdef EXEC_ENV_OLS
-    diskann::load_bin<uint8_t>(files, pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
-#else
-    diskann::load_bin<uint8_t>(pq_compressed_vectors, this->data, npts_u64, nchunks_u64);
-#endif
-
-    this->_num_points = npts_u64;
-    this->_n_chunks = nchunks_u64;
-#ifdef EXEC_ENV_OLS
-    if (files.fileExists(labels_file))
-    {
-        FileContent &content_labels = files.getContent(labels_file);
-        std::stringstream infile(std::string((const char *)content_labels._content, content_labels._size));
-#else
-    if (file_exists(labels_file))
-    {
-        std::ifstream infile(labels_file, std::ios::binary);
-        if (infile.fail())
-        {
-            throw diskann::ANNException(std::string("Failed to open file ") + labels_file, -1);
-        }
-#endif
-        parse_label_file(infile, num_pts_in_label_file);
-        assert(num_pts_in_label_file == this->_num_points);
-
-#ifndef EXEC_ENV_OLS
-        infile.close();
-#endif
-
-#ifdef EXEC_ENV_OLS
-        FileContent &content_labels_map = files.getContent(labels_map_file);
-        std::stringstream map_reader(std::string((const char *)content_labels_map._content, content_labels_map._size));
-#else
-        std::ifstream map_reader(labels_map_file);
-#endif
-        _label_map = load_label_map(map_reader);
-
-#ifndef EXEC_ENV_OLS
-        map_reader.close();
-#endif
-
-#ifdef EXEC_ENV_OLS
-        if (files.fileExists(labels_to_medoids))
-        {
-            FileContent &content_labels_to_meoids = files.getContent(labels_to_medoids);
-            std::stringstream medoid_stream(
-                std::string((const char *)content_labels_to_meoids._content, content_labels_to_meoids._size));
-#else
-        if (file_exists(labels_to_medoids))
-        {
-            std::ifstream medoid_stream(labels_to_medoids);
-            assert(medoid_stream.is_open());
-#endif
-            std::string line, token;
-
-            _filter_to_medoid_ids.clear();
-            try
-            {
-                while (std::getline(medoid_stream, line))
-                {
-                    std::istringstream iss(line);
-                    uint32_t cnt = 0;
-                    std::vector<uint32_t> medoids;
-                    LabelT label;
-                    while (std::getline(iss, token, ','))
-                    {
-                        if (cnt == 0)
-                            label = (LabelT)std::stoul(token);
-                        else
-                            medoids.push_back((uint32_t)stoul(token));
-                        cnt++;
-                    }
-                    _filter_to_medoid_ids[label].swap(medoids);
-                }
-            }
-            catch (std::system_error &e)
-            {
-                throw FileException(labels_to_medoids, e, __FUNCSIG__, __FILE__, __LINE__);
-            }
-        }
-        std::string univ_label_file = std ::string(_disk_index_file) + "_universal_label.txt";
-
-#ifdef EXEC_ENV_OLS
-        if (files.fileExists(univ_label_file))
-        {
-            FileContent &content_univ_label = files.getContent(univ_label_file);
-            std::stringstream universal_label_reader(
-                std::string((const char *)content_univ_label._content, content_univ_label._size));
-#else
-        if (file_exists(univ_label_file))
-        {
-            std::ifstream universal_label_reader(univ_label_file);
-            assert(universal_label_reader.is_open());
-#endif
-            std::string univ_label;
-            universal_label_reader >> univ_label;
-#ifndef EXEC_ENV_OLS
-            universal_label_reader.close();
-#endif
-            LabelT label_as_num = (LabelT)std::stoul(univ_label);
-            set_universal_label(label_as_num);
-        }
-
-#ifdef EXEC_ENV_OLS
-        if (files.fileExists(dummy_map_file))
-        {
-            FileContent &content_dummy_map = files.getContent(dummy_map_file);
-            std::stringstream dummy_map_stream(
-                std::string((const char *)content_dummy_map._content, content_dummy_map._size));
-#else
-        if (file_exists(dummy_map_file))
-        {
-            std::ifstream dummy_map_stream(dummy_map_file);
-            assert(dummy_map_stream.is_open());
-#endif
-            std::string line, token;
-
-            while (std::getline(dummy_map_stream, line))
-            {
-                std::istringstream iss(line);
-                uint32_t cnt = 0;
-                uint32_t dummy_id;
-                uint32_t real_id;
-                while (std::getline(iss, token, ','))
-                {
-                    if (cnt == 0)
-                        dummy_id = (uint32_t)stoul(token);
-                    else
-                        real_id = (uint32_t)stoul(token);
-                    cnt++;
-                }
-                _dummy_pts.insert(dummy_id);
-                _has_dummy_pts.insert(real_id);
-                _dummy_to_real_map[dummy_id] = real_id;
-
-                if (_real_to_dummy_map.find(real_id) == _real_to_dummy_map.end())
-                    _real_to_dummy_map[real_id] = std::vector<uint32_t>();
-
-                _real_to_dummy_map[real_id].emplace_back(dummy_id);
-            }
-#ifndef EXEC_ENV_OLS
-            dummy_map_stream.close();
-#endif
-            diskann::cout << "Loaded dummy map" << std::endl;
-        }
-    }
-
-#ifdef EXEC_ENV_OLS
-    _pq_table.load_pq_centroid_bin(files, pq_table_bin.c_str(), nchunks_u64);
-#else
-    _pq_table.load_pq_centroid_bin(pq_table_bin.c_str(), nchunks_u64);
-#endif
-
-    diskann::cout << "Loaded PQ centroids and in-memory compressed vectors. #points: " << _num_points
-                  << " #dim: " << _data_dim << " #aligned_dim: " << _aligned_dim << " #chunks: " << _n_chunks
-                  << std::endl;
-
-    if (_n_chunks > MAX_PQ_CHUNKS)
-    {
-        std::stringstream stream;
-        stream << "Error loading index. Ensure that max PQ bytes for in-memory "
-                  "PQ data does not exceed "
-               << MAX_PQ_CHUNKS << std::endl;
-        throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
-    }
-
-    std::string disk_pq_pivots_path = this->_disk_index_file + "_pq_pivots.bin";
-#ifdef EXEC_ENV_OLS
-    if (files.fileExists(disk_pq_pivots_path))
-    {
-        _use_disk_index_pq = true;
-        // giving 0 chunks to make the _pq_table infer from the
-        // chunk_offsets file the correct value
-        _disk_pq_table.load_pq_centroid_bin(files, disk_pq_pivots_path.c_str(), 0);
-#else
-    if (file_exists(disk_pq_pivots_path))
-    {
-        _use_disk_index_pq = true;
-        // giving 0 chunks to make the _pq_table infer from the
-        // chunk_offsets file the correct value
-        _disk_pq_table.load_pq_centroid_bin(disk_pq_pivots_path.c_str(), 0);
-#endif
-        _disk_pq_n_chunks = _disk_pq_table.get_num_chunks();
-        _disk_bytes_per_point =
-            _disk_pq_n_chunks * sizeof(uint8_t); // revising disk_bytes_per_point since DISK PQ is used.
-        diskann::cout << "Disk index uses PQ data compressed down to " << _disk_pq_n_chunks << " bytes per point."
-                      << std::endl;
-    }
-
-// read index metadata
-#ifdef EXEC_ENV_OLS
-    // This is a bit tricky. We have to read the header from the
-    // disk_index_file. But  this is now exclusively a preserve of the
     // DiskPriorityIO class. So, we need to estimate how many
     // bytes are needed to store the header and read in that many using our
     // 'standard' aligned file reader approach.
@@ -1147,248 +944,89 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
 
 #endif
 
-    // Load RaBitQ reorder codes (optional)
-#ifndef EXEC_ENV_OLS
-    if (file_exists(rabitq_reorder_file))
+    // Load RaBitQ main-search codes (optional)
+#ifdef EXEC_ENV_OLS
+    if (files.fileExists(rabitq_main_file))
     {
-        struct RaBitQReorderHeader
+        FileContent &content = files.getContent(rabitq_main_file);
+        if (content._size >= sizeof(diskann::rabitq::RaBitQCodeHeader))
         {
-            char magic[8];
-            uint32_t version;
-            uint32_t metric;
-            uint32_t nb_bits;
-            uint32_t dim;
-            uint64_t num_points;
-            uint64_t code_size;
-        };
-
-        std::ifstream in(rabitq_reorder_file, std::ios::binary);
-        if (!in.is_open())
-        {
-            throw diskann::ANNException(std::string("Failed to open RaBitQ reorder code file ") + rabitq_reorder_file,
-                                        -1);
-        }
-
-        RaBitQReorderHeader hdr;
-        in.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
-        if (!in.good())
-        {
-            throw diskann::ANNException(std::string("Failed to read RaBitQ reorder code header from ") +
-                                            rabitq_reorder_file,
-                                        -1);
-        }
-
-        const std::string magic(hdr.magic, hdr.magic + 7);
-        if (magic != std::string("DARBQ1\0", 7) && magic != std::string("DARBQ1", 5))
-        {
-            throw diskann::ANNException(std::string("Invalid RaBitQ reorder code magic in ") + rabitq_reorder_file,
-                                        -1);
-        }
-
-        if (hdr.version != 1)
-        {
-            throw diskann::ANNException(std::string("Unsupported RaBitQ reorder code version in ") +
-                                            rabitq_reorder_file,
-                                        -1);
-        }
-
-        if (hdr.num_points != this->_num_points)
-        {
-            throw diskann::ANNException(std::string("RaBitQ reorder code file point count mismatch: ") +
-                                            std::to_string(hdr.num_points) + " vs index " +
-                                            std::to_string(this->_num_points),
-                                        -1);
-        }
-
-        if (hdr.code_size == 0 || hdr.dim == 0 || hdr.nb_bits < 1 || hdr.nb_bits > 9)
-        {
-            throw diskann::ANNException(std::string("Invalid RaBitQ reorder code header fields in ") +
-                                            rabitq_reorder_file,
-                                        -1);
-        }
-
-        const uint64_t expected_code_size =
-            static_cast<uint64_t>(diskann::rabitq::compute_code_size(hdr.dim, hdr.nb_bits));
-        if (hdr.code_size != expected_code_size)
-        {
-            throw diskann::ANNException(std::string("RaBitQ reorder code_size mismatch in ") + rabitq_reorder_file +
-                                            ": header=" + std::to_string(hdr.code_size) +
-                                            " expected=" + std::to_string(expected_code_size),
-                                        -1);
-        }
-
-        // For safety, require code dim to match reorder vector dim (if reorder exists), otherwise allow.
-        if (this->_reorder_data_exists && hdr.dim != this->_ndims_reorder_vecs)
-        {
-            diskann::cout << "RaBitQ reorder dim (" << hdr.dim << ") does not match reorder vector dim ("
-                          << this->_ndims_reorder_vecs << "), disabling RaBitQ reorder prefilter." << std::endl;
-        }
-        else
-        {
-            const uint64_t total_bytes = hdr.num_points * hdr.code_size;
-            if (_rabitq_reorder_codes != nullptr)
-                aligned_free(_rabitq_reorder_codes);
-
-            const size_t alloc_bytes = static_cast<size_t>(ROUND_UP(total_bytes, 64));
-            diskann::alloc_aligned((void **)&_rabitq_reorder_codes, alloc_bytes, 64);
-            std::memset(_rabitq_reorder_codes, 0, alloc_bytes);
-
-            in.read(reinterpret_cast<char *>(_rabitq_reorder_codes), total_bytes);
-            if (!in.good())
+            diskann::rabitq::RaBitQCodeHeader hdr;
+            std::memcpy(&hdr, content._content, sizeof(hdr));
+            if (diskann::rabitq::validate_header(hdr) && hdr.num_points == this->_num_points && hdr.dim == this->_data_dim)
             {
-                aligned_free(_rabitq_reorder_codes);
-                _rabitq_reorder_codes = nullptr;
-                throw diskann::ANNException(std::string("Failed to read RaBitQ reorder codes from ") +
-                                                rabitq_reorder_file,
-                                            -1);
+                const uint64_t expected_code_size =
+                    static_cast<uint64_t>(diskann::rabitq::compute_code_size(hdr.dim, hdr.nb_bits));
+                if (hdr.code_size == expected_code_size)
+                {
+                    const uint64_t total_bytes = static_cast<uint64_t>(hdr.num_points) * static_cast<uint64_t>(hdr.code_size);
+                    const uint64_t need = sizeof(hdr) + total_bytes;
+                    if (content._size >= need)
+                    {
+                        const uint64_t alloc_bytes = ROUND_UP(total_bytes, 64);
+                        if (_rabitq_main_codes != nullptr)
+                            aligned_free(_rabitq_main_codes);
+                        diskann::alloc_aligned((void **)&_rabitq_main_codes, alloc_bytes, 64);
+                        std::memset(_rabitq_main_codes, 0, alloc_bytes);
+                        std::memcpy(_rabitq_main_codes, (const uint8_t *)content._content + sizeof(hdr), total_bytes);
+                        _rabitq_main_codes_exist = true;
+                        _rabitq_main_code_size = hdr.code_size;
+                        _rabitq_main_dim = hdr.dim;
+                        _rabitq_main_nb_bits = hdr.nb_bits;
+                        _rabitq_main_metric = hdr.metric;
+                    }
+                }
             }
-
-            _rabitq_reorder_codes_exist = true;
-            _rabitq_reorder_code_size = hdr.code_size;
-            _rabitq_reorder_dim = hdr.dim;
-            _rabitq_reorder_nb_bits = hdr.nb_bits;
-            _rabitq_reorder_metric = hdr.metric;
-            diskann::cout << "Loaded RaBitQ reorder codes: nb_bits=" << _rabitq_reorder_nb_bits
-                          << " dim=" << _rabitq_reorder_dim << " code_size=" << _rabitq_reorder_code_size
-                          << " from " << rabitq_reorder_file << std::endl;
         }
     }
-#endif
-
-    // Load RaBitQ main-search codes (optional)
-#ifndef EXEC_ENV_OLS
+#else
+    if (file_exists(rabitq_main_file))
     {
-        const bool main_exists = file_exists(rabitq_main_file);
-        const bool reorder_exists = file_exists(rabitq_reorder_file);
+        try
+        {
+            std::ifstream in(rabitq_main_file, std::ios::binary);
+            if (!in)
+                throw diskann::ANNException(std::string("Failed to open RaBitQ main code file ") + rabitq_main_file, -1);
 
-        // If no dedicated main file exists, prefer aliasing reorder codes (if already loaded)
-        // to avoid doubling memory.
-        if (!main_exists && reorder_exists && _rabitq_reorder_codes_exist && _rabitq_reorder_codes != nullptr &&
-            _rabitq_reorder_dim == this->_data_dim)
-        {
-            _rabitq_main_codes_exist = true;
-            _rabitq_main_codes = _rabitq_reorder_codes;
-            _rabitq_main_code_size = _rabitq_reorder_code_size;
-            _rabitq_main_dim = _rabitq_reorder_dim;
-            _rabitq_main_nb_bits = _rabitq_reorder_nb_bits;
-            _rabitq_main_metric = _rabitq_reorder_metric;
-            _rabitq_main_codes_alias_reorder = true;
-            diskann::cout << "RaBitQ main code file not found; aliasing reorder codes as main codes: "
-                          << rabitq_reorder_file << std::endl;
-        }
-        else
-        {
-            const std::string file_to_load = main_exists ? rabitq_main_file : (reorder_exists ? rabitq_reorder_file : std::string());
-            if (!file_to_load.empty())
+            diskann::rabitq::RaBitQCodeHeader hdr;
+            in.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
+            if (!in)
+                throw diskann::ANNException(std::string("Failed to read RaBitQ main code header from ") + rabitq_main_file,
+                                            -1);
+
+            if (!diskann::rabitq::validate_header(hdr) || hdr.num_points != this->_num_points || hdr.dim != this->_data_dim)
+                throw diskann::ANNException(std::string("Invalid RaBitQ main code header in ") + rabitq_main_file, -1);
+
+            const uint64_t expected_code_size =
+                static_cast<uint64_t>(diskann::rabitq::compute_code_size(hdr.dim, hdr.nb_bits));
+            if (hdr.code_size != expected_code_size)
+                throw diskann::ANNException(std::string("RaBitQ main code_size mismatch in ") + rabitq_main_file, -1);
+
+            const uint64_t total_bytes = static_cast<uint64_t>(hdr.num_points) * static_cast<uint64_t>(hdr.code_size);
+            const uint64_t alloc_bytes = ROUND_UP(total_bytes, 64);
+
+            if (_rabitq_main_codes != nullptr)
+                aligned_free(_rabitq_main_codes);
+            diskann::alloc_aligned((void **)&_rabitq_main_codes, alloc_bytes, 64);
+            std::memset(_rabitq_main_codes, 0, alloc_bytes);
+
+            in.read(reinterpret_cast<char *>(_rabitq_main_codes), total_bytes);
+            if (!in)
             {
-                struct RaBitQReorderHeader
-                {
-                    char magic[8];
-                    uint32_t version;
-                    uint32_t metric;
-                    uint32_t nb_bits;
-                    uint32_t dim;
-                    uint64_t num_points;
-                    uint64_t code_size;
-                };
-
-                std::ifstream in(file_to_load, std::ios::binary);
-                if (!in.is_open())
-                {
-                    throw diskann::ANNException(std::string("Failed to open RaBitQ main code file ") + file_to_load,
-                                                -1);
-                }
-
-                RaBitQReorderHeader hdr;
-                in.read(reinterpret_cast<char *>(&hdr), sizeof(hdr));
-                if (!in.good())
-                {
-                    throw diskann::ANNException(std::string("Failed to read RaBitQ main code header from ") +
-                                                    file_to_load,
-                                                -1);
-                }
-
-                const std::string magic(hdr.magic, hdr.magic + 7);
-                if (magic != std::string("DARBQ1\0", 7) && magic != std::string("DARBQ1", 5))
-                {
-                    throw diskann::ANNException(std::string("Invalid RaBitQ main code magic in ") + file_to_load, -1);
-                }
-
-                if (hdr.version != 1)
-                {
-                    throw diskann::ANNException(std::string("Unsupported RaBitQ main code version in ") +
-                                                    file_to_load,
-                                                -1);
-                }
-
-                if (hdr.num_points != this->_num_points)
-                {
-                    throw diskann::ANNException(std::string("RaBitQ main code file point count mismatch: ") +
-                                                    std::to_string(hdr.num_points) + " vs index " +
-                                                    std::to_string(this->_num_points),
-                                                -1);
-                }
-
-                if (hdr.dim != this->_data_dim)
-                {
-                    diskann::cout << "RaBitQ main code dim (" << hdr.dim << ") does not match index dim ("
-                                  << this->_data_dim << "), disabling RaBitQ main scoring." << std::endl;
-                }
-                else if (hdr.code_size == 0 || hdr.nb_bits < 1 || hdr.nb_bits > 9)
-                {
-                    throw diskann::ANNException(std::string("Invalid RaBitQ main code header fields in ") +
-                                                    file_to_load,
-                                                -1);
-                }
-                else
-                {
-                    const uint64_t expected_code_size =
-                        static_cast<uint64_t>(diskann::rabitq::compute_code_size(hdr.dim, hdr.nb_bits));
-                    if (hdr.code_size != expected_code_size)
-                    {
-                        throw diskann::ANNException(std::string("RaBitQ main code_size mismatch in ") + file_to_load +
-                                                        ": header=" + std::to_string(hdr.code_size) +
-                                                        " expected=" + std::to_string(expected_code_size),
-                                                    -1);
-                    }
-
-                    const uint64_t total_bytes = hdr.num_points * hdr.code_size;
-
-                    if (_rabitq_main_codes != nullptr && !_rabitq_main_codes_alias_reorder)
-                        aligned_free(_rabitq_main_codes);
-
-                    _rabitq_main_codes_alias_reorder = false;
-                    const size_t alloc_bytes = static_cast<size_t>(ROUND_UP(total_bytes, 64));
-                    diskann::alloc_aligned((void **)&_rabitq_main_codes, alloc_bytes, 64);
-                    std::memset(_rabitq_main_codes, 0, alloc_bytes);
-
-                    in.read(reinterpret_cast<char *>(_rabitq_main_codes), total_bytes);
-                    if (!in.good())
-                    {
-                        aligned_free(_rabitq_main_codes);
-                        _rabitq_main_codes = nullptr;
-                        throw diskann::ANNException(std::string("Failed to read RaBitQ main codes from ") +
-                                                        file_to_load,
-                                                    -1);
-                    }
-
-                    _rabitq_main_codes_exist = true;
-                    _rabitq_main_code_size = hdr.code_size;
-                    _rabitq_main_dim = hdr.dim;
-                    _rabitq_main_nb_bits = hdr.nb_bits;
-                    _rabitq_main_metric = hdr.metric;
-
-                    if (!main_exists)
-                    {
-                        diskann::cout << "RaBitQ main code file not found; loaded reorder code file as main codes: "
-                                      << file_to_load << std::endl;
-                    }
-
-                    diskann::cout << "Loaded RaBitQ main codes: nb_bits=" << _rabitq_main_nb_bits
-                                  << " dim=" << _rabitq_main_dim << " code_size=" << _rabitq_main_code_size
-                                  << " from " << file_to_load << std::endl;
-                }
+                aligned_free(_rabitq_main_codes);
+                _rabitq_main_codes = nullptr;
+                throw diskann::ANNException(std::string("Failed to read RaBitQ main codes from ") + rabitq_main_file, -1);
             }
+
+            _rabitq_main_codes_exist = true;
+            _rabitq_main_code_size = hdr.code_size;
+            _rabitq_main_dim = hdr.dim;
+            _rabitq_main_nb_bits = hdr.nb_bits;
+            _rabitq_main_metric = hdr.metric;
+        }
+        catch (const std::exception &e)
+        {
+            diskann::cout << "Warning: failed to load RaBitQ main codes: " << e.what() << std::endl;
         }
     }
 #endif
@@ -1953,44 +1591,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         // Candidate pool before exact reorder.
         if (full_retset.size() > k_search * FULL_PRECISION_REORDER_MULTIPLIER)
             full_retset.erase(full_retset.begin() + k_search * FULL_PRECISION_REORDER_MULTIPLIER, full_retset.end());
-
-        // Optional: RaBitQ prefilter to prune reorder IO for INNER_PRODUCT.
-        // Enable via env var DISKANN_USE_RABITQ_REORDER_PREFILTER=1.
-        // Control target multiplier via DISKANN_RABITQ_REORDER_PREFILTER_MULT (default: FULL_PRECISION_REORDER_MULTIPLIER).
-        const char *use_rabitq_env = std::getenv("DISKANN_USE_RABITQ_REORDER_PREFILTER");
-        const bool use_rabitq_prefilter =
-            (use_rabitq_env != nullptr && std::atoi(use_rabitq_env) != 0 && _rabitq_reorder_codes_exist &&
-             _rabitq_reorder_codes != nullptr && metric == diskann::Metric::INNER_PRODUCT);
-
-        if (use_rabitq_prefilter)
-        {
-            uint64_t mult = FULL_PRECISION_REORDER_MULTIPLIER;
-            if (const char *mult_env = std::getenv("DISKANN_RABITQ_REORDER_PREFILTER_MULT"))
-            {
-                const int v = std::atoi(mult_env);
-                if (v > 0)
-                    mult = static_cast<uint64_t>(v);
-            }
-
-            const uint64_t target = std::min<uint64_t>(full_retset.size(), k_search * mult);
-            if (target < full_retset.size())
-            {
-                // Score all candidates using RaBitQ and keep the best 'target'.
-                for (auto &nbr : full_retset)
-                {
-                    const uint64_t id = nbr.id;
-                    const uint8_t *code = _rabitq_reorder_codes + id * _rabitq_reorder_code_size;
-                    const float approx_ip = diskann::rabitq::approx_inner_product_from_code(
-                        code, query_float, static_cast<size_t>(_rabitq_reorder_dim),
-                        static_cast<size_t>(_rabitq_reorder_nb_bits));
-                    nbr.distance = -approx_ip;
-                }
-
-                std::nth_element(full_retset.begin(), full_retset.begin() + target, full_retset.end());
-                full_retset.erase(full_retset.begin() + target, full_retset.end());
-                std::sort(full_retset.begin(), full_retset.end());
-            }
-        }
 
         for (size_t i = 0; i < full_retset.size(); ++i)
         {
