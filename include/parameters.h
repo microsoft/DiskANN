@@ -164,6 +164,7 @@ struct IndexLoadParams
     std::string seller_file_path;
     std::string bitmask_label_file_path;
     std::string integer_label_file_path;
+    std::string universal_label_file_path;
 
     IndexLoadParams() = default;
 

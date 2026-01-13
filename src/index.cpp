@@ -764,8 +764,8 @@ void Index<T, TagT, LabelT>::load(const IndexLoadParams & load_params)
         _label_to_start_id.clear();
         label_helper().load_label_medoids(labels_to_medoids, _label_to_start_id);
 
-        std::string universal_label_file(filename);
-        universal_label_file += "_universal_label.txt";
+        std::string universal_label_file = load_params.universal_label_file_path.empty()
+            ? filename + "_universal_label.txt" : load_params.universal_label_file_path;
         if (file_exists(universal_label_file))
         {
             std::ifstream universal_label_reader(universal_label_file);
