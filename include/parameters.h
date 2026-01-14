@@ -146,4 +146,43 @@ class IndexWriteParametersBuilder
     uint32_t _num_diverse_build{ defaults::NUM_DIVERSE_BUILD };
 };
 
+struct IndexLoadParams
+{
+    std::string index_file_path;
+    uint32_t num_threads{defaults::NUM_THREADS};
+    uint32_t search_list_size{defaults::SEARCH_LIST_SIZE};
+    LabelFormatType label_format_type{LabelFormatType::String};
+
+    // Optional file paths - if empty, will be derived from index_file_path
+    std::string data_file_path;
+    std::string tags_file_path;
+    std::string delete_set_file_path;
+    std::string graph_file_path;
+    std::string labels_file_path;
+    std::string labels_to_medoids_file_path;
+    std::string labels_map_file_path;
+    std::string seller_file_path;
+    std::string bitmask_label_file_path;
+    std::string integer_label_file_path;
+    std::string universal_label_file_path;
+
+    IndexLoadParams() = default;
+
+    IndexLoadParams(const std::string &index_file_path, uint32_t num_threads = defaults::NUM_THREADS,
+                    uint32_t search_list_size = defaults::SEARCH_LIST_SIZE,
+                    LabelFormatType label_format_type = LabelFormatType::String)
+        : index_file_path(index_file_path), num_threads(num_threads), search_list_size(search_list_size),
+          label_format_type(label_format_type)
+    {
+    }
+
+    IndexLoadParams(const char *index_file_path, uint32_t num_threads = defaults::NUM_THREADS,
+                    uint32_t search_list_size = defaults::SEARCH_LIST_SIZE,
+                    LabelFormatType label_format_type = LabelFormatType::String)
+        : index_file_path(index_file_path), num_threads(num_threads), search_list_size(search_list_size),
+          label_format_type(label_format_type)
+    {
+    }
+};
+
 } // namespace diskann

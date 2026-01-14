@@ -53,6 +53,8 @@ class AbstractIndex
 #ifdef EXEC_ENV_OLS
     virtual void load(AlignedFileReader &reader, uint32_t num_threads, uint32_t search_l) = 0;
 #else
+    virtual void load(const IndexLoadParams& index_load_params) = 0;
+
     virtual void load(const char *index_file, uint32_t num_threads, uint32_t search_l, LabelFormatType label_format_type = LabelFormatType::String) = 0;
 #endif
 
