@@ -31,7 +31,7 @@ bool generate_pq(const std::string &data_path, const std::string &index_prefix_p
                                     (uint32_t)num_pq_chunks, KMEANS_ITERS_FOR_PQ, pq_pivots_path);
     }
     diskann::generate_pq_data_from_pivots<T>(data_path, (uint32_t)num_pq_centers, (uint32_t)num_pq_chunks,
-                                             pq_pivots_path, pq_compressed_vectors_path, true);
+                                             pq_pivots_path, pq_compressed_vectors_path, opq);
 
     delete[] train_data;
 

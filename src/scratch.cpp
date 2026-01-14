@@ -14,8 +14,8 @@ namespace diskann
 //
 template <typename T>
 InMemQueryScratch<T>::InMemQueryScratch(uint32_t search_l, uint32_t indexing_l, uint32_t r, uint32_t maxc, size_t dim,
-                                        size_t aligned_dim, size_t alignment_factor, bool init_pq_scratch)
-    : _L(0), _R(r), _maxc(maxc)
+                                        size_t aligned_dim, size_t alignment_factor, std::vector<uint32_t> &location_to_sellers, bool init_pq_scratch)
+    : _L(0), _R(r), _maxc(maxc), _best_diverse_nodes(location_to_sellers)
 {
     if (search_l == 0 || indexing_l == 0 || r == 0 || dim == 0)
     {
@@ -56,6 +56,8 @@ template <typename T> void InMemQueryScratch<T>::clear()
     _expanded_nodes_set.clear();
     _expanded_nghrs_vec.clear();
     _occlude_list_output.clear();
+    _best_diverse_nodes.clear();
+    
 }
 
 template <typename T> void InMemQueryScratch<T>::resize_for_new_L(uint32_t new_l)
@@ -91,9 +93,10 @@ template <typename T> void SSDQueryScratch<T>::reset()
     visited.clear();
     retset.clear();
     full_retset.clear();
+    best_diverse_nodes.clear();
 }
 
-template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve)
+template <typename T> SSDQueryScratch<T>::SSDQueryScratch(size_t aligned_dim, size_t visited_reserve, std::vector<uint32_t> &location_to_sellers) : best_diverse_nodes(location_to_sellers)
 {
     size_t coord_alloc_size = ROUND_UP(sizeof(T) * aligned_dim, 256);
 
@@ -121,7 +124,7 @@ template <typename T> SSDQueryScratch<T>::~SSDQueryScratch()
 }
 
 template <typename T>
-SSDThreadData<T>::SSDThreadData(size_t aligned_dim, size_t visited_reserve) : scratch(aligned_dim, visited_reserve)
+SSDThreadData<T>::SSDThreadData(size_t aligned_dim, size_t visited_reserve, std::vector<uint32_t> &location_to_sellers) : scratch(aligned_dim, visited_reserve, location_to_sellers)
 {
 }
 

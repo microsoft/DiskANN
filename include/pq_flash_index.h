@@ -62,23 +62,23 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
                                             const bool shuffle = false);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
-                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
+                                              uint64_t *res_ids, float *res_dists, const uint64_t beam_width, const uint32_t max_l_per_seller = std::numeric_limits<uint32_t>::max(), 
                                               const bool use_reorder_data = false, QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const bool use_filter, const LabelT &filter_label,
+                                              const bool use_filter, const LabelT &filter_label, const uint32_t max_l_per_seller = std::numeric_limits<uint32_t>::max(), 
                                               const bool use_reorder_data = false, QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
-                                              const uint32_t io_limit, const bool use_reorder_data = false,
+                                              const uint32_t io_limit, const uint32_t max_l_per_seller = std::numeric_limits<uint32_t>::max(), const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT void cached_beam_search(const T *query, const uint64_t k_search, const uint64_t l_search,
                                               uint64_t *res_ids, float *res_dists, const uint64_t beam_width,
                                               const bool use_filter, const LabelT &filter_label,
-                                              const uint32_t io_limit, const bool use_reorder_data = false,
+                                              const uint32_t io_limit, const uint32_t max_l_per_seller = std::numeric_limits<uint32_t>::max(), const bool use_reorder_data = false,
                                               QueryStats *stats = nullptr);
 
     DISKANN_DLLEXPORT LabelT get_converted_label(const std::string &filter_label);
@@ -118,10 +118,14 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     DISKANN_DLLEXPORT inline bool point_has_label(uint32_t point_id, LabelT label_id);
     std::unordered_map<std::string, LabelT> load_label_map(std::basic_istream<char> &infile);
     DISKANN_DLLEXPORT void parse_label_file(std::basic_istream<char> &infile, size_t &num_pts_labels);
+
     DISKANN_DLLEXPORT void get_label_file_metadata(const std::string &fileContent, uint32_t &num_pts,
                                                    uint32_t &num_total_labels);
     DISKANN_DLLEXPORT void generate_random_labels(std::vector<LabelT> &labels, const uint32_t num_labels,
                                                   const uint32_t nthreads);
+
+    DISKANN_DLLEXPORT void parse_seller_file(const std::string &label_file, size_t &num_pts_labels);
+
     void reset_stream_for_reading(std::basic_istream<char> &infile);
 
     // sector # on disk where node_id is present with in the graph part
@@ -233,6 +237,13 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     tsl::robin_map<uint32_t, uint32_t> _dummy_to_real_map;
     tsl::robin_map<uint32_t, std::vector<uint32_t>> _real_to_dummy_map;
     std::unordered_map<std::string, LabelT> _label_map;
+
+
+    bool _diverse_index = false;
+    uint32_t _max_L_per_seller = 0;
+    std::vector<uint32_t> _location_to_seller;
+    std::string _seller_file;
+
 
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate

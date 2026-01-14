@@ -51,6 +51,12 @@ add_executable(compute_groundtruth compute_groundtruth.cpp)
 target_include_directories(compute_groundtruth PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
 target_link_libraries(compute_groundtruth ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
 
+
+# Compute ground truth thing outside of DiskANN main source that depends on MKL.
+add_executable(compute_diverse_groundtruth compute_diverse_groundtruth.cpp)
+target_include_directories(compute_diverse_groundtruth PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
+target_link_libraries(compute_diverse_groundtruth ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
+
 add_executable(compute_groundtruth_for_filters compute_groundtruth_for_filters.cpp)
 target_include_directories(compute_groundtruth_for_filters PRIVATE ${DISKANN_MKL_INCLUDE_DIRECTORIES})
 target_link_libraries(compute_groundtruth_for_filters ${PROJECT_NAME} ${DISKANN_MKL_LINK_LIBRARIES} ${DISKANN_ASYNC_LIB} Boost::program_options)
