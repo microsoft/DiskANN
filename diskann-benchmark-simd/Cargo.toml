@@ -15,7 +15,7 @@ path = "src/bin.rs"
 anyhow.workspace = true
 diskann-utils = { workspace = true, default-features = false }
 half = { workspace = true, features = ["rand_distr"] }
-diskann-benchmark-runner = { path = "../diskann-benchmark-runner" }
+diskann-benchmark-runner = { workspace = true }
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

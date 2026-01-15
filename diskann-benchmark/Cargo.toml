@@ -14,7 +14,7 @@ bit-set.workspace = true
 bytemuck.workspace = true
 roaring.workspace = true
 clap = { workspace = true, features = ["derive"] }
-diskann-providers = { path = "../diskann-providers" }
+diskann-providers = { workspace = true }
 diskann.workspace = true
 diskann-utils.workspace = true
 half = { workspace = true, features = ["rand_distr", "num-traits"] }
@@ -30,10 +30,10 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 diskann-vector.workspace = true
 diskann-wide.workspace = true
 diskann-label-filter.workspace = true
-diskann-tools = { path = "../diskann-tools" }
+diskann-tools = { workspace = true }
 diskann-disk = { workspace = true, optional = true }
 cfg-if.workspace = true
-diskann-benchmark-runner = { path = "../diskann-benchmark-runner" }
+diskann-benchmark-runner = { workspace = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
 scopeguard = { version = "1.2", optional = true }

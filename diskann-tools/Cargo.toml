@@ -5,16 +5,17 @@ version.workspace = true
 authors.workspace = true
 description.workspace = true
 documentation.workspace = true
+license.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 byteorder.workspace = true
 clap = { workspace = true, features = ["derive"] }
-diskann-providers = { path = "../diskann-providers", default-features = false } # see `linalg/Cargo.toml`
-diskann-vector = { path = "../diskann-vector" }
-diskann-disk = { path = "../diskann-disk" }
-diskann-utils = { path = "../diskann-utils" }
+diskann-providers = { workspace = true, default-features = false } # see `linalg/Cargo.toml`
+diskann-vector = { workspace = true }
+diskann-disk = { workspace = true }
+diskann-utils = { workspace = true }
 bytemuck.workspace = true
 num_cpus.workspace = true
 rayon.workspace = true
