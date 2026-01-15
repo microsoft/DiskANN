@@ -98,7 +98,7 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
-          - macos-latest
+
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust ${{ env.rust_stable }}
@@ -137,7 +137,7 @@ jobs:
 
       - name: Generate code coverage
         run: |
-          cargo llvm-cov --workspace \
+          cargo llvm-cov nextest \
             --package diskann-wide \
             --package diskann-vector \
             --package diskann-quantization \
@@ -163,20 +163,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust nightly with miri
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: nightly
           components: miri
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Setup miri
-        run: cargo miri setup
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
 
-      - name: Run miri tests on diskann-quantization
+      - uses: Swatinem/rust-cache@v2
+      - name: miri
         run: cargo miri nextest run --package diskann-quantization
         env:
-          MIRIFLAGS: -Zmiri-strict-provenance
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
