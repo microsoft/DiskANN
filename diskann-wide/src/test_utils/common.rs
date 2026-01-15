@@ -124,9 +124,8 @@ impl ScalarTraits for f32 {
     }
 
     fn exact_eq(self, other: Self) -> bool {
-        // Miri does not seem to handle `total_cmp` correctly when it comes to `NAN`s - so
-        // we special case this comparison when running with Miri.
-        #[cfg(miri)]
+        // NAN handling can be dependent on environment. For testing purposes, we just care
+        // that NANs are produced.
         if self.is_nan() && other.is_nan() {
             return true;
         }
