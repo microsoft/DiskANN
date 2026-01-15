@@ -1,0 +1,390 @@
+{
+  "file": "diskann/src/graph/test/cases/grid.rs",
+  "test": "graph/test/cases/grid/search_4_4",
+  "payload": [
+    {
+      "beam_width": 1,
+      "comparisons": 78,
+      "description": "With a query of all -1s, we expect the neighbor with all zeros to bethe closest. Due to how the grid is generated, this will be coordinate 0. Next, there should be `dim` neighbors that are one further away. Increasing the beam width should increase the number of comparisons.",
+      "grid_dims": 4,
+      "grid_size": 4,
+      "hops": 22,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 22,
+        "get_vector": 78,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        -1.0,
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "results": [
+        [
+          0,
+          4.0
+        ],
+        [
+          1,
+          7.0
+        ],
+        [
+          4,
+          7.0
+        ],
+        [
+          64,
+          7.0
+        ],
+        [
+          16,
+          7.0
+        ],
+        [
+          5,
+          10.0
+        ],
+        [
+          17,
+          10.0
+        ],
+        [
+          65,
+          10.0
+        ],
+        [
+          80,
+          10.0
+        ],
+        [
+          68,
+          10.0
+        ]
+      ]
+    },
+    {
+      "beam_width": 2,
+      "comparisons": 103,
+      "description": "With a query of all -1s, we expect the neighbor with all zeros to bethe closest. Due to how the grid is generated, this will be coordinate 0. Next, there should be `dim` neighbors that are one further away. Increasing the beam width should increase the number of comparisons.",
+      "grid_dims": 4,
+      "grid_size": 4,
+      "hops": 31,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 31,
+        "get_vector": 103,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        -1.0,
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "results": [
+        [
+          0,
+          4.0
+        ],
+        [
+          4,
+          7.0
+        ],
+        [
+          16,
+          7.0
+        ],
+        [
+          64,
+          7.0
+        ],
+        [
+          1,
+          7.0
+        ],
+        [
+          5,
+          10.0
+        ],
+        [
+          65,
+          10.0
+        ],
+        [
+          17,
+          10.0
+        ],
+        [
+          80,
+          10.0
+        ],
+        [
+          68,
+          10.0
+        ]
+      ]
+    },
+    {
+      "beam_width": 4,
+      "comparisons": 129,
+      "description": "With a query of all -1s, we expect the neighbor with all zeros to bethe closest. Due to how the grid is generated, this will be coordinate 0. Next, there should be `dim` neighbors that are one further away. Increasing the beam width should increase the number of comparisons.",
+      "grid_dims": 4,
+      "grid_size": 4,
+      "hops": 49,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 49,
+        "get_vector": 129,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        -1.0,
+        -1.0,
+        -1.0,
+        -1.0
+      ],
+      "results": [
+        [
+          0,
+          4.0
+        ],
+        [
+          16,
+          7.0
+        ],
+        [
+          64,
+          7.0
+        ],
+        [
+          4,
+          7.0
+        ],
+        [
+          1,
+          7.0
+        ],
+        [
+          5,
+          10.0
+        ],
+        [
+          65,
+          10.0
+        ],
+        [
+          17,
+          10.0
+        ],
+        [
+          80,
+          10.0
+        ],
+        [
+          68,
+          10.0
+        ]
+      ]
+    },
+    {
+      "beam_width": 1,
+      "comparisons": 30,
+      "description": "With a query of all `size`s, we expect the start point to be the first result as this is not filtered by default.",
+      "grid_dims": 4,
+      "grid_size": 4,
+      "hops": 11,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 11,
+        "get_vector": 30,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        4.0,
+        4.0,
+        4.0,
+        4.0
+      ],
+      "results": [
+        [
+          4294967295,
+          0.0
+        ],
+        [
+          255,
+          4.0
+        ],
+        [
+          254,
+          7.0
+        ],
+        [
+          251,
+          7.0
+        ],
+        [
+          239,
+          7.0
+        ],
+        [
+          191,
+          7.0
+        ],
+        [
+          175,
+          10.0
+        ],
+        [
+          235,
+          10.0
+        ],
+        [
+          187,
+          10.0
+        ],
+        [
+          250,
+          10.0
+        ]
+      ]
+    },
+    {
+      "beam_width": 2,
+      "comparisons": 30,
+      "description": "With a query of all `size`s, we expect the start point to be the first result as this is not filtered by default.",
+      "grid_dims": 4,
+      "grid_size": 4,
+      "hops": 11,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 11,
+        "get_vector": 30,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        4.0,
+        4.0,
+        4.0,
+        4.0
+      ],
+      "results": [
+        [
+          4294967295,
+          0.0
+        ],
+        [
+          255,
+          4.0
+        ],
+        [
+          254,
+          7.0
+        ],
+        [
+          251,
+          7.0
+        ],
+        [
+          239,
+          7.0
+        ],
+        [
+          191,
+          7.0
+        ],
+        [
+          175,
+          10.0
+        ],
+        [
+          235,
+          10.0
+        ],
+        [
+          187,
+          10.0
+        ],
+        [
+          250,
+          10.0
+        ]
+      ]
+    },
+    {
+      "beam_width": 4,
+      "comparisons": 30,
+      "description": "With a query of all `size`s, we expect the start point to be the first result as this is not filtered by default.",
+      "grid_dims": 4,
+      "grid_size": 4,
+      "hops": 11,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 11,
+        "get_vector": 30,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 10,
+      "query": [
+        4.0,
+        4.0,
+        4.0,
+        4.0
+      ],
+      "results": [
+        [
+          4294967295,
+          0.0
+        ],
+        [
+          255,
+          4.0
+        ],
+        [
+          254,
+          7.0
+        ],
+        [
+          251,
+          7.0
+        ],
+        [
+          239,
+          7.0
+        ],
+        [
+          191,
+          7.0
+        ],
+        [
+          175,
+          10.0
+        ],
+        [
+          235,
+          10.0
+        ],
+        [
+          187,
+          10.0
+        ],
+        [
+          250,
+          10.0
+        ]
+      ]
+    }
+  ]
+}

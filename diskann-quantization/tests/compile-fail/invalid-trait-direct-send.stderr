@@ -1,0 +1,9 @@
+error[E0277]: `Rc<[{integer}; 2]>` cannot be sent between threads safely
+  --> tests/compile-fail/invalid-trait-direct-send.rs:11:13
+   |
+11 |     let _ = poly!({std::fmt::Debug + Send}, x, GlobalAllocator).unwrap();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Rc<[{integer}; 2]>` cannot be sent between threads safely
+   |
+   = help: the trait `Send` is not implemented for `Rc<[{integer}; 2]>`
+   = note: required for the cast from `NonNull<Rc<[{integer}; 2]>>` to `NonNull<dyn Debug + Send>`
+   = note: this error originates in the macro `$crate::alloc::poly` which comes from the expansion of the macro `poly` (in Nightly builds, run with -Z macro-backtrace for more info)

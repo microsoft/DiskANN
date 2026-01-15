@@ -1,0 +1,56 @@
+{
+  "search_directories": [
+    "../big-ann-benchmarks/data/MSTuringANNS",
+    "../big-ann-benchmarks/neurips23/runbooks"
+  ],
+  "jobs": [
+    {
+      "type": "async-dynamic-index-run",
+      "content": {
+        "build": {
+          "data_type": "float32",
+          "data": "base1b.fbin.crop_nb_1000000",
+          "distance": "squared_l2",
+          "max_degree": 64,
+          "l_build": 128,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 4
+        },
+        "search_phase": {
+            "search-type": "topk",
+            "queries": "query100K.fbin",
+            "groundtruth": "msturing-gt-1M",
+            "reps": 1,
+            "num_threads": [
+              2
+            ],
+            "runs": [
+              {
+                "search_n": 10,
+                "search_l": [
+                  32,
+                  200
+                ],
+                "recall_k": 10
+              }
+            ]
+        },
+        "runbook_params": {
+            "runbook_path": "simple_runbook.yaml",
+            "dataset_name": "msturing-1M",
+            "gt_directory": "1000000/simple_runbook.yaml",
+            "ip_delete_method": {
+              "method": "visited_and_top_k",
+              "params": {
+                "k_value": 50,
+                "l_value": 128
+              }
+            },
+            "ip_delete_num_to_replace": 3,
+            "consolidate_threshold": 0.2
+          }
+      }
+    }
+  ]
+}

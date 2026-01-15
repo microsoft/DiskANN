@@ -1,0 +1,41 @@
+[package]
+name = "diskann-utils"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+half = { workspace = true, features = ["rand_distr", "num-traits"] }
+cfg-if.workspace = true
+rayon = { workspace = true, optional = true }
+thiserror.workspace = true
+diskann-vector = { workspace = true }
+rand = { workspace = true }
+diskann-wide = { workspace = true }
+
+[lints]
+workspace = true
+
+# [lints.clippy]
+# undocumented_unsafe_blocks = "warn"
+# unwrap_used = "warn"
+# expect_used = "warn"
+# panic = "warn"
+# uninlined_format_args = "allow"
+
+[dev-dependencies]
+cfg-if.workspace = true
+rand.workspace = true
+rstest.workspace = true
+
+
+[features]
+default = ["rayon"]
+
+# Enable Rayon-based Parallelism for tagged kernels.
+rayon = ["dep:rayon"]
+# Enable testing utilities like test_data_root()
+testing = []

@@ -1,0 +1,24 @@
+[package]
+name = "diskann-linalg"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+faer = { version = "0.23", default-features = false, features = ["std"]}
+cfg-if.workspace = true
+thiserror.workspace = true
+rand_distr.workspace = true
+rand.workspace = true
+
+[lints]
+clippy.undocumented_unsafe_blocks = "warn"
+clippy.uninlined_format_args = "allow"
+
+[dev-dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+approx = { workspace = true }

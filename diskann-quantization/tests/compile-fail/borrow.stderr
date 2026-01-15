@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `x` as mutable because it is also borrowed as immutable
+  --> tests/compile-fail/borrow.rs:14:5
+   |
+12 |     let slice = BitSlice::<8, Unsigned>::new(x.as_slice(), 3).unwrap();
+   |                                              - immutable borrow occurs here
+13 |     assert_eq!(slice.get(0).unwrap(), 0);
+14 |     x[1] = 1;
+   |     ^ mutable borrow occurs here
+15 |     assert_eq!(slice.get(0).unwrap(), 0);
+   |                ----- immutable borrow later used here

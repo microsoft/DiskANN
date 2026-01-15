@@ -1,0 +1,22 @@
+{
+  "search_directories": [],
+  "output_directory": null,
+  "jobs": [
+    {
+      "type": "test-input-types",
+      "content": {
+        "data_type": "float16",
+        "dim": 128,
+        "error_when_checked": false
+      }
+    },
+    {
+      "type": "test-input-types",
+      "content": {
+        "data_type": "f32",
+        "dim": 128,
+        "error_when_checked": false
+      }
+    }
+  ]
+}

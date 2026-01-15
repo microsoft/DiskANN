@@ -1,0 +1,7 @@
+The example JSON representation for "test-input-dim" is:
+{
+  "type": "test-input-dim",
+  "content": {
+    "dim": 128
+  }
+}

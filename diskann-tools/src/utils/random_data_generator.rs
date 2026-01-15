@@ -1,0 +1,200 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+use std::io::{BufWriter, Write};
+
+use byteorder::{LittleEndian, WriteBytesExt};
+use diskann_providers::{
+    storage::StorageWriteProvider,
+    utils::{math_util, write_metadata},
+};
+use diskann_vector::Half;
+
+use crate::utils::{CMDResult, CMDToolError, DataType};
+
+type WriteVectorMethodType<T> = Box<dyn Fn(&mut BufWriter<T>, &Vec<f32>) -> CMDResult<bool>>;
+
+/**
+Generate random points around a sphere with the specified radius and write them to a file
+
+When data_type is int8 or uint8 radius must be <= 127.0
+ */
+#[allow(clippy::panic)]
+pub fn write_random_data<StorageProvider: StorageWriteProvider>(
+    storage_provider: &StorageProvider,
+    output_file: &str,
+    data_type: DataType,
+    number_of_dimensions: usize,
+    number_of_vectors: u64,
+    radius: f32,
+) -> CMDResult<()> {
+    if (data_type == DataType::Int8 || data_type == DataType::Uint8)
+        && radius > 127.0
+        && radius <= 0.0
+    {
+        return Err(CMDToolError {
+            details:
+            "Error: for int8/uint8 datatypes, radius (L2 norm) cannot be greater than 127 and less than or equal to 0"
+                .to_string(),
+        });
+    }
+
+    let file = storage_provider.create_for_write(output_file)?;
+    let writer = BufWriter::new(file);
+
+    write_random_data_writer(
+        writer,
+        data_type,
+        number_of_dimensions,
+        number_of_vectors,
+        radius,
+    )
+}
+
+/**
+Generate random points around a sphere with the specified radius and write them to a file
+
+When data_type is int8 or uint8 radius must be <= 127.0
+*/
+#[allow(clippy::panic)]
+pub fn write_random_data_writer<T: Sized + Write>(
+    mut writer: BufWriter<T>,
+    data_type: DataType,
+    number_of_dimensions: usize,
+    number_of_vectors: u64,
+    radius: f32,
+) -> CMDResult<()> {
+    if (data_type == DataType::Int8 || data_type == DataType::Uint8)
+        && radius > 127.0
+        && radius <= 0.0
+    {
+        return Err(CMDToolError {
+            details:
+                "Error: for int8/uint8 datatypes, radius (L2 norm) cannot be greater than 127 and less than or equal to 0"
+                    .to_string(),
+        });
+    }
+
+    write_metadata(&mut writer, number_of_vectors, number_of_dimensions)?;
+
+    let block_size = 131072;
+    let nblks = u64::div_ceil(number_of_vectors, block_size);
+    println!("# blks: {}", nblks);
+
+    for i in 0..nblks {
+        let cblk_size = std::cmp::min(number_of_vectors - i * block_size, block_size);
+
+        // Each data has special code to write it out.  These methods convert the random data
+        // from the input vector into the specific datatype and writes it out to the data file.
+        let write_method: WriteVectorMethodType<T> = match data_type {
+            DataType::Float => Box::new(
+                |writer: &mut BufWriter<T>, vector: &Vec<f32>| -> CMDResult<bool> {
+                    let mut found_nonzero = false;
+                    for value in vector {
+                        writer.write_f32::<LittleEndian>(*value)?;
+                        found_nonzero = found_nonzero || ((*value != 0f32) && value.is_finite());
+                    }
+                    Ok(found_nonzero)
+                },
+            ),
+            DataType::Uint8 => Box::new(
+                |writer: &mut BufWriter<T>, vector: &Vec<f32>| -> CMDResult<bool> {
+                    let mut found_nonempty = false;
+                    // Since u8 is unsigned, add 128 to ensure non-negative before
+                    // rounding and casting
+                    for value in vector.iter().map(|&item| (item + 128.0).round() as u8) {
+                        writer.write_u8(value)?;
+
+                        // Since we add 128 to the random number to prevent negative values,
+                        // 'empty' is a vector where all indices hold 128u8.
+                        found_nonempty = found_nonempty || (value != 128u8);
+                    }
+                    Ok(found_nonempty)
+                },
+            ),
+            DataType::Int8 => Box::new(
+                |writer: &mut BufWriter<T>, vector: &Vec<f32>| -> CMDResult<bool> {
+                    let mut found_nonzero = false;
+                    for value in vector.iter().map(|&item| item.round() as i8) {
+                        writer.write_i8(value)?;
+                        found_nonzero = found_nonzero || (value != 0i8);
+                    }
+                    Ok(found_nonzero)
+                },
+            ),
+            DataType::Fp16 => Box::new(
+                |writer: &mut BufWriter<T>, vector: &Vec<f32>| -> CMDResult<bool> {
+                    let mut found_nonzero = false;
+                    for value in vector.iter().map(|&item| Half::from_f32(item)) {
+                        let mut buf = [0; 2];
+                        buf.clone_from_slice(value.to_le_bytes().as_slice());
+                        writer.write_all(&buf)?;
+                        found_nonzero =
+                            found_nonzero || (value != Half::from_f32(0.0) && value.is_finite());
+                    }
+                    Ok(found_nonzero)
+                },
+            ),
+        };
+
+        // Propagate errors if there are any
+        write_random_vector_block(
+            write_method,
+            &mut writer,
+            number_of_dimensions,
+            cblk_size,
+            radius,
+        )?;
+    }
+
+    // writer flushes the inner file object as part of it's flush.  File object moved
+    // to writer scope so we cannot manually call flush on it here.
+    writer.flush()?;
+
+    Ok(())
+}
+
+/**
+Writes random vectors to the specified writer.  Function generates random floats.  It is the
+responsibility of the "write_method" method argument to convert the random floats into other
+datatypes.
+
+NOTE: This generates random points on a sphere that has the specified radius
+*/
+fn write_random_vector_block<
+    F: Sized + Write,
+    T: FnMut(&mut BufWriter<F>, &Vec<f32>) -> CMDResult<bool>,
+>(
+    mut write_method: T,
+    writer: &mut BufWriter<F>,
+    number_of_dimensions: usize,
+    number_of_points: u64,
+    radius: f32,
+) -> CMDResult<()> {
+    let mut found_nonzero = false;
+
+    let vectors = math_util::generate_vectors_with_norm(
+        number_of_points as usize,
+        number_of_dimensions,
+        radius,
+        &mut diskann_providers::utils::create_rnd_from_seed(0),
+    )?;
+    for vector in vectors {
+        // Check for non-zero after casting to final numeric types.  Do not short-circuit
+        // evaluate to ensure we always write the data.
+        found_nonzero |= write_method(writer, &vector)?;
+    }
+
+    if found_nonzero {
+        Ok(())
+    } else {
+        Err(CMDToolError {
+            details: format!(
+                "Generated all-zero vectors with radius {}. Try increasing radius",
+                radius
+            ),
+        })
+    }
+}

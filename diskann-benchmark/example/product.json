@@ -1,0 +1,56 @@
+{
+  "search_directories": [
+    "test_data/disk_index_search"
+  ],
+  "jobs": [
+    {
+      "type": "async-index-build-pq",
+      "content": {
+        "index_operation": {
+          "source":{
+            "index-source": "Build",
+            "data_type": "float32",
+            "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+            "distance": "squared_l2",
+            "start_point_strategy": "medoid",
+            "max_degree": 32,
+            "l_build": 50,
+            "alpha": 1.2,
+            "backedge_ratio": 1.0,
+            "num_threads": 1,
+            "multi_insert": {
+              "batch_size": 128,
+              "batch_parallelism": 32,
+              "intra_batch_candidates": "all"
+            }
+          },
+          "search_phase": {
+            "search-type": "topk",
+            "queries": "disk_index_sample_query_10pts.fbin",
+            "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+            "reps": 5,
+            "num_threads": [
+              1
+            ],
+            "runs": [
+              {
+                "search_n": 10,
+                "search_l": [
+                  10,
+                  20,
+                  30,
+                  40
+                ],
+                "recall_k": 10
+              }
+            ]
+          }
+        },
+        "num_pq_chunks": 16,
+        "seed": 13076402859301299683,
+        "max_fp_vecs_per_prune": 48,
+        "use_fp_for_search": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+text eol=crlf
+.cer binary
+.qencr binary
+.dat binary
+test_data/**/* filter=lfs diff=lfs merge=lfs -text

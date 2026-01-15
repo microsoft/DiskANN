@@ -1,0 +1,42 @@
+[
+  {
+    "input": {
+      "content": {
+        "dim": null
+      },
+      "type": "test-input-dim"
+    },
+    "results": 18446744073709551615
+  },
+  {
+    "input": {
+      "content": {
+        "dim": 128
+      },
+      "type": "test-input-dim"
+    },
+    "results": 128
+  },
+  {
+    "input": {
+      "content": {
+        "data_type": "float32",
+        "dim": 128,
+        "error_when_checked": false
+      },
+      "type": "test-input-types"
+    },
+    "results": "float32"
+  },
+  {
+    "input": {
+      "content": {
+        "data_type": "int8",
+        "dim": 128,
+        "error_when_checked": false
+      },
+      "type": "test-input-types"
+    },
+    "results": "int8"
+  }
+]

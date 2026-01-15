@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package scalar_quantization;
+
+// !!! IMPORTANT !!!
+// The Rust code for this file is NOT automatically generated during the build.
+// If you modify this file, you MUST manually regenerate the Rust sources.
+// Please refer to contrib/proto-codegen/README.md for instructions.
+
+message Version {
+    // The major version number.
+    uint32 major = 1;
+    // The minor version number.
+    uint32 minor = 2;
+    // The patch version number.
+    uint32 patch = 3;
+}
+
+message ScalarQuantizer {
+  // The version of the layout for scalar quantizer.
+  Version version = 1;
+  // The `scale` parameter of the scalar quantizer.
+  float scale = 2;
+  // The `shift` vector parameter of the scalar quantizer.
+  repeated float shift = 3;
+  // The `mean_norm` parameter of the scalar quantizer.
+  optional float mean_norm = 4;
+  // The name of the file containing the compressed data.
+  string compressed_data_file_name = 5;
+}

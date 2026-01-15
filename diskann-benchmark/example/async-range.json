@@ -1,0 +1,45 @@
+{
+  "search_directories": [
+    "test_data/disk_index_search"
+  ],
+  "jobs": [
+    {
+      "type": "async-index-build",
+      "content": {
+        "source": {
+          "index-source": "Build",
+          "data_type": "float32",
+          "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+          "distance": "squared_l2",
+          "start_point_strategy": "medoid",
+          "max_degree": 32,
+          "l_build": 50,
+          "alpha": 1.2,
+          "backedge_ratio": 1.0,
+          "num_threads": 1
+        },
+        "search_phase": { 
+          "search-type": "range",
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "groundtruth": "disk_index_10pts_idx_uint32_range_res_r_100000.bin",
+          "reps": 5,
+          "num_threads": [
+            1
+          ],
+          "runs": [
+            {
+              "radius": 100000.0,
+              "initial_search_l": [
+                1,
+                5,
+                10              
+              ],
+              "initial_search_slack": 1.0,
+              "range_search_slack": 1.0
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

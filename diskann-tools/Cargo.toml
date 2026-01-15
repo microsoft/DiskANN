@@ -1,0 +1,60 @@
+[package]
+name = "diskann-tools"
+edition = "2021"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+byteorder.workspace = true
+clap = { workspace = true, features = ["derive"] }
+diskann-providers = { path = "../diskann-providers", default-features = false } # see `linalg/Cargo.toml`
+diskann-vector = { path = "../diskann-vector" }
+diskann-disk = { path = "../diskann-disk" }
+diskann-utils = { path = "../diskann-utils" }
+bytemuck.workspace = true
+num_cpus.workspace = true
+rayon.workspace = true
+half.workspace = true
+ordered-float = "4.2.0"
+rand_distr.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+toml = "0.8.13"
+bincode.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+csv.workspace = true
+tokio = { workspace = true, features = ["full"] }
+arc-swap.workspace = true
+diskann-quantization = { workspace = true }
+diskann = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing.workspace = true
+bit-set.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+itertools.workspace = true
+diskann-label-filter.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+assert_ok = "1.0.2"
+# Use virtual-storage for integration tests
+diskann-disk = { path = "../diskann-disk", features = ["virtual_storage"] }
+vfs = { workspace = true }
+ureq = { version = "3.0.11", default-features = false, features = ["native-tls", "gzip"] }
+diskann-providers = { path = "../diskann-providers", default-features = false, features = ["testing", "virtual_storage"] }
+diskann-utils = { workspace = true, features = ["testing"] }
+
+[features]
+default = []
+# When a feature is enabled in tools, enable it in dependencies
+perf_test = ["diskann-providers/perf_test", "diskann-disk/perf_test"]
+
+[lints]
+clippy.undocumented_unsafe_blocks = "warn"
+clippy.uninlined_format_args = "allow"

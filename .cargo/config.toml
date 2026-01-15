@@ -1,0 +1,8 @@
+[target.'cfg(target_os = "windows")']
+rustflags = ["-C", "control-flow-guard"]
+
+# If running on x86_64, use x86-64-v3 CPU target which contains SIMD features like avx2 and fma. Change to
+# x86-64 if you have an older x86_64 target without those SIMD features available. You can also override this
+# by setting RUSTFLAGS in the enviornment: RUSTFLAGS="-C target-cpu=x86-64"
+[target.'cfg(target_arch="x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v3"]

@@ -1,0 +1,94 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+[package]
+name = "diskann-providers"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition = "2024"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bincode.workspace = true
+bytemuck = { workspace = true, features = ["must_cast"]}
+byteorder.workspace = true
+half = { workspace = true, features = ["bytemuck", "num-traits"] }
+hashbrown.workspace = true
+num-traits.workspace = true
+once_cell.workspace = true
+lru = "0.12.3"
+rand.workspace = true
+rayon.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+opentelemetry = { workspace = true, optional = true }
+diskann-platform = { workspace = true }
+diskann-vector = { workspace = true }
+rand_distr.workspace = true
+cfg-if.workspace = true
+diskann-wide = { workspace = true }
+arc-swap.workspace = true
+tracing.workspace = true
+diskann-linalg = { workspace = true }
+vfs = { workspace = true }
+diskann = { workspace = true }
+diskann-utils = { workspace = true }
+diskann-quantization = { workspace = true, features = ["rayon"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
+tempfile = { workspace = true, optional = true }
+bf-tree = { workspace = true, optional = true }
+anyhow.workspace = true
+prost = "0.14.1"
+futures-util.workspace = true
+polonius-the-crab = { version = "0.5.0", optional = true }
+serde_json.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+criterion.workspace = true
+iai-callgrind.workspace = true
+itertools.workspace = true
+tempfile.workspace = true
+rstest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+proptest.workspace = true
+
+[[bench]]
+name = "bench_main"
+harness = false
+required-features = ["virtual_storage"]
+
+[[bench]]
+name = "bench_main_iai"
+harness = false
+required-features = ["virtual_storage"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-pc-windows-msvc",
+    "i686-pc-windows-msvc",
+    "x86_64-pc-windows-msvc",
+]
+
+[features]
+default = []
+perf_test = ["dep:opentelemetry"]
+testing = ["dep:tempfile"]
+bf_tree = ["dep:bf-tree", "dep:polonius-the-crab"]
+experimental_diversity_search = ["diskann/experimental_diversity_search"]
+virtual_storage = []
+
+# Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
+[lints.clippy]
+# Commenting out for now. It would give warnings.
+# undocumented_unsafe_blocks = "warn"
+uninlined_format_args = "allow"
+

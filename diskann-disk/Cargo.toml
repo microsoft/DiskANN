@@ -1,0 +1,74 @@
+[package]
+name = "diskann-disk"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = ["x86_64-unknown-linux-gnu", "aarch64-pc-windows-msvc", "i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
+
+[dependencies]
+# Core dependencies
+diskann = { workspace = true }
+diskann-utils = { workspace = true }
+diskann-providers = { workspace = true }
+diskann-vector = { workspace = true }
+diskann-linalg = { workspace = true }
+diskann-quantization = { workspace = true, features = ["rayon"] }
+
+# Shared dependencies from main diskann crate
+anyhow.workspace = true
+bincode.workspace = true
+bytemuck.workspace = true
+byteorder.workspace = true
+cfg-if.workspace = true
+futures-util = { workspace = true, default-features = false  }
+hashbrown.workspace = true
+half = { workspace = true, features = ["bytemuck", "num-traits"] }
+diskann-platform = { workspace = true }
+rand.workspace = true
+rayon.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing.workspace = true
+vfs = { workspace = true }
+
+# Optional dependencies
+opentelemetry = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.6.4"
+libc = "0.2.148"
+
+[dev-dependencies]
+rstest.workspace = true
+tempfile.workspace = true
+vfs.workspace = true
+diskann-providers = { path = "../diskann-providers", default-features = false, features = ["testing", "virtual_storage"] }
+diskann-utils = { workspace = true, features = ["testing"] }
+criterion.workspace = true
+iai-callgrind.workspace = true
+diskann = { workspace = true }
+
+[features]
+default = []
+perf_test = ["dep:opentelemetry"]
+virtual_storage = ["diskann-providers/virtual_storage"]
+experimental_diversity_search = ["diskann/experimental_diversity_search", "diskann-providers/experimental_diversity_search"]
+
+[[bench]]
+name = "bench_main"
+harness = false
+
+[[bench]]
+name = "bench_main_iai"
+harness = false
+
+# Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

@@ -1,0 +1,17 @@
+{
+    "search_directories": [
+        "test_data/disk_index_search"
+    ],
+    "jobs": [
+        {
+            "type": "metadata-index-build",
+            "content": {
+                "filter_params": {
+                    "query_predicates": "query.128.label.jsonl",
+                    "data_labels": "data.256.label.jsonl"
+                },
+                "inverted_index_type": "bftree"
+            }
+        }
+    ]
+}

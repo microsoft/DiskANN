@@ -1,0 +1,23 @@
+include "transforms_v001.fbs";
+
+namespace Spherical;
+
+file_identifier "sq00";
+
+enum SupportedMetric: byte { SquaredL2, InnerProduct, Cosine }
+
+table SphericalQuantizer {
+  centroid:[float32] (required);
+  transform:Transforms.Transform (required);
+  metric:SupportedMetric;
+  mean_norm:float32;
+  pre_scale:float32;
+}
+
+table Quantizer {
+    quantizer:SphericalQuantizer (required);
+    nbits:uint32;
+}
+
+root_type Quantizer;
+

@@ -1,0 +1,4 @@
+while processing input 2 of 2
+
+Caused by:
+    unknown variant `f32`, expected one of `float64`, `float32`, `float16`, `uint8`, `uint16`, `uint32`, `uint64`, `int8`, `int16`, `int32`, `int64`, `bool`

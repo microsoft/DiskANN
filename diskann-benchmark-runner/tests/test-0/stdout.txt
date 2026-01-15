@@ -1,0 +1,9 @@
+Skeleton input file:
+{
+  "search_directories": [
+    "directory/a",
+    "directory/b"
+  ],
+  "output_directory": null,
+  "jobs": []
+}

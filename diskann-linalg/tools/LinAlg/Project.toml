@@ -1,0 +1,8 @@
+name = "LinAlg"
+uuid = "b5ae1df0-e5fa-46c9-8ae6-e646411e045a"
+authors = ["Microsoft"]
+version = "0.1.0"
+
+[deps]
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"

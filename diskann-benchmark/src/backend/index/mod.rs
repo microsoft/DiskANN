@@ -1,0 +1,21 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+mod benchmarks;
+mod build;
+mod multihop_filtered_search;
+mod range_search;
+mod result;
+mod search;
+mod update;
+
+// Feature based backends.
+mod product;
+mod scalar;
+mod spherical;
+
+pub(crate) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
+    benchmarks::register_benchmarks(benchmarks)
+}

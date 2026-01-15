@@ -1,0 +1,41 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT license.
+[package]
+name = "diskann-vector"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cfg-if.workspace = true
+half.workspace = true
+diskann-wide.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+iai-callgrind.workspace = true
+rand.workspace = true
+criterion.workspace = true
+rand_distr.workspace = true
+half = { workspace = true, features = ["rand_distr", "num-traits"] }
+
+[[bench]]
+name = "bench_main"
+harness = false
+
+[[bench]]
+name = "bench_main_vector_iai"
+harness = false
+
+[lints]
+# Commenting out for now. It would give warnings.
+# clippy.undocumented_unsafe_blocks = "warn"
+clippy.uninlined_format_args = "allow"
+
+[features]
+experimental_avx512 = []

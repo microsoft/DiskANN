@@ -1,0 +1,15 @@
+Could not find a match for the following input:
+
+{
+  "data_type": "float16",
+  "dim": 128,
+  "error_when_checked": false
+}
+
+Closest matches:
+
+    1. "type-bench-i8": expected "int8" but found "float16"
+    2. "type-bench-f32": expected "float32" but found "float16"
+    3. "dim-bench": expected tag "test-input-dim" - instead got "test-input-types"
+
+could not find find a benchmark for all inputs

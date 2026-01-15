@@ -1,0 +1,74 @@
+[package]
+name = "diskann-benchmark"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bf-tree.workspace = true
+bit-set.workspace = true
+bytemuck.workspace = true
+roaring.workspace = true
+clap = { workspace = true, features = ["derive"] }
+diskann-providers = { path = "../diskann-providers" }
+diskann.workspace = true
+diskann-utils.workspace = true
+half = { workspace = true, features = ["rand_distr", "num-traits"] }
+indicatif = "0.18.3"
+diskann-quantization = { workspace = true, features = ["linalg"] }
+rand.workspace = true
+rayon.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde_yaml = "0.9"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+diskann-vector.workspace = true
+diskann-wide.workspace = true
+diskann-label-filter.workspace = true
+diskann-tools = { path = "../diskann-tools" }
+diskann-disk = { workspace = true, optional = true }
+cfg-if.workspace = true
+diskann-benchmark-runner = { path = "../diskann-benchmark-runner" }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+scopeguard = { version = "1.2", optional = true }
+
+[lints]
+clippy.undocumented_unsafe_blocks = "warn"
+clippy.uninlined_format_args = "allow"
+
+[dev-dependencies]
+rand.workspace = true
+tempfile.workspace = true
+half = { workspace = true, features = ["rand_distr", "num-traits"] }
+
+[features]
+default = []
+
+# Enable spherical-quantization based algorithms
+spherical-quantization = []
+
+# Enable product-quantization based algorithms
+product-quantization = []
+
+# Enable scalar-quantization based algorithms
+scalar-quantization = []
+
+# Enable minmax-quantization based algorithms
+minmax-quantization = []
+
+# Enable Disk Index benchmarks
+disk-index = [
+    "diskann-disk/perf_test",
+    "diskann-providers/perf_test",
+    "diskann-tools/perf_test",
+    "dep:diskann-disk",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:scopeguard",
+]

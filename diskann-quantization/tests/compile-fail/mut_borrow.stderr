@@ -1,0 +1,10 @@
+error[E0499]: cannot borrow `x` as mutable more than once at a time
+  --> tests/compile-fail/mut_borrow.rs:14:5
+   |
+12 |     let mut slice = MutBitSlice::<8, Unsigned>::new(x.as_mut_slice(), 3).unwrap();
+   |                                                     - first mutable borrow occurs here
+13 |     slice.set(0, 0).unwrap();
+14 |     x[1] = 1;
+   |     ^ second mutable borrow occurs here
+15 |     slice.set(2, 2).unwrap();
+   |     ----- first borrow later used here

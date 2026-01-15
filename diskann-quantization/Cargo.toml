@@ -1,0 +1,70 @@
+[package]
+name = "diskann-quantization"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytemuck = { workspace = true, features = ["derive"] }
+cfg-if = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+diskann-vector = { workspace = true }
+diskann-wide = { workspace = true }
+diskann-linalg = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
+flatbuffers = { version = "25.2.10", optional = true }
+half = { version = "2.6.0", features = ["bytemuck"] }
+diskann-utils = { workspace = true }
+
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+uninlined_format_args = "allow"
+
+[dev-dependencies]
+cfg-if = { workspace = true }
+trybuild = "1.0.101"
+rand_distr = { workspace = true }
+
+[features]
+default = ["rayon"]
+
+# Add support for linear-algebran enhanced routines.
+linalg = ["dep:diskann-linalg"]
+
+# Compile support for serializing and deserializing to flatbuffers.
+flatbuffers = ["dep:flatbuffers"]
+
+# Enable Rayon-based Parallelism for tagged kernels.
+rayon = ["dep:rayon", "diskann-utils/rayon"]
+
+# Compile the `.fbs` files in `schemas` using the `flatc` executable and copy the generated
+# files into the source tree.
+#
+# This avoids a general dependency on the `flatc` executable to build `quantization`.
+flatbuffers-build = []
+
+# Instantiate well named functions for distance functions whose aseembly we care about.
+#
+# This adds to the compile time of the library without meaningfully adding features to the
+# library and is meant to help with tooling.
+codegen = []
+
+# Note
+#
+# Build docs locally with
+# ```
+# RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc \
+#    --package quantization \
+#    --features rayon,linalg,flatbuffers \
+#    --no-deps
+# ```
+[package.metadata.docs.rs]
+features = ["rayon", "linalg", "flatbuffers"]
+rustdoc-args = ["--cfg", "docsrs"]

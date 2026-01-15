@@ -1,0 +1,7 @@
+Registered Benchmarks:
+    type-bench-f32: tag "test-input-types"
+float32
+    type-bench-i8: tag "test-input-types"
+int8
+    dim-bench: tag "test-input-dim"
+matches all

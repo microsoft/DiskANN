@@ -1,0 +1,30 @@
+error[E0603]: module `ptr` is private
+ --> tests/compile-fail/precursor.rs:6:44
+  |
+6 | use diskann_quantization::bits::{SlicePtr, ptr::sealed::Precursor};
+  |                                            ^^^          --------- trait `Precursor` is not publicly re-exported
+  |                                            |
+  |                                            private module
+  |
+note: the module `ptr` is defined here
+ --> src/bits/mod.rs
+  |
+  | mod ptr;
+  | ^^^^^^^
+
+error[E0599]: no method named `precursor_into` found for reference `&[u8]` in the current scope
+  --> tests/compile-fail/precursor.rs:12:40
+   |
+12 |     let borrowed: SlicePtr<u8> = (&*x).precursor_into();
+   |                                        ^^^^^^^^^^^^^^
+   |
+   = help: items from traits can only be used if the trait is in scope
+help: trait `Precursor` which provides `precursor_into` is implemented but not in scope; perhaps you want to import it
+   |
+ 6 + use diskann_quantization::bits::ptr::sealed::Precursor;
+   |
+help: there is a method `precursor_len` with a similar name
+   |
+12 -     let borrowed: SlicePtr<u8> = (&*x).precursor_into();
+12 +     let borrowed: SlicePtr<u8> = (&*x).precursor_len();
+   |

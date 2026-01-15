@@ -1,0 +1,1 @@
+Registered benchmarks are printed.

@@ -1,0 +1,54 @@
+{
+    "search_directories": [
+      "test_data/disk_index_search"
+    ],
+    "jobs": [
+      {
+        "type": "async-index-build",
+        "content": {
+          "source": {
+            "index-source": "Build",
+            "data_type": "float32",
+            "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+            "distance": "squared_l2",
+            "start_point_strategy": "medoid",
+            "max_degree": 32,
+            "l_build": 50,
+            "alpha": 1.2,
+            "backedge_ratio": 1.0,
+            "num_threads": 1,
+            "num_start_points": 1,
+            "num_insert_attempts": 1,
+            "saturate_inserts": false
+          },
+          "search_phase": {
+            "search-type": "topk-beta-filter",
+            "queries": "disk_index_sample_query_10pts.fbin",
+            "groundtruth": "gt_small_filter.bin",
+            "beta": 0.5,
+            "query_predicates": "query.10.label.jsonl",
+            "data_labels": "data.256.label.jsonl",
+            "reps": 5,
+            "num_threads": [
+              1
+            ],
+            "runs": [
+              {
+                "search_n": 20,
+                "search_l": [
+                  20,
+                  30,
+                  40,
+                  50,
+                  100,
+                  200
+                ],
+                "recall_k": 10
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+  

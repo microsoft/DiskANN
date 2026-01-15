@@ -1,0 +1,8 @@
+error[E0277]: `[{integer}; 2]` doesn't implement `std::fmt::Display`
+  --> tests/compile-fail/invalid-trait-direct.rs:11:13
+   |
+11 |     let _ = poly!(std::fmt::Display, x, GlobalAllocator).unwrap();
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::fmt::Display` is not implemented for `[{integer}; 2]`
+   |
+   = note: required for the cast from `NonNull<[{integer}; 2]>` to `NonNull<dyn std::fmt::Display>`
+   = note: this error originates in the macro `$crate::alloc::poly` which comes from the expansion of the macro `poly` (in Nightly builds, run with -Z macro-backtrace for more info)

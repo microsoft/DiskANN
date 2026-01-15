@@ -1,0 +1,17 @@
+error[E0080]: evaluation panicked: error type is too big
+ --> src/error.rs
+  |
+  |         const { assert!(std::mem::size_of::<T>() <= N, "error type is too big") };
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `diskann_quantization::error::InlineError::<4>::new::<Error>::{constant#0}` failed here
+
+note: erroneous constant encountered
+  --> src/error.rs
+   |
+   |         const { assert!(std::mem::size_of::<T>() <= N, "error type is too big") };
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: the above error was encountered while instantiating `fn diskann_quantization::error::InlineError::<4>::new::<Error>`
+  --> tests/compile-fail/error/inline_error_size.rs:21:13
+   |
+21 |     let _ = InlineError::<4>::new(Error(10));
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

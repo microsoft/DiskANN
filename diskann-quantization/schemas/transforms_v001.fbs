@@ -1,0 +1,35 @@
+namespace Transforms;
+
+table RandomRotation {
+   data:[float32] (required);
+   nrows:uint32;
+   ncols:uint32;
+}
+
+table PaddingHadamard {
+  signs:[bool] (required);
+  padded_dim:uint32;
+  subsample:[uint32];
+}
+
+table DoubleHadamard {
+  signs0:[bool] (required);
+  signs1:[bool] (required);
+  subsample:[uint32];
+}
+
+table NullTransform {
+  dim:uint32;
+}
+
+union TransformKind {
+  RandomRotation:RandomRotation,
+  PaddingHadamard:PaddingHadamard,
+  DoubleHadamard:DoubleHadamard,
+  NullTransform:NullTransform,
+}
+
+table Transform {
+    transform:TransformKind (required);
+}
+

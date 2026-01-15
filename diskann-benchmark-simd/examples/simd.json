@@ -1,0 +1,1850 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "float32",
+        "data_type": "float32",
+        "arch": "x86-64-v4",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "float32",
+        "data_type": "float32",
+        "arch": "x86-64-v3",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "float32",
+        "data_type": "float32",
+        "arch": "scalar",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "float32",
+        "data_type": "float32",
+        "arch": "reference",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "float16",
+        "data_type": "float16",
+        "arch": "x86-64-v4",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "float16",
+        "data_type": "float16",
+        "arch": "x86-64-v3",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "float16",
+        "data_type": "float16",
+        "arch": "scalar",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "float16",
+        "data_type": "float16",
+        "arch": "reference",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 50,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+
+
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "uint8",
+        "data_type": "uint8",
+        "arch": "x86-64-v4",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "uint8",
+        "data_type": "uint8",
+        "arch": "x86-64-v3",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "uint8",
+        "data_type": "uint8",
+        "arch": "scalar",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "uint8",
+        "data_type": "uint8",
+        "arch": "reference",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+
+
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "int8",
+        "data_type": "int8",
+        "arch": "x86-64-v4",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "int8",
+        "data_type": "int8",
+        "arch": "x86-64-v3",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "int8",
+        "data_type": "int8",
+        "arch": "scalar",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    },
+    {
+      "type": "simd-op",
+      "content": {
+        "query_type": "int8",
+        "data_type": "int8",
+        "arch": "reference",
+        "runs": [
+          {
+            "distance": "squared_l2",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "squared_l2",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "inner_product",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 100,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 128,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 160,
+            "num_points": 50,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 384,
+            "num_points": 24,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          },
+          {
+            "distance": "cosine",
+            "dim": 768,
+            "num_points": 12,
+            "loops_per_measurement": 5000,
+            "num_measurements": 100
+          }
+        ]
+      }
+    }
+  ]
+}

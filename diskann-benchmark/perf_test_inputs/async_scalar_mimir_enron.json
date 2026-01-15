@@ -1,0 +1,115 @@
+{
+    "search_directories": [
+      "/mnt/nvme/s"
+    ],
+    "jobs": [
+      {
+        "type": "async-index-build-sq",
+        "content": {
+          "build": {
+            "data_type": "float16",
+            "data": "normalized_dim_384_vector_fp16_1087932_vectors.bin",
+            "distance": "squared_l2",
+            "max_degree": 59,
+            "l_build": 64,
+            "alpha": 1.2,
+            "backedge_ratio": 1.0,
+            "num_threads": 8,
+            "multi_insert":null,
+            "search_phase": {
+              "queries": "query_vector_normalized_dim_384_fp16_top_1000.bin",
+              "groundtruth": "groundtruth_recall_1000_query_1000.bin",
+              "reps": 2,
+              "num_threads": [
+                8
+              ],
+              "runs": [
+                {
+                  "search_n": 1000,
+                  "search_l": [
+                    2000
+                  ],
+                  "recall_k": 1000
+                }
+              ]
+            }
+          },
+          "num_bits": 1,
+          "standard_deviations": 2,
+          "use_fp_for_search": true
+        }
+      },
+      {
+        "type": "async-index-build-sq",
+        "content": {
+          "build": {
+            "data_type": "float16",
+            "data": "normalized_dim_384_vector_fp16_1087932_vectors.bin",
+            "distance": "squared_l2",
+            "max_degree": 59,
+            "l_build": 64,
+            "alpha": 1.2,
+            "backedge_ratio": 1.0,
+            "num_threads": 8,
+            "multi_insert":null,
+            "search_phase": {
+              "queries": "query_vector_normalized_dim_384_fp16_top_1000.bin",
+              "groundtruth": "groundtruth_recall_1000_query_1000.bin",
+              "reps": 2,
+              "num_threads": [
+                8
+              ],
+              "runs": [
+                {
+                  "search_n": 1000,
+                  "search_l": [
+                    2000
+                  ],
+                  "recall_k": 1000
+                }
+              ]
+            }
+          },
+          "num_bits": 4,
+          "standard_deviations": 2,
+          "use_fp_for_search": true
+        }
+      },
+      {
+        "type": "async-index-build-sq",
+        "content": {
+          "build": {
+            "data_type": "float16",
+            "data": "normalized_dim_384_vector_fp16_1087932_vectors.bin",
+            "distance": "squared_l2",
+            "max_degree": 59,
+            "l_build": 64,
+            "alpha": 1.2,
+            "backedge_ratio": 1.0,
+            "num_threads": 8,
+            "multi_insert":null,
+            "search_phase": {
+              "queries": "query_vector_normalized_dim_384_fp16_top_1000.bin",
+              "groundtruth": "groundtruth_recall_1000_query_1000.bin",
+              "reps": 2,
+              "num_threads": [
+                8
+              ],
+              "runs": [
+                {
+                  "search_n": 1000,
+                  "search_l": [
+                    2000
+                  ],
+                  "recall_k": 1000
+                }
+              ]
+            }
+          },
+          "num_bits": 8,
+          "standard_deviations": 2,
+          "use_fp_for_search": true
+        }
+      }
+    ]
+  }

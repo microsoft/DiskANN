@@ -1,0 +1,34 @@
+{
+  "search_directories": [],
+  "output_directory": null,
+  "jobs": [
+    {
+      "type": "test-input-dim",
+      "content": {
+        "dim": null
+      }
+    },
+    {
+      "type": "test-input-dim",
+      "content": {
+        "dim": 128
+      }
+    },
+    {
+      "type": "test-input-types",
+      "content": {
+        "data_type": "float16",
+        "dim": 128,
+        "error_when_checked": false
+      }
+    },
+    {
+      "type": "test-input-types",
+      "content": {
+        "data_type": "int8",
+        "dim": 128,
+        "error_when_checked": false
+      }
+    }
+  ]
+}

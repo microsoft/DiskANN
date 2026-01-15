@@ -1,0 +1,9 @@
+The example JSON representation for "test-input-types" is:
+{
+  "type": "test-input-types",
+  "content": {
+    "data_type": "float32",
+    "dim": 128,
+    "error_when_checked": false
+  }
+}

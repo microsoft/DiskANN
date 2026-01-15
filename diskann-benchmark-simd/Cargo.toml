@@ -1,0 +1,30 @@
+[package]
+name = "diskann-benchmark-simd"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "benchmark-simd"
+path = "src/bin.rs"
+
+[dependencies]
+anyhow.workspace = true
+diskann-utils = { workspace = true, default-features = false }
+half = { workspace = true, features = ["rand_distr"] }
+diskann-benchmark-runner = { path = "../diskann-benchmark-runner" }
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+diskann-vector = { workspace = true, features = ["experimental_avx512"] }
+diskann-wide.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,53 @@
+{
+    "search_directories": [
+      "base.100k"
+    ],
+    "jobs": [
+      {
+        "type": "async-index-build",
+        "content": {
+          "source": {
+            "index-source": "Build",
+            "data_type": "uint8",
+            "data": "base.100k.u8bin",
+            "distance": "squared_l2",
+            "max_degree": 32,
+            "l_build": 50,
+            "alpha": 1.2,
+            "backedge_ratio": 1.0,
+            "num_threads": 1,
+            "num_start_points": 1,
+            "num_insert_attempts": 1,
+            "saturate_inserts": false
+          },
+          "search_phase": {
+            "search-type": "topk-beta-filter",
+            "queries": "query.1K.u8bin",
+            "groundtruth": "gt_filter.bin",
+            "beta": 0.5,
+            "query_predicates": "query.1k.label.jsonl",
+            "data_labels": "base.100k.label.jsonl",
+            "reps": 5,
+            "num_threads": [
+              1
+            ],
+            "runs": [
+              {
+                "search_n": 20,
+                "search_l": [
+                  20,
+                  30,
+                  40,
+                  50,
+                  100,
+                  200
+                ],
+                "recall_k": 10
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+  
