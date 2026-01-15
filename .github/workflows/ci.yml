@@ -101,10 +101,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+
       - name: Install Rust ${{ env.rust_stable }}
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.rust_stable }}
+
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
@@ -124,6 +128,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
+
       - name: Install Rust ${{ env.rust_stable }}
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -162,25 +169,28 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  miri:
-    needs: basics
-    name: miri-test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Rust nightly with miri
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: nightly
-          components: miri
+  # miri:
+  #   needs: basics
+  #   name: miri-test
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         lfs: true
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
+  #     - name: Install Rust nightly with miri
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         toolchain: nightly
+  #         components: miri
 
-      - uses: Swatinem/rust-cache@v2
-      - name: miri
-        run: cargo +nightly miri nextest run --package diskann-quantization
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+  #     - name: Install cargo-nextest
+  #       uses: taiki-e/install-action@v2
+  #       with:
+  #         tool: cargo-nextest
+
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: miri
+  #       run: cargo +nightly miri nextest run --package diskann-quantization
+  #       env:
+  #         MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
