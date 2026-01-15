@@ -119,8 +119,8 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --workspace
-          cargo test --doc --workspace
+          cargo nextest run --workspace --cargo-profile ci
+          cargo test --doc --workspace --cargo-profile ci
 
   coverage:
     needs: basics
@@ -150,7 +150,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Generate code coverage
         run: |
-          cargo llvm-cov nextest \
+          cargo llvm-cov nextest --cargo-profile ci \
             --package diskann-wide \
             --package diskann-vector \
             --package diskann-quantization \
