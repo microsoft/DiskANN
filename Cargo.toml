@@ -54,7 +54,7 @@ diskann-platform = { path = "diskann-platform", version = "0.41.0" }
 # Algorithm
 diskann = { path = "diskann", version = "0.41.0" }
 # Providers
-diskann-providers = { path = "diskann-providers", version = "0.41.0" }
+diskann-providers = { path = "diskann-providers", default-features = false, version = "0.41.0" }
 diskann-disk = { path = "diskann-disk", version = "0.41.0" }
 diskann-label-filter = { path = "diskann-label-filter", version = "0.41.0" }
 # Infra
