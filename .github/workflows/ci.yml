@@ -120,7 +120,7 @@ jobs:
         run: |
           set -euxo pipefail
           cargo nextest run --workspace --cargo-profile ci
-          cargo test --doc --workspace --cargo-profile ci
+          cargo test --doc --workspace --profile ci
 
   coverage:
     needs: basics
@@ -157,7 +157,6 @@ jobs:
             --package diskann \
             --package diskann-linalg \
             --package diskann-utils \
-            --package diskann-providers \
             --package diskann-disk \
             --lcov --output-path lcov.info
 
