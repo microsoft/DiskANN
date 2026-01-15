@@ -69,7 +69,7 @@ impl TableDeleteProviderAsync {
     }
 
     /// Serialize the delete bitmap to bytes (little-endian u32 values)
-    #[cfg(target_feature = "bf_tree")]
+    #[cfg(feature = "bf_tree")]
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(std::mem::size_of_val(self.delete_table.as_slice()));
         for atomic_val in &self.delete_table {
@@ -80,7 +80,7 @@ impl TableDeleteProviderAsync {
     }
 
     /// Create a TableDeleteProviderAsync from serialized bytes
-    #[cfg(target_feature = "bf_tree")]
+    #[cfg(feature = "bf_tree")]
     pub(crate) fn from_bytes(bytes: &[u8], max_size: usize) -> Result<Self, String> {
         let expected_len = max_size.div_ceil(32);
 
@@ -236,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_feature = "bf_tree")]
+    #[cfg(feature = "bf_tree")]
     fn test_save_load_roundtrip() {
         let original = get_test_delete_table_provider(50, &[0, 5, 20, 34, 48]);
         let bytes = original.to_bytes();
@@ -249,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_feature = "bf_tree")]
+    #[cfg(feature = "bf_tree")]
     fn test_from_bytes_size_mismatch() {
         // max_size=50 requires ceil(50/32) = 2 u32 values = 8 bytes
         // Provide wrong number of bytes (e.g., 4 bytes = 1 u32)
