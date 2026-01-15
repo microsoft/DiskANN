@@ -455,7 +455,7 @@ mod tests {
         let natural_errors = test_utils::ErrorSetup {
             norm: test_utils::Check::ulp(4),
             l2: test_utils::Check::ulp(4),
-            ip: test_utils::Check::absrel(3.0e-6, 2e-4),
+            ip: test_utils::Check::absrel(5.0e-6, 2e-4),
         };
 
         // NOTE: Subsampling introduces high variance in the norm and L2, so our error

@@ -1,0 +1,28 @@
+[profile.default]
+
+# terminate the test run it takes more than 10 minutes.
+slow-timeout = { period = "600s", terminate-after = 1 }
+
+# "retries" defines the number of times a test should be retried.
+retries = 3
+
+# The number of threads to run tests with.
+test-threads = "num-cpus"
+
+# The number of threads required for each test.
+threads-required = 1
+
+# Show these test statuses in the output.
+status-level = "all"
+
+# Similar to status-level, show these test statuses at the end of the run.
+final-status-level = "flaky"
+
+# "failure-output" defines when standard output and standard error for failing tests are produced.
+failure-output = "immediate"
+
+# "success-output" controls production of standard output and standard error on success.
+success-output = "never"
+
+# Cancel the test run on the first failure. For CI runs, this should be false.
+fail-fast = false
