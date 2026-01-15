@@ -13,7 +13,7 @@
 > We are currently in the process of updating this repository with a new version of the code written in Rust.
 
 DiskANN is a suite of scalable, accurate and cost-effective approximate nearest neighbor search algorithms for large-scale vector search that support real-time changes and simple filters.
-This code is based on ideas from Microsoft's [DiskANN](aka.ms/AboutDiskANN).
+This code is based on ideas from Microsoft's [DiskANN](https://aka.ms/AboutDiskANN).
 The main branch now contains a rearchitected project written in Rust.
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
