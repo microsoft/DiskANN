@@ -1,29 +1,6 @@
 # DiskANN
 
-## Stabilized Interfaces
-
-### Error
-
-* `ANNError`: `diskann` (very common import)
-* `ANNResult`: `diskann` (very common import)
-* `ANNErrorKind`: `diskann` (common testing import)
-
-* `IntoANNResult`: `diskann::error` (somewhat common import)
-* `DiskANNError`: `diskann::error` (uncommon import)
-* `ErrorContext`: `diskann::error`
-
-The set of ranked errors is less commonly used than the generic `ANNError` type and so
-remains available in the `error` submodule.
-
-Users of this type and associated traits are usually either end-users that wish to implement
-a `RankedError`, or algorithmic code that needs to deal with ranked errors.
-
-* `ErrorExt`: `diskann::error`
-* `Infallible`: `diskann::error`
-* `NeverTransient`: `diskann::error`
-* `RankedError`: `diskann::error`
-* `ToRanked`: `diskann::error`
-* `TransientError`: `diskann::error`
+Stay tuned for more updates!
 
 ## Developer Docs
 
@@ -81,3 +58,5 @@ standard libraries `PartialEq` trait. Additional utilities include
 
 * `diskann::test::cmp::assert_eq_verbose!`: The equivalent of the standard library's
   `assert_eq` but using `VerboseEq` to provide more information on the test failure.
+
+The DiskANN team thanks [INFINI Labs](https://github.com/infinilabs/) for transferring ownership of the [diskann](https://crates.io/crates/diskann) crate!
