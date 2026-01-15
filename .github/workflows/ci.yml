@@ -50,10 +50,10 @@ jobs:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       # Check fmt
-      - name: "rustfmt --check"
+      - name: "cargo fmt --check"
         run: |
-          if ! rustfmt --check --edition 2021 $(git ls-files '*.rs'); then
-            printf "Please run \`rustfmt --edition 2021 \$(git ls-files '*.rs')\` to fix rustfmt errors.\n" >&2
+          if ! cargo fmt --all --check; then
+            printf "Please run \`cargo fmt --all\` to fix rustfmt errors.\n" >&2
             exit 1
           fi
 
@@ -102,7 +102,7 @@ jobs:
       - name: Install Rust ${{ env.rust_stable }}
         uses: dtolnay/rust-toolchain@stable
         with:
-            toolchain: ${{ env.rust_stable }}
+          toolchain: ${{ env.rust_stable }}
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
         with:
