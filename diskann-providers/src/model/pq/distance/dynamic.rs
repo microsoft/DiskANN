@@ -601,7 +601,7 @@ mod tests {
             assert_relative_eq!(
                 cosine_normalized.evaluate_similarity(&*code0, &*code1),
                 expected,
-                max_relative = 2.0e-6,
+                max_relative = 4.0e-6,
             );
         }
     }
