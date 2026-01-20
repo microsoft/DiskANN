@@ -185,7 +185,7 @@ jobs:
           tool: cargo-nextest
 
       - uses: Swatinem/rust-cache@v2
-      
+
       - name: Generate code coverage
         run: |
           cargo llvm-cov nextest --cargo-profile ci \
