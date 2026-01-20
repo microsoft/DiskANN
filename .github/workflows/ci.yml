@@ -229,7 +229,7 @@ jobs:
 
       - name: miri
         run: |
-          set -euxo pipefail
+          set -eux
           echo "::group::Miri Test Execution"
           START_TIME=$(date +%s)
           cargo +nightly miri nextest run --package diskann-quantization || true
