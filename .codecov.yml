@@ -12,7 +12,7 @@ coverage:
         target: auto
         threshold: 1%
         informational: true
-    
+
     # Patch coverage (changed lines only) - this will block PRs
     patch:
       default:
