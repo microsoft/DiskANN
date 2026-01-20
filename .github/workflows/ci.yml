@@ -228,14 +228,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: miri
-        run: |
-          set -ux
-          echo "::group::Miri Test Execution"
-          START_TIME=$(date +%s)
-          cargo +nightly miri nextest run --package diskann-quantization || true
-          END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-          echo "::endgroup::"
-          echo "::notice::Miri tests completed in ${DURATION} seconds"
+        run: cargo +nightly miri nextest run --package diskann-quantization
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
