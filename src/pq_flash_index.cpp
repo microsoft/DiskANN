@@ -794,8 +794,8 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     std::string pq_table_bin = pivots_filepath;
     std::string pq_compressed_vectors = compressed_filepath;
     std::string _disk_index_file = index_filepath;
-    std::string medoids_file = "C:\\Users\\jinweizhang\\Downloads\\bannindex_disk.index_medoids.bin";
-    std::string centroids_file = "C:\\Users\\jinweizhang\\Downloads\\bannindex_disk.index_centroids.bin";
+    std::string medoids_file = std::string(_disk_index_file) + "_medoids.bin";
+    std::string centroids_file = std::string(_disk_index_file) + "_centroids.bin";
 
     std::string labels_file = std ::string(_disk_index_file) + "_labels.txt";
     std::string labels_to_medoids = std ::string(_disk_index_file) + "_labels_to_medoids.txt";
