@@ -15,7 +15,7 @@ use rand_distr::{Distribution, StandardUniform};
 use diskann::utils::VectorRepr;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_providers::storage::StorageWriteProvider;
-use diskann_providers::utils::{write_metadata, SampleVectorReader, SamplingDensity};
+use diskann_providers::utils::{random, write_metadata, SampleVectorReader, SamplingDensity};
 use diskann_tools::utils::DataType;
 
 /// Subsamples vectors from a DiskANN style binary file.
@@ -43,7 +43,7 @@ fn create_rng(seed: Option<u64>) -> StdRng {
     match seed {
         Some(seed) => StdRng::seed_from_u64(seed),
         None => {
-            let mut system_rng = rand::rng();
+            let mut system_rng = random::create_rnd();
             StdRng::from_rng(&mut system_rng)
         }
     }
