@@ -768,7 +768,6 @@ mod fixed_chunk_pq_table_test {
         distance::{InnerProduct, SquaredL2},
     };
     use itertools::iproduct;
-    use vfs::PhysicalFS;
 
     use super::*;
     use crate::{
@@ -945,9 +944,8 @@ mod fixed_chunk_pq_table_test {
             .parent()
             .unwrap()
             .to_path_buf();
-        let vfs = PhysicalFS::new(workspace_root);
-        let storage_provider = VirtualStorageProvider::new(vfs);
-        let pq_pivots_path: &str = "test_data/sift/siftsmall_learn_pq_pivots.bin";
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
         let fixed_chunk_pq_table = FixedChunkPQTable::new(
@@ -1021,10 +1019,9 @@ mod fixed_chunk_pq_table_test {
             .parent()
             .unwrap()
             .to_path_buf();
-        let vfs = PhysicalFS::new(workspace_root);
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
 
-        let pq_pivots_path: &str = "test_data/sift/siftsmall_learn_pq_pivots.bin";
+        let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
         let fixed_chunk_pq_table = FixedChunkPQTable::new(
@@ -1121,10 +1118,9 @@ mod fixed_chunk_pq_table_test {
             .parent()
             .unwrap()
             .to_path_buf();
-        let vfs = PhysicalFS::new(workspace_root);
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
 
-        let pq_pivots_path: &str = "test_data/sift/siftsmall_learn_pq_pivots.bin";
+        let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
 
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();

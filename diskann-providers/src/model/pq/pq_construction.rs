@@ -1009,7 +1009,7 @@ mod pq_test {
     use diskann::utils::IntoUsize;
     use rand_distr::{Distribution, Uniform};
     use rstest::rstest;
-    use vfs::{MemoryFS, OverlayFS, PhysicalFS};
+    use vfs::{MemoryFS, OverlayFS};
 
     use super::*;
     use crate::{
@@ -1248,10 +1248,7 @@ mod pq_test {
             .parent()
             .unwrap()
             .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new(OverlayFS::new(&[
-            MemoryFS::default().into(),
-            PhysicalFS::new(workspace_root).into(),
-        ]));
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
         let pq_storage = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
         let pool = create_thread_pool_for_test();
         let result = generate_pq_pivots(
@@ -1430,15 +1427,12 @@ mod pq_test {
         #[case] make_zero_mean: bool,
         #[case] num_pq_chunks: usize,
     ) {
-        // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
+        // Creates a new filesystem using an in-memory layer over workspace data.
         let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new(OverlayFS::new(&[
-            MemoryFS::default().into(),
-            PhysicalFS::new(workspace_root).into(),
-        ]));
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
 
         let data_file = "/test_data/sift/siftsmall_learn.bin";
         let pq_pivots_path = "/pq_pivots_validation.bin";
@@ -1684,15 +1678,12 @@ mod pq_test {
 
     #[test]
     fn pq_end_to_end_validation_with_codebook_test() {
-        // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
+        // Creates a new filesystem using an in-memory layer over workspace data.
         let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new(OverlayFS::new(&[
-            MemoryFS::default().into(),
-            PhysicalFS::new(workspace_root).into(),
-        ]));
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
         type ReaderType = <VirtualStorageProvider<OverlayFS> as StorageReadProvider>::Reader;
 
         let data_file = "/test_data/sift/siftsmall_learn.bin";
@@ -1793,15 +1784,12 @@ mod pq_test {
         #[case] distance_function: String,
         #[case] num_pq_chunks: usize,
     ) {
-        // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
+        // Creates a new filesystem using an in-memory layer over workspace data.
         let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new(OverlayFS::new(&[
-            MemoryFS::default().into(),
-            PhysicalFS::new(workspace_root).into(),
-        ]));
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
 
         let data_file = "/test_data/sift/siftsmall_learn.bin";
         let pq_pivots_path = "/pq_pivots_validation.bin";

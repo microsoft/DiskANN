@@ -139,7 +139,6 @@ pub fn normalize_data_internal<Pool: AsThreadPool>(
 #[cfg(test)]
 mod normalizing_utils_test {
     use crate::storage::{StorageReadProvider, VirtualStorageProvider};
-    use vfs::{MemoryFS, OverlayFS, PhysicalFS};
 
     use super::*;
     use crate::utils::{create_thread_pool_for_test, storage_utils::*};
@@ -154,10 +153,7 @@ mod normalizing_utils_test {
             .parent()
             .unwrap()
             .to_path_buf();
-        let base_filesystem = PhysicalFS::new(workspace_root);
-        let memory_filesystem = MemoryFS::new();
-        let vfs = OverlayFS::new(&[memory_filesystem.into(), base_filesystem.into()]);
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
         let pool = create_thread_pool_for_test();
         normalize_data_file(in_file_name, out_file_name, &storage_provider, &pool).unwrap();
 

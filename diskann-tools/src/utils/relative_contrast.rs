@@ -109,7 +109,7 @@ mod relative_contrast_tests {
     use diskann_vector::distance::Metric;
     use half::f16;
     use rand::Rng;
-    use vfs::{MemoryFS, PhysicalFS};
+    use vfs::MemoryFS;
 
     use super::*;
     use crate::utils::{ground_truth::compute_ground_truth_from_datafiles, GraphDataHalfVector};
@@ -201,10 +201,9 @@ mod relative_contrast_tests {
     /// Expectation: relative contrast > 1.5
     #[test]
     fn test_compute_relative_contrast_with_sift_files() {
-        let filesystem = PhysicalFS::new(diskann_utils::test_data_root().join("sift"));
-
-        let storage_provider = VirtualStorageProvider::new(filesystem);
-        let base_file_path = "siftsmall_learn_256pts.fbin";
+        let storage_provider =
+            VirtualStorageProvider::new_overlay(diskann_utils::test_data_root().join("sift"));
+        let base_file_path = "/siftsmall_learn_256pts.fbin";
 
         assert!(
             storage_provider.exists(base_file_path),
@@ -218,7 +217,7 @@ mod relative_contrast_tests {
             .map(|_| f16::from_f32(rng.random_range(0.0..1.0)))
             .collect();
 
-        let query_file_path = "query.bin";
+        let query_file_path = "/query.bin";
 
         {
             let mut query_writer = storage_provider
@@ -233,7 +232,7 @@ mod relative_contrast_tests {
         }
 
         // Generate ground truth file using compute_ground_truth_from_datafiles
-        let gt_file_path = "ground_truth.bin";
+        let gt_file_path = "/ground_truth.bin";
         let recall_at = 3;
         compute_ground_truth_from_datafiles::<GraphDataHalfVector, _>(
             &storage_provider,

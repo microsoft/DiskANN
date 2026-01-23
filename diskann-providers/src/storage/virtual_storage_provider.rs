@@ -167,6 +167,7 @@ impl VirtualStorageProvider<OverlayFS> {
     /// Create a two-layer overlay filesystem with an in-memory filesystem for writes
     /// on top of the physical filesystem for reads.
     pub fn new_overlay<P: AsRef<std::path::Path>>(path: P) -> Self {
+        #[allow(clippy::disallowed_methods)]
         let base_filesystem = PhysicalFS::new(path);
         let memory_filesystem = MemoryFS::new();
         let overlay_filesystem =
