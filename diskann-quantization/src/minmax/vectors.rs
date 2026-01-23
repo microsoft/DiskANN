@@ -752,7 +752,13 @@ mod minmax_vector_tests {
             #[test]
             fn $name() {
                 let mut rng = StdRng::seed_from_u64($seed);
-                for dim in 1..(bit_scale::<$nbits>() as usize) {
+                const MAX_DIM: usize = (bit_scale::<$nbits>() as usize);
+                for dim in 1..=MAX_DIM {
+                    #[cfg(miri)]
+                    if dim != MAX_DIM {
+                        continue;
+                    }
+
                     for _ in 0..TRIALS {
                         test_minmax_compensated_vectors::<$nbits, _>(dim, &mut rng);
                     }

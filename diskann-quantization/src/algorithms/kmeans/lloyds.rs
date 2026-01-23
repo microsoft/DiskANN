@@ -615,9 +615,19 @@ mod tests {
         //
         // Similarly, we need to ensure we have both an even and odd number of centers,
         // so bound this up to 5.
+        #[cfg(not(miri))]
         for ndata in 1..=35 {
             for ncenters in 1..=5 {
                 for dim in 1..=4 {
+                    test_miri_distances_in_place_impl(ndata, ncenters, dim);
+                }
+            }
+        }
+
+        #[cfg(miri)]
+        for ndata in 34..=35 {
+            for ncenters in 4..=5 {
+                for dim in 3..=4 {
                     test_miri_distances_in_place_impl(ndata, ncenters, dim);
                 }
             }
@@ -729,12 +739,22 @@ mod tests {
     #[test]
     fn end_to_end_test() {
         let mut rng = StdRng::seed_from_u64(0xff22c38d0f0531bf);
+        #[cfg(not(miri))]
         let setup = EndToEndSetup {
             ncenters: 11,
             ndim: 4,
             data_per_center: 8,
             step_between_clusters: 20,
             ntrials: 10,
+        };
+
+        #[cfg(miri)]
+        let setup = EndToEndSetup {
+            ncenters: 3,
+            ndim: 4,
+            data_per_center: 2,
+            step_between_clusters: 20,
+            ntrials: 2,
         };
         end_to_end_test_impl(&setup, &mut rng);
     }

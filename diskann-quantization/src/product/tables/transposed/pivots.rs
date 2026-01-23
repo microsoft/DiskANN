@@ -1418,7 +1418,7 @@ mod tests {
     fn run_test_happy_path() {
         // Step dimensions by 1 to test all possible residual combinations.
         let dims: Vec<usize> = if cfg!(miri) {
-            (1..=8).collect()
+            (7..=8).collect()
         } else {
             (1..=16).collect()
         };
@@ -1583,8 +1583,18 @@ mod tests {
     #[test]
     fn test_process_into() {
         let mut rng = StdRng::seed_from_u64(0x21dfb5f35dfe5639);
+
+        #[cfg(not(miri))]
         for total in 1..64 {
             for dim in 1..5 {
+                println!("on ({}, {})", total, dim);
+                test_process_into_impl(dim, total, &mut rng);
+            }
+        }
+
+        #[cfg(miri)]
+        for total in 63..64 {
+            for dim in 4..5 {
                 println!("on ({}, {})", total, dim);
                 test_process_into_impl(dim, total, &mut rng);
             }

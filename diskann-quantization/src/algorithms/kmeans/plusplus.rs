@@ -683,6 +683,11 @@ mod tests {
     fn test_update_distances() {
         let mut rng = StdRng::seed_from_u64(0x56c94b53c73e4fd9);
         for num_points in 0..48 {
+            #[cfg(miri)]
+            if num_points % 7 != 0 {
+                continue;
+            }
+
             for dim in 1..4 {
                 test_update_distances_impl(num_points, dim, &mut rng);
             }
