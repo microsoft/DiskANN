@@ -1512,6 +1512,11 @@ mod tests {
     fn test_binary_dense() {
         let mut rng = StdRng::seed_from_u64(0xb3c95e8e19d3842e);
         for len in 0..MAX_DIM {
+            #[cfg(miri)]
+            if len != MAX_DIM - 1 {
+                continue;
+            }
+
             test_send_and_sync::<1, Binary, Dense>();
             test_empty::<1, Binary, Dense>();
             test_construction_errors::<1, Binary, Dense>();
@@ -1558,6 +1563,11 @@ mod tests {
     fn test_4bit_bit_transpose() {
         let mut rng = StdRng::seed_from_u64(0xb3c95e8e19d3842e);
         for len in 0..MAX_DIM {
+            #[cfg(miri)]
+            if len != MAX_DIM - 1 {
+                continue;
+            }
+
             test_send_and_sync::<4, Unsigned, BitTranspose>();
             test_empty::<4, Unsigned, BitTranspose>();
             test_construction_errors::<4, Unsigned, BitTranspose>();

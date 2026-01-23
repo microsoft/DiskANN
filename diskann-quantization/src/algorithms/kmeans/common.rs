@@ -565,8 +565,16 @@ mod tests {
 
     #[test]
     fn test_block_transpose_16() {
+        #[cfg(not(miri))]
         for nrows in 0..128 {
             for ncols in 0..5 {
+                test_block_transpose::<16>(nrows, ncols);
+            }
+        }
+
+        #[cfg(miri)]
+        for nrows in 127..128 {
+            for ncols in 4..5 {
                 test_block_transpose::<16>(nrows, ncols);
             }
         }
@@ -574,8 +582,16 @@ mod tests {
 
     #[test]
     fn test_block_transpose_8() {
+        #[cfg(not(miri))]
         for nrows in 0..128 {
             for ncols in 0..5 {
+                test_block_transpose::<8>(nrows, ncols);
+            }
+        }
+
+        #[cfg(miri)]
+        for nrows in 127..128 {
+            for ncols in 4..5 {
                 test_block_transpose::<8>(nrows, ncols);
             }
         }

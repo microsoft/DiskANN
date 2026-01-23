@@ -490,9 +490,7 @@ mod tests {
             (500, 1000, false, target_dim(1000), &subsampled_errors),
         ];
         #[cfg(miri)]
-        let dim_combos = [
-            (15, 16, true, target_dim(16), &natural_errors),
-        ];
+        let dim_combos = [(15, 16, true, target_dim(16), &natural_errors)];
 
         cfg_if::cfg_if! {
             if #[cfg(miri)] {

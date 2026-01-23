@@ -567,9 +567,19 @@ mod tests {
     #[test]
     fn test_distances_in_place() {
         let mut rng = StdRng::seed_from_u64(0xece88a9c6cd86a8a);
+        #[cfg(not(miri))]
         for ndata in 1..=31 {
             for ncenters in 1..=5 {
                 for dim in 1..=4 {
+                    test_distances_in_place_impl(ndata, ncenters, dim, TRIALS, &mut rng);
+                }
+            }
+        }
+
+        #[cfg(miri)]
+        for ndata in 31..=31 {
+            for ncenters in 5..=5 {
+                for dim in 4..=4 {
                     test_distances_in_place_impl(ndata, ncenters, dim, TRIALS, &mut rng);
                 }
             }
