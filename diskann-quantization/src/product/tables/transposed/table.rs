@@ -619,7 +619,7 @@ mod test_compression {
         let mut rng = StdRng::seed_from_u64(0x88e3d3366501ad6c);
 
         let num_data = if cfg!(miri) {
-            vec![0, 8, 9, 10, 11]
+            vec![7, 8]
         } else {
             vec![0, 1, 2, 3, 4, 16, 17, 18, 19]
         };
@@ -916,8 +916,17 @@ mod test_compression {
     #[test]
     fn test_process_into() {
         let mut rng = StdRng::seed_from_u64(0x0e3cf3ba4b27e7f8);
+
+        #[cfg(not(miri))]
         for num_chunks in 1..5 {
             for num_centers in 1..48 {
+                test_process_into_impl(num_chunks, num_centers, 2, &mut rng);
+            }
+        }
+
+        #[cfg(miri)]
+        for num_chunks in 4..5 {
+            for num_centers in 47..48 {
                 test_process_into_impl(num_chunks, num_centers, 2, &mut rng);
             }
         }
