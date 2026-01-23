@@ -190,6 +190,16 @@ std::vector<bool> PQFlashIndex<T, LabelT>::read_nodes(const std::vector<uint32_t
         {
             uint32_t *node_nhood = offset_to_node_nhood(node_buf);
             auto num_nbrs = *node_nhood;
+            // Validate num_nbrs is within expected bounds
+            if (num_nbrs > _max_degree)
+            {
+                std::stringstream stream;
+                stream << "Corrupt or mismatched index data detected: num_nbrs (" << num_nbrs
+                       << ") exceeds max_degree (" << _max_degree << "). "
+                       << "This may indicate a data type mismatch - ensure the data_type parameter "
+                       << "matches the type used when building the index.";
+                throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
             nbr_buffers[i].first = num_nbrs;
             memcpy(nbr_buffers[i].second, node_nhood + 1, num_nbrs * sizeof(uint32_t));
         }
