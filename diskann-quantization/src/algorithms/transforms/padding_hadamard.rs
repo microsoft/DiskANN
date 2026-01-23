@@ -463,6 +463,7 @@ mod tests {
         //
         // Subsampling results in poor preservation of inner products, so we skip it
         // altogether.
+        #[cfg(not(miri))]
         let subsampled_errors = test_utils::ErrorSetup {
             norm: test_utils::Check::absrel(0.0, 1e-1),
             l2: test_utils::Check::absrel(0.0, 1e-1),
@@ -471,6 +472,8 @@ mod tests {
 
         let target_dim = |v| TargetDim::Override(NonZeroUsize::new(v).unwrap());
 
+        // Miri is extremely slow, so we skip the larger tests there.
+        #[cfg(not(miri))]
         let dim_combos = [
             // Natural
             (15, 16, true, target_dim(16), &natural_errors),
@@ -486,9 +489,20 @@ mod tests {
             (1000, 1000, false, TargetDim::Same, &subsampled_errors),
             (500, 1000, false, target_dim(1000), &subsampled_errors),
         ];
+        #[cfg(miri)]
+        let dim_combos = [
+            (15, 16, true, target_dim(16), &natural_errors),
+        ];
 
-        let trials_per_combo = 20;
-        let trials_per_dim = 100;
+        cfg_if::cfg_if! {
+            if #[cfg(miri)] {
+                let trials_per_combo = 1;
+                let trials_per_dim = 1;
+            } else {
+                let trials_per_combo = 20;
+                let trials_per_dim = 100;
+            }
+        }
 
         let mut rng = StdRng::seed_from_u64(0x6d1699abe0626147);
         for (input, output, preserves_norms, target, errors) in dim_combos {

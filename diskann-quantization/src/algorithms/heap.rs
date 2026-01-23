@@ -390,11 +390,15 @@ mod tests {
         // Heap of size 2.
         fuzz_test_impl(2, 101, &mut rng);
 
-        // Heap size not power of two.
-        fuzz_test_impl(1000, 1000, &mut rng);
+        // Miri is extremely slow, so we skip the larger tests there.
+        #[cfg(not(miri))]
+        {
+            // Heap size not power of two.
+            fuzz_test_impl(1000, 1000, &mut rng);
 
-        // Heap size power of two.
-        fuzz_test_impl(128, 1000, &mut rng);
+            // Heap size power of two.
+            fuzz_test_impl(128, 1000, &mut rng);
+        }
     }
 
     #[test]
