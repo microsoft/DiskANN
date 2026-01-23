@@ -57,14 +57,12 @@ mod tests {
     use diskann_providers::common::AlignedBoxWithSlice;
 
     fn test_index_path() -> String {
-        test_data_root()
-            .join("disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index")
-            .to_string_lossy()
+        "/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index"
             .to_string()
     }
 
     fn setup_reader() -> StorageProviderAlignedFileReader {
-        let storage_provider = VirtualStorageProvider::new_overlay("/");
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         StorageProviderAlignedFileReader::new(&storage_provider, &test_index_path()).unwrap()
     }
 
@@ -100,7 +98,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Assert that the actual data is correct.
-        let file_system = VirtualStorageProvider::new_overlay("/");
+        let file_system = VirtualStorageProvider::new_overlay(test_data_root());
         let mut file = file_system.open_reader(&test_index_path()).unwrap();
         for current_read in aligned_reads {
             let offset = current_read.offset();
