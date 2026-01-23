@@ -436,7 +436,7 @@ impl PQStorage {
 mod pq_storage_tests {
 
     use crate::storage::VirtualStorageProvider;
-    use vfs::{MemoryFS, OverlayFS, PhysicalFS};
+    use vfs::MemoryFS;
 
     use super::*;
     use crate::utils::{gen_random_slice, read_metadata};
@@ -485,8 +485,7 @@ mod pq_storage_tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let filesystem = PhysicalFS::new(workspace_root);
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
         let result = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
         assert!(result.pivot_data_exist(&storage_provider));
 
@@ -501,8 +500,7 @@ mod pq_storage_tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let filesystem = PhysicalFS::new(workspace_root);
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
         let result = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
         let (npt, dim) = result
             .read_existing_pivot_metadata(&storage_provider)
@@ -518,8 +516,7 @@ mod pq_storage_tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let filesystem = PhysicalFS::new(workspace_root);
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
         let result = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
         let (pq_pivot_data, centroids, chunk_offsets, _) = result
             .load_existing_pivot_data(&1, &256, &128, &storage_provider, false)
@@ -542,10 +539,7 @@ mod pq_storage_tests {
             .parent()
             .unwrap()
             .to_path_buf();
-        let base_filesystem = PhysicalFS::new(workspace_root);
-        let memory_filesystem = MemoryFS::new();
-        let vfs = OverlayFS::new(&[memory_filesystem.into(), base_filesystem.into()]);
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
         let pq_storage = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
 
         // Write OPQ test data

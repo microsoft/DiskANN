@@ -48,27 +48,21 @@ impl AlignedFileReader for StorageProviderAlignedFileReader {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs::File,
-        io::{Seek, SeekFrom},
-    };
+    use std::io::{Seek, SeekFrom};
 
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_utils::test_data_root;
-    use vfs::PhysicalFS;
 
     use super::*;
     use diskann_providers::common::AlignedBoxWithSlice;
 
     fn test_index_path() -> String {
-        test_data_root()
-            .join("disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index")
-            .to_string_lossy()
+        "/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index"
             .to_string()
     }
 
     fn setup_reader() -> StorageProviderAlignedFileReader {
-        let storage_provider = VirtualStorageProvider::new(PhysicalFS::new("/"));
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         StorageProviderAlignedFileReader::new(&storage_provider, &test_index_path()).unwrap()
     }
 
@@ -104,7 +98,8 @@ mod tests {
         assert!(result.is_ok());
 
         // Assert that the actual data is correct.
-        let mut file = File::open(test_index_path()).unwrap();
+        let file_system = VirtualStorageProvider::new_overlay(test_data_root());
+        let mut file = file_system.open_reader(&test_index_path()).unwrap();
         for current_read in aligned_reads {
             let offset = current_read.offset();
             let mut expected = vec![0; current_read.aligned_buf().len()];

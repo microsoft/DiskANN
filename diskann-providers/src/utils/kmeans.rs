@@ -723,10 +723,7 @@ mod kmeans_test {
             .parent()
             .unwrap()
             .to_path_buf();
-        let base_filesystem = PhysicalFS::new(workspace_root);
-        let memory_filesystem = MemoryFS::new();
-        let vfs = OverlayFS::new(&[memory_filesystem.into(), base_filesystem.into()]);
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
         let mut reader =
             std::io::BufReader::new(storage_provider.open_reader(test_data_path).unwrap());
         for _ in 0..256 {
@@ -949,7 +946,6 @@ mod kmeans_test {
     }
 
     use proptest::{prelude::*, test_runner::Config};
-    use vfs::{MemoryFS, OverlayFS, PhysicalFS};
 
     proptest! {
         #![proptest_config(Config {
