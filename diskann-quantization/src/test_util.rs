@@ -54,8 +54,8 @@ impl LimitedAllocator {
     }
 }
 
-/// SAFETY: This either forwards to the global allocator, or failed.
 #[cfg(not(miri))]
+/// SAFETY: This either forwards to the global allocator, or failed.
 unsafe impl AllocatorCore for LimitedAllocator {
     fn allocate(
         &self,
