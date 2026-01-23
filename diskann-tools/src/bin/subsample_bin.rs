@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use anyhow::{ensure, Result};
 use clap::Parser;
 use half::f16;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::rngs::StdRng;
 use rand_distr::{Distribution, StandardUniform};
 
 use diskann::utils::VectorRepr;
@@ -41,11 +41,8 @@ struct Args {
 
 fn create_rng(seed: Option<u64>) -> StdRng {
     match seed {
-        Some(seed) => StdRng::seed_from_u64(seed),
-        None => {
-            let mut system_rng = random::create_rnd();
-            StdRng::from_rng(&mut system_rng)
-        }
+        Some(seed) => random::create_rnd_from_seed(seed),
+        None => random::create_rnd(),
     }
 }
 
