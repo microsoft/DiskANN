@@ -766,7 +766,7 @@ mod minmax_vector_tests {
             }
         };
     }
-    test_minmax_compensated!(unsigned_minmax_compensated_test_u1, 1, 0xa32d5658097a1c35);
+    test_minmax_compensated!(unsigned_minmax_compensated_test_u1, 1, 0xa33d5658097a1c35);
     test_minmax_compensated!(unsigned_minmax_compensated_test_u2, 2, 0xaedf3d2a223b7b77);
     test_minmax_compensated!(unsigned_minmax_compensated_test_u4, 4, 0xf60c0c8d1aadc126);
     test_minmax_compensated!(unsigned_minmax_compensated_test_u8, 8, 0x09fa14c42a9d7d98);
