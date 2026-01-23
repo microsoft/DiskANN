@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+#[cfg(not(miri))]
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -15,7 +16,9 @@ use rand::{
     seq::SliceRandom,
 };
 
-use crate::alloc::{AllocatorCore, AllocatorError, GlobalAllocator};
+#[cfg(not(miri))]
+use crate::alloc::GlobalAllocator;
+use crate::alloc::{AllocatorCore, AllocatorError};
 
 /// An allocator that always fails.
 #[derive(Debug, Clone, Copy)]
@@ -36,11 +39,13 @@ unsafe impl AllocatorCore for AlwaysFails {
 /// An allocator that can only perform a limited number of allocations.
 ///
 /// Used to test interfaces for allocation reliability.
+#[cfg(not(miri))]
 #[derive(Debug, Clone)]
 pub(crate) struct LimitedAllocator {
     remaining: Arc<AtomicUsize>,
 }
 
+#[cfg(not(miri))]
 impl LimitedAllocator {
     pub(crate) fn new(allocations: usize) -> Self {
         Self {
@@ -50,6 +55,7 @@ impl LimitedAllocator {
 }
 
 /// SAFETY: This either forwards to the global allocator, or failed.
+#[cfg(not(miri))]
 unsafe impl AllocatorCore for LimitedAllocator {
     fn allocate(
         &self,

@@ -511,13 +511,14 @@ mod test_compression {
     };
 
     use super::*;
+    #[cfg(not(miri))]
+    use crate::product::tables::test::{
+        check_pqtable_batch_compression_errors, check_pqtable_single_compression_errors,
+    };
     use crate::{
         distances::{InnerProduct, SquaredL2},
         error::format,
-        product::tables::test::{
-            check_pqtable_batch_compression_errors, check_pqtable_single_compression_errors,
-            create_dataset, create_pivot_tables,
-        },
+        product::tables::test::{create_dataset, create_pivot_tables},
     };
     use diskann_utils::lazy_format;
 
