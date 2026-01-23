@@ -5,6 +5,7 @@
 
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::StorageReadProvider;
+use diskann_providers::utils::random;
 use diskann_providers::{model::graph::traits::GraphDataType, utils::file_util::load_bin};
 use rand::Rng;
 
@@ -33,7 +34,7 @@ fn average_squared_distance<Data: GraphDataType>(
     base: &[Vec<Data::VectorDataType>],
     num_random_samples: usize,
 ) -> CMDResult<f32> {
-    let mut rng = rand::rng();
+    let mut rng = random::create_rnd();
     let n = base.len();
     let mut sum_dist = 0.0;
     for _ in 0..num_random_samples {
@@ -125,7 +126,7 @@ mod relative_contrast_tests {
         // Generate 1000 random vectors of fp16 data type with 384 dimensions
         let num_vectors = 1000;
         let dim = 384;
-        let mut rng = rand::rng();
+        let mut rng = random::create_rnd_in_tests();
         let base: Vec<f16> = (0..num_vectors * dim)
             .map(|_| f16::from_f32(rng.random_range(0.0..1.0)))
             .collect();
@@ -212,7 +213,7 @@ mod relative_contrast_tests {
 
         let num_queries = 10;
         let dim = 128;
-        let mut rng = rand::rng();
+        let mut rng = random::create_rnd_in_tests();
         let query: Vec<f16> = (0..num_queries * dim)
             .map(|_| f16::from_f32(rng.random_range(0.0..1.0)))
             .collect();

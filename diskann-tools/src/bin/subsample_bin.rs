@@ -9,13 +9,13 @@ use std::path::PathBuf;
 use anyhow::{ensure, Result};
 use clap::Parser;
 use half::f16;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::rngs::StdRng;
 use rand_distr::{Distribution, StandardUniform};
 
 use diskann::utils::VectorRepr;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_providers::storage::StorageWriteProvider;
-use diskann_providers::utils::{write_metadata, SampleVectorReader, SamplingDensity};
+use diskann_providers::utils::{random, write_metadata, SampleVectorReader, SamplingDensity};
 use diskann_tools::utils::DataType;
 
 /// Subsamples vectors from a DiskANN style binary file.
@@ -41,11 +41,8 @@ struct Args {
 
 fn create_rng(seed: Option<u64>) -> StdRng {
     match seed {
-        Some(seed) => StdRng::seed_from_u64(seed),
-        None => {
-            let mut system_rng = rand::rng();
-            StdRng::from_rng(&mut system_rng)
-        }
+        Some(seed) => random::create_rnd_from_seed(seed),
+        None => random::create_rnd(),
     }
 }
 
