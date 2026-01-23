@@ -59,7 +59,12 @@ mod tests {
     use super::*;
     use diskann_providers::common::AlignedBoxWithSlice;
 
-    fn test_index_path() -> std::path::PathBuf {
+    fn test_index_path() -> String {
+        "/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index"
+            .to_string()
+    }
+
+    fn test_index_os_path() -> std::path::PathBuf {
         test_data_root().join(
             "disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index",
         )
@@ -67,7 +72,7 @@ mod tests {
 
     fn setup_reader() -> StorageProviderAlignedFileReader {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
-        StorageProviderAlignedFileReader::new(&storage_provider, "/disk_index_misc/disk_index_siftsmall_learn_256pts_R4_L50_A1.2_aligned_reader_test.index").unwrap()
+        StorageProviderAlignedFileReader::new(&storage_provider, &test_index_path()).unwrap()
     }
 
     #[test]
@@ -102,7 +107,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Assert that the actual data is correct.
-        let mut file = File::open(test_index_path()).unwrap();
+        let mut file = File::open(test_index_os_path()).unwrap();
         for current_read in aligned_reads {
             let offset = current_read.offset();
             let mut expected = vec![0; current_read.aligned_buf().len()];
