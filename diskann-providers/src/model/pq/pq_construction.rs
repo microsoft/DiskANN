@@ -1427,7 +1427,7 @@ mod pq_test {
         #[case] make_zero_mean: bool,
         #[case] num_pq_chunks: usize,
     ) {
-        // Creates a new filesystem using an in-memory layer over workspace data.
+        // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
         let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -1678,7 +1678,7 @@ mod pq_test {
 
     #[test]
     fn pq_end_to_end_validation_with_codebook_test() {
-        // Creates a new filesystem using an in-memory layer over workspace data.
+        // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
         let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -1784,7 +1784,7 @@ mod pq_test {
         #[case] distance_function: String,
         #[case] num_pq_chunks: usize,
     ) {
-        // Creates a new filesystem using an in-memory layer over workspace data.
+        // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
         let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
