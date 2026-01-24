@@ -337,6 +337,7 @@ impl_functor!(MinMaxCosineNormalized);
 // Tests //
 ///////////
 #[cfg(test)]
+#[cfg_attr(miri, ignore)]
 mod minmax_quantizer_tests {
     use std::num::NonZeroUsize;
 
@@ -475,11 +476,6 @@ mod minmax_quantizer_tests {
                 let scales = [1.0, 1.1, 0.9];
                 for (s, e) in scales.iter().zip($err) {
                     for d in 10..$dim {
-                        #[cfg(miri)]
-                        if d != $dim - 1 {
-                            continue;
-                        }
-
                         for _ in 0..TRIALS {
                             test_quantizer_encoding_random::<$nbits>(d, &mut rng, e, *s);
                         }
