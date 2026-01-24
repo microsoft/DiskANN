@@ -489,6 +489,7 @@ where
 ///////////
 
 #[cfg(test)]
+#[cfg_attr(miri, ignore)]
 mod minmax_vector_tests {
     use diskann_utils::Reborrow;
     use rand::{
@@ -754,11 +755,6 @@ mod minmax_vector_tests {
                 let mut rng = StdRng::seed_from_u64($seed);
                 const MAX_DIM: usize = (bit_scale::<$nbits>() as usize);
                 for dim in 1..=MAX_DIM {
-                    #[cfg(miri)]
-                    if dim != MAX_DIM {
-                        continue;
-                    }
-
                     for _ in 0..TRIALS {
                         test_minmax_compensated_vectors::<$nbits, _>(dim, &mut rng);
                     }
