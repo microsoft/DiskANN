@@ -428,7 +428,7 @@ mod partition_test {
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::utils::create_thread_pool_for_test;
     use diskann_utils::test_data_root;
-    use vfs::{MemoryFS, OverlayFS, PhysicalFS};
+    use vfs::{MemoryFS, OverlayFS};
 
     use super::*;
 
@@ -468,10 +468,7 @@ mod partition_test {
         let num_points: u32 = 100;
         let dim: usize = 10;
 
-        let base_filesystem = PhysicalFS::new(test_data_root());
-        let memory_filesystem = MemoryFS::new();
-        let vfs = OverlayFS::new(&[memory_filesystem.into(), base_filesystem.into()]);
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         {
             let writer = storage_provider.create_for_write(dataset_path).unwrap();
             let mut dataset_writer = CachedWriter::<VirtualStorageProvider<MemoryFS>>::new(
@@ -556,10 +553,7 @@ mod partition_test {
 
     #[test]
     fn test_partition_with_ram_budget() -> ANNResult<()> {
-        let base_filesystem = PhysicalFS::new(test_data_root());
-        let memory_filesystem = MemoryFS::new();
-        let vfs = OverlayFS::new(&[memory_filesystem.into(), base_filesystem.into()]);
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let dataset_file = "/sift/siftsmall_learn.bin";
         let mut file = storage_provider.open_reader(dataset_file).unwrap();
         let mut data = vec![];

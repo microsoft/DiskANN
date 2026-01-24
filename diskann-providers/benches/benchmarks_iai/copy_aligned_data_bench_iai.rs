@@ -27,7 +27,10 @@ iai_callgrind::library_benchmark_group!(
 #[iai_callgrind::library_benchmark]
 pub fn benchmark_copy_aligned_data_iai() {
     let tmp_dir = TempDir::with_prefix(BENCHMARK_ID).expect("Failed to create temporary directory");
-    // Use physical file system rather than memory for testing the actual disk read/write
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Use physical file system rather than memory for testing the actual disk read/write"
+    )]
     let storage_provider = VirtualStorageProvider::new(PhysicalFS::new(tmp_dir.path()));
 
     let num_points = 1_000_000;

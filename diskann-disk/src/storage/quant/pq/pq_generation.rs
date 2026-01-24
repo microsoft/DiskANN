@@ -194,7 +194,7 @@ mod pq_generation_tests {
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
     use rstest::rstest;
-    use vfs::{FileSystem, MemoryFS, OverlayFS, PhysicalFS};
+    use vfs::{FileSystem, MemoryFS, OverlayFS};
 
     use super::{CompressionStage, PQGeneration, PQGenerationContext};
     use crate::storage::quant::compressor::QuantCompressor;
@@ -361,10 +361,7 @@ mod pq_generation_tests {
 
     #[rstest]
     fn test_pq_end_to_end_with_codebook() {
-        let storage_provider = VirtualStorageProvider::new(OverlayFS::new(&[
-            MemoryFS::default().into(),
-            PhysicalFS::new(test_data_root()).into(),
-        ]));
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
         let pool = create_thread_pool_for_test();
         let dim = 128;
@@ -415,10 +412,7 @@ mod pq_generation_tests {
         #[case] centers: usize,
     ) {
         //test the error cases for parameters: num_chunks > dim, num_chunks == 0, num_centers == 0
-        let storage_provider = VirtualStorageProvider::new(OverlayFS::new(&[
-            MemoryFS::default().into(),
-            PhysicalFS::new("tests/data/").into(),
-        ]));
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let pool = create_thread_pool_for_test();
         let max_k_means_reps = 10;
         let compressor = create_new_compressor(
