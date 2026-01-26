@@ -96,8 +96,8 @@ jobs:
     strategy:
       matrix:
         os:
-          - [ self-hosted, 1ES.Pool=1es-vscode-oss-windows-2022-x64 ]
-          - [ self-hosted, 1ES.Pool=1es-vscode-oss-ubuntu-22.04-x64 ]
+          - windows-latest
+          - ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -129,8 +129,8 @@ jobs:
     strategy:
       matrix:
         os:
-          - [ self-hosted, 1ES.Pool=1es-vscode-oss-windows-2022-x64 ]
-          - [ self-hosted, 1ES.Pool=1es-vscode-oss-ubuntu-22.04-x64 ]
+          - windows-latest
+          - ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -207,7 +207,7 @@ jobs:
   miri:
     needs: basics
     name: miri-test
-    runs-on: [ self-hosted, 1ES.Pool=1es-vscode-oss-ubuntu-22.04-x64 ]
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
