@@ -387,6 +387,7 @@ where
 ///////////
 
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use diskann_utils::lazy_format;
     use rand::{rngs::StdRng, SeedableRng};
@@ -400,7 +401,6 @@ mod tests {
     test_utils::delegate_transformer!(DoubleHadamard<GlobalAllocator>);
 
     #[test]
-    #[cfg(not(miri))]
     fn test_double_hadamard() {
         // Inner product computations are more susceptible to floating point error.
         // Instead of using ULP here, we fall back to using absolute and relative error.

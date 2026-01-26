@@ -457,14 +457,15 @@ pub fn lloyds(
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views::Matrix};
+    #[cfg(not(miri))]
+    use diskann_utils::lazy_format;
+    use diskann_utils::views::Matrix;
     use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
-    use rand::{
-        distr::{Distribution, Uniform},
-        rngs::StdRng,
-        seq::{IndexedRandom, SliceRandom},
-        Rng, SeedableRng,
-    };
+    #[cfg(not(miri))]
+    use rand::distr::{Distribution, Uniform};
+    #[cfg(not(miri))]
+    use rand::seq::IndexedRandom;
+    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 
     use super::*;
 
@@ -477,6 +478,7 @@ mod tests {
     // relatively quickly.
     //
     // Outside of rare validations, Miri tests go through a different path for speed purposes.
+    #[cfg(not(miri))]
     fn test_distances_in_place_impl<R: Rng>(
         ndata: usize,
         ncenters: usize,
@@ -556,13 +558,8 @@ mod tests {
         }
     }
 
-    cfg_if::cfg_if! {
-        if #[cfg(miri)] {
-            const TRIALS: usize = 1;
-        } else {
-            const TRIALS: usize = 100;
-        }
-    }
+    #[cfg(not(miri))]
+    const TRIALS: usize = 100;
 
     #[test]
     #[cfg(not(miri))]
