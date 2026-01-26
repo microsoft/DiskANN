@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg(not(miri))]
     fn test_distances_in_place() {
         let mut rng = StdRng::seed_from_u64(0xece88a9c6cd86a8a);
         for ndata in 1..=31 {
