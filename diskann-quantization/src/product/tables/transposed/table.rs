@@ -917,16 +917,16 @@ mod test_compression {
     fn test_process_into() {
         let mut rng = StdRng::seed_from_u64(0x0e3cf3ba4b27e7f8);
 
-        #[cfg(not(miri))]
-        for num_chunks in 1..5 {
-            for num_centers in 1..48 {
-                test_process_into_impl(num_chunks, num_centers, 2, &mut rng);
-            }
-        }
+        let num_chunks_range = if cfg!(miri) { 4..5 } else { 1..5 };
 
-        #[cfg(miri)]
-        for num_chunks in 4..5 {
-            for num_centers in 47..48 {
+        let num_centers: Vec<usize> = if cfg!(miri) {
+            vec![1, 7, 16, 33, 47]
+        } else {
+            (1..48).collect()
+        };
+
+        for num_chunks in num_chunks_range {
+            for num_centers in num_centers.clone() {
                 test_process_into_impl(num_chunks, num_centers, 2, &mut rng);
             }
         }

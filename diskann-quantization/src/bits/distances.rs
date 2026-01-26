@@ -2003,12 +2003,6 @@ mod tests {
         let dist = Uniform::new_inclusive(min, max).unwrap();
 
         for dim in 0..dim_max {
-            // Only run the maximum dimension when running under miri.
-            #[cfg(miri)]
-            if dim != dim_max - 1 {
-                continue;
-            }
-
             let mut x_reference: Vec<u8> = vec![0; dim];
             let mut y_reference: Vec<u8> = vec![0; dim];
 

@@ -565,16 +565,11 @@ mod tests {
 
     #[test]
     fn test_block_transpose_16() {
-        #[cfg(not(miri))]
-        for nrows in 0..128 {
-            for ncols in 0..5 {
-                test_block_transpose::<16>(nrows, ncols);
-            }
-        }
+        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
+        let column_range = if cfg!(miri) { 4..5 } else { 0..5 };
 
-        #[cfg(miri)]
-        for nrows in 127..128 {
-            for ncols in 4..5 {
+        for nrows in row_range {
+            for ncols in column_range.clone() {
                 test_block_transpose::<16>(nrows, ncols);
             }
         }
@@ -582,16 +577,11 @@ mod tests {
 
     #[test]
     fn test_block_transpose_8() {
-        #[cfg(not(miri))]
-        for nrows in 0..128 {
-            for ncols in 0..5 {
-                test_block_transpose::<8>(nrows, ncols);
-            }
-        }
+        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
+        let column_range = if cfg!(miri) { 4..5 } else { 0..5 };
 
-        #[cfg(miri)]
-        for nrows in 127..128 {
-            for ncols in 4..5 {
+        for nrows in row_range {
+            for ncols in column_range.clone() {
                 test_block_transpose::<8>(nrows, ncols);
             }
         }

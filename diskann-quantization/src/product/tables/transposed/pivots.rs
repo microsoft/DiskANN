@@ -1584,17 +1584,11 @@ mod tests {
     fn test_process_into() {
         let mut rng = StdRng::seed_from_u64(0x21dfb5f35dfe5639);
 
-        #[cfg(not(miri))]
-        for total in 1..64 {
-            for dim in 1..5 {
-                println!("on ({}, {})", total, dim);
-                test_process_into_impl(dim, total, &mut rng);
-            }
-        }
+        let total_range = if cfg!(miri) { 1..48 } else { 1..64 };
+        let dim_range = if cfg!(miri) { 4..5 } else { 1..5 };
 
-        #[cfg(miri)]
-        for total in 63..64 {
-            for dim in 4..5 {
+        for total in total_range {
+            for dim in dim_range.clone() {
                 println!("on ({}, {})", total, dim);
                 test_process_into_impl(dim, total, &mut rng);
             }
