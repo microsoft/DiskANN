@@ -400,7 +400,7 @@ mod tests {
     test_utils::delegate_transformer!(DoubleHadamard<GlobalAllocator>);
 
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg(not(miri))]
     fn test_double_hadamard() {
         // Inner product computations are more susceptible to floating point error.
         // Instead of using ULP here, we fall back to using absolute and relative error.

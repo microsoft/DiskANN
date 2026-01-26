@@ -446,7 +446,7 @@ mod tests {
     // This tests the natural hadamard transform where the output dimension is upgraded
     // to the next power of 2.
     #[test]
-    #[cfg_attr(miri, ignore)]
+    #[cfg(not(miri))]
     fn test_padding_hadamard() {
         // Inner product computations are more susceptible to floating point error.
         // Instead of using ULP here, we fall back to using absolute and relative error.
