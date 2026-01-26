@@ -1155,6 +1155,46 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     READ_U64(index_metadata, _nnodes_per_sector);
     _max_degree = ((_max_node_len - _disk_bytes_per_point) / sizeof(uint32_t)) - 1;
 
+    // Early validation: read first node from disk and validate neighbor data.
+    // If data type is wrong, _disk_bytes_per_point will be incorrect, causing
+    // us to read garbage for neighbor count and neighbor IDs.
+    // Disk layout: [sector 0: metadata] [sector 1+: node data]
+    // Node layout: [vector data: _disk_bytes_per_point bytes] [neighbor count: 4 bytes] [neighbor IDs: 4 bytes each]
+    if (!_use_disk_index_pq && disk_nnodes > 0)
+    {
+        std::vector<char> first_node_buf(_max_node_len);
+        index_metadata.seekg(defaults::SECTOR_LEN, std::ios::beg);
+        index_metadata.read(first_node_buf.data(), _max_node_len);
+
+        // Get neighbor count (located after vector data)
+        uint32_t *nhood_ptr = reinterpret_cast<uint32_t *>(first_node_buf.data() + _disk_bytes_per_point);
+        uint32_t num_neighbors = *nhood_ptr;
+
+        // Validate neighbor count is reasonable
+        if (num_neighbors > _max_degree)
+        {
+            std::stringstream stream;
+            stream << "Data type mismatch detected: first node has neighbor count " << num_neighbors
+                   << " which exceeds max_degree " << _max_degree << ". "
+                   << "Please ensure --data_type matches the type used when building the index.";
+            throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+        }
+
+        // Validate each neighbor ID is within valid range [0, disk_nnodes)
+        uint32_t *neighbors = nhood_ptr + 1;
+        for (uint32_t i = 0; i < num_neighbors; i++)
+        {
+            if (neighbors[i] >= disk_nnodes)
+            {
+                std::stringstream stream;
+                stream << "Data type mismatch detected: first node has invalid neighbor ID " << neighbors[i]
+                       << " (max valid ID is " << (disk_nnodes - 1) << "). "
+                       << "Please ensure --data_type matches the type used when building the index.";
+                throw diskann::ANNException(stream.str(), -1, __FUNCSIG__, __FILE__, __LINE__);
+            }
+        }
+    }
+
     if (_max_degree > defaults::MAX_GRAPH_DEGREE)
     {
         std::stringstream stream;
