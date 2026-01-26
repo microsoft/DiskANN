@@ -32,7 +32,7 @@ pub fn create_rnd_from_seed_in_tests(seed: u64) -> StandardRng {
 }
 
 /// Creates a randomly seeded random number generator.
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "testing")))]
 #[allow(clippy::disallowed_methods)]
 pub fn create_rnd() -> StandardRng {
     rand::rngs::StdRng::from_os_rng()
@@ -40,7 +40,7 @@ pub fn create_rnd() -> StandardRng {
 
 /// Creates a pseudo-random number generator from a predefined seed to ensure reproducibility
 /// of tests and benchmarks.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn create_rnd() -> StandardRng {
     create_rnd_from_seed(DEFAULT_SEED_FOR_TESTS)
 }
@@ -64,7 +64,7 @@ pub fn create_rnd_provider_from_seed_in_tests(seed: u64) -> RandomProvider<Stand
 }
 
 /// Creates a random number generator provider.
-#[cfg(not(test))]
+#[cfg(not(any(test, feature = "testing")))]
 pub fn create_rnd_provider() -> RandomProvider<StandardRng> {
     RandomProvider {
         seed: None,
@@ -73,7 +73,7 @@ pub fn create_rnd_provider() -> RandomProvider<StandardRng> {
 }
 
 /// Creates a pseudo-random number generator provider from a predefined seed to ensure reproducibility of tests and benchmarks.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn create_rnd_provider() -> RandomProvider<StandardRng> {
     RandomProvider {
         seed: None,
