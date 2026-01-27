@@ -37,6 +37,8 @@ const bool NUM_DIVERSE_BUILD = 1;
 
 const bool REORDER_INDEX = false;
 const uint32_t REORDER_DIM = 0;
+const bool ATTRIBUTE_DIVERSITY = false;
+const float ATTR_DIST_THRESHOLD = 0.2f;
 
 } // namespace defaults
 } // namespace diskann
