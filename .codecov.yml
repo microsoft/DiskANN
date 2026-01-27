@@ -1,0 +1,35 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+# Codecov configuration for DiskANN Rust code coverage
+# See: https://docs.codecov.com/docs/codecov-yaml
+
+coverage:
+  status:
+    # Project coverage (overall) - informational only
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+
+    # Patch coverage (changed lines only) - this will block PRs
+    patch:
+      default:
+        target: 90%
+        threshold: 0%
+        informational: false
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+
+ignore:
+  - "test_data/**"
+  - "**/*_test.rs"
+  - "**/tests/**"
+  - "**/benches/**"
+  - "**/examples/**"
