@@ -5,7 +5,6 @@
 
 use diskann::{utils::VectorRepr, ANNError};
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::utils::random;
 use diskann_providers::{model::graph::traits::GraphDataType, utils::file_util::load_bin};
 use rand::Rng;
 
@@ -29,12 +28,12 @@ fn squared_distance<Data: GraphDataType>(
         .sum())
 }
 
-fn average_squared_distance<Data: GraphDataType>(
+fn average_squared_distance<Data: GraphDataType, R: Rng>(
     query: &[Data::VectorDataType],
     base: &[Vec<Data::VectorDataType>],
     num_random_samples: usize,
+    rng: &mut R,
 ) -> CMDResult<f32> {
-    let mut rng = random::create_rnd();
     let n = base.len();
     let mut sum_dist = 0.0;
     for _ in 0..num_random_samples {
@@ -44,13 +43,18 @@ fn average_squared_distance<Data: GraphDataType>(
     Ok(sum_dist / num_random_samples as f32)
 }
 
-pub fn compute_relative_contrast<Data: GraphDataType, StorageProvider: StorageReadProvider>(
+pub fn compute_relative_contrast<
+    Data: GraphDataType,
+    StorageProvider: StorageReadProvider,
+    R: Rng,
+>(
     storage_provider: &StorageProvider,
     base_file: &str,
     query_file: &str,
     gt_file: &str,
     recall_at: usize,
     num_random_samples: usize,
+    rng: &mut R,
 ) -> CMDResult<f32> {
     // Load base, query, and ground truth data
     let (base_flat, nb, dim) = load_bin::<Data::VectorDataType, _>(storage_provider, base_file, 0)?;
@@ -75,7 +79,7 @@ pub fn compute_relative_contrast<Data: GraphDataType, StorageProvider: StorageRe
 
     for (i, q) in query.iter().enumerate() {
         // Compute numerator: average squared distance to random samples
-        let numerator = average_squared_distance::<Data>(q, &base, num_random_samples)?;
+        let numerator = average_squared_distance::<Data, R>(q, &base, num_random_samples, rng)?;
 
         // Compute denominator: average squared distance to ground truth neighbors
         let mut denominator = 0.0;
@@ -106,6 +110,7 @@ pub fn compute_relative_contrast<Data: GraphDataType, StorageProvider: StorageRe
 #[cfg(test)]
 mod relative_contrast_tests {
     use diskann_providers::storage::{StorageWriteProvider, VirtualStorageProvider};
+    use diskann_providers::utils::random;
     use diskann_providers::utils::write_metadata;
     use diskann_vector::distance::Metric;
     use half::f16;
@@ -178,13 +183,14 @@ mod relative_contrast_tests {
 
         // Run compute_relative_contrast with the generated files
         let num_random_samples = 5;
-        let mean_rc = compute_relative_contrast::<GraphDataHalfVector, _>(
+        let mean_rc = compute_relative_contrast::<GraphDataHalfVector, _, _>(
             &storage_provider,
             base_file_path,
             query_file_path,
             gt_file_path,
             recall_at,
             num_random_samples,
+            &mut rng,
         )
         .unwrap();
         println!("Mean relative contrast: {}", mean_rc);
@@ -253,13 +259,14 @@ mod relative_contrast_tests {
 
         // Run compute_relative_contrast with the generated files
         let num_random_samples = 3;
-        let mean_rc = compute_relative_contrast::<GraphDataHalfVector, _>(
+        let mean_rc = compute_relative_contrast::<GraphDataHalfVector, _, _>(
             &storage_provider,
             base_file_path,
             query_file_path,
             gt_file_path,
             recall_at,
             num_random_samples,
+            &mut rng,
         )
         .unwrap();
         println!("Mean relative contrast: {}", mean_rc);

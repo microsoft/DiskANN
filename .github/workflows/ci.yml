@@ -158,51 +158,47 @@ jobs:
 
           cargo test --doc --workspace --profile ci
 
-  # coverage:
-  #   needs: basics
-  #   name: code coverage
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         lfs: true
+  coverage:
+    needs: basics
+    name: code coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 0
 
-  #     - name: Install Rust ${{ env.rust_stable }}
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: ${{ env.rust_stable }}
-  #         components: llvm-tools-preview
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+          components: llvm-tools-preview
 
-  #     - name: Install cargo-llvm-cov
-  #       uses: taiki-e/install-action@v2
-  #       with:
-  #         tool: cargo-llvm-cov
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
 
-  #     - name: Install cargo-nextest
-  #       uses: taiki-e/install-action@v2
-  #       with:
-  #         tool: cargo-nextest
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
-  #     - uses: Swatinem/rust-cache@v2
-  #     - name: Generate code coverage
-  #       run: |
-  #         cargo llvm-cov nextest --cargo-profile ci \
-  #           --package diskann-wide \
-  #           --package diskann-vector \
-  #           --package diskann-quantization \
-  #           --package diskann \
-  #           --package diskann-linalg \
-  #           --package diskann-utils \
-  #           --package diskann-disk \
-  #           --lcov --output-path lcov.info
+      - uses: Swatinem/rust-cache@v2
 
-  #     - name: Upload coverage to Codecov
-  #       uses: codecov/codecov-action@v4
-  #       with:
-  #         files: lcov.info
-  #         fail_ci_if_error: false
-  #       env:
-  #         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Generate code coverage
+        run: |
+          cargo llvm-cov nextest --cargo-profile ci \
+            --workspace \
+            --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   miri:
     needs: basics

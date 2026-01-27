@@ -5,6 +5,7 @@
 
 use clap::Parser;
 use diskann_providers::storage::FileStorageProvider;
+use diskann_providers::utils::random;
 use diskann_tools::utils::{
     init_subscriber, relative_contrast::compute_relative_contrast, CMDResult, DataType,
     GraphDataF32Vector, GraphDataHalfVector, GraphDataInt8Vector, GraphDataU8Vector,
@@ -36,39 +37,44 @@ fn main() -> CMDResult<()> {
 
     let args = RelativeContrastArgs::parse();
     let storage_provider = FileStorageProvider;
+    let mut rng = random::create_rnd();
 
     let result = match args.data_type {
-        DataType::Float => compute_relative_contrast::<GraphDataF32Vector, _>(
+        DataType::Float => compute_relative_contrast::<GraphDataF32Vector, _, _>(
             &storage_provider,
             &args.data_file,
             &args.query_file,
             &args.gt_file,
             args.recall_at,
             args.search_list,
+            &mut rng,
         ),
-        DataType::Fp16 => compute_relative_contrast::<GraphDataHalfVector, _>(
+        DataType::Fp16 => compute_relative_contrast::<GraphDataHalfVector, _, _>(
             &storage_provider,
             &args.data_file,
             &args.query_file,
             &args.gt_file,
             args.recall_at,
             args.search_list,
+            &mut rng,
         ),
-        DataType::Uint8 => compute_relative_contrast::<GraphDataU8Vector, _>(
+        DataType::Uint8 => compute_relative_contrast::<GraphDataU8Vector, _, _>(
             &storage_provider,
             &args.data_file,
             &args.query_file,
             &args.gt_file,
             args.recall_at,
             args.search_list,
+            &mut rng,
         ),
-        DataType::Int8 => compute_relative_contrast::<GraphDataInt8Vector, _>(
+        DataType::Int8 => compute_relative_contrast::<GraphDataInt8Vector, _, _>(
             &storage_provider,
             &args.data_file,
             &args.query_file,
             &args.gt_file,
             args.recall_at,
             args.search_list,
+            &mut rng,
         ),
     };
 
