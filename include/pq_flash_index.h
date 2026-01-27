@@ -254,6 +254,12 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     tsl::robin_map<uint32_t, std::vector<uint32_t>> _real_to_dummy_map;
     std::unordered_map<std::string, LabelT> _label_map;
 
+    // Validate if data type is correct by check each data's vector/neighbor section.
+    // disk_nnodes, total node count in index, used to validate neighbor index of each node.
+    // contains_disk_pq_file, flag if indices contains disk pq file(suffix : _disk.index_pq_pivots.bin);
+    // If it's true, max_node_len use uint8 to calculate data size instead.(check aux_utils.cpp:1399)
+    bool validate_vector_data_type(uint64_t disk_nnodes, bool contains_disk_pq_file);
+
 #ifdef EXEC_ENV_OLS
     // Set to a larger value than the actual header to accommodate
     // any additions we make to the header. This is an outer limit

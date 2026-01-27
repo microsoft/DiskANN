@@ -687,7 +687,6 @@ bool PQFlashIndex<T, LabelT>::point_has_any_label(uint32_t point_id, const std::
     return ret_val;
 }
 
-
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile, size_t &num_points_labels)
 {
@@ -980,7 +979,6 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_labels
             ss << "Note: Filter support is enabled but " << dummy_map_file << " file cannot be opened" << std::endl;
             diskann::cerr << ss.str();
         }
-
     }
     else
     {
@@ -1180,11 +1178,11 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         READ_U64(index_metadata, this->_nvecs_per_sector);
     }
 
-    #ifdef EXEC_ENV_OLS
-        load_labels(files, _disk_index_file);
-    #else
-        load_labels(_disk_index_file);
-    #endif
+#ifdef EXEC_ENV_OLS
+    load_labels(files, _disk_index_file);
+#else
+    load_labels(_disk_index_file);
+#endif
 
     diskann::cout << "Disk-Index File Meta-data: ";
     diskann::cout << "# nodes per sector: " << _nnodes_per_sector;
@@ -1209,7 +1207,13 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
     this->_max_nthreads = num_threads;
 
 #endif
-
+    // Validate data type (called once for both EXEC_ENV_OLS and non-OLS paths)
+    if (!validate_vector_data_type(disk_nnodes, _use_disk_index_pq))
+    {
+        throw diskann::ANNException("Data type validation failed. Please ensure --data_type matches "
+                                    "the type used when building the index.",
+                                    -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
 #ifdef EXEC_ENV_OLS
     if (files.fileExists(medoids_file))
     {
@@ -1469,12 +1473,11 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (use_filters) {
         uint64_t size_to_reserve = std::max(l_search, (std::min((uint64_t)filter_label_count, this->_max_degree) + 1));
         retset.reserve(size_to_reserve);
-        full_retset.reserve(4096); 
+        full_retset.reserve(4096);
         full_retset_ids.reserve(4096);
     } else {
         retset.reserve(l_search + 1);
     }
-
 
     uint32_t best_medoid = 0;
     uint32_t cur_list_size = 0;
@@ -1538,7 +1541,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     //if we are doing multi-filter search we don't want to restrict the number of IOs
     //at present. Must revisit this decision later.
     uint32_t max_ios_for_query = use_filters || (io_limit == 0) ? std::numeric_limits<uint32_t>::max() : io_limit;
-    const std::vector<LabelT>& label_ids = filter_labels; //avoid renaming. 
+    const std::vector<LabelT>& label_ids = filter_labels; //avoid renaming.
     std::vector<LabelT> lbl_vec;
 
     retset.sort();
@@ -1553,7 +1556,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         sector_scratch_idx = 0;
         // find new beam
         uint32_t num_seen = 0;
-
 
         for (const auto &lbl : label_ids)
         { // assuming that number of OR labels is
@@ -1686,7 +1688,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 full_retset.push_back(Neighbor((unsigned)cached_nhood.first, cur_expanded_dist));
             }
 
-
             uint64_t nnbrs = cached_nhood.second.first;
             uint32_t *node_nbrs = cached_nhood.second.second;
 
@@ -1768,7 +1769,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             {
                 full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
             }
-            
+
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
             cpu_timer.reset();
@@ -1970,6 +1971,90 @@ template <typename T, typename LabelT> char *PQFlashIndex<T, LabelT>::getHeaderB
     return (char *)readReq.buf;
 }
 #endif
+
+template <typename T, typename LabelT>
+bool PQFlashIndex<T, LabelT>::validate_vector_data_type(uint64_t disk_nnodes, bool contains_disk_pq_file)
+{
+    size_t vector_length = contains_disk_pq_file ? _data_dim * sizeof(uint8_t) : _data_dim * sizeof(T);
+    if (vector_length + sizeof(uint32_t) >= _max_node_len)
+    {
+        diskann::cerr << "Vector length : " << vector_length << " and neighbor count size : " << sizeof(uint32_t)
+                      << ", expected less than max node length : " << _max_node_len << std::endl;
+        diskann::cerr << "Please check if wrong data type with larger size is "
+                         "specified, like use float type to load byte index!"
+                      << std::endl;
+        return false;
+    }
+
+    // Borrow thread data for the read
+    ScratchStoreManager<SSDThreadData<T>> manager(this->_thread_data);
+    auto this_thread_data = manager.scratch_space();
+    IOContext &ctx = this_thread_data->ctx;
+
+    // Allocate sector-aligned buffer (required for direct I/O)
+    char *buf = nullptr;
+    alloc_aligned((void **)&buf, defaults::SECTOR_LEN, defaults::SECTOR_LEN);
+
+    // Read first node (located at sector 1, after header in sector 0)
+    AlignedRead read_request(defaults::SECTOR_LEN, defaults::SECTOR_LEN, buf);
+    std::vector<AlignedRead> read_requests;
+    read_requests.emplace_back(read_request);
+    reader->read(read_requests, ctx);
+
+#if defined(_WINDOWS) && defined(USE_BING_INFRA)
+    if ((*ctx.m_pRequestsStatus)[0] != IOContext::READ_SUCCESS)
+    {
+        aligned_free(buf);
+        diskann::cerr << "Read disk index file " << _disk_index_file << " failed, can't validate data type!"
+                      << std::endl;
+        return false;
+    }
+#endif
+
+    uint32_t max_degree = static_cast<uint32_t>((_max_node_len - vector_length - sizeof(uint32_t)) / sizeof(uint32_t));
+    char *first_node = buf;
+    uint32_t *neighbors = reinterpret_cast<uint32_t *>(first_node + vector_length);
+    uint32_t neighbor_count = *neighbors;
+
+    if (neighbor_count > max_degree)
+    {
+        aligned_free(buf);
+        diskann::cerr << "Calculated max neighbor count : " << max_degree
+                      << " and first node neighbor count : " << neighbor_count << ", load data type is not correct!"
+                      << std::endl;
+        return false;
+    }
+
+    if (contains_disk_pq_file)
+    {
+        size_t real_node_len = _data_dim * sizeof(T) + sizeof(uint32_t) * (max_degree + 1);
+        if (real_node_len <= defaults::SECTOR_LEN)
+        {
+            aligned_free(buf);
+            diskann::cerr << "Index files contains disk pq file, which means real node length : " << real_node_len
+                          << " should be greater than disk sector length : " << defaults::SECTOR_LEN << std::endl;
+            diskann::cerr << "Please check if wrong data type with smaller size is "
+                             "specified, like use byte type to load float index!"
+                          << std::endl;
+            return false;
+        }
+    }
+
+    for (uint32_t i = 1; i <= neighbor_count; ++i)
+    {
+        if (neighbors[i] >= disk_nnodes)
+        {
+            aligned_free(buf);
+            diskann::cerr << ":Neighbor[" << i - 1 << "], index : " << neighbors[i]
+                          << ", greater than total node count : " << disk_nnodes << ", load data type is not correct!"
+                          << std::endl;
+            return false;
+        }
+    }
+
+    aligned_free(buf);
+    return true;
+}
 
 template <typename T, typename LabelT>
 std::vector<std::uint8_t> PQFlashIndex<T, LabelT>::get_pq_vector(std::uint64_t vid)
