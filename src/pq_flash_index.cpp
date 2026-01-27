@@ -687,6 +687,7 @@ bool PQFlashIndex<T, LabelT>::point_has_any_label(uint32_t point_id, const std::
     return ret_val;
 }
 
+
 template <typename T, typename LabelT>
 void PQFlashIndex<T, LabelT>::parse_label_file(std::basic_istream<char> &infile, size_t &num_points_labels)
 {
@@ -979,6 +980,7 @@ template <typename T, typename LabelT> void PQFlashIndex<T, LabelT>::load_labels
             ss << "Note: Filter support is enabled but " << dummy_map_file << " file cannot be opened" << std::endl;
             diskann::cerr << ss.str();
         }
+
     }
     else
     {
@@ -1178,11 +1180,11 @@ int PQFlashIndex<T, LabelT>::load_from_separate_paths(uint32_t num_threads, cons
         READ_U64(index_metadata, this->_nvecs_per_sector);
     }
 
-#ifdef EXEC_ENV_OLS
-    load_labels(files, _disk_index_file);
-#else
-    load_labels(_disk_index_file);
-#endif
+    #ifdef EXEC_ENV_OLS
+        load_labels(files, _disk_index_file);
+    #else
+        load_labels(_disk_index_file);
+    #endif
 
     diskann::cout << "Disk-Index File Meta-data: ";
     diskann::cout << "# nodes per sector: " << _nnodes_per_sector;
@@ -1473,7 +1475,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     if (use_filters) {
         uint64_t size_to_reserve = std::max(l_search, (std::min((uint64_t)filter_label_count, this->_max_degree) + 1));
         retset.reserve(size_to_reserve);
-        full_retset.reserve(4096);
+        full_retset.reserve(4096); 
         full_retset_ids.reserve(4096);
     } else {
         retset.reserve(l_search + 1);
@@ -1541,7 +1543,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
     //if we are doing multi-filter search we don't want to restrict the number of IOs
     //at present. Must revisit this decision later.
     uint32_t max_ios_for_query = use_filters || (io_limit == 0) ? std::numeric_limits<uint32_t>::max() : io_limit;
-    const std::vector<LabelT>& label_ids = filter_labels; //avoid renaming.
+    const std::vector<LabelT>& label_ids = filter_labels; //avoid renaming. 
     std::vector<LabelT> lbl_vec;
 
     retset.sort();
@@ -1556,6 +1558,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         sector_scratch_idx = 0;
         // find new beam
         uint32_t num_seen = 0;
+
 
         for (const auto &lbl : label_ids)
         { // assuming that number of OR labels is
@@ -1769,6 +1772,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             {
                 full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
             }
+
 
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
