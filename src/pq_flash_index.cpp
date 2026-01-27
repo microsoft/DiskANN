@@ -1481,6 +1481,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
         retset.reserve(l_search + 1);
     }
 
+
     uint32_t best_medoid = 0;
     uint32_t cur_list_size = 0;
     float best_dist = (std::numeric_limits<float>::max)();
@@ -1691,6 +1692,7 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
                 full_retset.push_back(Neighbor((unsigned)cached_nhood.first, cur_expanded_dist));
             }
 
+
             uint64_t nnbrs = cached_nhood.second.first;
             uint32_t *node_nbrs = cached_nhood.second.second;
 
@@ -1772,7 +1774,6 @@ void PQFlashIndex<T, LabelT>::cached_beam_search(const T *query1, const uint64_t
             {
                 full_retset.push_back(Neighbor(frontier_nhood.first, cur_expanded_dist));
             }
-
 
             uint32_t *node_nbrs = (node_buf + 1);
             // compute node_nbrs <-> query dist in PQ space
