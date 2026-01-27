@@ -207,6 +207,8 @@ jobs:
   miri:
     needs: basics
     name: miri-test
+    # This step is slow, so it only runs after a PR merge to avoid slowing down pre-merge checks.
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
