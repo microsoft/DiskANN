@@ -196,7 +196,7 @@ The keyword after "tag" corresponds to the type of input that the benchmark acce
 
 Benchmarks are run with
 ```sh
-cargo run --release --package diskann-benchmark -- run --input-file ./benchmark/example/async.json --output-file output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/async.json --output-file output.json
 ```
 
 A benchmark run happens in several phases.
@@ -237,7 +237,7 @@ First, set up the runbook and ground truth for the desired workload. Refer to th
 
 Benchmarks are run with
 ```sh
-cargo run --release --package diskann-benchmark -- run --input-file ./benchmark/example/async-dynamic.json --output-file dynamic-output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./diskann-benchmark/example/async-dynamic.json --output-file dynamic-output.json
 ```
 Note in the example json that the benchmark is registered under `async-dynamic-index-run`,
 instead of `async-index-build` etc..
