@@ -7,7 +7,7 @@ easier by providing a "one click" runner for benchmarks with machine readable ou
 
 To get started, run
 ```sh
-cargo run --release --package benchmark -- skeleton
+cargo run --release --package diskann-benchmark -- skeleton
 ```
 which will print to `stdout` the following JSON schema:
 ```json
@@ -88,7 +88,7 @@ In the case of loading an already constructed index rather than building, the "s
 
 Registered inputs are queried using
 ```sh
-cargo run --release --package benchmark -- inputs
+cargo run --release --package diskann-benchmark -- inputs
 ```
 which will list something like
 ```
@@ -98,7 +98,7 @@ Available input kinds are listed below:
 ```
 To obtain the JSON schema for an input, add its name to the query like
 ```sh
-cargo run --release --package benchmark -- inputs async-index-build
+cargo run --release --package diskann-benchmark -- inputs async-index-build
 ```
 which will generate something like
 ```json
@@ -181,7 +181,7 @@ Any number of inputs can be used.
 
 Registered benchmarks are queries using the following.
 ```sh
-cargo run --release --package benchmark -- benchmarks
+cargo run --release --package diskann-benchmark -- benchmarks
 ```
 Example output is shown below:
 ```
@@ -196,7 +196,7 @@ The keyword after "tag" corresponds to the type of input that the benchmark acce
 
 Benchmarks are run with
 ```sh
-cargo run --release --package benchmark -- run --input-file ./benchmark/example/async.json --output-file output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./benchmark/example/async.json --output-file output.json
 ```
 
 A benchmark run happens in several phases.
@@ -237,7 +237,7 @@ First, set up the runbook and ground truth for the desired workload. Refer to th
 
 Benchmarks are run with
 ```sh
-cargo run --release --package benchmark -- run --input-file ./benchmark/example/async-dynamic.json --output-file dynamic-output.json
+cargo run --release --package diskann-benchmark -- run --input-file ./benchmark/example/async-dynamic.json --output-file dynamic-output.json
 ```
 Note in the example json that the benchmark is registered under `async-dynamic-index-run`,
 instead of `async-index-build` etc..
@@ -378,11 +378,11 @@ Note that registration can fail if multiple inputs have the same`tag`.
 
 When these steps are completed, our new input will be available using
 ```sh
-cargo run --release --package benchmark -- inputs
+cargo run --release --package diskann-benchmark -- inputs
 ```
 and
 ```sh
-cargo run --release --package benchmark -- inputs compute-groundtruth
+cargo run --release --package diskann-benchmark -- inputs compute-groundtruth
 ```
 will display an example JSON input for our type.
 
