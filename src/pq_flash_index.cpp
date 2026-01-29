@@ -1980,7 +1980,12 @@ template <typename T, typename LabelT> char *PQFlashIndex<T, LabelT>::getHeaderB
 template <typename T, typename LabelT>
 bool PQFlashIndex<T, LabelT>::validate_vector_data_type(uint64_t disk_nnodes, bool contains_disk_pq_file)
 {
-    size_t vector_length = contains_disk_pq_file ? _data_dim * sizeof(uint8_t) : _data_dim * sizeof(T);
+    (void)contains_disk_pq_file; // Suppress unused parameter warning
+
+    // Use _disk_bytes_per_point which is already set correctly:
+    // - For disk PQ: _disk_pq_n_chunks * sizeof(uint8_t)
+    // - For regular: _data_dim * sizeof(T)
+    size_t vector_length = _disk_bytes_per_point;
     if (vector_length + sizeof(uint32_t) >= _max_node_len)
     {
         diskann::cerr << "Vector length : " << vector_length << " and neighbor count size : " << sizeof(uint32_t)
@@ -1996,12 +2001,16 @@ bool PQFlashIndex<T, LabelT>::validate_vector_data_type(uint64_t disk_nnodes, bo
     auto this_thread_data = manager.scratch_space();
     IOContext &ctx = this_thread_data->ctx;
 
+    // Calculate the number of sectors needed per node
+    uint64_t num_sectors_per_node = _nnodes_per_sector > 0 ? 1 : DIV_ROUND_UP(_max_node_len, defaults::SECTOR_LEN);
+
     // Allocate sector-aligned buffer (required for direct I/O)
     char *buf = nullptr;
-    alloc_aligned((void **)&buf, defaults::SECTOR_LEN, defaults::SECTOR_LEN);
+    alloc_aligned((void **)&buf, num_sectors_per_node * defaults::SECTOR_LEN, defaults::SECTOR_LEN);
 
-    // Read first node (located at sector 1, after header in sector 0)
-    AlignedRead read_request(defaults::SECTOR_LEN, defaults::SECTOR_LEN, buf);
+    // Read sector(s) containing node 0
+    uint64_t node_sector = get_node_sector(0);
+    AlignedRead read_request(node_sector * defaults::SECTOR_LEN, num_sectors_per_node * defaults::SECTOR_LEN, buf);
     std::vector<AlignedRead> read_requests;
     read_requests.emplace_back(read_request);
     reader->read(read_requests, ctx);
@@ -2016,10 +2025,17 @@ bool PQFlashIndex<T, LabelT>::validate_vector_data_type(uint64_t disk_nnodes, bo
     }
 #endif
 
-    uint32_t max_degree = static_cast<uint32_t>((_max_node_len - vector_length - sizeof(uint32_t)) / sizeof(uint32_t));
-    char *first_node = buf;
-    uint32_t *neighbors = reinterpret_cast<uint32_t *>(first_node + vector_length);
+    // Use offset_to_node to get correct position within the sector buffer for node 0
+    char *first_node = offset_to_node(buf, 0);
+    
+    // Use offset_to_node_nhood which correctly uses _disk_bytes_per_point
+    uint32_t *neighbors = offset_to_node_nhood(first_node);
     uint32_t neighbor_count = *neighbors;
+
+    // Calculate max degree based on the assumed vector length
+    // max_node_len = vector_length + sizeof(uint32_t) + max_degree * sizeof(uint32_t)
+    // So: max_degree = (max_node_len - vector_length - sizeof(uint32_t)) / sizeof(uint32_t)
+    uint32_t max_degree = static_cast<uint32_t>((_max_node_len - vector_length - sizeof(uint32_t)) / sizeof(uint32_t));
 
     if (neighbor_count > max_degree)
     {
@@ -2030,27 +2046,12 @@ bool PQFlashIndex<T, LabelT>::validate_vector_data_type(uint64_t disk_nnodes, bo
         return false;
     }
 
-    if (contains_disk_pq_file)
-    {
-        size_t real_node_len = _data_dim * sizeof(T) + sizeof(uint32_t) * (max_degree + 1);
-        if (real_node_len <= defaults::SECTOR_LEN)
-        {
-            aligned_free(buf);
-            diskann::cerr << "Index files contains disk pq file, which means real node length : " << real_node_len
-                          << " should be greater than disk sector length : " << defaults::SECTOR_LEN << std::endl;
-            diskann::cerr << "Please check if wrong data type with smaller size is "
-                             "specified, like use byte type to load float index!"
-                          << std::endl;
-            return false;
-        }
-    }
-
     for (uint32_t i = 1; i <= neighbor_count; ++i)
     {
         if (neighbors[i] >= disk_nnodes)
         {
             aligned_free(buf);
-            diskann::cerr << ":Neighbor[" << i - 1 << "], index : " << neighbors[i]
+            diskann::cerr << "Neighbor[" << i - 1 << "], index : " << neighbors[i]
                           << ", greater than total node count : " << disk_nnodes << ", load data type is not correct!"
                           << std::endl;
             return false;
