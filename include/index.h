@@ -269,8 +269,9 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
 
     template <typename ValueT>
     void parse_integer_string_file(const std::string &file_path, size_t &num_points, size_t& total_values,
-                                   std::vector<std::vector<ValueT>>& location_to_values, 
-                                   tsl::robin_set<ValueT>* unique_values = nullptr);
+                                   std::vector<std::vector<ValueT>>& location_to_values,
+                                   tsl::robin_set<ValueT>* unique_values = nullptr,
+                                   bool sort_values = true);
     void parse_seller_file(const std::string& label_file, size_t& num_pts_labels, 
                            std::vector<uint32_t>& location_to_seller, uint32_t& num_unique_sellers);
 

@@ -1855,9 +1855,9 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
 
     if( _attribute_diversity) {
         uint64_t nrows = 0, total_attributes = 0;
-        
+
         parse_integer_string_file<uint32_t>(_attribute_file,
-                    nrows, total_attributes, _location_to_attributes, nullptr);
+                    nrows, total_attributes, _location_to_attributes, nullptr, false);
 
         std::cout << "Parsed attribute file with " << nrows << " rows" << std::endl;
     }
@@ -2199,7 +2199,8 @@ template <typename T, typename TagT, typename LabelT>
 template <typename ValueT>
 void Index<T, TagT, LabelT>::parse_integer_string_file(const std::string &file_path, size_t &num_points, size_t& total_values,
                                                        std::vector<std::vector<ValueT>>& location_to_values,
-                                                       tsl::robin_set<ValueT>* unique_values)
+                                                       tsl::robin_set<ValueT>* unique_values,
+                                                       bool sort_values)
 {
     // Format of file: integer values with comma separators per line
 
@@ -2249,7 +2250,10 @@ void Index<T, TagT, LabelT>::parse_integer_string_file(const std::string &file_p
             }
         }
 
-        std::sort(vals.begin(), vals.end());
+        if (sort_values)
+        {
+            std::sort(vals.begin(), vals.end());
+        }
         location_to_values[line_cnt] = vals;
         line_cnt++;
         total_values += vals.size();
