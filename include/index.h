@@ -267,8 +267,13 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     // determines navigating node of the graph by calculating medoid of datafopt
     uint32_t calculate_entry_point();
 
-    void parse_label_file(const std::string &label_file, size_t &num_pts_labels, size_t& total_labels);
-    void parse_seller_file(const std::string& label_file, size_t& num_pts_labels);
+    template <typename ValueT>
+    void parse_integer_string_file(const std::string &file_path, size_t &num_points, size_t& total_values,
+                                   std::vector<std::vector<ValueT>>& location_to_values,
+                                   tsl::robin_set<ValueT>* unique_values = nullptr,
+                                   bool sort_values = true);
+    void parse_seller_file(const std::string& label_file, size_t& num_pts_labels, 
+                           std::vector<uint32_t>& location_to_seller, uint32_t& num_unique_sellers);
 
     void convert_pts_label_to_bitmask(std::vector<std::vector<LabelT>>& pts_to_labels, simple_bitmask_buf& bitmask_buf, size_t num_labels);
 
@@ -357,6 +362,8 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     void initialize_query_scratch(uint32_t num_threads, uint32_t search_l, uint32_t indexing_l, uint32_t r,
                                   uint32_t maxc, size_t dim, size_t bitmask_size = 0);
 
+    double attribute_distance(const std::vector<uint32_t> &a, const std::vector<uint32_t> &b);
+
     // Do not call without acquiring appropriate locks
     // call public member functions save and load to invoke these.
     DISKANN_DLLEXPORT size_t save_graph(std::string filename);
@@ -426,6 +433,10 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
     std::vector<uint32_t> _location_to_seller;
     uint32_t _num_unique_sellers = 0;
     std::string _seller_file;
+    bool _attribute_diversity = false;
+    float _attr_dist_threshold = 0.2f;
+    std::string _attribute_file;
+    std::vector<std::vector<std::uint32_t>> _location_to_attributes;
 
     bool _use_universal_label = false;
     LabelT _universal_label = 0;
