@@ -1818,6 +1818,11 @@ double Index<T, TagT, LabelT>::attribute_distance(const std::vector<uint32_t> &a
         }
     }
 
+    if (counts == 0)
+    {
+        return 0.0;
+    }
+
     double similarity = static_cast<double>(matches) / counts; 
     return 1.0 - similarity;
 }
