@@ -389,7 +389,7 @@ mod tests {
 
         // Heap of size 2.
         fuzz_test_impl(2, 101, &mut rng);
-        
+
         // Heap of size 10.
         fuzz_test_impl(10, 101, &mut rng);
 
