@@ -619,7 +619,7 @@ mod test_compression {
         let mut rng = StdRng::seed_from_u64(0x88e3d3366501ad6c);
 
         let num_data = if cfg!(miri) {
-            vec![7, 8]
+            vec![0, 7, 8, 10]
         } else {
             vec![0, 1, 2, 3, 4, 16, 17, 18, 19]
         };

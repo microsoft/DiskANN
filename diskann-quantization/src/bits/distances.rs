@@ -2092,7 +2092,7 @@ mod tests {
 
     cfg_if::cfg_if! {
         if #[cfg(miri)] {
-            const MAX_DIM: usize = 8;
+            const MAX_DIM: usize = 132;
             const TRIALS_PER_DIM: usize = 1;
         } else {
             const MAX_DIM: usize = 256;
