@@ -1,17 +1,17 @@
 #Copyright(c) Microsoft Corporation.All rights reserved.
 #Licensed under the MIT license.
-# Kun: updated to install DiskANN to system directly, and update base image
 
-FROM ubuntu:24.04
+FROM ubuntu:jammy
 
 RUN apt update
-RUN apt install -y software-properties-common git make cmake g++ libaio-dev \
-    libgoogle-perftools-dev libunwind-dev clang-format libboost-dev \
-    libboost-program-options-dev libmkl-full-dev libcpprest-dev
+RUN apt install -y software-properties-common
+RUN add-apt-repository -y ppa:git-core/ppa
+RUN apt update
+RUN DEBIAN_FRONTEND=noninteractive apt install -y git make cmake g++ libaio-dev libgoogle-perftools-dev libunwind-dev clang-format libboost-dev libboost-program-options-dev libmkl-full-dev libcpprest-dev python3.10
 
 WORKDIR /app
-RUN cd /app && git clone https://github.com/rmit-ir/DiskANN
+RUN git clone https://github.com/microsoft/DiskANN.git 
 WORKDIR /app/DiskANN
-RUN cd /app/DiskANN && mkdir build
-RUN cd /app/DiskANN/build && cmake -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DCMAKE_BUILD_TYPE=Release .. && make -j && make install
+RUN mkdir build
+RUN cmake -S . -B build  -DCMAKE_BUILD_TYPE=Release
+RUN cmake --build build -- -j
