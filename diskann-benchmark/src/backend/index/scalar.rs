@@ -82,12 +82,12 @@ mod imp {
         Any, Checkpoint, Output,
     };
     use diskann_providers::{
-        index::diskann_async::{self},
         model::{
             configuration::IndexConfiguration,
-            graph::provider::async_::{common, inmem},
+            graph::provider::async_::common,
         },
     };
+    use diskann_inmem::{self as inmem, diskann_async};
     use diskann_utils::views::{Matrix, MatrixView};
     use half::f16;
 

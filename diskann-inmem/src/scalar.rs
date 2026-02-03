@@ -5,7 +5,7 @@
 
 use std::{future::Future, sync::Mutex};
 
-use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
+use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider, SQError};
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
@@ -795,36 +795,6 @@ impl<const NBITS: usize> storage::bin::GetData for SQStore<NBITS> {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum SQError {
-    #[error("Issue with canonical layout of data: {0:?}")]
-    CanonicalLayoutError(#[from] NotCanonical),
-
-    #[error("Input contains NaN values.")]
-    InputContainsNaN(#[from] InputContainsNaN),
-
-    #[error("Input full-precision conversion error : {0}")]
-    FullPrecisionConversionErr(String),
-
-    #[error("Mean Norm is missing in the quantizer.")]
-    MeanNormMissing(#[from] MeanNormMissing),
-
-    #[error("Unsupported distance metric: {0:?}")]
-    UnsupportedDistanceMetric(Metric),
-
-    #[error("Error while loading quantizer proto struct from file: {0:?}")]
-    ProtoStorageError(#[from] crate::storage::protos::ProtoStorageError),
-
-    #[error("Error while converting proto struct to Scalar Qunatizer: {0:?}")]
-    QuantizerDecodeError(#[from] crate::storage::protos::ProtoConversionError),
-}
-
-impl From<SQError> for ANNError {
-    #[cold]
-    fn from(err: SQError) -> Self {
-        ANNError::log_sq_error(err)
-    }
-}
 
 #[cfg(test)]
 mod tests {

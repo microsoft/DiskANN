@@ -704,6 +704,7 @@ dependencies = [
  "cfg-if",
  "criterion",
  "diskann",
+ "diskann-inmem",
  "diskann-linalg",
  "diskann-platform",
  "diskann-quantization",

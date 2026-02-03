@@ -9,7 +9,6 @@ use super::{StorageReadProvider, StorageWriteProvider};
 use diskann_quantization::scalar::ScalarQuantizer;
 
 use super::protos;
-use diskann_inmem::SQError;
 
 /// The suffix for the compressed SQ vectors file.
 const COMPRESSED_DATA_FILE_NAME_SUFFIX: &str = "sq_compressed.bin";
@@ -138,5 +137,36 @@ mod tests {
             .expect("load_quantizer should succeed");
 
         assert_eq!(quantizer.compare(&loaded_quantizer), Ok(()));
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SQError {
+    #[error("Issue with canonical layout of data: {0:?}")]
+    CanonicalLayoutError(#[from] diskann_quantization::meta::NotCanonical),
+
+    #[error("Input contains NaN values.")]
+    InputContainsNaN(#[from] diskann_quantization::scalar::InputContainsNaN),
+
+    #[error("Input full-precision conversion error : {0}")]
+    FullPrecisionConversionErr(String),
+
+    #[error("Mean Norm is missing in the quantizer.")]
+    MeanNormMissing(#[from] diskann_quantization::scalar::MeanNormMissing),
+
+    #[error("Unsupported distance metric: {0:?}")]
+    UnsupportedDistanceMetric(diskann_vector::distance::Metric),
+
+    #[error("Error while loading quantizer proto struct from file: {0:?}")]
+    ProtoStorageError(#[from] crate::storage::protos::ProtoStorageError),
+
+    #[error("Error while converting proto struct to Scalar Quantizer: {0:?}")]
+    QuantizerDecodeError(#[from] crate::storage::protos::ProtoConversionError),
+}
+
+impl From<SQError> for diskann::ANNError {
+    #[cold]
+    fn from(err: SQError) -> Self {
+        diskann::ANNError::log_sq_error(err)
     }
 }

@@ -11,16 +11,11 @@ use diskann::{
     utils::VectorRepr,
 };
 use diskann_utils::future::AsyncFriendly;
+use diskann_providers::model::graph::provider::async_::common::{CreateDeleteProvider, CreateVectorStore, NoDeletes, NoStore};
 
-use crate::model::{
-    self,
-    graph::provider::async_::{
-        common::{CreateDeleteProvider, CreateVectorStore, NoDeletes, NoStore},
-        inmem::{
-            CreateFullPrecision, DefaultProvider, DefaultProviderParameters, DefaultQuant,
-            FullPrecisionProvider,
-        },
-    },
+use crate::{
+    CreateFullPrecision, DefaultProvider, DefaultProviderParameters, DefaultQuant,
+    FullPrecisionProvider,
 };
 
 /////////////////////////
@@ -197,20 +192,20 @@ pub(crate) mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::{
+    use diskann_providers::{
         model::graph::provider::{
             async_::{
                 TableDeleteProviderAsync,
                 common::{FullPrecision, Hybrid, NoDeletes, Quantized, TableBasedDeletes},
-                inmem::{self, DefaultQuant, SetStartPoints},
             },
             layers::BetaFilter,
         },
         test_utils::{
             assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
         },
-        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests, file_util},
+        utils::{self as providers_utils, VectorDataIterator, create_rnd_from_seed_in_tests, file_util},
     };
+    use crate::{self as inmem, DefaultQuant, SetStartPoints};
 
     // Callbacks for use with `simplified_builder`.
     fn no_modify(_: &mut diskann::graph::config::Builder) {}
@@ -2416,7 +2411,7 @@ pub(crate) mod tests {
                     let index = new_quant_index::<f32, _, _>(
                         config,
                         params,
-                        inmem::WithBits::<$nbits>::new(quantizer),
+                        crate::WithBits::<$nbits>::new(quantizer),
                         NoDeletes,
                     )
                     .unwrap();
@@ -2520,7 +2515,7 @@ pub(crate) mod tests {
                         new_quant_only_index(
                             config,
                             params,
-                            inmem::WithBits::<$nbits>::new(quantizer),
+                            crate::WithBits::<$nbits>::new(quantizer),
                             NoDeletes,
                         )
                         .unwrap(),
@@ -2636,7 +2631,7 @@ pub(crate) mod tests {
 
         let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<Matrix<f32>>| {
             let ctx = &DefaultContext;
-            let strategy = inmem::spherical::Quantized::build();
+            let strategy = crate::spherical::Quantized::build();
             for (i, vector) in data.row_iter().enumerate() {
                 index
                     .insert(strategy, ctx, &(i as u32), vector)
@@ -2690,7 +2685,7 @@ pub(crate) mod tests {
 
             // Quantized Search
             let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let strategy = inmem::spherical::Quantized::search(
+            let strategy = crate::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
 
@@ -2708,7 +2703,7 @@ pub(crate) mod tests {
         }
 
         // Ensure that the query computer used for insertion uses the `SameAsData` layout.
-        let strategy = inmem::spherical::Quantized::build();
+        let strategy = crate::spherical::Quantized::build();
         let accessor = strategy.search_accessor(index.provider(), ctx).unwrap();
         let computer = accessor.build_query_computer(data.row(0)).unwrap();
         assert_eq!(
@@ -2759,7 +2754,7 @@ pub(crate) mod tests {
 
         let build_fn = async |index: Arc<DiskANNIndex<_>>, data: Arc<Matrix<f32>>| {
             let ctx = &DefaultContext;
-            let strategy = inmem::spherical::Quantized::build();
+            let strategy = crate::spherical::Quantized::build();
             for (i, vector) in data.row_iter().enumerate() {
                 index
                     .insert(strategy, ctx, &(i as u32), vector)
@@ -2798,7 +2793,7 @@ pub(crate) mod tests {
         for (q, query) in data.row_iter().enumerate() {
             // Quantized Search
             let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-            let strategy = inmem::spherical::Quantized::search(
+            let strategy = crate::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
 
@@ -2818,9 +2813,9 @@ pub(crate) mod tests {
         }
 
         // Ensure that the query computer used for insertion uses the `SameAsData` layout.
-        let strategy = inmem::spherical::Quantized::build();
-        let accessor = <inmem::spherical::Quantized as SearchStrategy<
-            DefaultProvider<NoStore, inmem::spherical::SphericalStore>,
+        let strategy = crate::spherical::Quantized::build();
+        let accessor = <crate::spherical::Quantized as SearchStrategy<
+            DefaultProvider<NoStore, crate::spherical::SphericalStore>,
             [f32],
             _,
         >>::search_accessor(&strategy, index.provider(), ctx)
@@ -2995,7 +2990,7 @@ pub(crate) mod tests {
             .to_path_buf();
         let storage = VirtualStorageProvider::new_overlay(workspace_root);
 
-        let mut iter = VectorDataIterator::<_, crate::model::graph::traits::AdHoc<f32>>::new(
+        let mut iter = VectorDataIterator::<_, diskann_providers::model::graph::traits::AdHoc<f32>>::new(
             file, None, &storage,
         )
         .unwrap();
@@ -3589,7 +3584,7 @@ pub(crate) mod tests {
 
         // This is the two level index.
         let (index, data) = init_from_file(
-            inmem::test::Flaky::new(9),
+            crate::test::Flaky::new(9),
             parameters,
             SIFTSMALL,
             8,
@@ -3712,7 +3707,7 @@ pub(crate) mod tests {
         populate_data(&index.data_provider, ctx, &vectors).await;
 
         let r = index
-            .consolidate_vector(&inmem::test::SuperFlaky, ctx, 0)
+            .consolidate_vector(&crate::test::SuperFlaky, ctx, 0)
             .await
             .unwrap();
         assert_eq!(r, ConsolidateKind::FailedVectorRetrieval);
@@ -3758,13 +3753,13 @@ pub(crate) mod tests {
         let index_sat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), true)
             .await
             .unwrap();
-        let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
+        let mut accessor_sat = crate::FullAccessor::new(index_sat.provider());
         let res_sat = index_sat.get_degree_stats(&mut accessor_sat).await.unwrap();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
-        let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
+        let mut accessor_unsat = crate::FullAccessor::new(index_unsat.provider());
         let res_unsat = index_sat
             .get_degree_stats(&mut accessor_unsat)
             .await
@@ -3780,13 +3775,13 @@ pub(crate) mod tests {
         let index_sat = create_retry_saturated_index(NonZeroU32::new(3).unwrap(), false)
             .await
             .unwrap();
-        let mut accessor_sat = inmem::FullAccessor::new(index_sat.provider());
+        let mut accessor_sat = crate::FullAccessor::new(index_sat.provider());
         let res_sat = index_sat.get_degree_stats(&mut accessor_sat).await.unwrap();
 
         let index_unsat = create_retry_saturated_index(NonZeroU32::new(1).unwrap(), false)
             .await
             .unwrap();
-        let mut accessor_unsat = inmem::FullAccessor::new(index_unsat.provider());
+        let mut accessor_unsat = crate::FullAccessor::new(index_unsat.provider());
         let res_unsat = index_sat
             .get_degree_stats(&mut accessor_unsat)
             .await

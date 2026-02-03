@@ -18,12 +18,12 @@ use diskann_benchmark_runner::{
     Any, Checkpoint,
 };
 use diskann_providers::{
-    index::diskann_async,
     model::{
         configuration::IndexConfiguration,
-        graph::provider::async_::{common, inmem::DefaultProvider},
+        graph::provider::async_::common,
     },
 };
+use diskann_inmem::{diskann_async, DefaultProvider};
 use diskann_utils::{
     future::AsyncFriendly,
     views::{Matrix, MatrixView},

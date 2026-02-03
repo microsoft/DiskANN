@@ -3,6 +3,5 @@
  * Licensed under the MIT license.
  */
 
-pub mod diskann_async;
-
+// diskann_async module has been moved to diskann-inmem crate
 pub mod wrapped_async;

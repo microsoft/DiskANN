@@ -37,9 +37,9 @@ mod imp {
     use std::{io::Write, sync::Arc};
 
     use diskann_providers::{
-        index::diskann_async::{self},
         model::{graph::provider::async_::common, IndexConfiguration},
     };
+    use diskann_inmem::diskann_async;
     use diskann_utils::views::{Matrix, MatrixView};
 
     use diskann_benchmark_runner::{
