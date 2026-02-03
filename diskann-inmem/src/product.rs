@@ -20,7 +20,7 @@ use diskann::{
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
 
-use crate::model::{
+use diskann_providers::model::{
     graph::{
         provider::async_::{
             FastMemoryQuantVectorProviderAsync, FastMemoryVectorProviderAsync,
@@ -30,15 +30,16 @@ use crate::model::{
                 VectorStore,
             },
             distances,
-            inmem::{
-                DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
-                Rerank,
-            },
             postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
         },
         traits::AdHoc,
     },
     pq::{self, FixedChunkPQTable},
+};
+
+use crate::{
+    DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
+    Rerank,
 };
 
 /// The default quant provider.

@@ -17,10 +17,10 @@ use diskann_benchmark_runner::{
 use diskann_providers::{
     model::{
         configuration::IndexConfiguration,
-        graph::provider::async_::inmem::DefaultProviderParameters,
     },
     utils::load_metadata_from_file,
 };
+use diskann_inmem::DefaultProviderParameters;
 use serde::{Deserialize, Serialize};
 
 use crate::{

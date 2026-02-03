@@ -24,18 +24,19 @@ use diskann::{
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{DistanceFunction, distance::Metric};
 
-use crate::model::graph::{
+use diskann_providers::model::graph::{
     provider::async_::{
         FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
         common::{
             CreateVectorStore, FullPrecision, Internal, NoDeletes, NoStore, Panics,
             PrefetchCacheLineLevel, SetElementHelper,
         },
-        inmem::DefaultProvider,
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
     traits::AdHoc,
 };
+
+use crate::DefaultProvider;
 
 /// A type alias for the DefaultProvider with full-precision as the primary vector store.
 pub type FullPrecisionProvider<T, Q = NoStore, D = NoDeletes, Ctx = DefaultContext> =

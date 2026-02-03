@@ -15,7 +15,7 @@ use diskann::{
     utils::async_tools,
 };
 use diskann_benchmark_runner::utils::{percentiles, MicroSeconds};
-use diskann_providers::model::graph::provider::async_::inmem::DefaultProvider;
+use diskann_inmem::DefaultProvider;
 use diskann_utils::views::Matrix;
 use serde::Serialize;
 

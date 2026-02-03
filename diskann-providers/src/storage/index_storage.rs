@@ -12,11 +12,11 @@ use diskann::{
 use diskann_utils::future::AsyncFriendly;
 
 use super::{AsyncIndexMetadata, AsyncQuantLoadContext, DiskGraphOnly, LoadWith, SaveWith};
+use diskann_inmem::{self as inmem, DefaultProvider, FullPrecisionStore};
 use crate::model::{
     configuration::IndexConfiguration,
     graph::provider::async_::{
         FastMemoryQuantVectorProviderAsync, TableDeleteProviderAsync, common,
-        inmem::{self, DefaultProvider, FullPrecisionStore},
     },
 };
 

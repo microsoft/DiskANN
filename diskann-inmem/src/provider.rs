@@ -5,7 +5,7 @@
 
 use std::{fmt::Debug, future::Future, num::NonZeroUsize};
 
-use crate::storage::{StorageReadProvider, StorageWriteProvider};
+use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 #[cfg(test)]
 use diskann::neighbor::Neighbor;
 use diskann::{
@@ -20,7 +20,7 @@ use diskann::{
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
 
-use crate::{
+use diskann_providers::{
     model::graph::provider::async_::{
         SimpleNeighborProviderAsync, StartPoints, TableDeleteProviderAsync,
         common::{

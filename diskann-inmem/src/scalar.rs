@@ -5,7 +5,7 @@
 
 use std::{future::Future, sync::Mutex};
 
-use crate::storage::{StorageReadProvider, StorageWriteProvider};
+use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
@@ -33,7 +33,7 @@ use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::M
 use thiserror::Error;
 
 use super::{DefaultProvider, GetFullPrecision, Rerank};
-use crate::{
+use diskann_providers::{
     common::IgnoreLockPoison,
     model::graph::{
         provider::async_::{
@@ -42,13 +42,14 @@ use crate::{
                 AlignedMemoryVectorStore, CreateVectorStore, NoStore, Quantized, SetElementHelper,
                 TestCallCount, VectorStore,
             },
-            inmem::{FullPrecisionProvider, FullPrecisionStore},
             postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
         },
         traits::AdHoc,
     },
     storage::{self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
 };
+
+use crate::{FullPrecisionProvider, FullPrecisionStore};
 
 type CVRef<'a, const NBITS: usize> = CompensatedVectorRef<'a, NBITS>;
 

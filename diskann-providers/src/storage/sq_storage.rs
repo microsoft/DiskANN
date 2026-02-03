@@ -9,7 +9,7 @@ use super::{StorageReadProvider, StorageWriteProvider};
 use diskann_quantization::scalar::ScalarQuantizer;
 
 use super::protos;
-use crate::model::graph::provider::async_::inmem::SQError;
+use diskann_inmem::SQError;
 
 /// The suffix for the compressed SQ vectors file.
 const COMPRESSED_DATA_FILE_NAME_SUFFIX: &str = "sq_compressed.bin";

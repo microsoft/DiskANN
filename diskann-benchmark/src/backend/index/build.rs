@@ -23,10 +23,10 @@ use diskann_providers::{
     self,
     model::{
         configuration::IndexConfiguration,
-        graph::provider::async_::inmem::{DefaultProvider, SetStartPoints},
     },
     storage::{AsyncIndexMetadata, LoadWith, SaveWith},
 };
+use diskann_inmem::{DefaultProvider, SetStartPoints};
 use diskann_utils::{
     future::AsyncFriendly,
     views::{Matrix, MatrixView},

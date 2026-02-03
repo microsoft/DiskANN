@@ -23,7 +23,7 @@ mod full_precision;
 pub use full_precision::{
     CreateFullPrecision, FullAccessor, FullPrecisionProvider, FullPrecisionStore,
 };
-pub(super) use full_precision::{GetFullPrecision, Rerank};
+pub use full_precision::{GetFullPrecision, Rerank};
 
 #[cfg(test)]
 pub mod product;

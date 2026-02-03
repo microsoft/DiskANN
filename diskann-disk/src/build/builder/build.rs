@@ -19,7 +19,6 @@ use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
         graph::{
-            provider::async_::inmem::DefaultProviderParameters,
             traits::{AdHoc, GraphDataType},
         },
         IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
@@ -30,6 +29,7 @@ use diskann_providers::{
         VectorDataIterator, MAX_MEDOID_SAMPLE_SIZE,
     },
 };
+use diskann_inmem::DefaultProviderParameters;
 use tokio::task::JoinSet;
 use tracing::{debug, info};
 
