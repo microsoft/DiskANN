@@ -14,30 +14,82 @@
 ///
 /// Upstream handling should first look for these fields and only if they don't exist should
 /// we inspect the file and line included as part of the tracing record.
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! tracked_error {
     ($($arg:tt)+) =>  {{
         let location = std::panic::Location::caller();
-        tracing::error!(diskann.file = location.file(), diskann.line = location.line(), $($arg)+);
+        ::tracing::error!(diskann.file = location.file(), diskann.line = location.line(), $($arg)+);
     }};
 }
 
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! tracked_error {
+    ($($arg:tt)+) => {{
+        $crate::used!($($arg)+);
+    }};
+}
+
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! tracked_warn {
     ($($arg:tt)+) => {{
         let location = std::panic::Location::caller();
-        tracing::warn!(diskann.file = location.file(), diskann.line = location.line(), $($arg)+);
+        ::tracing::warn!(diskann.file = location.file(), diskann.line = location.line(), $($arg)+);
     }};
 }
 
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! tracked_warn {
+    ($($arg:tt)+) => {{
+        $crate::used!($($arg)+)
+    }};
+}
+
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! tracked_debug {
     ($($arg:tt)+) => {{
         let location = std::panic::Location::caller();
-        tracing::debug!(diskann.file = location.file(), diskann.line = location.line(), $($arg)+);
+        ::tracing::debug!(diskann.file = location.file(), diskann.line = location.line(), $($arg)+);
     }};
 }
 
-pub use tracked_debug;
-pub use tracked_error;
-pub use tracked_warn;
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! tracked_debug {
+    ($($arg:tt)+) => {{
+        $crate::used!($($arg)+);
+    }};
+}
+
+#[cfg(feature = "tracing")]
+#[macro_export]
+macro_rules! tracked_trace {
+    ($($arg:tt)+) => {{
+        let location = std::panic::Location::caller();
+        ::tracing::trace!(diskann.file = location.file(), diskann.line = location.line(), $($arg)+);
+    }};
+}
+
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! tracked_trace {
+    ($($arg:tt)+) => {{
+        $crate::used!($($arg)+);
+    }};
+}
+
+#[macro_export]
+#[doc(hidden)]
+macro_rules! used {
+    ($($arg:tt)+) => {{
+        // Using `format_args!` will:
+        //
+        // 1. Still validate the formatting is valid.
+        // 2. Most likely compile away under optimizations.
+        let _ = format_args!($($arg)+);
+    }}
+}
