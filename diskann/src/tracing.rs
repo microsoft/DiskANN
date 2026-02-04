@@ -44,7 +44,7 @@ macro_rules! tracked_warn {
 #[macro_export]
 macro_rules! tracked_warn {
     ($($arg:tt)+) => {{
-        $crate::used!($($arg)+)
+        $crate::used!($($arg)+);
     }};
 }
 
