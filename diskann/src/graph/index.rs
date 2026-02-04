@@ -22,7 +22,6 @@ use futures_util::FutureExt;
 use hashbrown::HashSet;
 use thiserror::Error;
 use tokio::task::JoinSet;
-use tracing::{debug, trace};
 
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, RangeSearchParams, SearchParams,
@@ -52,6 +51,7 @@ use crate::{
         NeighborAccessorMut, SetElement,
     },
     tracked_error,
+    tracing::{debug, trace},
     utils::{
         IntoUsize, TryIntoVectorId, VectorId,
         async_tools::{self, DynamicBalancer, VectorIdBoxSlice},

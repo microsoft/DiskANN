@@ -14,6 +14,7 @@
 ///
 /// Upstream handling should first look for these fields and only if they don't exist should
 /// we inspect the file and line included as part of the tracing record.
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! tracked_error {
     ($($arg:tt)+) =>  {{
@@ -22,6 +23,13 @@ macro_rules! tracked_error {
     }};
 }
 
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! tracked_error {
+    ($($arg:tt)+) => {{}};
+}
+
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! tracked_warn {
     ($($arg:tt)+) => {{
@@ -30,6 +38,13 @@ macro_rules! tracked_warn {
     }};
 }
 
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! tracked_warn {
+    ($($arg:tt)+) => {{}};
+}
+
+#[cfg(feature = "tracing")]
 #[macro_export]
 macro_rules! tracked_debug {
     ($($arg:tt)+) => {{
@@ -38,6 +53,35 @@ macro_rules! tracked_debug {
     }};
 }
 
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! tracked_debug {
+    ($($arg:tt)+) => {{}};
+}
+
 pub use tracked_debug;
 pub use tracked_error;
 pub use tracked_warn;
+
+// Re-export tracing macros when the feature is enabled
+#[cfg(feature = "tracing")]
+pub use tracing::{debug, trace};
+
+// Define no-op macros when the tracing feature is disabled
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! debug {
+    ($($arg:tt)*) => {{}};
+}
+
+#[cfg(not(feature = "tracing"))]
+#[macro_export]
+macro_rules! trace {
+    ($($arg:tt)*) => {{}};
+}
+
+#[cfg(not(feature = "tracing"))]
+pub use debug;
+
+#[cfg(not(feature = "tracing"))]
+pub use trace;
