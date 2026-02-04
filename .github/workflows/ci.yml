@@ -73,6 +73,54 @@ jobs:
       - name: "clippy --workspace --all-targets"
         run: cargo clippy --workspace --all-targets --no-deps
 
+  # This is a quick test to ensure that micro-architecture detection and dispatching works.
+  #
+  # The crate `diskann-wide` is the primary driver for this mechanism.
+  #
+  # We test by:
+  #
+  # 1. Compiling the test binaries specifically for the old `x86-64` CPU target to ensure
+  #    the compiler does not emit `x86-64-v3` instructions.
+  #
+  # 2. We use QEMU to emulate an older CPU. QEMU will abort if an unrecognized instruction
+  #    is hit.
+  #
+  # The shell command for running tests is as follows:
+  #
+  # 1. `find ./target/**/deps`: Search for the generated artifacts from the test build.
+  #
+  # 2. `grep -e "dispatch-[a-f0-9]*$"`: Find a binary called `dispatch-a38d0...` that does
+  #    not end in ".d". In other words, the hash goes all the way to the end of the file name.
+  #
+  #    This means it's a test executable and not a library.
+  #
+  # 3. `xargs -n1`: Take the newline delimited executable and call the following command
+  #    once for each argument.
+  #
+  # 4. `qemu-x86_64 -cpu Nehalem`: Run the qemu binary using `Nehalem` as the target CPU.
+  #    This is a very old CPU model that will crash if any AVX/AVX2 instructions are executed.
+  qemu:
+    needs: basics
+    name: qemu-tests
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS="-Dwarnings -Ctarget-cpu=x86-64"
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: docker-setup-qemu-action@v3
+        name: Set up QEMU
+      - name: "QEMU Tests"
+        run: |
+          set -euxo pipefail
+          cargo test --package diskann-wide --locked
+          find ./target/**/deps | grep -e "dispatch-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
+
   # TODO: Re-enable docs check later
   # docs:
   #   name: docs
