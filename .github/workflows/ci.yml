@@ -129,8 +129,8 @@ jobs:
         with:
           toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
-      - uses: docker/setup-qemu-action@v3
-        name: Set up QEMU
+      - name: Install QEMU user-mode
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
       - name: "QEMU Tests"
         run: |
           set -euxo pipefail
