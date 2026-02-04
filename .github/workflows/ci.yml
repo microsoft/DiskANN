@@ -14,7 +14,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # RUSTFLAGS: -Dwarnings
+  # Pass additional arguments to cargo using `--config build.rustflags=["...", "..."]`.
+  #
+  # This ensures that we do not overwrite the parameters in `.config/cargo.toml` unnecessarily.
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   # Use the Rust version specified in rust-toolchain.toml
@@ -120,8 +122,10 @@ jobs:
     needs: basics
     name: qemu-tests
     runs-on: ubuntu-latest
-    # env:
-    #   RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
+    env:
+      # For this test - we explicitly overwrite the flags in `.cargo/config.toml` because
+      # we want to ensure the `x86-64` target CPU.
+      RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
 
     steps:
       - uses: actions/checkout@v4
@@ -176,7 +180,7 @@ jobs:
 
   test-workspace-features:
     needs: basics
-    name: test workspace
+    name: test workspace features
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
