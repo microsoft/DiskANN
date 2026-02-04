@@ -506,6 +506,44 @@ where
         }
     }
 
+    /// Return a view over the specified rows of the matrix.
+    ///
+    /// If the specified range is out of bounds, return `None`.
+    ///
+    /// ```rust
+    /// use diskann_utils::views::Matrix;
+    ///
+    /// let mut mat = Matrix::new(0usize, 4, 3);
+    ///
+    /// // Fill the matrix with some data.
+    /// mat.row_iter_mut().enumerate().for_each(|(i, row)| row.fill(i));
+    ///
+    /// // Creating a subview into an offset portion of the matrix.
+    /// let subview = mat.subview(1..3).unwrap();
+    /// assert_eq!(subview.nrows(), 2);
+    /// assert_eq!(subview.row(0), &[1, 1, 1]);
+    /// assert_eq!(subview.row(1), &[2, 2, 2]);
+    ///
+    /// // A trying to access out-of-bounds returns `None`
+    /// assert!(mat.subview(3..5).is_none());
+    /// ```
+    pub fn subview(&self, rows: std::ops::Range<usize>) -> Option<MatrixView<'_, T::Elem>> {
+        let ncols = self.ncols();
+
+        let lower = rows.start.checked_mul(ncols)?;
+        let upper = rows.end.checked_mul(ncols)?;
+
+        if let Some(data) = self.as_slice().get(lower..upper) {
+            Some(MatrixBase {
+                data,
+                nrows: rows.len(),
+                ncols: self.ncols(),
+            })
+        } else {
+            None
+        }
+    }
+
     /// Return a pointer to the base of the matrix.
     pub fn as_ptr(&self) -> *const T::Elem {
         self.as_slice().as_ptr()
@@ -1370,6 +1408,95 @@ mod tests {
         assert_eq!(m[(0, 0)], 10);
         assert_eq!(m[(0, 1)], 20);
         assert_eq!(m.row(0), &[10, 20]);
+    }
+
+    #[test]
+    fn test_subview() {
+        let data = make_test_matrix();
+        let m = Matrix::try_from(data.into(), 4, 3).unwrap();
+
+        // Create a subview of the first two rows
+        {
+            let subview = m.subview(0..4).unwrap();
+            assert_eq!(subview.nrows(), 4);
+            assert_eq!(subview.ncols(), 3);
+
+            assert_eq!(subview.row(0), &[0, 1, 2]);
+            assert_eq!(subview.row(1), &[1, 2, 3]);
+            assert_eq!(subview.row(2), &[2, 3, 4]);
+            assert_eq!(subview.row(3), &[3, 4, 5]);
+            assert!(subview.get_row(4).is_none());
+        }
+
+        // Sub view over a subset that touches the end.
+        {
+            let subview = m.subview(1..4).unwrap();
+            assert_eq!(subview.nrows(), 3);
+            assert_eq!(subview.ncols(), 3);
+
+            assert_eq!(subview.row(0), &[1, 2, 3]);
+            assert_eq!(subview.row(1), &[2, 3, 4]);
+            assert_eq!(subview.row(2), &[3, 4, 5]);
+            assert!(subview.get_row(3).is_none());
+        }
+
+        // Sub view over a subset that is in the middle
+        {
+            let subview = m.subview(1..3).unwrap();
+            assert_eq!(subview.nrows(), 2);
+            assert_eq!(subview.ncols(), 3);
+
+            assert_eq!(subview.row(0), &[1, 2, 3]);
+            assert_eq!(subview.row(1), &[2, 3, 4]);
+            assert!(subview.get_row(2).is_none());
+        }
+
+        // Empty sub-view.
+        {
+            let subview = m.subview(2..2).unwrap();
+            assert_eq!(subview.nrows(), 0);
+            assert_eq!(subview.ncols(), 3);
+        }
+
+        // Empty subview in bounds
+        {
+            let subview = m.subview(0..0).unwrap();
+            assert_eq!(subview.nrows(), 0);
+            assert_eq!(subview.ncols(), 3);
+
+            let subview = m.subview(4..4).unwrap();
+            assert_eq!(subview.nrows(), 0);
+            assert_eq!(subview.ncols(), 3);
+        }
+
+        // Empty out-of-bounds subview
+        assert!(m.subview(5..5).is_none());
+
+        // View too-large
+        assert!(m.subview(0..6).is_none());
+        assert!(m.subview(2..10).is_none());
+
+        // View disjoint.
+        assert!(m.subview(10..100).is_none());
+
+        // Negative bounds
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "we want to make sure it doesn't work"
+        )]
+        let empty = 3..2;
+        assert!(m.subview(empty).is_none());
+
+        #[expect(
+            clippy::reversed_empty_ranges,
+            reason = "we want to make sure it doesn't work"
+        )]
+        let empty = 3..1;
+        assert!(m.subview(empty).is_none());
+
+        // Bounds that overflow.
+        assert!(m.subview(usize::MAX - 1..usize::MAX).is_none());
+        assert!(m.subview(0..usize::MAX).is_none());
     }
 
     #[test]

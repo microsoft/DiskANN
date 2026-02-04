@@ -23,7 +23,7 @@
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_filter_res.bin",
           "beta": 0.5,
-          "query_predicates": "query.128.label.jsonl",
+          "query_predicates": "query.10.label.jsonl",
           "data_labels": "data.256.label.jsonl",
           "reps": 5,
           "num_threads": [
@@ -83,7 +83,7 @@
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_filter_res.bin",
           "beta": 0.5,
-          "query_predicates": "query.128.label.jsonl",
+          "query_predicates": "query.10.label.jsonl",
           "data_labels": "data.256.label.jsonl",
           "reps": 5,
           "num_threads": [
@@ -143,7 +143,7 @@
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_filter_res.bin",
           "beta": 0.5,
-          "query_predicates": "query.128.label.jsonl",
+          "query_predicates": "query.10.label.jsonl",
           "data_labels": "data.256.label.jsonl",
           "reps": 5,
           "num_threads": [
@@ -205,7 +205,7 @@
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_filter_res.bin",
           "beta": 0.5,
-          "query_predicates": "query.128.label.jsonl",
+          "query_predicates": "query.10.label.jsonl",
           "data_labels": "data.256.label.jsonl",
           "reps": 5,
           "num_threads": [
@@ -265,7 +265,7 @@
           "queries": "disk_index_sample_query_10pts.fbin",
           "groundtruth": "disk_index_10pts_idx_uint32_truth_search_filter_res.bin",
           "beta": 0.5,
-          "query_predicates": "query.128.label.jsonl",
+          "query_predicates": "query.10.label.jsonl",
           "data_labels": "data.256.label.jsonl",
           "reps": 5,
           "num_threads": [

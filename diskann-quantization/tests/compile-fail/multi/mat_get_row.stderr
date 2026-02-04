@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `mat` as mutable because it is also borrowed as immutable
+  --> tests/compile-fail/multi/mat_get_row.rs:14:13
+   |
+12 |     let row = mat.get_row(0).unwrap();
+   |               --- immutable borrow occurs here
+13 |     // This should fail: we cannot mutably borrow `mat` while `row` exists
+14 |     let _ = mat.get_row_mut(1);
+   |             ^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+15 |     assert_eq!(row[0], 0.0);
+   |                ------ immutable borrow later used here

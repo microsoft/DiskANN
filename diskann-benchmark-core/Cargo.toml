@@ -1,0 +1,36 @@
+[package]
+name = "diskann-benchmark-core"
+version = { workspace = true }
+description = { workspace = true }
+authors = { workspace = true }
+documentation = { workspace = true }
+license = { workspace = true }
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+diskann.workspace = true
+diskann-benchmark-runner = { workspace = true }
+diskann-utils.default-features = false
+diskann-utils.workspace = true
+futures-util = { workspace = true, default-features = false }
+thiserror.workspace = true
+tokio.workspace = true
+
+serde_yaml = { version = "0.9.34", optional = true }
+
+[features]
+default = []
+
+# BigANN Runbook support requires parsing a YAML file.
+bigann = ["dep:serde_yaml"]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+itertools.workspace = true
+diskann = { workspace = true, features = ["testing"] }
+diskann-vector = { workspace = true }
+diskann-benchmark-runner = { workspace = true, features = ["ux-tools"] }
+tempfile = { workspace = true }

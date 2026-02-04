@@ -4,3 +4,4 @@
  */
 
 mod grid;
+mod inplace_delete;

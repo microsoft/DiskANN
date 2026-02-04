@@ -67,7 +67,7 @@ impl ExampleCache {
         uncacheable: Option<Vec<u32>>,
     ) -> Self {
         Self {
-            cache: Cache::new(bytes),
+            cache: Cache::new(bytes).unwrap(),
             uncacheable,
             neighbor_stats: HitStats::new(),
             vector_stats: HitStats::new(),

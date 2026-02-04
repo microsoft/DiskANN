@@ -11,6 +11,7 @@ use diskann::{
     graph::{self, config, RangeSearchParams, RangeSearchParamsError, StartPointStrategy},
     utils::IntoUsize,
 };
+use diskann_benchmark_core::streaming::executors::bigann;
 use diskann_benchmark_runner::{
     files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
 };
@@ -25,10 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     inputs::{self, as_input, save_and_load, Example, Input},
-    utils::{
-        datafiles::{DynamicRunbook, RunbookFile},
-        SimilarityMeasure,
-    },
+    utils::SimilarityMeasure,
 };
 
 //////////////
@@ -57,74 +55,23 @@ pub(super) fn register_inputs(
 ////////////
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct TargetRecall {
-    pub(crate) target: Vec<usize>,
-    pub(crate) percentile: Vec<f32>,
-    pub(crate) max_search_l: NonZeroUsize,
-    pub(crate) calibration_size: NonZeroUsize,
-}
-
-impl CheckDeserialization for TargetRecall {
-    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
-        for p in self.percentile.iter() {
-            if *p < 0.0 || *p > 1.0 {
-                return Err(anyhow!("percentile {} is not in the range [0.0, 1.0]", p));
-            }
-        }
-
-        if self.percentile.is_empty() {
-            return Err(anyhow!("at least one percentile must be specified"));
-        }
-        if self.target.is_empty() {
-            return Err(anyhow!("at least one target must be specified"));
-        }
-
-        Ok(())
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct GraphSearch {
     pub(crate) search_n: usize,
-    pub(crate) search_l: Option<Vec<usize>>,
-    pub(crate) target_recall: Option<Vec<TargetRecall>>,
+    pub(crate) search_l: Vec<usize>,
     pub(crate) recall_k: usize,
-    pub(crate) enhanced_metrics: Option<bool>,
 }
 
 impl CheckDeserialization for GraphSearch {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
-        if let Some(search_l) = self.search_l.as_mut() {
-            for (i, l) in search_l.iter().enumerate() {
-                if *l < self.search_n {
-                    return Err(anyhow!(
-                        "search_l {} at position {} is less than search_n: {}",
-                        l,
-                        i,
-                        self.search_n
-                    ));
-                }
+    fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
+        for (i, l) in self.search_l.iter().enumerate() {
+            if *l < self.search_n {
+                return Err(anyhow!(
+                    "search_l {} at position {} is less than search_n: {}",
+                    l,
+                    i,
+                    self.search_n
+                ));
             }
-        }
-        if let Some(target_recall) = self.target_recall.as_mut() {
-            for (i, tr) in target_recall.iter_mut().enumerate() {
-                for target in tr.target.iter() {
-                    if *target > self.search_n {
-                        return Err(anyhow!(
-                            "target_recall target_n at position {} has value {} which is greater than search_n: {}",
-                            i,
-                            target,
-                            self.search_n
-                        ));
-                    }
-                }
-                tr.check_deserialization(checker)?;
-            }
-        }
-        if self.search_l.is_none() && self.target_recall.is_none() {
-            return Err(anyhow!(
-                "at least one of search_l or target_recall must be specified"
-            ));
         }
 
         Ok(())
@@ -173,7 +120,7 @@ impl CheckDeserialization for GraphRangeSearch {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TopkSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
@@ -211,15 +158,8 @@ impl Example for TopkSearchPhase {
 
         let runs = vec![GraphSearch {
             search_n: 10,
-            search_l: Some(vec![10, 20, 30, 40]),
-            target_recall: Some(vec![TargetRecall {
-                target: vec![5, 6, 7],
-                percentile: vec![0.9, 0.95],
-                max_search_l: NonZeroUsize::new(1000).unwrap(),
-                calibration_size: NonZeroUsize::new(1).unwrap(),
-            }]),
+            search_l: vec![10, 20, 30, 40],
             recall_k: 10,
-            enhanced_metrics: None,
         }];
 
         Self {
@@ -1140,11 +1080,11 @@ impl CheckDeserialization for DynamicRunbookParams {
         // Store the resolved path for later use
         self.resolved_gt_directory = Some(final_gt_directory.clone());
 
-        let runbook_file = RunbookFile(&self.runbook_path);
-        let _runbook = DynamicRunbook::new_from_runbook_file(
-            runbook_file,
-            self.dataset_name.clone(),
-            Some(&final_gt_directory.to_string_lossy()),
+        // Run pre-flight checks for the runbook.
+        let _runbook = bigann::RunBook::load(
+            &self.runbook_path,
+            &self.dataset_name,
+            &mut bigann::ScanDirectory::new(final_gt_directory)?,
         )
         .with_context(|| {
             format!(

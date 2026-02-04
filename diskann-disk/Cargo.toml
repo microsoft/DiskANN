@@ -9,7 +9,12 @@ edition.workspace = true
 
 [package.metadata.docs.rs]
 default-target = "x86_64-pc-windows-msvc"
-targets = ["x86_64-unknown-linux-gnu", "aarch64-pc-windows-msvc", "i686-pc-windows-msvc", "x86_64-pc-windows-msvc"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-pc-windows-msvc",
+    "i686-pc-windows-msvc",
+    "x86_64-pc-windows-msvc",
+]
 
 [dependencies]
 # Core dependencies
@@ -26,7 +31,7 @@ bincode.workspace = true
 bytemuck.workspace = true
 byteorder.workspace = true
 cfg-if.workspace = true
-futures-util = { workspace = true, default-features = false  }
+futures-util = { workspace = true, default-features = false }
 hashbrown.workspace = true
 half = { workspace = true, features = ["bytemuck", "num-traits"] }
 diskann-platform = { workspace = true }
@@ -49,7 +54,10 @@ libc = "0.2.148"
 rstest.workspace = true
 tempfile.workspace = true
 vfs.workspace = true
-diskann-providers = { path = "../diskann-providers", default-features = false, features = ["testing", "virtual_storage"] }
+diskann-providers = { workspace = true, default-features = false, features = [
+    "testing",
+    "virtual_storage",
+] }
 diskann-utils = { workspace = true, features = ["testing"] }
 criterion.workspace = true
 iai-callgrind.workspace = true
@@ -59,7 +67,10 @@ diskann = { workspace = true }
 default = []
 perf_test = ["dep:opentelemetry"]
 virtual_storage = ["diskann-providers/virtual_storage"]
-experimental_diversity_search = ["diskann/experimental_diversity_search", "diskann-providers/experimental_diversity_search"]
+experimental_diversity_search = [
+    "diskann/experimental_diversity_search",
+    "diskann-providers/experimental_diversity_search",
+]
 
 [[bench]]
 name = "bench_main"

@@ -477,24 +477,33 @@ where
     /// Returns an error if `data.len() != `Self::canonical_bytes`.
     pub fn from_canonical_front_mut(data: &'a mut [u8], dim: usize) -> Result<Self, NotCanonical> {
         let expected = Self::canonical_bytes(dim);
-        let bytes = data.len();
-        let (front, back) = match data.split_at_mut_checked(std::mem::size_of::<T>()) {
-            Some(v) => v,
-            None => {
-                return Err(NotCanonical::WrongLength(expected, bytes));
-            }
-        };
+        if data.len() != expected {
+            Err(NotCanonical::WrongLength(expected, data.len()))
+        } else {
+            // SAFETY: We have checked the length of `data`.
+            Ok(unsafe { Self::from_canonical_front_mut_unchecked(data, dim) })
+        }
+    }
 
-        let bits =
-            MutBitSlice::new(back, dim).map_err(|_| NotCanonical::WrongLength(expected, bytes))?;
+    /// Construct a `VectorMut` from the raw data.
+    ///
+    /// # Safety
+    ///
+    /// * `data.len()` must be equal to `Self::canonical_bytes(dim)`.
+    ///
+    /// This invariant is checked in debug builds and will panic if not satisfied.
+    pub unsafe fn from_canonical_front_mut_unchecked(data: &'a mut [u8], dim: usize) -> Self {
+        debug_assert_eq!(data.len(), Self::canonical_bytes(dim));
 
-        // SAFETY: `split_at_mut_checked` was successful, so `front` points to a valid
-        // slice of `std::mem::size_of::<T>()` bytes. Further, we have verified that the
-        // base pointer for `front` is properly aligned to `std::mem::align_of::<T>()`, so
-        // we can safely construct a reference to a `T` from the pointer returned by
-        // `front.as_ptr_mut()`.
+        // SAFETY: The length precondition for this function guarantees the split is valid.
+        let (front, back) = unsafe { data.split_at_mut_unchecked(std::mem::size_of::<T>()) };
+
+        // SAFETY: The length precondition guarantees the bit slice is valid.
+        let bits = unsafe { MutBitSlice::new_unchecked(back, dim) };
+
+        // SAFETY: `front` points to a valid slice of `std::mem::size_of::<T>()` bytes.
         let meta = unsafe { Mut::new(NonNull::new_unchecked(front.as_mut_ptr()).cast::<T>()) };
-        Ok(Self { bits, meta })
+        Self { bits, meta }
     }
 
     /// Construct an instance of `Self` viewing `data` as the canonical layout for a vector.

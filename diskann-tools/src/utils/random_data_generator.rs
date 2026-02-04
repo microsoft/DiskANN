@@ -198,3 +198,71 @@ fn write_random_vector_block<
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use diskann_providers::storage::VirtualStorageProvider;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::utils::size_constants::{TEST_DATASET_SIZE_SMALL, TEST_NUM_DIMENSIONS_RECOMMENDED};
+
+    #[rstest]
+    fn random_data_write_success(
+        #[values(DataType::Float, DataType::Uint8, DataType::Int8)] data_type: DataType,
+        #[values(100.0, 127.0)] norm: f32,
+    ) {
+        let random_data_path = "/mydatafile.bin";
+        let num_dimensions = TEST_NUM_DIMENSIONS_RECOMMENDED;
+
+        let storage_provider = VirtualStorageProvider::new_overlay(".");
+        let result = write_random_data(
+            &storage_provider,
+            random_data_path,
+            data_type,
+            num_dimensions,
+            10000,
+            norm,
+        );
+
+        assert!(result.is_ok(), "write_random_data should succeed");
+        assert!(
+            storage_provider.exists(random_data_path),
+            "Random data file should exist"
+        );
+    }
+
+    /// Very low values of "radius" cause the random data to all be zero.
+    /// Ensure that an appropriate error is returned when invalid radius is used.
+    #[rstest]
+    #[case(DataType::Float, 0.0)]
+    #[case(DataType::Int8, 0.0)]
+    #[case(DataType::Int8, 0.1)]
+    #[case(DataType::Int8, 1.0)]
+    #[case(DataType::Uint8, 0.0)]
+    #[case(DataType::Uint8, 0.1)]
+    #[case(DataType::Uint8, 1.0)]
+    fn random_data_write_too_low_norm(#[case] data_type: DataType, #[case] radius: f32) {
+        let random_data_path = "/mydatafile.bin";
+        let num_dimensions = TEST_NUM_DIMENSIONS_RECOMMENDED;
+
+        let expected = Err(CMDToolError {
+            details: format!(
+                "Generated all-zero vectors with radius {}. Try increasing radius",
+                radius
+            ),
+        });
+
+        let storage_provider = VirtualStorageProvider::new_overlay(".");
+        let result = write_random_data(
+            &storage_provider,
+            random_data_path,
+            data_type,
+            num_dimensions,
+            TEST_DATASET_SIZE_SMALL,
+            radius,
+        );
+
+        assert_eq!(expected, result);
+    }
+}

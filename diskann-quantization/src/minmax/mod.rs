@@ -51,16 +51,19 @@
 //! ```math
 //! X = X' * c / (2^n - 1) + s
 //! ```
-
+mod multi;
 mod quantizer;
+mod recompress;
 mod vectors;
 
 /////////////
 // Exports //
 /////////////
 
-pub use quantizer::MinMaxQuantizer;
+pub use multi::{MinMaxKernel, MinMaxMeta};
+pub use quantizer::{L2Loss, MinMaxQuantizer};
+pub use recompress::{RecompressError, Recompressor};
 pub use vectors::{
-    Data, DataMutRef, DataRef, DecompressError, FullQuery, MetaParseError, MinMaxCompensation,
-    MinMaxCosine, MinMaxCosineNormalized, MinMaxIP, MinMaxL2Squared,
+    Data, DataMutRef, DataRef, DecompressError, FullQuery, FullQueryMeta, MetaParseError,
+    MinMaxCompensation, MinMaxCosine, MinMaxCosineNormalized, MinMaxIP, MinMaxL2Squared,
 };

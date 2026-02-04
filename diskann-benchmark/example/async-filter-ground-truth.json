@@ -18,7 +18,8 @@
             "num_threads": 1,
             "num_start_points": 1,
             "num_insert_attempts": 1,
-            "saturate_inserts": false
+            "saturate_inserts": false,
+            "start_point_strategy": "medoid"
           },
           "search_phase": {
             "search-type": "topk-beta-filter",
@@ -50,4 +51,4 @@
       }
     ]
   }
-  
+

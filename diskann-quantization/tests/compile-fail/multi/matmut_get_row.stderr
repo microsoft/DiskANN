@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `view` as mutable because it is also borrowed as immutable
+  --> tests/compile-fail/multi/matmut_get_row.rs:15:13
+   |
+13 |     let row = view.get_row(0).unwrap();
+   |               ---- immutable borrow occurs here
+14 |     // This should fail: we cannot mutably borrow `view` while `row` exists
+15 |     let _ = view.get_row_mut(1);
+   |             ^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+16 |     assert_eq!(row[0], 0.0);
+   |                ------ immutable borrow later used here

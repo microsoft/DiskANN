@@ -7,6 +7,17 @@
 
 use std::{cell::UnsafeCell, marker::PhantomData, mem::MaybeUninit};
 
+#[derive(Debug)]
+pub enum Infallible {}
+
+impl std::fmt::Display for Infallible {
+    fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        unreachable!("Infallible is unconstructible");
+    }
+}
+
+impl std::error::Error for Infallible {}
+
 /// Format the entire error chain for `err` by first calling `err.to_string()` and then
 /// by walking the error's
 /// [source tree](https://doc.rust-lang.org/std/error/trait.Error.html#method.source).
