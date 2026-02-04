@@ -85,28 +85,12 @@ verbose_eq!(GridSearch {
 ///
 /// The provider will be configured with the L2 metric.
 fn setup_grid_search(grid: Grid, size: usize) -> Arc<DiskANNIndex<test_provider::Provider>> {
-    let max_degree: usize = (grid.dim() * 2).into();
-    let start_id = u32::MAX;
-
-    // Generate the grid data.
-    let setup = grid.setup(size, start_id);
-
-    // Create the provider config with the grid start point.
-    let provider_config = test_provider::Config::new(
-        Metric::L2,
-        max_degree,
-        test_provider::StartPoint::new(setup.start_id(), setup.start_point()),
-    )
-    .unwrap();
-
     // Initialize the provider.
-    let provider =
-        test_provider::Provider::new_from(provider_config, setup.start_neighbors(), setup.setup())
-            .unwrap();
+    let provider = test_provider::Provider::grid(grid, size).unwrap();
 
     // Initialize the index.
     let index_config = graph::config::Builder::new(
-        max_degree,
+        provider.max_degree(),
         graph::config::MaxDegree::same(),
         100,
         (Metric::L2).into(),
@@ -157,7 +141,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
                     &context,
                     query.as_slice(),
                     &params,
-                    neighbors.as_mut_slice(),
+                    &mut crate::neighbor::BackInserter::new(neighbors.as_mut_slice()),
                 ))
                 .unwrap();
 

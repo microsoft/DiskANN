@@ -389,7 +389,7 @@ where
         I: Iterator<Item = Neighbor<A::Id>> + Send,
         B: SearchOutputBuffer<A::Id> + Send + ?Sized,
     {
-        let count = output.set_from(candidates.map(|n| (n.id, n.distance)));
+        let count = output.extend(candidates.map(|n| (n.id, n.distance)));
         std::future::ready(Ok(count))
     }
 }
@@ -804,7 +804,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ANNResult,
+        ANNResult, neighbor,
         provider::{DelegateNeighbor, ExecutionContext, HasId, NeighborAccessor},
     };
 
@@ -1087,7 +1087,7 @@ mod tests {
                         &query,
                         &computer,
                         input.iter().copied(),
-                        output.as_mut_slice(),
+                        &mut neighbor::BackInserter::new(output.as_mut_slice()),
                     )
                     .await
                     .unwrap();

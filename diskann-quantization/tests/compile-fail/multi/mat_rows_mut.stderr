@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `mat` as immutable because it is also borrowed as mutable
+  --> tests/compile-fail/multi/mat_rows_mut.rs:14:13
+   |
+12 |     let iter = mat.rows_mut();
+   |                --- mutable borrow occurs here
+13 |     // This should fail: we cannot use `mat` while the mutable iterator is alive
+14 |     let _ = mat.num_vectors();
+   |             ^^^ immutable borrow occurs here
+15 |     for row in iter {
+   |                ---- mutable borrow later used here

@@ -3,42 +3,60 @@
  * Licensed under the MIT license.
  */
 
-use thiserror::Error;
-
 /// A generalized trait for extracting search results.
 ///
 /// Putting this behind a trait allows multiple different output containers to use common
 /// interfaces. This, in turn, can allow search to return IDs and distances as separate
-/// buffers (see [`IdDistance`]), or as a contiguous `[Neighbor<_>]`, and more.
+/// buffers (see [`IdDistance`]), or as a contiguous [`crate::neighbor::BackInserter`].
 ///
 /// It also makes it easier to testing search post-processing routines as they should target
 /// an output implementing `SearchOutputBuffer`, simplifying how they can be tested.
 pub trait SearchOutputBuffer<I, D = f32> {
-    /// Return a hint on the size of the buffer.
+    /// Return a hint on the remaining size of the buffer.
     ///
-    /// Implementations should guarantee that if `size_hint` returns `Some`, then
-    /// `set` is valid for all indices up to the returned value (but unsafe code should
-    /// not rely on this).
-    ///
-    /// `None` may be returned in instances where the output has unbounded size.
+    /// `None` may be returned in instances where the output has unknown or unbounded size.
     fn size_hint(&self) -> Option<usize>;
 
-    /// Set position `i` in the buffer, returning an error is `i` is out of bounds.
-    fn set(&mut self, i: usize, id: I, distance: D) -> Result<(), IndexOutOfBounds>;
+    /// Push an `id` and `distance` pair to the next position in the buffer.
+    ///
+    /// Returns a [`BufferState`] to indicate whether future insertions will succeed.
+    ///
+    /// Unlike the iterator interface, implementations should return [`BufferState::Full`]
+    /// if **future** insertions will fail to prevent unnecessary work.
+    fn push(&mut self, id: I, distance: D) -> BufferState;
+
+    /// Return the number of items pushed into the buffer.
+    fn current_len(&self) -> usize;
 
     /// Set from an iterator, returning the number of positions filled.
-    fn set_from<Itr>(&mut self, itr: Itr) -> usize
+    ///
+    /// The entire iterator may not be consumed if there is insufficient capacity in `self`.
+    fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: Iterator<Item = (I, D)>;
+        Itr: IntoIterator<Item = (I, D)>;
 }
 
-#[derive(Debug, Clone, Copy, Error)]
-#[error("index {0} is out-of-bounds")]
-pub struct IndexOutOfBounds(usize);
+/// Indicate whether future calls to [`SearchOutputBuffer::push`] will succeed or not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[must_use = "This type indicates whether the output buffer is full or not."]
+pub enum BufferState {
+    /// There is capacity available in the buffer.
+    Available,
 
-impl IndexOutOfBounds {
-    pub fn new(index: usize) -> Self {
-        Self(index)
+    /// The buffer is full. Future calls to [`SearchOutputBuffer::push`] or
+    /// [`SearchOutputBuffer::extend`] will fail.
+    Full,
+}
+
+impl BufferState {
+    /// Return `true` if `self == Self::Available`. Otherwise return `false`.
+    pub fn is_available(self) -> bool {
+        self == Self::Available
+    }
+
+    /// Return `true` if `self == Self::Full`. Otherwise return `false`.
+    pub fn is_full(self) -> bool {
+        self == Self::Full
     }
 }
 
@@ -51,6 +69,7 @@ impl IndexOutOfBounds {
 pub struct IdDistance<'a, I> {
     ids: &'a mut [I],
     distances: &'a mut [f32],
+    position: usize,
 }
 
 impl<'a, I> IdDistance<'a, I> {
@@ -65,46 +84,62 @@ impl<'a, I> IdDistance<'a, I> {
             distances.len(),
             "ids and distances should have the same length"
         );
-        Self { ids, distances }
+        Self {
+            ids,
+            distances,
+            position: 0,
+        }
     }
 
     /// The length of **both** internal slices.
-    pub fn len(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.ids.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.ids.is_empty()
     }
 }
 
 impl<I> SearchOutputBuffer<I> for IdDistance<'_, I> {
     fn size_hint(&self) -> Option<usize> {
-        Some(self.len())
+        Some(self.capacity() - self.position)
     }
 
-    fn set(&mut self, i: usize, id: I, distance: f32) -> Result<(), IndexOutOfBounds> {
-        if i >= self.len() {
-            Err(IndexOutOfBounds::new(i))
+    fn push(&mut self, id: I, distance: f32) -> BufferState {
+        if self.position == self.capacity() {
+            return BufferState::Full;
+        }
+
+        self.ids[self.position] = id;
+        self.distances[self.position] = distance;
+        self.position += 1;
+
+        // Return `Full` if we added the last item.
+        if self.position == self.capacity() {
+            BufferState::Full
         } else {
-            self.ids[i] = id;
-            self.distances[i] = distance;
-            Ok(())
+            BufferState::Available
         }
     }
 
-    fn set_from<Itr>(&mut self, itr: Itr) -> usize
+    fn current_len(&self) -> usize {
+        self.position
+    }
+
+    fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: Iterator<Item = (I, f32)>,
+        Itr: IntoIterator<Item = (I, f32)>,
     {
         let mut i = 0;
-        std::iter::zip(self.ids.iter_mut(), self.distances.iter_mut())
-            .zip(itr)
-            .for_each(|((i_out, d_out), (i_in, d_in))| {
-                i += 1;
-                *i_out = i_in;
-                *d_out = d_in;
-            });
+        let p = self.position;
+        std::iter::zip(
+            self.ids.iter_mut().skip(p),
+            self.distances.iter_mut().skip(p),
+        )
+        .zip(itr)
+        .for_each(|((i_out, d_out), (i_in, d_in))| {
+            i += 1;
+            *i_out = i_in;
+            *d_out = d_in;
+        });
+        self.position += i;
         i
     }
 }
@@ -114,6 +149,7 @@ pub struct IdDistanceAssociatedData<'a, I, A> {
     ids: &'a mut [I],
     distances: &'a mut [f32],
     associated_data: &'a mut [A],
+    position: usize,
 }
 
 impl<'a, I, A> IdDistanceAssociatedData<'a, I, A> {
@@ -132,15 +168,12 @@ impl<'a, I, A> IdDistanceAssociatedData<'a, I, A> {
             ids,
             distances,
             associated_data,
+            position: 0,
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.ids.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.ids.is_empty()
     }
 }
 
@@ -148,31 +181,44 @@ impl<I: Copy + Send, A: Clone + Send> SearchOutputBuffer<(I, A), f32>
     for IdDistanceAssociatedData<'_, I, A>
 {
     fn size_hint(&self) -> Option<usize> {
-        Some(self.len())
+        Some(self.capacity() - self.position)
     }
 
-    fn set(&mut self, i: usize, item: (I, A), distance: f32) -> Result<(), IndexOutOfBounds> {
+    fn push(&mut self, item: (I, A), distance: f32) -> BufferState {
+        if self.position == self.capacity() {
+            return BufferState::Full;
+        }
+
         let (id, assoc) = item;
-        if i >= self.len() {
-            Err(IndexOutOfBounds::new(i))
+        self.ids[self.position] = id;
+        self.distances[self.position] = distance;
+        self.associated_data[self.position] = assoc;
+        self.position += 1;
+
+        // Return `Full` if we added the last item.
+        if self.position == self.capacity() {
+            BufferState::Full
         } else {
-            self.ids[i] = id;
-            self.distances[i] = distance;
-            self.associated_data[i] = assoc;
-            Ok(())
+            BufferState::Available
         }
     }
 
-    fn set_from<Itr>(&mut self, itr: Itr) -> usize
+    fn current_len(&self) -> usize {
+        self.position
+    }
+
+    fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: Iterator<Item = ((I, A), f32)>,
+        Itr: IntoIterator<Item = ((I, A), f32)>,
     {
         let mut i = 0;
+        let p = self.position;
         for (((id_out, dist_out), assoc_out), ((id, assoc), dist)) in self
             .ids
             .iter_mut()
-            .zip(self.distances.iter_mut())
-            .zip(self.associated_data.iter_mut())
+            .skip(p)
+            .zip(self.distances.iter_mut().skip(p))
+            .zip(self.associated_data.iter_mut().skip(p))
             .zip(itr)
         {
             *id_out = id;
@@ -180,7 +226,7 @@ impl<I: Copy + Send, A: Clone + Send> SearchOutputBuffer<(I, A), f32>
             *assoc_out = assoc;
             i += 1;
         }
-
+        self.position += i;
         i
     }
 }
@@ -193,18 +239,6 @@ impl<I: Copy + Send, A: Clone + Send> SearchOutputBuffer<(I, A), f32>
 mod tests {
     use super::*;
 
-    fn assert_is_err<T>(_: &T)
-    where
-        T: std::error::Error,
-    {
-    }
-
-    #[test]
-    fn index_error_is_error() {
-        let err = IndexOutOfBounds::new(0);
-        assert_is_err(&err);
-    }
-
     // Test that the constructor panics on unequal lengths.
     #[test]
     #[should_panic(expected = "ids and distances should have the same length")]
@@ -216,60 +250,100 @@ mod tests {
 
     #[test]
     fn test_id_distance() {
-        // Scalar Interface
-        for len in 0..20 {
-            let mut ids = vec![0u32; len];
-            let mut distances = vec![0.0; len];
+        const MAX_LENGTH: usize = 5;
+
+        // All `push`.
+        {
+            let mut ids = [0u32; MAX_LENGTH];
+            let mut distances = [0.0f32; MAX_LENGTH];
             let mut buffer = IdDistance::new(&mut ids, &mut distances);
 
-            assert_eq!(buffer.len(), len);
-            assert_eq!(buffer.size_hint(), Some(len));
+            assert_eq!(buffer.capacity(), MAX_LENGTH);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH));
+            assert_eq!(buffer.current_len(), 0);
 
-            // All of these should work okay.
-            for i in 0..len {
-                buffer.set(i, i as u32, i as f32).unwrap();
-            }
+            assert!(buffer.push(1, 1.0).is_available());
+            assert_eq!(buffer.current_len(), 1);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH - 1));
 
-            // Setting one past the end should yield an error.
-            let err = buffer.set(len, 0, 0.0).unwrap_err();
-            assert_is_err(&err);
-            assert_eq!(err.to_string(), format!("index {} is out-of-bounds", len));
+            assert!(buffer.push(2, 2.0).is_available());
+            assert_eq!(buffer.current_len(), 2);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH - 2));
 
-            // Check that the ids and distances are set correctly.
-            for (i, id) in ids.iter().enumerate() {
-                assert_eq!(i, *id as usize);
-            }
-            for (i, distance) in distances.iter().enumerate() {
-                assert_eq!(i as f32, *distance);
-            }
+            assert!(buffer.push(3, 3.0).is_available());
+            assert_eq!(buffer.current_len(), 3);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH - 3));
+
+            assert!(buffer.push(4, 4.0).is_available());
+            assert_eq!(buffer.current_len(), 4);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH - 4));
+
+            // This should error since further attempts will not work.
+            assert!(buffer.push(5, 5.0).is_full());
+            assert_eq!(buffer.current_len(), 5);
+            assert_eq!(buffer.size_hint(), Some(0));
+
+            assert!(buffer.push(6, 6.0).is_full());
+            assert_eq!(buffer.current_len(), 5);
+            assert_eq!(buffer.size_hint(), Some(0));
+
+            assert_eq!(&ids, &[1, 2, 3, 4, 5]);
+            assert_eq!(&distances, &[1.0, 2.0, 3.0, 4.0, 5.0]);
         }
 
-        // Iterator Interface
-        for len in 0..10 {
-            for input_len in 0..10 {
-                let mut ids = vec![0u32; len];
-                let mut distances = vec![0.0; len];
-                let mut buffer = IdDistance::new(&mut ids, &mut distances);
+        // All `iterator`.
+        {
+            let mut ids = [0u32; MAX_LENGTH];
+            let mut distances = [0.0f32; MAX_LENGTH];
+            let mut buffer = IdDistance::new(&mut ids, &mut distances);
 
-                let source: Vec<_> = (0..input_len).map(|i| (i as u32, i as f32)).collect();
+            assert_eq!(buffer.capacity(), MAX_LENGTH);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH));
+            assert_eq!(buffer.current_len(), 0);
 
-                let count = buffer.set_from(source.into_iter());
-                // The assigned count should be the minimum of the input and output lengths.
-                assert_eq!(count, input_len.min(len));
-                for (i, (id, dist)) in std::iter::zip(ids.iter(), distances.iter())
-                    .take(count)
-                    .enumerate()
-                {
-                    assert_eq!(i, *id as usize);
-                    assert_eq!(i as f32, *dist);
-                }
+            let set = buffer.extend([(1, 1.0), (2, 2.0), (3, 3.0), (4, 4.0), (5, 5.0), (6, 6.0)]);
+            assert_eq!(set, MAX_LENGTH);
+            assert_eq!(buffer.current_len(), MAX_LENGTH);
+            assert_eq!(buffer.size_hint(), Some(0));
 
-                // THe upper values should be untouched.
-                for i in count..len {
-                    assert_eq!(ids[i], 0);
-                    assert_eq!(distances[i], 0.0);
-                }
-            }
+            // Ensure that `pushing` respects the limit.
+            assert!(buffer.push(7, 7.0).is_full());
+
+            let set = buffer.extend([(10, 10.0), (20, 20.0)]);
+            assert_eq!(set, 0, "no more items can be added");
+
+            assert_eq!(&ids, &[1, 2, 3, 4, 5]);
+            assert_eq!(&distances, &[1.0, 2.0, 3.0, 4.0, 5.0]);
+        }
+
+        // Mixture
+        {
+            let mut ids = [0u32; MAX_LENGTH];
+            let mut distances = [0.0f32; MAX_LENGTH];
+            let mut buffer = IdDistance::new(&mut ids, &mut distances);
+
+            assert!(buffer.push(1, 1.0).is_available());
+
+            let set = buffer.extend([(2, 2.0), (3, 3.0)]);
+            assert_eq!(set, 2, "only two items were pushed");
+
+            assert_eq!(buffer.current_len(), 3);
+            assert_eq!(buffer.size_hint(), Some(2));
+
+            assert!(buffer.push(4, 4.0).is_available());
+            assert_eq!(buffer.current_len(), 4);
+            assert_eq!(buffer.size_hint(), Some(1));
+
+            let set = buffer.extend([(5, 5.0), (6, 6.0)]);
+            assert_eq!(
+                set, 1,
+                "there should only be room for one more item in the buffer"
+            );
+            assert_eq!(buffer.current_len(), 5);
+            assert_eq!(buffer.size_hint(), Some(0));
+
+            assert_eq!(&ids, &[1, 2, 3, 4, 5],);
+            assert_eq!(&distances, &[1.0, 2.0, 3.0, 4.0, 5.0]);
         }
     }
 
@@ -283,111 +357,117 @@ mod tests {
     }
 
     #[test]
-    fn test_id_distance_associated_data_set() {
-        // Test scalar interface
-        for len in 0..20 {
-            let mut ids = vec![0u32; len];
-            let mut distances = vec![0.0; len];
-            let mut associated_data = vec![0u32; len];
+    fn test_id_distance_associated() {
+        const MAX_LENGTH: usize = 5;
+
+        // All `push`.
+        {
+            let mut ids = [0u32; MAX_LENGTH];
+            let mut distances = [0.0f32; MAX_LENGTH];
+            let mut associated = [0u32; MAX_LENGTH];
             let mut buffer =
-                IdDistanceAssociatedData::new(&mut ids, &mut distances, &mut associated_data);
+                IdDistanceAssociatedData::new(&mut ids, &mut distances, &mut associated);
 
-            assert_eq!(buffer.len(), len);
-            assert_eq!(buffer.size_hint(), Some(len));
+            assert_eq!(buffer.capacity(), MAX_LENGTH);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH));
+            assert_eq!(buffer.current_len(), 0);
 
-            // All of these should work okay
-            for i in 0..len {
-                buffer.set(i, (i as u32, i as u32), i as f32).unwrap();
-            }
+            assert!(buffer.push((1, 10), 1.0).is_available());
+            assert_eq!(buffer.current_len(), 1);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH - 1));
 
-            // Setting one past the end should yield an error
-            let err = buffer.set(len, (0, 999u32), 0.0).unwrap_err();
-            assert_is_err(&err);
-            assert_eq!(err.to_string(), format!("index {} is out-of-bounds", len));
+            assert!(buffer.push((2, 20), 2.0).is_available());
+            assert_eq!(buffer.current_len(), 2);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH - 2));
 
-            // Check that ids, distances, and associated data are set correctly
-            for (i, id) in ids.iter().enumerate() {
-                assert_eq!(i, *id as usize);
-            }
-            for (i, distance) in distances.iter().enumerate() {
-                assert_eq!(i as f32, *distance);
-            }
-            for (i, data) in associated_data.iter().enumerate() {
-                assert_eq!(i as u32, *data);
-            }
+            assert!(buffer.push((3, 30), 3.0).is_available());
+            assert_eq!(buffer.current_len(), 3);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH - 3));
+
+            assert!(buffer.push((4, 40), 4.0).is_available());
+            assert_eq!(buffer.current_len(), 4);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH - 4));
+
+            // This should error since further attempts will not work.
+            assert!(buffer.push((5, 50), 5.0).is_full());
+            assert_eq!(buffer.current_len(), 5);
+            assert_eq!(buffer.size_hint(), Some(0));
+
+            assert!(buffer.push((6, 60), 6.0).is_full());
+            assert_eq!(buffer.current_len(), 5);
+            assert_eq!(buffer.size_hint(), Some(0));
+
+            assert_eq!(&ids, &[1, 2, 3, 4, 5]);
+            assert_eq!(&distances, &[1.0, 2.0, 3.0, 4.0, 5.0]);
+            assert_eq!(&associated, &[10, 20, 30, 40, 50]);
         }
-    }
 
-    #[test]
-    fn test_id_distance_associated_data_set_from() {
-        // Iterator Interface
-        for len in 0..10 {
-            for input_len in 0..10 {
-                let mut ids = vec![0u32; len];
-                let mut distances = vec![0.0; len];
-                let mut associated_data = vec![0u32; len];
-                let mut buffer =
-                    IdDistanceAssociatedData::new(&mut ids, &mut distances, &mut associated_data);
+        // All `iterator`.
+        {
+            let mut ids = [0u32; MAX_LENGTH];
+            let mut distances = [0.0f32; MAX_LENGTH];
+            let mut associated = [0u32; MAX_LENGTH];
+            let mut buffer =
+                IdDistanceAssociatedData::new(&mut ids, &mut distances, &mut associated);
 
-                let source: Vec<_> = (0..input_len)
-                    .map(|i| ((i as u32, i as u32), i as f32))
-                    .collect();
+            assert_eq!(buffer.capacity(), MAX_LENGTH);
+            assert_eq!(buffer.size_hint(), Some(MAX_LENGTH));
+            assert_eq!(buffer.current_len(), 0);
 
-                let count = buffer.set_from(source.into_iter());
+            let set = buffer.extend([
+                ((1, 10), 1.0),
+                ((2, 20), 2.0),
+                ((3, 30), 3.0),
+                ((4, 40), 4.0),
+                ((5, 50), 5.0),
+                ((6, 60), 6.0),
+            ]);
+            assert_eq!(set, MAX_LENGTH);
+            assert_eq!(buffer.current_len(), MAX_LENGTH);
+            assert_eq!(buffer.size_hint(), Some(0));
 
-                // The assigned count should be the minimum of the input and output lengths
-                assert_eq!(count, input_len.min(len));
+            // Ensure that `pushing` respects the limit.
+            assert!(buffer.push((7, 70), 7.0).is_full());
 
-                for i in 0..count {
-                    assert_eq!(i, ids[i] as usize);
-                    assert_eq!(i as f32, distances[i]);
-                    assert_eq!(i as u32, associated_data[i]);
-                }
+            let set = buffer.extend([((10, 100), 10.0), ((20, 200), 20.0)]);
+            assert_eq!(set, 0, "no more items can be added");
 
-                // The upper values should be untouched
-                for i in count..len {
-                    assert_eq!(ids[i], 0);
-                    assert_eq!(distances[i], 0.0);
-                    assert_eq!(0u32, associated_data[i]);
-                }
-            }
+            assert_eq!(&ids, &[1, 2, 3, 4, 5]);
+            assert_eq!(&distances, &[1.0, 2.0, 3.0, 4.0, 5.0]);
+            assert_eq!(&associated, &[10, 20, 30, 40, 50]);
         }
-    }
 
-    #[test]
-    fn test_id_distance_is_empty() {
-        // Test with empty buffers
-        let mut empty_ids: Vec<u32> = Vec::new();
-        let mut empty_distances: Vec<f32> = Vec::new();
-        let buffer_empty = IdDistance::new(&mut empty_ids, &mut empty_distances);
-        assert!(buffer_empty.is_empty());
+        // Mixture
+        {
+            let mut ids = [0u32; MAX_LENGTH];
+            let mut distances = [0.0f32; MAX_LENGTH];
+            let mut associated = [0u32; MAX_LENGTH];
+            let mut buffer =
+                IdDistanceAssociatedData::new(&mut ids, &mut distances, &mut associated);
 
-        // Test with non-empty buffers
-        let mut ids = vec![0u32; 5];
-        let mut distances = vec![0.0f32; 5];
-        let buffer_non_empty = IdDistance::new(&mut ids, &mut distances);
-        assert!(!buffer_non_empty.is_empty());
-    }
+            assert!(buffer.push((1, 10), 1.0).is_available());
 
-    #[test]
-    fn test_id_distance_associated_data_is_empty() {
-        // Test with empty buffers
-        let mut empty_ids: Vec<u32> = Vec::new();
-        let mut empty_distances: Vec<f32> = Vec::new();
-        let mut empty_associated_data: Vec<u32> = Vec::new();
-        let buffer_empty = IdDistanceAssociatedData::new(
-            &mut empty_ids,
-            &mut empty_distances,
-            &mut empty_associated_data,
-        );
-        assert!(buffer_empty.is_empty());
+            let set = buffer.extend([((2, 20), 2.0), ((3, 30), 3.0)]);
+            assert_eq!(set, 2, "only two items were pushed");
 
-        // Test with non-empty buffers
-        let mut ids = vec![0u32; 5];
-        let mut distances = vec![0.0f32; 5];
-        let mut associated_data = vec![0u32; 5];
-        let buffer_non_empty =
-            IdDistanceAssociatedData::new(&mut ids, &mut distances, &mut associated_data);
-        assert!(!buffer_non_empty.is_empty());
+            assert_eq!(buffer.current_len(), 3);
+            assert_eq!(buffer.size_hint(), Some(2));
+
+            assert!(buffer.push((4, 40), 4.0).is_available());
+            assert_eq!(buffer.current_len(), 4);
+            assert_eq!(buffer.size_hint(), Some(1));
+
+            let set = buffer.extend([((5, 50), 5.0), ((6, 60), 6.0)]);
+            assert_eq!(
+                set, 1,
+                "there should only be room for one more item in the buffer"
+            );
+            assert_eq!(buffer.current_len(), 5);
+            assert_eq!(buffer.size_hint(), Some(0));
+
+            assert_eq!(&ids, &[1, 2, 3, 4, 5],);
+            assert_eq!(&distances, &[1.0, 2.0, 3.0, 4.0, 5.0]);
+            assert_eq!(&associated, &[10, 20, 30, 40, 50],);
+        }
     }
 }

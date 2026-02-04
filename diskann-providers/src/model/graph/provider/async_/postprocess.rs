@@ -57,7 +57,7 @@ where
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
         let checker = accessor.as_deletion_check();
-        let count = output.set_from(candidates.filter_map(|n| {
+        let count = output.extend(candidates.filter_map(|n| {
             if checker.deletion_check(n.id) {
                 None
             } else {

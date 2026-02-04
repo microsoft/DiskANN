@@ -180,6 +180,7 @@ pub mod algorithms;
 // quantization
 pub mod binary;
 pub mod minmax;
+pub mod multi_vector;
 pub mod product;
 pub mod scalar;
 pub mod spherical;
@@ -215,6 +216,7 @@ mod tests {
         t.pass("tests/compile-fail/bootstrap/bootstrap.rs");
         t.compile_fail("tests/compile-fail/*.rs");
         t.compile_fail("tests/compile-fail/error/*.rs");
+        t.compile_fail("tests/compile-fail/multi/*.rs");
     }
 }
 

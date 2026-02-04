@@ -572,8 +572,8 @@ mod tests {
 
         // This might succeed or fail depending on random sampling
         // If it fails, it should be due to zero vectors
-        if result.is_err() {
-            assert!(result.unwrap_err().to_string().contains("zero vectors"));
+        if let Err(err) = result {
+            assert!(err.to_string().contains("zero vectors"));
         }
     }
 

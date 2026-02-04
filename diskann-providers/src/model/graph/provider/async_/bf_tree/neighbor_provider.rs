@@ -17,6 +17,7 @@ use diskann::{
 };
 
 use super::super::common::TestCallCount;
+use super::ConfigError;
 
 pub struct NeighborProvider<I: VectorId> {
     adjacency_list_index: BfTree,
@@ -31,10 +32,10 @@ impl<I: VectorId> HasId for NeighborProvider<I> {
 
 impl<I: VectorId> NeighborProvider<I> {
     /// Create a new instance based on bf-tree Config directly
-    pub fn new_with_config(max_degree: u32, config: Config) -> Self {
-        let adj_list_index = BfTree::with_config(config, None);
+    pub fn new_with_config(max_degree: u32, config: Config) -> ANNResult<Self> {
+        let adj_list_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
-        Self::new(max_degree, adj_list_index)
+        Ok(Self::new(max_degree, adj_list_index))
     }
 
     fn new(max_degree: u32, adjacency_list_index: BfTree) -> Self {
@@ -248,7 +249,8 @@ mod tests {
     #[tokio::test]
     async fn test_neighbor_accessors() {
         let bf_tree_config = Config::default();
-        let neighbor_provider = NeighborProvider::<u32>::new_with_config(6, bf_tree_config);
+        let neighbor_provider =
+            NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
 
         // Set the neighbor list of a vector
         let adj_list = vec![1, 2, 3];
@@ -304,10 +306,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_tree_traversal() {
         let bf_tree_config = Config::default();
-        let neighbor_provider = Arc::new(NeighborProvider::<u32>::new_with_config(
-            120,
-            bf_tree_config,
-        ));
+        let neighbor_provider =
+            Arc::new(NeighborProvider::<u32>::new_with_config(120, bf_tree_config).unwrap());
 
         let mut set = JoinSet::new();
         for i in 0..100 {
@@ -347,7 +347,8 @@ mod tests {
         let mut bf_tree_config = Config::new(&snapshot_path, 16384 * 16);
         bf_tree_config.storage_backend(bf_tree::StorageBackend::Std);
 
-        let neighbor_provider = NeighborProvider::<u32>::new_with_config(6, bf_tree_config);
+        let neighbor_provider =
+            NeighborProvider::<u32>::new_with_config(6, bf_tree_config).unwrap();
 
         // Set some neighbor lists
         neighbor_provider.set_neighbors(1, &[2, 3, 4]).unwrap();
@@ -373,21 +374,23 @@ mod tests {
         let bf_tree_config = Config::default();
 
         // Test with various max_degree values
-        let neighbor_provider = NeighborProvider::<u32>::new_with_config(6, bf_tree_config.clone());
+        let neighbor_provider =
+            NeighborProvider::<u32>::new_with_config(6, bf_tree_config.clone()).unwrap();
         assert_eq!(neighbor_provider.max_degree(), 6);
 
         let neighbor_provider =
-            NeighborProvider::<u32>::new_with_config(120, bf_tree_config.clone());
+            NeighborProvider::<u32>::new_with_config(120, bf_tree_config.clone()).unwrap();
         assert_eq!(neighbor_provider.max_degree(), 120);
 
-        let neighbor_provider = NeighborProvider::<u32>::new_with_config(1, bf_tree_config);
+        let neighbor_provider =
+            NeighborProvider::<u32>::new_with_config(1, bf_tree_config).unwrap();
         assert_eq!(neighbor_provider.max_degree(), 1);
     }
 
     /// Test new_from_bftree constructor
     #[tokio::test]
     async fn test_new_from_bftree() {
-        let bftree = BfTree::with_config(Config::default(), None);
+        let bftree = BfTree::with_config(Config::default(), None).expect("Failed to create BfTree");
         let neighbor_provider = NeighborProvider::<u32>::new_from_bftree(10, bftree);
 
         assert_eq!(neighbor_provider.max_degree(), 10);
@@ -403,10 +406,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
     async fn test_parallel_neighbor_access() {
         let bf_tree_config = Config::default();
-        let neighbor_provider = Arc::new(NeighborProvider::<u32>::new_with_config(
-            120,
-            bf_tree_config,
-        ));
+        let neighbor_provider =
+            Arc::new(NeighborProvider::<u32>::new_with_config(120, bf_tree_config).unwrap());
 
         let mut set = JoinSet::new();
         for _ in 0..5 {

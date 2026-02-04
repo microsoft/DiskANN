@@ -6,6 +6,7 @@
 use std::{
     cmp,
     collections::HashMap,
+    fmt::Debug,
     num::NonZeroUsize,
     ops::Range,
     sync::{Arc, Mutex},
@@ -44,7 +45,7 @@ use super::DiverseSearchParams;
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::{ErrorExt, IntoANNResult},
-    neighbor::{Neighbor, NeighborPriorityQueue, NeighborQueue},
+    neighbor::{self, Neighbor, NeighborPriorityQueue, NeighborQueue},
     provider::{
         Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
         DataProvider, Delete, ElementStatus, ExecutionContext, Guard, NeighborAccessor,
@@ -58,6 +59,7 @@ use crate::{
     },
 };
 
+#[derive(Debug)]
 pub struct DiskANNIndex<DP: DataProvider> {
     /// Index config
     pub config: Config,
@@ -1350,7 +1352,7 @@ where
                     &*proxy,
                     &computer,
                     scratch.best.iter(),
-                    output.as_mut_slice(),
+                    &mut neighbor::BackInserter::new(output.as_mut_slice()),
                 )
                 .send()
                 .await
@@ -1497,6 +1499,17 @@ where
             let max_minibatch_par = self.config.max_minibatch_par();
             let chunk_iter = async_tools::arc_chunks(ids, max_minibatch_par);
             for chunk in chunk_iter {
+                // Convert external ids in chunk to internal ids. We do this first as `inplace_delete_inner` may actually
+                // delete the mapping.
+                let mut ids_to_delete = HashSet::with_capacity(chunk.len());
+                for i in 0..chunk.len() {
+                    let vector_id = self
+                        .data_provider
+                        .to_internal_id(context, chunk.get(i))
+                        .escalate("id translation for `inplace_delete` must succeed")?;
+                    ids_to_delete.insert(vector_id);
+                }
+
                 // compute edge updates for each inplace delete, running in parallel
                 let handles: Vec<_> = (0..chunk.len())
                     .map(|i| {
@@ -1562,16 +1575,6 @@ where
 
                 // next, insert and prune, adding the option to remove all the deleted neighbors
                 // at each prune. this runs in parallel and respects the max_minibatch_par
-
-                // convert external ids in chunk to internal ids
-                let mut ids_to_delete = HashSet::with_capacity(chunk.len());
-                for i in 0..chunk.len() {
-                    let vector_id = self
-                        .data_provider
-                        .to_internal_id(context, chunk.get(i))
-                        .escalate("id translation for `inplace_delete` must succeed")?;
-                    ids_to_delete.insert(vector_id);
-                }
 
                 let num_tasks = NonZeroUsize::new(ids_to_modify.len())
                     .unwrap_or(max_minibatch_par)
@@ -1675,6 +1678,11 @@ where
         DP: Delete,
     {
         async move {
+            let vector_id = self
+                .data_provider
+                .to_internal_id(context, id)
+                .escalate("id translation for `inplace_delete` must succeed")?;
+
             let edges_to_add = self
                 .inplace_delete_inner(
                     &strategy,
@@ -1684,11 +1692,6 @@ where
                     &inplace_delete_method,
                 )
                 .await?;
-
-            let vector_id = self
-                .data_provider
-                .to_internal_id(context, id)
-                .escalate("id translation for `inplace_delete` must succeed")?;
 
             let mut delete_set = HashSet::with_capacity(1);
             delete_set.insert(vector_id);
@@ -1739,14 +1742,14 @@ where
         DP: Delete,
     {
         async move {
-            self.data_provider
-                .delete(context, id)
-                .await
-                .escalate("`inplace_delete` requires a successful delete")?;
             let vector_id = self
                 .data_provider
                 .to_internal_id(context, id)
                 .escalate("id translation for `inplace_delete` must succeed")?;
+            self.data_provider
+                .delete(context, id)
+                .await
+                .escalate("`inplace_delete` requires a successful delete")?;
 
             let search_strategy = strategy.search_strategy();
             let accessor = &mut search_strategy
@@ -2599,7 +2602,7 @@ where
     where
         T: Sync + ?Sized,
         S: SearchStrategy<DP, T, O>,
-        O: Send + Default + Clone + Copy,
+        O: Send + Default + Clone,
     {
         async move {
             let mut accessor = strategy
@@ -2685,7 +2688,7 @@ where
     where
         T: Sync + ?Sized,
         S: SearchStrategy<DP, T, O>,
-        O: Send + Default + Clone + Copy,
+        O: Send + Default + Clone,
     {
         async move {
             let mut accessor = strategy
@@ -2756,7 +2759,7 @@ where
     /// Note that if the Strategy is of type BetaFilter, this function assumes
     /// but does not enforce that the label provider used in the strategy
     /// is the same as the one in the function argument
-    pub fn multihop_search<S, T, OB>(
+    pub fn multihop_search<S, T, O, OB>(
         &self,
         strategy: &S,
         context: &DP::Context,
@@ -2767,8 +2770,9 @@ where
     ) -> impl SendFuture<ANNResult<SearchStats>>
     where
         T: Sync + ?Sized,
-        S: SearchStrategy<DP, T>,
-        OB: search_output_buffer::SearchOutputBuffer<DP::InternalId> + Send,
+        S: SearchStrategy<DP, T, O>,
+        O: Send,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send,
     {
         async move {
             let mut accessor = strategy
@@ -3611,23 +3615,26 @@ where
     DP: DataProvider,
 {
     /// Create a diverse search scratch with DiverseNeighborQueue
-    fn create_diverse_scratch(
+    fn create_diverse_scratch<P>(
         &self,
         l_value: usize,
         beam_width: Option<usize>,
-        diverse_params: &DiverseSearchParams,
+        diverse_params: &DiverseSearchParams<P>,
         k_value: usize,
-    ) -> SearchScratch<DP::InternalId, crate::neighbor::DiverseNeighborQueue<DP::InternalId>> {
+    ) -> SearchScratch<DP::InternalId, crate::neighbor::DiverseNeighborQueue<P>>
+    where
+        P: crate::neighbor::AttributeValueProvider<Id = DP::InternalId>,
+    {
         use crate::neighbor::DiverseNeighborQueue;
 
-        let attr_provider = diverse_params.attr_provider.clone();
+        let attribute_provider = diverse_params.attribute_provider.clone();
         let diverse_queue = DiverseNeighborQueue::new(
             l_value,
             // SAFETY: k_value is guaranteed to be non-zero by SearchParams validation by caller
             #[allow(clippy::expect_used)]
             NonZeroUsize::new(k_value).expect("k_value must be non-zero"),
             diverse_params.diverse_results_k,
-            attr_provider,
+            attribute_provider,
         );
 
         SearchScratch {
@@ -3665,13 +3672,13 @@ where
     ///
     /// Returns an error if there is a failure accessing elements or if the provided parameters are invalid.
     #[allow(clippy::too_many_arguments)]
-    pub fn diverse_search_experimental<S, T, O, OB, SR>(
+    pub fn diverse_search_experimental<S, T, O, OB, SR, P>(
         &self,
         strategy: &S,
         context: &DP::Context,
         query: &T,
         search_params: &SearchParams,
-        diverse_params: &DiverseSearchParams,
+        diverse_params: &DiverseSearchParams<P>,
         output: &mut OB,
         search_record: &mut SR,
     ) -> impl SendFuture<ANNResult<SearchStats>>
@@ -3681,6 +3688,7 @@ where
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,
         SR: super::search::record::SearchRecord<DP::InternalId> + ?Sized,
+        P: crate::neighbor::AttributeValueProvider<Id = DP::InternalId>,
     {
         async move {
             let mut accessor = strategy

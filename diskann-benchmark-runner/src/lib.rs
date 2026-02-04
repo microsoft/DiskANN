@@ -26,6 +26,10 @@ pub use result::Checkpoint;
 #[cfg(any(test, feature = "test-app"))]
 pub mod test;
 
+#[cfg(any(test, feature = "ux-tools"))]
+#[doc(hidden)]
+pub mod ux;
+
 //-------//
 // Input //
 //-------//
@@ -40,7 +44,16 @@ pub trait Input {
 
     /// Attempt to deserialize an opaque object from the raw `serialized` representation.
     ///
-    /// Deserialized values can be constructed and returned via [`Checker::any`].
+    /// Deserialized values can be constructed and returned via [`Checker::any`],
+    /// [`Any::new`] or [`Any::raw`].
+    ///
+    /// If using the [`Any`] constructors directly, implementations should associate
+    /// [`Self::tag`] with the returned `Any`. If [`Checker::any`] is used - this will
+    /// happen automatically.
+    ///
+    /// Implementations are **strongly** encouraged to implement [`CheckDeserialization`]
+    /// and use this API to ensure shared resources (like input files or output files)
+    /// are correctly resolved and properly shared among all jobs in a benchmark run.
     fn try_deserialize(
         &self,
         serialized: &serde_json::Value,

@@ -330,7 +330,7 @@ where
         reranked
             .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         // Store the reranked results.
-        Ok(output.set_from(reranked.into_iter()))
+        Ok(output.extend(reranked))
     }
 }
 
@@ -1676,7 +1676,35 @@ mod disk_provider_tests {
     #[test]
     fn test_disk_search_diversity_search() {
         use diskann::graph::DiverseSearchParams;
-        use diskann::neighbor::PlaceholderAttributeValueProvider;
+        use diskann::neighbor::AttributeValueProvider;
+        use std::collections::HashMap;
+
+        // Simple test attribute provider
+        #[derive(Debug, Clone)]
+        struct TestAttributeProvider {
+            attributes: HashMap<u32, u32>,
+        }
+        impl TestAttributeProvider {
+            fn new() -> Self {
+                Self {
+                    attributes: HashMap::new(),
+                }
+            }
+            fn insert(&mut self, id: u32, attribute: u32) {
+                self.attributes.insert(id, attribute);
+            }
+        }
+        impl diskann::provider::HasId for TestAttributeProvider {
+            type Id = u32;
+        }
+
+        impl AttributeValueProvider for TestAttributeProvider {
+            type Value = u32;
+
+            fn get(&self, id: Self::Id) -> Option<Self::Value> {
+                self.attributes.get(&id).copied()
+            }
+        }
 
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
@@ -1695,13 +1723,15 @@ mod disk_provider_tests {
         let query_vector: [f32; 128] = [1f32; 128];
 
         // Create attribute provider with random labels (1 to 3) for all vectors
-        let mut attr_provider = PlaceholderAttributeValueProvider::new();
+        let mut attribute_provider = TestAttributeProvider::new();
         let num_vectors = 256; // Number of vectors in the test dataset
         for i in 0..num_vectors {
             // Assign labels 1-3 based on modulo to ensure distribution
-            let label = ((i % 15) + 1) as u32;
-            attr_provider.insert(i, label);
+            let label = (i % 15) + 1;
+            attribute_provider.insert(i, label);
         }
+        // Wrap in Arc once to avoid cloning the HashMap later
+        let attribute_provider = std::sync::Arc::new(attribute_provider);
 
         let mut indices = vec![0u32; 10];
         let mut distances = vec![0f32; 10];
@@ -1716,11 +1746,11 @@ mod disk_provider_tests {
         let mut search_record = VisitedSearchRecord::new(0);
 
         // Create diverse search parameters with attribute provider
-        let diverse_params = DiverseSearchParams {
-            diverse_attribute_id: 0,
-            diverse_results_k: 3,
-            attr_provider: attr_provider.clone(),
-        };
+        let diverse_params = DiverseSearchParams::new(
+            0, // diverse_attribute_id
+            3, // diverse_results_k
+            attribute_provider.clone(),
+        );
 
         let search_params = SearchParams::new(10, 20, None).unwrap();
 
@@ -1752,11 +1782,11 @@ mod disk_provider_tests {
         let return_list_size = 10;
         let search_list_size = 20;
         let diverse_results_k = 1;
-        let diverse_params = DiverseSearchParams {
-            diverse_attribute_id: 0,
+        let diverse_params = DiverseSearchParams::new(
+            0, // diverse_attribute_id
             diverse_results_k,
-            attr_provider: attr_provider.clone(),
-        };
+            attribute_provider.clone(),
+        );
 
         // Test diverse search using the experimental API
         let mut indices2 = vec![0u32; return_list_size as usize];
@@ -1810,10 +1840,10 @@ mod disk_provider_tests {
         println!("{:<10} {:<15} {:<10}", "Vertex ID", "Distance", "Label");
         println!("{}", "-".repeat(35));
         for i in 0..stats.result_count as usize {
-            let attr_value = attr_provider.get(indices2[i] as usize).unwrap_or(0);
+            let attribute_value = attribute_provider.get(indices2[i]).unwrap_or(0);
             println!(
                 "{:<10} {:<15.2} {:<10}",
-                indices2[i], distances2[i], attr_value
+                indices2[i], distances2[i], attribute_value
             );
         }
 
@@ -1829,8 +1859,8 @@ mod disk_provider_tests {
         // Verify diversity: Check that we have diverse attribute values in the results
         let mut attribute_counts = HashMap::new();
         for item in indices2.iter().take(stats.result_count as usize) {
-            if let Some(attr_value) = attr_provider.get(*item as usize) {
-                *attribute_counts.entry(attr_value).or_insert(0) += 1;
+            if let Some(attribute_value) = attribute_provider.get(*item) {
+                *attribute_counts.entry(attribute_value).or_insert(0) += 1;
             }
         }
 
@@ -1838,25 +1868,25 @@ mod disk_provider_tests {
         println!("\n=== Attribute Distribution ===");
         let mut sorted_attrs: Vec<_> = attribute_counts.iter().collect();
         sorted_attrs.sort_by_key(|(k, _)| *k);
-        for (attr_value, count) in &sorted_attrs {
+        for (attribute_value, count) in &sorted_attrs {
             println!(
                 "Label {}: {} occurrences (max allowed: {})",
-                attr_value, count, diverse_results_k
+                attribute_value, count, diverse_results_k
             );
         }
         println!("Total unique labels: {}", attribute_counts.len());
         println!("================================\n");
 
         // With diverse_results_k = 5, we expect at most 5 results per attribute value
-        for (attr_value, count) in &attribute_counts {
+        for (attribute_value, count) in &attribute_counts {
             println!(
                 "Assert: Label {} has {} occurrences (max: {})",
-                attr_value, count, diverse_results_k
+                attribute_value, count, diverse_results_k
             );
             assert!(
                 *count <= diverse_results_k,
                 "Attribute value {} appears {} times, which exceeds diverse_results_k of {}",
-                attr_value,
+                attribute_value,
                 count,
                 diverse_results_k
             );

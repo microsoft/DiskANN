@@ -84,7 +84,7 @@ impl<T> Deref for VectorGuard<T> {
 /// each vector starts on a cache-aligned boundary (64 byte aligned).
 /// To achieve this, vectors may not be densely packed into the underlying
 /// buffer.
-pub struct AlignedMemoryVectorStore<T: Copy + Clone + Default> {
+pub struct AlignedMemoryVectorStore<T: bytemuck::Pod> {
     store: UnsafeCell<Vec<T>>,
     max_vectors: usize,
     start_index: usize,
@@ -92,11 +92,13 @@ pub struct AlignedMemoryVectorStore<T: Copy + Clone + Default> {
     padded_vector_dim: usize,
 }
 
-unsafe impl<T: Copy + Clone + Default + Sync> Sync for AlignedMemoryVectorStore<T> {}
+// SAFETY: It's not really, but the `bytemuck::Pod` bound helps mitigate the fallout.
+unsafe impl<T: bytemuck::Pod + Sync> Sync for AlignedMemoryVectorStore<T> {}
 
-unsafe impl<T: Copy + Clone + Default + Send> Send for AlignedMemoryVectorStore<T> {}
+// SAFETY: It's not really, but the `bytemuck::Pod` bound helps mitigate the fallout.
+unsafe impl<T: bytemuck::Pod + Send> Send for AlignedMemoryVectorStore<T> {}
 
-impl<T: Copy + Clone + Default> AlignedMemoryVectorStore<T> {
+impl<T: bytemuck::Pod> AlignedMemoryVectorStore<T> {
     pub fn with_capacity(max_vectors: usize, dim: usize) -> Self {
         let elem_size = mem::size_of::<T>();
         assert!(64 % elem_size == 0);
@@ -119,7 +121,8 @@ impl<T: Copy + Clone + Default> AlignedMemoryVectorStore<T> {
         let last_elems: usize = 64 / elem_size - 1;
 
         let count = max_vectors * padded_vector_dim + last_elems;
-        let mut store: UnsafeCell<Vec<T>> = UnsafeCell::new(vec![T::default(); count]);
+        let mut store: UnsafeCell<Vec<T>> =
+            UnsafeCell::new(vec![<T as bytemuck::Zeroable>::zeroed(); count]);
 
         let start_index = store.get_mut().as_ptr().align_offset(64);
 

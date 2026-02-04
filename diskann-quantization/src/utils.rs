@@ -3,6 +3,8 @@
  * Licensed under the MIT license.
  */
 
+use std::ptr::NonNull;
+
 use thiserror::Error;
 
 use diskann_utils::views::MatrixView;
@@ -22,6 +24,18 @@ macro_rules! features {
 }
 
 pub(crate) use features;
+
+/// Return a `NonNull<T>` pointer to the first element of `slice`.
+pub(crate) fn as_nonnull<T>(slice: &[T]) -> NonNull<T> {
+    // SAFETY: Slices guarantee non-null pointers.
+    unsafe { NonNull::new_unchecked(slice.as_ptr().cast_mut()) }
+}
+
+/// Return a `NonNull<T>` pointer to the first element of `slice`.
+pub(crate) fn as_nonnull_mut<T>(slice: &mut [T]) -> NonNull<T> {
+    // SAFETY: Slices guarantee non-null pointers.
+    unsafe { NonNull::new_unchecked(slice.as_mut_ptr()) }
+}
 
 /// Perform the computation `ceil(x / y)` where `x`, `y`, and the returned value are all
 /// integers.
