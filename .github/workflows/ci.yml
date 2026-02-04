@@ -73,6 +73,22 @@ jobs:
       - name: "clippy --workspace --all-targets"
         run: cargo clippy --workspace --all-targets --no-deps
 
+  # TODO: Re-enable docs check later
+  # docs:
+  #   name: docs
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install Rust ${{ env.rust_stable }}
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         toolchain: ${{ env.rust_stable }}
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: "doc --workspace --no-deps"
+  #       run: cargo doc --workspace --no-deps --document-private-items
+  #       env:
+  #         RUSTDOCFLAGS: -Dwarnings
+
   # This is a quick test to ensure that micro-architecture detection and dispatching works.
   #
   # The crate `diskann-wide` is the primary driver for this mechanism.
@@ -104,7 +120,7 @@ jobs:
     name: qemu-tests
     runs-on: ubuntu-latest
     env:
-      RUSTFLAGS="-Dwarnings -Ctarget-cpu=x86-64"
+      RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
 
     steps:
       - uses: actions/checkout@v4
@@ -120,22 +136,6 @@ jobs:
           set -euxo pipefail
           cargo test --package diskann-wide --locked
           find ./target/**/deps | grep -e "dispatch-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
-
-  # TODO: Re-enable docs check later
-  # docs:
-  #   name: docs
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Install Rust ${{ env.rust_stable }}
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: ${{ env.rust_stable }}
-  #     - uses: Swatinem/rust-cache@v2
-  #     - name: "doc --workspace --no-deps"
-  #       run: cargo doc --workspace --no-deps --document-private-items
-  #       env:
-  #         RUSTDOCFLAGS: -Dwarnings
 
   test-workspace:
     needs: basics
