@@ -119,18 +119,21 @@ jobs:
     needs: basics
     name: qemu-tests
     runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
+    # env:
+    #   RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
 
     steps:
       - uses: actions/checkout@v4
+
       - name: Install Rust ${{ env.rust_stable }}
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
+
       - name: Install QEMU user-mode
         run: sudo apt-get update && sudo apt-get install -y qemu-user
+
       - name: "QEMU Tests"
         run: |
           set -euxo pipefail
