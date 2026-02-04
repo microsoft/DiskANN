@@ -16,7 +16,7 @@ concurrency:
 env:
   # Pass additional arguments to cargo using `--config build.rustflags=["...", "..."]`.
   #
-  # This ensures that we do not overwrite the parameters in `.config/cargo.toml` unnecessarily.
+  # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   # Use the Rust version specified in rust-toolchain.toml
