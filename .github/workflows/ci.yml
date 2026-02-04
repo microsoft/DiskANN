@@ -17,7 +17,7 @@ env:
   RUSTFLAGS: -Dwarnings
   RUST_BACKTRACE: 1
   # Use the Rust version specified in rust-toolchain.toml
-  rust_stable: "1.90"
+  rust_stable: "1.92"
 
 defaults:
   run:
