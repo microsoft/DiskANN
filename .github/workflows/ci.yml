@@ -129,7 +129,7 @@ jobs:
         with:
           toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
-      - uses: docker-setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v3
         name: Set up QEMU
       - name: "QEMU Tests"
         run: |
