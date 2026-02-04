@@ -14,7 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUSTFLAGS: -Dwarnings
+  # RUSTFLAGS: -Dwarnings
+  RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   # Use the Rust version specified in rust-toolchain.toml
   rust_stable: "1.90"
@@ -71,7 +72,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Run clippy on workspace
       - name: "clippy --workspace --all-targets"
-        run: cargo clippy --workspace --all-targets --no-deps
+        run: cargo clippy --workspace --all-targets --no-deps --config "$RUST_CONFIG"
 
   # TODO: Re-enable docs check later
   # docs:
@@ -119,8 +120,8 @@ jobs:
     needs: basics
     name: qemu-tests
     runs-on: ubuntu-latest
-    # env:
-    #   RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
+    env:
+      RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
 
     steps:
       - uses: actions/checkout@v4
@@ -170,8 +171,8 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --workspace --cargo-profile ci
-          cargo test --doc --workspace --profile ci
+          cargo nextest run --workspace --cargo-profile ci --config "$RUST_CONFIG"
+          cargo test --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   test-workspace-features:
     needs: basics
@@ -203,11 +204,13 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --workspace --cargo-profile ci \
+          cargo nextest run --workspace \
+            --cargo-profile ci \
+            --config "$RUST_CONFIG" \
             --features \
               virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search
 
-          cargo test --doc --workspace --profile ci
+          cargo test --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   coverage:
     needs: basics
@@ -240,6 +243,7 @@ jobs:
       - name: Generate code coverage
         run: |
           cargo llvm-cov nextest --cargo-profile ci \
+            --config "$RUST_CONFIG" \
             --workspace \
             --lcov --output-path lcov.info
 
