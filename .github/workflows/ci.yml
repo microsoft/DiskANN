@@ -143,7 +143,7 @@ jobs:
         run: |
           set -euxo pipefail
           cargo test --package diskann-wide --locked
-          find ./target/**/deps | grep -e "dispatch-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
+          find ./target -type f -path "*/deps/dispatch-[a-f0-9]*" | xargs -n1 qemu-x86_64 -cpu Nehalem
 
   test-workspace:
     needs: basics
