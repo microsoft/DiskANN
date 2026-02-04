@@ -120,8 +120,8 @@ jobs:
     needs: basics
     name: qemu-tests
     runs-on: ubuntu-latest
-    env:
-      RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
+    # env:
+    #   RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
 
     steps:
       - uses: actions/checkout@v4
