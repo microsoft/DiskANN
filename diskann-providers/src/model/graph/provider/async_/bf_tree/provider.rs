@@ -1779,10 +1779,17 @@ where
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+pub struct BfTreeParams {
+    pub bytes: usize,
+    pub max_record_size: usize,
+    pub leaf_page_size: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct QuantParams {
     pub num_pq_bytes: usize,
     pub max_fp_vecs_per_fill: usize,
-    pub bytes_quant: usize,
+    pub params_quant: BfTreeParams,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1793,8 +1800,8 @@ pub struct SavedParams {
     pub metric: String,
     pub max_degree: u32,
     pub prefix: String,
-    pub bytes_vector: usize,
-    pub bytes_neighbor: usize,
+    pub params_vector: BfTreeParams,
+    pub params_neighbor: BfTreeParams,
     pub quant_params: Option<QuantParams>,
 }
 
@@ -1903,11 +1910,15 @@ where
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
         let vector_path = BfTreePaths::vectors_bftree(&saved_params.prefix);
-        let mut vector_config = Config::new(&vector_path, saved_params.bytes_vector);
+        let mut vector_config = Config::new(&vector_path, saved_params.params_vector.bytes);
+        vector_config.cb_max_record_size(saved_params.params_vector.max_record_size);
+        vector_config.leaf_page_size(saved_params.params_vector.leaf_page_size);
         vector_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let neighbor_path = BfTreePaths::neighbors_bftree(&saved_params.prefix);
-        let mut neighbor_config = Config::new(&neighbor_path, saved_params.bytes_neighbor);
+        let mut neighbor_config = Config::new(&neighbor_path, saved_params.params_neighbor.bytes);
+        neighbor_config.cb_max_record_size(saved_params.params_neighbor.max_record_size);
+        neighbor_config.leaf_page_size(saved_params.params_neighbor.leaf_page_size);
         neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let vector_index =
@@ -2036,15 +2047,21 @@ where
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
         let vector_path = BfTreePaths::vectors_bftree(&saved_params.prefix);
-        let mut vector_config = Config::new(&vector_path, saved_params.bytes_vector);
+        let mut vector_config = Config::new(&vector_path, saved_params.params_vector.bytes);
+        vector_config.cb_max_record_size(saved_params.params_vector.max_record_size);
+        vector_config.leaf_page_size(saved_params.params_vector.leaf_page_size);
         vector_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let neighbor_path = BfTreePaths::neighbors_bftree(&saved_params.prefix);
-        let mut neighbor_config = Config::new(&neighbor_path, saved_params.bytes_neighbor);
+        let mut neighbor_config = Config::new(&neighbor_path, saved_params.params_neighbor.bytes);
+        neighbor_config.cb_max_record_size(saved_params.params_neighbor.max_record_size);
+        neighbor_config.leaf_page_size(saved_params.params_neighbor.leaf_page_size);
         neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let quant_path = BfTreePaths::quant_bftree(&saved_params.prefix);
-        let mut quant_config = Config::new(&quant_path, quant_params.bytes_quant);
+        let mut quant_config = Config::new(&quant_path, quant_params.params_quant.bytes);
+        quant_config.cb_max_record_size(quant_params.params_quant.max_record_size);
+        quant_config.leaf_page_size(quant_params.params_quant.leaf_page_size);
         quant_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let vector_index =
@@ -2333,6 +2350,8 @@ mod tests {
 
         let bytes_vector = 1024 * 1024;
         let mut vector_config = Config::new(&vector_path, bytes_vector);
+        vector_config.leaf_page_size(8192);
+        vector_config.cb_max_record_size(1024);
         vector_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let bytes_neighbor = 1024 * 1024;
@@ -2391,6 +2410,9 @@ mod tests {
             );
         }
 
+        assert_eq!(vector_config.get_leaf_page_size(), 8192);
+        assert_eq!(vector_config.get_cb_max_record_size(), 1024);
+
         let storage = FileStorageProvider;
 
         let metric_str = params.metric.as_str();
@@ -2401,8 +2423,16 @@ mod tests {
             metric: metric_str.to_string(),
             max_degree: params.max_degree,
             prefix: prefix.clone(),
-            bytes_vector,
-            bytes_neighbor,
+            params_vector: BfTreeParams {
+                bytes: bytes_vector,
+                leaf_page_size: vector_config.get_leaf_page_size(),
+                max_record_size: vector_config.get_cb_max_record_size(),
+            },
+            params_neighbor: BfTreeParams {
+                bytes: bytes_neighbor,
+                leaf_page_size: neighbor_config.get_leaf_page_size(),
+                max_record_size: neighbor_config.get_cb_max_record_size(),
+            },
             quant_params: None,
         };
 
@@ -2584,12 +2614,24 @@ mod tests {
             metric: metric_str.to_string(),
             max_degree: params.max_degree,
             prefix: prefix.clone(),
-            bytes_vector,
-            bytes_neighbor,
+            params_vector: BfTreeParams {
+                bytes: bytes_vector,
+                leaf_page_size: vector_config.get_leaf_page_size(),
+                max_record_size: vector_config.get_cb_max_record_size(),
+            },
+            params_neighbor: BfTreeParams {
+                bytes: bytes_neighbor,
+                leaf_page_size: neighbor_config.get_leaf_page_size(),
+                max_record_size: neighbor_config.get_cb_max_record_size(),
+            },
             quant_params: Some(QuantParams {
                 num_pq_bytes,
                 max_fp_vecs_per_fill: params.max_fp_vecs_per_fill.unwrap_or(0),
-                bytes_quant,
+                params_quant: BfTreeParams {
+                    bytes: bytes_quant,
+                    leaf_page_size: quant_config.get_leaf_page_size(),
+                    max_record_size: quant_config.get_cb_max_record_size(),
+                },
             }),
         };
 
