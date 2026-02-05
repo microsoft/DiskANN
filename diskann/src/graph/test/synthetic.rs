@@ -252,6 +252,23 @@ impl Grid {
         lists
     }
 
+    /// Return the graph start point for a grid of the given size.
+    ///
+    /// This returns a vector of length `self.dim()` populated with `size as f32`.
+    pub fn start_point(self, size: usize) -> Vec<f32> {
+        Self::start_point_as(self, size, |i: usize| i as f32)
+    }
+
+    /// Return the graph start point for a grid of the given size.
+    ///
+    /// This returns a vector of length `self.dim()` populated with repeated calls to `f(size)`.
+    pub fn start_point_as<F, R>(self, size: usize, mut f: F) -> Vec<R>
+    where
+        F: FnMut(usize) -> R,
+    {
+        (0..self.dim()).map(|_| f(size)).collect()
+    }
+
     /// Return the number of dimensions in the grid.
     pub fn dim(self) -> u8 {
         match self {
@@ -261,14 +278,17 @@ impl Grid {
         }
     }
 
-    #[cfg(test)]
+    /// Return the number of points in a grid with the given edge size.
+    pub fn num_points(self, size: usize) -> usize {
+        size.pow(self.dim().into())
+    }
+
     #[inline(never)]
     pub(super) fn setup(self, size: usize, start_id: u32) -> Setup {
-        let dim = self.dim();
-        let num_points = size.pow(dim.into());
+        let num_points = self.num_points(size);
 
         Setup {
-            start_point: vec![size as f32; dim.into()],
+            start_point: self.start_point(size),
             start_id,
             start_neighbors: AdjacencyList::from_iter_unique(std::iter::once(
                 num_points as u32 - 1,
@@ -303,7 +323,6 @@ fn increment<const N: usize>(array: &mut [usize; N], modulo: usize) {
     }
 }
 
-#[cfg(test)]
 #[derive(Debug)]
 pub(super) struct Setup {
     start_point: Vec<f32>,
@@ -314,7 +333,6 @@ pub(super) struct Setup {
     neighbors: Vec<AdjacencyList<u32>>,
 }
 
-#[cfg(test)]
 impl Setup {
     pub(super) fn start_point(&self) -> Vec<f32> {
         self.start_point.clone()
@@ -329,11 +347,15 @@ impl Setup {
     }
 
     pub(super) fn setup(&self) -> impl Iterator<Item = (u32, Vec<f32>, AdjacencyList<u32>)> {
+        let mut i = 0u32;
         self.data
             .row_iter()
             .zip(self.neighbors.iter())
-            .enumerate()
-            .map(|(i, (data, neighbors))| (i.try_into().unwrap(), data.into(), neighbors.clone()))
+            .map(move |(data, neighbors)| {
+                let id = i;
+                i = i.wrapping_add(1);
+                (id, data.into(), neighbors.clone())
+            })
     }
 }
 

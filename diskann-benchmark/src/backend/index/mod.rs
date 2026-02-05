@@ -3,13 +3,12 @@
  * Licensed under the MIT license.
  */
 
-mod benchmarks;
 mod build;
-mod multihop_filtered_search;
-mod range_search;
-mod result;
 mod search;
-mod update;
+mod streaming;
+
+mod benchmarks;
+mod result;
 
 // Feature based backends.
 mod product;

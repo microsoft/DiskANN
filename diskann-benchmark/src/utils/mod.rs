@@ -153,6 +153,23 @@ macro_rules! stub_impl {
 
 pub(crate) use stub_impl;
 
+/////////////////
+// SmallBanner //
+/////////////////
+
+pub(crate) struct SmallBanner<'a>(pub(crate) &'a str);
+
+impl std::fmt::Display for SmallBanner<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let st = format!("| {} |", self.0);
+        let len = st.len() - 2;
+        writeln!(f, "+{:->len$}+", "")?;
+        writeln!(f, "{}", st)?;
+        writeln!(f, "+{:->len$}+", "")?;
+        Ok(())
+    }
+}
+
 ///////////
 // Tests //
 ///////////

@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `view` as immutable because it is also borrowed as mutable
+  --> tests/compile-fail/multi/matmut_rows_mut.rs:15:13
+   |
+13 |     let iter = view.rows_mut();
+   |                ---- mutable borrow occurs here
+14 |     // This should fail: we cannot use `view` while the mutable iterator is alive
+15 |     let _ = view.num_vectors();
+   |             ^^^^ immutable borrow occurs here
+16 |     for row in iter {
+   |                ---- mutable borrow later used here

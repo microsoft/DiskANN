@@ -270,10 +270,9 @@ mod tests {
     use std::{
         ffi::OsString,
         path::{Path, PathBuf},
-        sync::LazyLock,
     };
 
-    use crate::registry;
+    use crate::{registry, ux};
 
     const ENV: &str = "POCKETBENCH_TEST";
 
@@ -283,21 +282,10 @@ mod tests {
     const INPUT_FILE: &str = "input.json";
     const OUTPUT_FILE: &str = "output.json";
 
-    // Normalize a string for comparison.
-    //
-    // Steps taken:
-    //
-    // 1. All leading trailing whitespace is removed.
-    // 2. Windows line-endings `\n\r` are replaced with `\n`.
-    fn normalize(s: String) -> String {
-        let trimmed = s.trim().to_string();
-        trimmed.replace("\r\n", "\n")
-    }
-
     // Read the entire contents of a file to a string.
     fn read_to_string<P: AsRef<Path>>(path: P, ctx: &str) -> String {
         match std::fs::read_to_string(path.as_ref()) {
-            Ok(s) => normalize(s),
+            Ok(s) => ux::normalize(s),
             Err(err) => panic!(
                 "failed to read {} {:?} with error: {}",
                 ctx,
@@ -327,57 +315,6 @@ mod tests {
             Err(std::env::VarError::NotUnicode(_)) => {
                 panic!("Value for {} is not unicode", ENV);
             }
-        }
-    }
-
-    // There does not appear to be a supported was of checking whether backtraces are
-    // enabled without first actually capturing a backtrace.
-    static BACKTRACE_ENABLED: LazyLock<bool> = LazyLock::new(|| {
-        use std::backtrace::{Backtrace, BacktraceStatus};
-        Backtrace::capture().status() == BacktraceStatus::Captured
-    });
-
-    // Strip the backtrace from `stdout` if running with backtraces enabled.
-    fn strip_backtrace(s: String) -> String {
-        println!("pre = {}", s);
-        if !*BACKTRACE_ENABLED {
-            return s;
-        }
-
-        // Split into lines until we see `Stack backtrace`, then drop the empty
-        //
-        // Prints with stack traces will looks something like
-        // ```
-        // while processing input 2 of 2
-        //
-        // Caused by:
-        //     unknown variant `f32`, expected one of `float64`, `float32`, <snip>
-        //
-        // Stack backtrace:
-        //    0:
-        // ```
-        // This works by splitting the output into lines - looking for the keyword
-        // `Stack backtrace` and taking all lines up to that point.
-        let mut stacktrace_found = false;
-        let lines: Vec<_> = s
-            .lines()
-            .take_while(|l| {
-                stacktrace_found = *l == "Stack backtrace:";
-                !stacktrace_found
-            })
-            .collect();
-
-        if lines.is_empty() {
-            String::new()
-        } else if stacktrace_found {
-            // When `anyhow` inserts a backtrace - it separates the body of the error from
-            // the stack trace with a newline. This strips that newline.
-            //
-            // Indexing is okay because we've already handled the empty case.
-            lines[..lines.len() - 1].join("\n")
-        } else {
-            // No stacktrace found - do not strip a trailing empty line.
-            lines.join("\n")
         }
     }
 
@@ -443,7 +380,7 @@ mod tests {
 
             // Check that `stdout` matches
             let stdout: String =
-                normalize(strip_backtrace(buffer.into_inner().try_into().unwrap()));
+                ux::normalize(ux::strip_backtrace(buffer.into_inner().try_into().unwrap()));
             let output = self.dir.join(STDOUT);
             if self.overwrite {
                 std::fs::write(output, stdout).unwrap();

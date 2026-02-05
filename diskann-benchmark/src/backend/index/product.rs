@@ -52,11 +52,9 @@ mod imp {
 
     use crate::{
         backend::index::{
-            benchmarks::{
-                run_build, run_search_outer, single_or_multi_insert, BuildAndSearch, FullPrecision,
-            },
-            build::{self, load_index, save_index},
-            result::{BuildStats, QuantBuildResult},
+            benchmarks::{run_build, run_search_outer, BuildAndSearch, FullPrecision},
+            build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
+            result::QuantBuildResult,
         },
         inputs::async_::{IndexOperation, IndexPQOperation, IndexSource},
         utils::{self, datafiles},

@@ -97,27 +97,23 @@ pub(crate) fn generate_bitmaps(
     Ok(bit_maps)
 }
 
-pub(crate) fn setup_filter_strategies<S>(
+pub(crate) fn setup_filter_strategies<I, S>(
     beta: f32,
-    bit_maps: Vec<BitSet>,
+    bit_maps: I,
     search_strategy: S,
-) -> anyhow::Result<Arc<Vec<BetaFilter<S, u32>>>>
+) -> Vec<BetaFilter<S, u32>>
 where
+    I: IntoIterator<Item = Arc<dyn QueryLabelProvider<u32>>>,
     S: Clone,
 {
-    let search_strategies = Arc::new(
-        bit_maps
-            .into_iter()
-            .map(|bit_map| {
-                BetaFilter::<S, u32>::new(
-                    search_strategy.clone(),
-                    std::sync::Arc::new(BitmapFilter(bit_map)),
-                    beta,
-                )
-            })
-            .collect::<Vec<_>>(),
-    );
-    Ok(search_strategies)
+    bit_maps
+        .into_iter()
+        .map(|bit_map| BetaFilter::<S, u32>::new(search_strategy.clone(), bit_map, beta))
+        .collect::<Vec<_>>()
+}
+
+pub(crate) fn as_query_label_provider(set: BitSet) -> Arc<dyn QueryLabelProvider<u32>> {
+    Arc::new(BitmapFilter(set))
 }
 
 #[cfg(test)]

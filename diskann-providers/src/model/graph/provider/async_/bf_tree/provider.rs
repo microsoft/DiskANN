@@ -19,7 +19,7 @@ use bf_tree::{BfTree, Config};
 use diskann::{
     ANNError, ANNResult,
     graph::{
-        self, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
+        AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
             self, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
             SearchExt, SearchStrategy,
@@ -33,7 +33,7 @@ use diskann::{
     },
     utils::{IntoUsize, VectorRepr},
 };
-use diskann_utils::future::AsyncFriendly;
+use diskann_utils::{future::AsyncFriendly, views::MatrixView};
 use diskann_vector::{DistanceFunction, distance::Metric};
 
 use crate::model::{
@@ -125,11 +125,11 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 /// };
 /// use diskann_vector::distance::Metric;
 /// use bf_tree::Config;
-/// use std::num::NonZero;
+/// use std::num::NonZeroUsize;
 ///
 /// let parameters = BfTreeProviderParameters {
 ///     max_points: 5,
-///     frozen_points: NonZero::new(1).unwrap(),
+///     num_start_points: NonZeroUsize::new(1).unwrap(),
 ///     dim: 4,
 ///     metric: Metric::L2,
 ///     max_fp_vecs_per_fill: None,
@@ -139,7 +139,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     neighbor_list_provider_config: Config::default(),
 /// };
 ///
-/// // Create a table that supports 5 points and 1 "frozen" point.
+/// // Create a table that supports 5 points and 1 start point.
 /// let provider = BfTreeProvider::<f32, _>::new_empty(
 ///     parameters,
 ///     NoStore,
@@ -164,7 +164,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 /// };
 /// use diskann_vector::distance::Metric;
 /// use bf_tree::Config;
-/// use std::num::NonZero;
+/// use std::num::NonZeroUsize;
 ///
 /// // An example PQ table.
 /// let dim = 4;
@@ -178,7 +178,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///
 /// let parameters = BfTreeProviderParameters {
 ///     max_points: 5,
-///     frozen_points: NonZero::new(1).unwrap(),
+///     num_start_points: NonZeroUsize::new(1).unwrap(),
 ///     dim: 4,
 ///     metric: Metric::L2,
 ///     max_fp_vecs_per_fill: None,
@@ -188,7 +188,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     neighbor_list_provider_config: Config::default(),
 /// };
 ///
-/// // Create a table that supports 5 points and 1 "frozen" point.
+/// // Create a table that supports 5 points and 1 start point.
 /// let provider = BfTreeProvider::<f32>::new_empty(
 ///     parameters,
 ///     table,
@@ -212,7 +212,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 /// };
 /// use diskann_vector::distance::Metric;
 /// use bf_tree::Config;
-/// use std::num::NonZero;
+/// use std::num::NonZeroUsize;
 ///
 /// // An example PQ table.
 /// let dim = 4;
@@ -226,7 +226,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///
 /// let parameters = BfTreeProviderParameters {
 ///     max_points: 5,
-///     frozen_points: NonZero::new(1).unwrap(),
+///     num_start_points: NonZeroUsize::new(1).unwrap(),
 ///     dim: 4,
 ///     metric: Metric::L2,
 ///     max_fp_vecs_per_fill: None,
@@ -236,7 +236,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     neighbor_list_provider_config: Config::default(),
 /// };
 ///
-/// // Create a table that supports 5 points and 1 "frozen" point.
+/// // Create a table that supports 5 points and 1 start point.
 /// let provider = BfTreeProvider::<f32, _, _>::new_empty(
 ///     parameters,
 ///     table,
@@ -278,9 +278,8 @@ pub struct BfTreeProviderParameters {
     // The maximum number of valid points that provider can hold.
     pub max_points: usize,
 
-    // The number of frozen-points (start points) to store. The two level provider
-    // stores these points starting at the linear index just after `max_points`
-    pub frozen_points: NonZeroUsize,
+    // The number of start points (frozen points) for graph search entry.
+    pub num_start_points: NonZeroUsize,
 
     // The dimension of the full-precision vectors.
     pub dim: usize,
@@ -308,50 +307,6 @@ pub struct BfTreeProviderParameters {
 pub type Index<T, D = NoDeletes> = Arc<DiskANNIndex<BfTreeProvider<T, NoStore, D>>>;
 pub type QuantIndex<T, Q, D = NoDeletes> = Arc<DiskANNIndex<BfTreeProvider<T, Q, D>>>;
 
-pub fn new_index<T, D>(
-    index_config: graph::Config,
-    bf_tree_config: BfTreeProviderParameters,
-    deleter: D,
-) -> ANNResult<Index<T, D::Target>>
-where
-    T: VectorRepr,
-    D: CreateDeleteProvider,
-    D::Target: Send + Sync + 'static,
-{
-    let data = BfTreeProvider::new_empty(bf_tree_config.clone(), NoStore, deleter);
-
-    {
-        // Initialize all neighborhoods to be empty lists.
-        // This is a temporary solution to the problem of trying to access
-        // an uninitialized neighbor list in functions `consolidate_deletes` and
-        // `consolidate_simple` and getting an error. This is a stop-gap solution
-        // until BF-tree API is improved to handle `exists` queries.
-        for i in 0..bf_tree_config.max_points {
-            let vector_id = i as u32;
-            data.neighbor_provider.set_neighbors(vector_id, &[])?;
-        }
-    }
-
-    Ok(Arc::new(DiskANNIndex::new(index_config, data, None)))
-}
-
-pub fn new_quant_index<T, Q, D>(
-    index_config: graph::Config,
-    bf_tree_config: BfTreeProviderParameters,
-    quant: Q,
-    deleter: D,
-) -> ANNResult<QuantIndex<T, Q::Target, D::Target>>
-where
-    T: VectorRepr,
-    Q: CreateQuantProvider,
-    Q::Target: Send + Sync + 'static,
-    D: CreateDeleteProvider,
-    D::Target: Send + Sync + 'static,
-{
-    let data = BfTreeProvider::new_empty(bf_tree_config, quant, deleter);
-    Ok(Arc::new(DiskANNIndex::new(index_config, data, None)))
-}
-
 impl<T, Q, D> BfTreeProvider<T, Q, D>
 where
     T: VectorRepr,
@@ -363,38 +318,91 @@ where
     ///   configuration information.
     /// * `quant_precursor`: A precursor type for the quantizer layer.
     /// * `delete_precursor`: A precursor type for the delete layer.
-    /// * `neighbor_precursor`: A precursor type f
+    /// * `neighbor_precursor`: A precursor type for the neighbor layer.
     ///   or the neighbor layer
     pub fn new_empty<TQ, TD>(
         params: BfTreeProviderParameters,
         quant_precursor: TQ,
         delete_precursor: TD,
-    ) -> Self
+    ) -> ANNResult<Self>
     where
         TQ: CreateQuantProvider<Target = Q>,
         TD: CreateDeleteProvider<Target = D>,
     {
-        Self {
+        let num_start_points = params.num_start_points.get();
+
+        Ok(Self {
             quant_vectors: quant_precursor.create(
                 params.max_points,
-                params.frozen_points.get(),
+                num_start_points,
                 params.metric,
                 params.quant_vector_provider_config,
-            ),
+            )?,
             full_vectors: VectorProvider::new_with_config(
                 params.max_points,
                 params.dim,
-                params.frozen_points.get(),
+                num_start_points,
                 params.vector_provider_config,
-            ),
+            )?,
             neighbor_provider: NeighborProvider::new_with_config(
                 params.max_degree,
                 params.neighbor_list_provider_config,
-            ),
-            deleted: delete_precursor.create(params.max_points + params.frozen_points.get()),
+            )?,
+            deleted: delete_precursor.create(params.max_points + num_start_points),
             max_fp_vecs_per_fill: params.max_fp_vecs_per_fill.unwrap_or(usize::MAX),
             metric: params.metric,
+        })
+    }
+
+    /// Construct a new data provider with start points initialized.
+    ///
+    /// This is the primary constructor for `BfTreeProvider`. It creates the provider
+    /// and sets the start points in one operation.
+    ///
+    /// # Arguments
+    /// * `params`: An instance of [`BfTreeProviderParameters`] collecting shared
+    ///   configuration information.
+    /// * `start_points`: A matrix view containing the start point vectors. The number
+    ///   of rows must match `params.num_start_points.get()`.
+    /// * `quant_precursor`: A precursor type for the quantizer layer.
+    /// * `delete_precursor`: A precursor type for the delete layer.
+    ///
+    /// # Type Constraints
+    /// * `Self: StartPoint<T>` - The provider must implement the `StartPoint` trait.
+    pub fn new<TQ, TD>(
+        params: BfTreeProviderParameters,
+        start_points: MatrixView<'_, T>,
+        quant_precursor: TQ,
+        delete_precursor: TD,
+    ) -> ANNResult<Self>
+    where
+        Self: StartPoint<T>,
+        TQ: CreateQuantProvider<Target = Q>,
+        TD: CreateDeleteProvider<Target = D>,
+    {
+        // Early validation before allocating resources
+        if start_points.nrows() != params.num_start_points.get() {
+            return Err(ANNError::log_async_index_error(format!(
+                "start_points matrix has {} rows, but params.num_start_points is {}",
+                start_points.nrows(),
+                params.num_start_points.get(),
+            )));
         }
+
+        let provider = Self::new_empty(params.clone(), quant_precursor, delete_precursor)?;
+        provider.set_start_points(Hidden(()), start_points)?;
+        {
+            // Initialize all neighborhoods to be empty lists.
+            // This is a temporary solution to the problem of trying to access
+            // an uninitialized neighbor list in functions `consolidate_deletes` and
+            // `consolidate_simple` and getting an error. This is a stop-gap solution
+            // until BF-tree API is improved to handle `exists` queries.
+            for i in 0..params.max_points {
+                let vector_id = i as u32;
+                provider.neighbor_provider.set_neighbors(vector_id, &[])?;
+            }
+        }
+        Ok(provider)
     }
 
     // /// Return a predicate that can be applied to `Iter::filter` to remove start points
@@ -510,7 +518,7 @@ pub trait CreateQuantProvider {
         frozen_points: usize,
         metric: Metric,
         bf_tree_config: Config,
-    ) -> Self::Target;
+    ) -> ANNResult<Self::Target>;
 }
 
 impl CreateQuantProvider for NoStore {
@@ -521,8 +529,8 @@ impl CreateQuantProvider for NoStore {
         _frozen_points: usize,
         _metric: Metric,
         _bf_tree_config: Config,
-    ) -> Self::Target {
-        self
+    ) -> ANNResult<Self::Target> {
+        Ok(self)
     }
 }
 
@@ -536,7 +544,7 @@ impl CreateQuantProvider for FixedChunkPQTable {
         frozen_points: usize,
         metric: Metric,
         bf_tree_config: Config,
-    ) -> Self::Target {
+    ) -> ANNResult<Self::Target> {
         QuantVectorProvider::new_with_config(
             metric,
             max_points,
@@ -792,6 +800,96 @@ where
         // Success
         //
         std::future::ready(Ok(NoopGuard::new(*id)))
+    }
+}
+
+//////////////////////
+// StartPoint Trait //
+//////////////////////
+
+/// A struct with a private member that cannot be constructed outside of this module.
+///
+/// This is used to prevent users from calling internal methods directly.
+pub struct Hidden(());
+
+/// A trait for setting the start points of a BfTreeProvider.
+///
+/// This trait is implemented by `BfTreeProvider` variants that support setting start points.
+/// The `Hidden` parameter ensures that users cannot call `set_start_points` directly;
+/// they must go through the `BfTreeProvider::new` constructor which handles this internally.
+pub trait StartPoint<T> {
+    /// Set the start points of the provider.
+    ///
+    /// # Safety
+    /// This method is internal and should not be called directly by users.
+    /// Use `BfTreeProvider::new` instead.
+    #[doc(hidden)]
+    fn set_start_points(&self, hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()>;
+}
+
+////////////////////
+// SetStartPoints //
+////////////////////
+
+/// Set start points for the BfTreeProvider with quantization.
+///
+/// This implementation sets both the full-precision and quantized vectors for each
+/// start point, as well as initializing empty neighbor lists.
+impl<T, D> StartPoint<T> for BfTreeProvider<T, QuantVectorProvider, D>
+where
+    T: VectorRepr,
+    D: AsyncFriendly,
+{
+    fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
+        let start_point_ids = self.full_vectors.starting_points()?;
+        if start_points.nrows() != start_point_ids.len() {
+            return Err(ANNError::log_async_index_error(format!(
+                "expected start_points to contain `{}` rows, instead it has {}",
+                start_point_ids.len(),
+                start_points.nrows(),
+            )));
+        }
+
+        for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
+            // Set the full-precision vector
+            self.full_vectors.set_vector_sync(id.into_usize(), v)?;
+            // Set the quantized vector
+            self.quant_vectors.set_vector_sync(id.into_usize(), v)?;
+            // Initialize empty neighbor list
+            self.neighbor_provider.set_neighbors(id, &[])?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Set start points for the BfTreeProvider without quantization.
+///
+/// This implementation sets the full-precision vectors for each start point
+/// and initializes empty neighbor lists.
+impl<T, D> StartPoint<T> for BfTreeProvider<T, NoStore, D>
+where
+    T: VectorRepr,
+    D: AsyncFriendly,
+{
+    fn set_start_points(&self, _hidden: Hidden, start_points: MatrixView<'_, T>) -> ANNResult<()> {
+        let start_point_ids = self.full_vectors.starting_points()?;
+        if start_points.nrows() != start_point_ids.len() {
+            return Err(ANNError::log_async_index_error(format!(
+                "expected start_points to contain `{}` rows, instead it has {}",
+                start_point_ids.len(),
+                start_points.nrows(),
+            )));
+        }
+
+        for (id, v) in std::iter::zip(start_point_ids, start_points.row_iter()) {
+            // Set the full-precision vector
+            self.full_vectors.set_vector_sync(id.into_usize(), v)?;
+            // Initialize empty neighbor list
+            self.neighbor_provider.set_neighbors(id, &[])?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1455,7 +1553,7 @@ where
         reranked
             .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         // Store the reranked results.
-        std::future::ready(Ok(output.set_from(reranked.into_iter())))
+        std::future::ready(Ok(output.extend(reranked)))
     }
 }
 
@@ -1812,7 +1910,8 @@ where
         let mut neighbor_config = Config::new(&neighbor_path, saved_params.bytes_neighbor);
         neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
 
-        let vector_index = BfTree::new_from_snapshot(vector_config.clone(), None);
+        let vector_index =
+            BfTree::new_from_snapshot(vector_config.clone(), None).map_err(super::ConfigError)?;
         let full_vectors = VectorProvider::<T>::new_from_bftree(
             saved_params.max_points,
             saved_params.dim,
@@ -1820,7 +1919,8 @@ where
             vector_index,
         );
 
-        let adjacency_list_index = BfTree::new_from_snapshot(neighbor_config.clone(), None);
+        let adjacency_list_index =
+            BfTree::new_from_snapshot(neighbor_config.clone(), None).map_err(super::ConfigError)?;
         let neighbor_provider =
             NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
 
@@ -1947,7 +2047,8 @@ where
         let mut quant_config = Config::new(&quant_path, quant_params.bytes_quant);
         quant_config.storage_backend(bf_tree::StorageBackend::Std);
 
-        let vector_index = BfTree::new_from_snapshot(vector_config.clone(), None);
+        let vector_index =
+            BfTree::new_from_snapshot(vector_config.clone(), None).map_err(super::ConfigError)?;
         let full_vectors = VectorProvider::<T>::new_from_bftree(
             saved_params.max_points,
             saved_params.dim,
@@ -1955,7 +2056,8 @@ where
             vector_index,
         );
 
-        let adjacency_list_index = BfTree::new_from_snapshot(neighbor_config.clone(), None);
+        let adjacency_list_index =
+            BfTree::new_from_snapshot(neighbor_config.clone(), None).map_err(super::ConfigError)?;
         let neighbor_provider =
             NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
 
@@ -1965,7 +2067,8 @@ where
         let pq_table =
             pq_storage.load_pq_pivots_bin(&filename, quant_params.num_pq_bytes, storage)?;
 
-        let quant_vector_index = BfTree::new_from_snapshot(quant_config.clone(), None);
+        let quant_vector_index =
+            BfTree::new_from_snapshot(quant_config.clone(), None).map_err(super::ConfigError)?;
         let quant_vectors = QuantVectorProvider::new_from_bftree(
             metric,
             saved_params.max_points,
@@ -2024,7 +2127,7 @@ mod tests {
         let provider = BfTreeProvider::new_empty(
             BfTreeProviderParameters {
                 max_points: 10,
-                frozen_points: NonZeroUsize::new(2).unwrap(),
+                num_start_points: NonZeroUsize::new(2).unwrap(),
                 dim: 5,
                 metric: Metric::L2,
                 max_fp_vecs_per_fill: None,
@@ -2035,7 +2138,8 @@ mod tests {
             },
             NoStore,
             TableBasedDeletes,
-        );
+        )
+        .unwrap();
 
         // Iterator
         //
@@ -2131,7 +2235,7 @@ mod tests {
         let provider = BfTreeProvider::<f32, _, _>::new_empty(
             BfTreeProviderParameters {
                 max_points: num_points as usize,
-                frozen_points: NonZeroUsize::new(2).unwrap(),
+                num_start_points: NonZeroUsize::new(2).unwrap(),
                 dim: 3,
                 metric: Metric::L2,
                 max_fp_vecs_per_fill: None,
@@ -2142,7 +2246,8 @@ mod tests {
             },
             NoStore,
             TableBasedDeletes,
-        );
+        )
+        .unwrap();
 
         let neighbor_accessor = &mut provider.neighbors();
 
@@ -2211,7 +2316,7 @@ mod tests {
         let num_points = 50usize;
         let dim = 4usize;
         let max_degree = 32u32;
-        let frozen_points = NonZeroUsize::new(2).unwrap();
+        let num_start_points = NonZeroUsize::new(2).unwrap();
         let ctx = &DefaultContext;
 
         // Create a temporary directory for test files
@@ -2237,7 +2342,7 @@ mod tests {
         // Create provider parameters
         let params = BfTreeProviderParameters {
             max_points: num_points,
-            frozen_points,
+            num_start_points,
             dim,
             metric: Metric::L2,
             max_fp_vecs_per_fill: None,
@@ -2252,7 +2357,8 @@ mod tests {
             params.clone(),
             NoStore,
             TableBasedDeletes,
-        );
+        )
+        .unwrap();
 
         // Populate provider with vectors
         for i in 0..num_points {
@@ -2290,7 +2396,7 @@ mod tests {
         let metric_str = params.metric.as_str();
         let saved_params = SavedParams {
             max_points: params.max_points,
-            frozen_points: params.frozen_points,
+            frozen_points: params.num_start_points,
             dim: params.dim,
             metric: metric_str.to_string(),
             max_degree: params.max_degree,
@@ -2375,7 +2481,7 @@ mod tests {
         let num_points = 50usize;
         let dim = 8usize;
         let max_degree = 32u32;
-        let frozen_points = NonZeroUsize::new(2).unwrap();
+        let num_start_points = NonZeroUsize::new(2).unwrap();
         let ctx = &DefaultContext;
 
         // Create a temporary directory for test files
@@ -2416,7 +2522,7 @@ mod tests {
         // Create provider parameters
         let params = BfTreeProviderParameters {
             max_points: num_points,
-            frozen_points,
+            num_start_points,
             dim,
             metric: Metric::L2,
             max_fp_vecs_per_fill: Some(10),
@@ -2432,7 +2538,8 @@ mod tests {
                 params.clone(),
                 pq_table.clone(),
                 TableBasedDeletes,
-            );
+            )
+            .unwrap();
 
         // Populate provider with vectors
         for i in 0..num_points {
@@ -2472,7 +2579,7 @@ mod tests {
         let num_pq_bytes = pq_table.get_num_chunks();
         let saved_params = SavedParams {
             max_points: params.max_points,
-            frozen_points: params.frozen_points,
+            frozen_points: params.num_start_points,
             dim: params.dim,
             metric: metric_str.to_string(),
             max_degree: params.max_degree,

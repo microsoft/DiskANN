@@ -1,0 +1,7 @@
+dataset:
+  max_pts: 10
+  unknown_key: 42
+  0:
+    operation: insert
+    start: 0
+    end: 100

@@ -6,24 +6,22 @@
 //! A pedantic provider implementation used for testing alorithmic logic.
 
 use std::{
-    collections::{HashMap, HashSet, hash_map},
+    collections::{HashMap, HashSet},
     num::NonZeroUsize,
     sync::Arc,
 };
 
+use dashmap::{DashMap, mapref::entry::Entry};
 use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use crate::{
     ANNError, ANNResult,
     error::{Infallible, message},
-    graph::{AdjacencyList, glue},
-    internal::{
-        buckets::Buckets,
-        counter::{Counter, LocalCounter},
-    },
+    graph::{AdjacencyList, glue, test::synthetic},
+    internal::counter::{Counter, LocalCounter},
     provider,
-    utils::{IntoUsize, VectorRepr},
+    utils::VectorRepr,
 };
 
 /// A starting point for graph search algorithms.
@@ -171,8 +169,12 @@ pub enum ConfigError {
     MaxDegreeCannotBeZero,
 }
 
-// The number of buckets to use for the light-weight concurrent hash map.
-const BUCKETS: usize = 64;
+impl From<ConfigError> for ANNError {
+    #[track_caller]
+    fn from(err: ConfigError) -> Self {
+        ANNError::opaque(err)
+    }
+}
 
 /// A test data provider for validating DiskANN API guarantees.
 ///
@@ -191,7 +193,7 @@ const BUCKETS: usize = 64;
 /// This provider allows for some amount of concurrent access, but is not optimized for performance.
 #[derive(Debug)]
 pub struct Provider {
-    terms: Buckets<HashMap<u32, Term>, BUCKETS>,
+    terms: DashMap<u32, Term>,
     config: Config,
 
     // Counters
@@ -207,8 +209,8 @@ impl Provider {
     ///
     /// All counters will be initialized to zero.
     pub fn new(config: Config) -> Self {
-        let mut this = Self {
-            terms: Buckets::new(),
+        let this = Self {
+            terms: DashMap::new(),
             config,
             get_vector: Counter::new(),
             set_vector: Counter::new(),
@@ -218,7 +220,7 @@ impl Provider {
         };
 
         for (id, value) in this.config.start_points.iter() {
-            this.terms.get_mut(id.into_usize()).insert(
+            this.terms.insert(
                 *id,
                 Term {
                     data: Vector::Valid(value.clone()),
@@ -247,7 +249,7 @@ impl Provider {
         I: IntoIterator<Item = (u32, AdjacencyList<u32>)>,
         T: IntoIterator<Item = (u32, Vec<f32>, AdjacencyList<u32>)>,
     {
-        let mut this = Self::new(config);
+        let this = Self::new(config);
         let max_degree = this.config.max_degree.get();
 
         // Add the start points.
@@ -261,7 +263,7 @@ impl Provider {
                 ));
             }
 
-            if let Some(term) = this.terms.get_mut(id.into_usize()).get_mut(&id) {
+            if let Some(mut term) = this.terms.get_mut(&id) {
                 term.neighbors = neighbors;
             } else {
                 return Err(message!("id {} is not a valid start point", id));
@@ -300,12 +302,35 @@ impl Provider {
                 neighbors,
             };
 
-            this.terms.get_mut(id.into_usize()).insert(id, term);
+            this.terms.insert(id, term);
         }
 
         // Now that we have inserted all the points - ensure our graph is consistent.
         this.is_consistent()?;
         Ok(this)
+    }
+
+    /// Return a fully-formed provider with a grid of points.
+    ///
+    /// The start point will have internal ID `u32::MAX`.
+    ///
+    /// See the documentation for [`synthetic::Grid`] and [`synthetic::Grid::data`] for
+    /// more details.
+    pub fn grid(grid: synthetic::Grid, size: usize) -> ANNResult<Self> {
+        let max_degree: usize = (grid.dim() * 2).into();
+        let start_id = u32::MAX;
+
+        let setup = grid.setup(size, start_id);
+
+        // Create the provider config with the grid start point.
+        let provider_config = Config::new(
+            Metric::L2,
+            max_degree,
+            StartPoint::new(setup.start_id(), setup.start_point()),
+        )?;
+
+        // Initialize the provider.
+        Self::new_from(provider_config, setup.start_neighbors(), setup.setup())
     }
 
     /// Return the dimensionality of data contained by this provider.
@@ -318,6 +343,11 @@ impl Provider {
         self.config.max_degree.get()
     }
 
+    /// Return the [`Metric`] used by this provider.
+    pub fn distance_metric(&self) -> Metric {
+        self.config.metric
+    }
+
     /// Return `true` is `id` is a start point. Otherwise, return `false`.
     fn is_start_point(&self, id: u32) -> bool {
         self.config.start_points.contains_key(&id)
@@ -328,30 +358,27 @@ impl Provider {
     /// This is approximate as it is not atomic. Thus, it is possible for other threads to
     /// update the collection of internal IDs while this operation is executing.
     pub fn all_internal_ids(&self) -> HashSet<u32> {
-        let mut all = HashSet::<u32>::new();
-        for i in 0..BUCKETS {
-            let bucket = self.terms.blocking_read(i);
-            all.extend(bucket.keys());
-        }
-        all
+        self.terms
+            .iter()
+            .map(|ref_multi| *ref_multi.key())
+            .collect()
     }
 
     /// Check whether all adjacency lists in `self` point to valid IDs.
     pub fn is_consistent(&self) -> ANNResult<()> {
         let all = self.all_internal_ids();
-        for i in 0..BUCKETS {
-            let bucket = self.terms.blocking_read(i);
-            for (id, term) in bucket.iter() {
-                for neighbor in term.neighbors.iter() {
-                    if !all.contains(neighbor) {
-                        return Err(message!(
-                            "term with id {} has neighbors {:?} \
-                             but neighbor {} is not in the provider",
-                            id,
-                            term.neighbors,
-                            neighbor,
-                        ));
-                    }
+        for ref_multi in self.terms.iter() {
+            let id = ref_multi.key();
+            let term = ref_multi.value();
+            for neighbor in term.neighbors.iter() {
+                if !all.contains(neighbor) {
+                    return Err(message!(
+                        "term with id {} has neighbors {:?} \
+                         but neighbor {} is not in the provider",
+                        id,
+                        term.neighbors,
+                        neighbor,
+                    ));
                 }
             }
         }
@@ -364,8 +391,8 @@ impl Provider {
     /// If `id` is present but not marked deleted, returns `false`.
     ///
     /// An error is returned if `id` is not present in the provider.
-    async fn is_deleted(&self, id: u32) -> Result<bool, InvalidId> {
-        if let Some(term) = self.terms.read(id.into_usize()).await.get(&id) {
+    fn is_deleted(&self, id: u32) -> Result<bool, InvalidId> {
+        if let Some(term) = self.terms.get(&id) {
             Ok(term.is_deleted())
         } else {
             Err(InvalidId::Internal(id))
@@ -381,6 +408,11 @@ impl Provider {
             set_neighbors: self.set_neighbors.value(),
             append_neighbors: self.append_neighbors.value(),
         }
+    }
+
+    /// Return a [`provider::NeighborAccessor`] for this provider.
+    pub fn neighbors(&self) -> NeighborAccessor<'_> {
+        NeighborAccessor::new(self)
     }
 }
 
@@ -574,7 +606,7 @@ impl provider::DataProvider for Provider {
     type Error = InvalidId;
 
     fn to_internal_id(&self, _context: &Context, gid: &u32) -> Result<u32, InvalidId> {
-        let valid = self.terms.blocking_read(gid.into_usize()).contains_key(gid);
+        let valid = self.terms.contains_key(gid);
         if valid {
             Ok(*gid)
         } else {
@@ -583,7 +615,7 @@ impl provider::DataProvider for Provider {
     }
 
     fn to_external_id(&self, _context: &Context, id: u32) -> Result<u32, InvalidId> {
-        let valid = self.terms.blocking_read(id.into_usize()).contains_key(&id);
+        let valid = self.terms.contains_key(&id);
         if valid {
             Ok(id)
         } else {
@@ -598,17 +630,16 @@ impl provider::Delete for Provider {
         _context: &Self::Context,
         gid: &Self::ExternalId,
     ) -> Result<(), Self::Error> {
-        if self.config.start_points.contains_key(gid) {
+        if self.is_start_point(*gid) {
             return Err(InvalidId::IsStartPoint(*gid));
         }
 
-        let mut guard = self.terms.write(gid.into_usize()).await;
-        match guard.entry(*gid) {
-            hash_map::Entry::Occupied(mut occupied) => {
+        match self.terms.entry(*gid) {
+            Entry::Occupied(mut occupied) => {
                 occupied.get_mut().mark_deleted();
                 Ok(())
             }
-            hash_map::Entry::Vacant(_) => Err(InvalidId::External(*gid)),
+            Entry::Vacant(_) => Err(InvalidId::External(*gid)),
         }
     }
 
@@ -617,12 +648,11 @@ impl provider::Delete for Provider {
         _context: &Self::Context,
         id: Self::InternalId,
     ) -> Result<(), Self::Error> {
-        if self.config.start_points.contains_key(&id) {
+        if self.is_start_point(id) {
             return Err(InvalidId::IsStartPoint(id));
         }
 
-        let mut guard = self.terms.write(id.into_usize()).await;
-        if guard.remove(&id).is_none() {
+        if self.terms.remove(&id).is_none() {
             Err(InvalidId::Internal(id))
         } else {
             Ok(())
@@ -634,7 +664,7 @@ impl provider::Delete for Provider {
         _context: &Context,
         id: u32,
     ) -> Result<provider::ElementStatus, Self::Error> {
-        if self.is_deleted(id).await? {
+        if self.is_deleted(id)? {
             Ok(provider::ElementStatus::Deleted)
         } else {
             Ok(provider::ElementStatus::Valid)
@@ -682,9 +712,9 @@ impl provider::SetElement<[f32]> for Provider {
             return Err(SetError::WrongDim(element.len(), self.dim()).into());
         }
 
-        match self.terms.write(id.into_usize()).await.entry(*id) {
-            hash_map::Entry::Occupied(_) => Err(SetError::AlreadyAssigned(*id).into()),
-            hash_map::Entry::Vacant(term) => {
+        match self.terms.entry(*id) {
+            Entry::Occupied(_) => Err(SetError::AlreadyAssigned(*id).into()),
+            Entry::Vacant(term) => {
                 term.insert(Term {
                     neighbors: AdjacencyList::new(),
                     data: Vector::Valid(element.into()),
@@ -742,7 +772,7 @@ impl provider::NeighborAccessor for NeighborAccessor<'_> {
         id: Self::Id,
         neighbors: &mut AdjacencyList<Self::Id>,
     ) -> ANNResult<Self> {
-        match self.provider.terms.read(id.into_usize()).await.get(&id) {
+        match self.provider.terms.get(&id) {
             Some(v) => {
                 self.provider.get_neighbors.increment();
                 neighbors.overwrite_trusted(&v.neighbors);
@@ -763,14 +793,8 @@ impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
             ));
         }
 
-        match self
-            .provider
-            .terms
-            .write(id.into_usize())
-            .await
-            .get_mut(&id)
-        {
-            Some(term) => {
+        match self.provider.terms.get_mut(&id) {
+            Some(mut term) => {
                 term.neighbors.clear();
                 term.neighbors.extend_from_slice(neighbors);
 
@@ -795,14 +819,8 @@ impl provider::NeighborAccessorMut for NeighborAccessor<'_> {
     }
 
     async fn append_vector(self, id: Self::Id, neighbors: &[Self::Id]) -> ANNResult<Self> {
-        match self
-            .provider
-            .terms
-            .write(id.into_usize())
-            .await
-            .get_mut(&id)
-        {
-            Some(term) => {
+        match self.provider.terms.get_mut(&id) {
+            Some(mut term) => {
                 // Do not allow `append_vector` to exceed the max degree.
                 if let Some(estimate) = term.neighbors.len().checked_add(neighbors.len()) {
                     if estimate > self.provider.max_degree() {
@@ -864,7 +882,7 @@ impl provider::Accessor for Accessor<'_> {
     type GetError = AccessedInvalidId;
 
     async fn get_element(&mut self, id: u32) -> Result<&[f32], AccessedInvalidId> {
-        match self.provider.terms.read(id.into_usize()).await.get(&id) {
+        match self.provider.terms.get(&id) {
             Some(term) => {
                 self.get_vector.increment();
                 self.buffer.copy_from_slice(&term.data);
@@ -891,6 +909,20 @@ impl provider::BuildQueryComputer<[f32]> for Accessor<'_> {
         from: &[f32],
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         Ok(f32::query_distance(from, self.provider.config.metric))
+    }
+}
+
+impl provider::BuildDistanceComputer for Accessor<'_> {
+    type DistanceComputerError = Infallible;
+    type DistanceComputer = <f32 as VectorRepr>::Distance;
+
+    fn build_distance_computer(
+        &self,
+    ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
+        Ok(f32::distance(
+            self.provider.distance_metric(),
+            Some(self.provider.dim()),
+        ))
     }
 }
 
@@ -937,6 +969,76 @@ impl glue::SearchStrategy<Provider, [f32]> for Strategy {
     }
 }
 
+impl glue::PruneStrategy<Provider> for Strategy {
+    type DistanceComputer = <f32 as VectorRepr>::Distance;
+    type PruneAccessor<'a> = Accessor<'a>;
+    type PruneAccessorError = Infallible;
+
+    fn prune_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        _context: &'a Context,
+    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
+        Ok(Accessor::new(provider))
+    }
+}
+
+impl glue::InsertStrategy<Provider, [f32]> for Strategy {
+    type PruneStrategy = Self;
+
+    fn prune_strategy(&self) -> Self::PruneStrategy {
+        *self
+    }
+
+    fn insert_search_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        _context: &'a Context,
+    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+        Ok(Accessor::new(provider))
+    }
+}
+
+impl<'a> glue::AsElement<&'a [f32]> for Accessor<'a> {
+    type Error = Infallible;
+    fn as_element(
+        &mut self,
+        vector: &'a [f32],
+        _id: Self::Id,
+    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send {
+        std::future::ready(Ok(vector))
+    }
+}
+
+impl glue::InplaceDeleteStrategy<Provider> for Strategy {
+    type DeleteElement<'a> = [f32];
+    type DeleteElementGuard = Box<[f32]>;
+    type DeleteElementError = AccessedInvalidId;
+    type PruneStrategy = Self;
+    type SearchStrategy = Self;
+
+    fn prune_strategy(&self) -> Self::PruneStrategy {
+        *self
+    }
+
+    fn search_strategy(&self) -> Self::SearchStrategy {
+        *self
+    }
+
+    async fn get_delete_element<'a>(
+        &'a self,
+        provider: &'a Provider,
+        _context: &'a <Provider as provider::DataProvider>::Context,
+        id: <Provider as provider::DataProvider>::InternalId,
+    ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
+        provider
+            .terms
+            .get(&id)
+            .map(|v| (*v.data).into())
+            .ok_or(AccessedInvalidId(id))
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -976,6 +1078,15 @@ mod tests {
         {
             let err = Config::new(metric, 0, StartPoint::new(0, vec![1.0, 2.0])).unwrap_err();
             assert!(matches!(err, ConfigError::MaxDegreeCannotBeZero));
+
+            let msg = err.to_string();
+            let ann: ANNError = err.into();
+            assert!(
+                ann.to_string().contains(&msg),
+                "ANNError message \"{}\" does not contain original error: \"{}\"",
+                ann,
+                msg,
+            );
         }
 
         // Error: no start points provided
@@ -1198,8 +1309,10 @@ mod tests {
             ),
         ];
         let provider = Provider::new_from(config, start_points, points).unwrap();
+
         assert_eq!(provider.dim(), 2);
         assert_eq!(provider.max_degree(), 4);
+        assert_eq!(provider.distance_metric(), Metric::Cosine);
 
         provider
     }
@@ -1499,7 +1612,7 @@ mod tests {
 
         let context = Context::new();
         for i in ids {
-            let is_deleted = rt.block_on(provider.is_deleted(i)).unwrap();
+            let is_deleted = provider.is_deleted(i).unwrap();
             assert!(!is_deleted);
 
             let status = rt
@@ -1515,7 +1628,7 @@ mod tests {
 
         // Accessing an invalid ID in all APIs returns an error.
         {
-            let err = rt.block_on(provider.is_deleted(invalid_id)).unwrap_err();
+            let err = provider.is_deleted(invalid_id).unwrap_err();
             assert_message_contains!(err.to_string(), "not initialized");
 
             let err = rt
@@ -1533,7 +1646,7 @@ mod tests {
         {
             let id = 3;
             rt.block_on(provider.delete(&context, &id)).unwrap();
-            let is_deleted = rt.block_on(provider.is_deleted(id)).unwrap();
+            let is_deleted = provider.is_deleted(id).unwrap();
             assert!(is_deleted);
 
             let status = rt
@@ -1551,7 +1664,7 @@ mod tests {
         {
             let id = 3;
             rt.block_on(provider.release(&context, id)).unwrap();
-            let err = rt.block_on(provider.is_deleted(id)).unwrap_err();
+            let err = provider.is_deleted(id).unwrap_err();
             assert_message_contains!(err.to_string(), "not initialized");
 
             let err = rt
@@ -1580,11 +1693,11 @@ mod tests {
         let err = rt.block_on(provider.delete(&context, &0)).unwrap_err();
         let msg = err.to_string();
         assert_message_contains!(msg, "cannot delete start point");
-        assert!(!rt.block_on(provider.is_deleted(0)).unwrap());
+        assert!(!provider.is_deleted(0).unwrap());
 
         let err = rt.block_on(provider.release(&context, 0)).unwrap_err();
         let msg = err.to_string();
         assert_message_contains!(msg, "cannot delete start point");
-        assert!(!rt.block_on(provider.is_deleted(0)).unwrap());
+        assert!(!provider.is_deleted(0).unwrap());
     }
 }

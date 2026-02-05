@@ -12,8 +12,8 @@ use diskann::{
     ANNError, ANNResult,
     graph::AdjacencyList,
     provider::{
-        DataProvider, DefaultContext, Delete, ElementStatus, ExecutionContext, NeighborAccessor,
-        NeighborAccessorMut, NoopGuard, SetElement,
+        DataProvider, DefaultAccessor, DefaultContext, Delete, ElementStatus, ExecutionContext,
+        NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
     },
     utils::{IntoUsize, ONE, VectorRepr},
 };
@@ -675,6 +675,19 @@ impl NeighborAccessorMut for &SimpleNeighborProviderAsync<u32> {
     async fn append_vector(self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<Self> {
         self.append_vector_sync(id.into_usize(), new_neighbor_ids)?;
         Ok(self)
+    }
+}
+
+impl<U, V, D, Ctx> DefaultAccessor for DefaultProvider<U, V, D, Ctx>
+where
+    U: AsyncFriendly,
+    V: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type Accessor<'a> = &'a SimpleNeighborProviderAsync<u32>;
+    fn default_accessor(&self) -> Self::Accessor<'_> {
+        self.neighbors()
     }
 }
 

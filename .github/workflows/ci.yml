@@ -20,7 +20,7 @@ env:
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   # Use the Rust version specified in rust-toolchain.toml
-  rust_stable: "1.90"
+  rust_stable: "1.92"
 
 defaults:
   run:
@@ -37,6 +37,7 @@ jobs:
     needs:
       - clippy
       - fmt
+      - clippy-no-default-features
       # TODO: Re-enable docs check later
       # - docs
     steps:
@@ -74,7 +75,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Run clippy on workspace
       - name: "clippy --workspace --all-targets"
-        run: cargo clippy --workspace --all-targets --no-deps --config "$RUST_CONFIG"
+        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG"
 
   # TODO: Re-enable docs check later
   # docs:
@@ -91,6 +92,45 @@ jobs:
   #       run: cargo doc --workspace --no-deps --document-private-items
   #       env:
   #         RUSTDOCFLAGS: -Dwarnings
+
+  clippy-no-default-features:
+    name: clippy ${{ matrix.crate }} (no default features)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          # Core crates
+          - diskann
+          - diskann-providers
+          - diskann-disk
+          - diskann-quantization
+          - diskann-utils
+          - diskann-vector
+          # Benchmark/tools crates
+          - diskann-benchmark-core
+          - diskann-benchmark-runner
+          - diskann-benchmark
+          - diskann-tools
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Cache per-crate to avoid conflicts
+          key: ${{ matrix.crate }}
+
+      - name: Clippy ${{ matrix.crate }} (no default features)
+        run: cargo clippy --locked --package ${{ matrix.crate }} --no-default-features --profile ci --no-deps
 
   # This is a quick test to ensure that micro-architecture detection and dispatching works.
   #
@@ -131,11 +171,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
       - uses: Swatinem/rust-cache@v2
 
       - name: Install QEMU user-mode
@@ -147,6 +182,7 @@ jobs:
           cargo test --package diskann-wide --locked
           find ./target -type f -regex ".*/deps/dispatch-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
           find ./target -type f -regex ".*/deps/float16_conversion-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
+
 
   test-workspace:
     needs: basics
@@ -178,12 +214,12 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --workspace --cargo-profile ci --config "$RUST_CONFIG"
-          cargo test --doc --workspace --profile ci --config "$RUST_CONFIG"
+          cargo nextest run --locked --workspace --cargo-profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   test-workspace-features:
     needs: basics
-    name: test workspace features
+    name: test workspace (all features)
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -211,13 +247,13 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --workspace \
+          cargo nextest run --locked --workspace \
             --cargo-profile ci \
             --config "$RUST_CONFIG" \
             --features \
               virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search
 
-          cargo test --doc --workspace --profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   coverage:
     needs: basics
@@ -249,7 +285,7 @@ jobs:
 
       - name: Generate code coverage
         run: |
-          cargo llvm-cov nextest --cargo-profile ci \
+          cargo llvm-cov nextest --locked --cargo-profile ci \
             --config "$RUST_CONFIG" \
             --workspace \
             --lcov --output-path lcov.info
@@ -284,6 +320,6 @@ jobs:
 
   #     - uses: Swatinem/rust-cache@v2
   #     - name: miri
-  #       run: cargo +nightly miri nextest run --package diskann-quantization
+  #       run: cargo +nightly miri nextest run --locked --package diskann-quantization
   #       env:
   #         MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
