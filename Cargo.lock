@@ -823,6 +823,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "experimental-multi-vector-bench"
+version = "0.45.0"
+dependencies = [
+ "anyhow",
+ "diskann-benchmark-runner",
+ "diskann-linalg",
+ "diskann-quantization",
+ "diskann-utils",
+ "diskann-vector",
+ "diskann-wide",
+ "rand 0.9.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "faer"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
