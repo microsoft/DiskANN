@@ -23,7 +23,7 @@ use crate::model::graph::provider::async_::{
 type MultiVec<T> = Mat<Standard<T>>;
 type MultiVecRef<'a, T> = MatRef<'a, Standard<T>>;
 
-type Provider<T, D> =
+pub type Provider<T, D = common::NoDeletes> =
     inmem::DefaultProvider<Store<T>, common::NoStore, D, provider::DefaultContext>;
 
 const METRIC: Metric = Metric::InnerProduct;
@@ -354,7 +354,10 @@ where
                     None
                 } else {
                     let multi = accessor.store().multi[n.id.into_usize()].read().unwrap();
-                    Some((n.id, Chamfer::evaluate(query.as_view(), multi.as_ref().unwrap().as_view())))
+                    // let tic = std::time::Instant::now();
+                    let v = Chamfer::evaluate(query.as_view(), multi.as_ref().unwrap().as_view());
+                    // println!("elapsed = {}", tic.elapsed().as_secs());
+                    Some((n.id, v))
                 }
             })
             .collect();

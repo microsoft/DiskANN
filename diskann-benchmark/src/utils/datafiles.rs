@@ -201,8 +201,6 @@ type SingleMultiVectorResult<T> = Result<Option<(Mat<Standard<T>>, usize)>, Mult
 ///
 /// Returns `Ok(Some(mat_ref))` on success where `mat_ref` is a view over the buffer,
 /// `Ok(None)` on clean EOF, or an error if the file is malformed.
-///
-/// This function is not generic over `T`, so it compiles once per reader type `R`.
 fn read_multi_vector_raw<'a, R>(
     reader: &mut R,
     expected_dim: Option<usize>,
@@ -318,21 +316,24 @@ where
 /// Returns a Vec of `Mat<Standard<T>>` where each Mat represents one multi-vector.
 /// All multi-vectors must have the same dimension D, but may have different K values.
 ///
-/// # Type Parameters
-/// - `T`: Target element type. Must implement `Copy + Default + From<half::f16>`.
-/// - `P`: Path type (e.g., `&Path`, `PathBuf`, `&str`).
-///
 /// # Errors
+///
 /// - `MultiVectorLoadError::Io`: IO error reading the file
 /// - `MultiVectorLoadError::DimensionMismatch`: D values differ between multi-vectors
 /// - `MultiVectorLoadError::UnexpectedEof`: File ends mid-record
 /// - `MultiVectorLoadError::InvalidHeader`: K or D is zero
-pub fn load_multi_vectors<T, P>(path: P) -> Result<Vec<Mat<Standard<T>>>, MultiVectorLoadError>
+pub fn load_multi_vectors<T>(path: impl AsRef<Path>) -> Result<Vec<Mat<Standard<T>>>, MultiVectorLoadError>
 where
     T: Copy + Default + From<f16>,
-    P: AsRef<Path>,
 {
-    let file = std::fs::File::open(path.as_ref())?;
+    load_multi_vectors_inner::<T>(path.as_ref())
+}
+
+fn load_multi_vectors_inner<T>(path: &Path) -> Result<Vec<Mat<Standard<T>>>, MultiVectorLoadError>
+where
+    T: Copy + Default + From<f16>,
+{
+    let file = std::fs::File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut result = Vec::new();
     let mut expected_dim: Option<usize> = None;

@@ -10,10 +10,14 @@ mod streaming;
 mod benchmarks;
 mod result;
 
+// Multi-Vector
+mod multi;
+
 // Feature based backends.
 mod product;
 mod scalar;
 mod spherical;
+
 
 pub(crate) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
     benchmarks::register_benchmarks(benchmarks)

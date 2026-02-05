@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::num::NonZero;
+use std::num::NonZeroUsize;
 
 use serde::{Deserialize, Serialize};
 
@@ -17,11 +17,13 @@ use crate::inputs::{as_input, Input, Example};
 const METRIC: diskann_vector::distance::Metric = diskann_vector::distance::Metric::InnerProduct;
 
 as_input!(BuildAndSearch);
+as_input!(ExhaustiveSearch);
 
 pub(super) fn register_inputs(
     registry: &mut diskann_benchmark_runner::registry::Inputs,
 ) -> anyhow::Result<()> {
     registry.register(Input::<BuildAndSearch>::new())?;
+    registry.register(Input::<ExhaustiveSearch>::new())?;
     Ok(())
 }
 
@@ -36,12 +38,12 @@ pub(crate) struct Build {
     pub(crate) start_point_strategy: StartPointStrategy,
     pub(crate) alpha: f32,
     pub(crate) backedge_ratio: f32,
-    pub(crate) num_threads: usize,
+    pub(crate) num_threads: NonZeroUsize,
 }
 
 impl Build {
-    pub(crate) fn try_as_config(&self) -> anyhow::Result<config::Builder> {
-        Ok(config::Builder::new_with(
+    pub(crate) fn as_config(&self) -> config::Builder {
+        config::Builder::new_with(
             self.pruned_degree,
             config::MaxDegree::new(self.max_degree),
             self.l_build,
@@ -51,7 +53,7 @@ impl Build {
                     .alpha(self.alpha)
                     .backedge_ratio(self.backedge_ratio);
             }
-        ))
+        )
     }
 
     pub(crate) fn inmem_parameters(
@@ -61,7 +63,7 @@ impl Build {
     ) -> DefaultProviderParameters {
         DefaultProviderParameters {
             max_points: num_points,
-            frozen_points: NonZero::new(self.start_point_strategy.count()).unwrap(),
+            frozen_points: NonZeroUsize::new(self.start_point_strategy.count()).unwrap(),
             metric: METRIC,
             dim,
             max_degree: self.max_degree as u32,
@@ -103,7 +105,7 @@ impl Example for Build {
             start_point_strategy: StartPointStrategy::Medoid,
             alpha: 1.2,
             backedge_ratio: 1.0,
-            num_threads: 1,
+            num_threads: diskann::utils::ONE,
         }
     }
 }
@@ -168,6 +170,81 @@ impl std::fmt::Display for BuildAndSearch {
         writeln!(f, "Multi-Vector Index Build and Search\n")?;
         write_field!(f, "tag", Self::tag())?;
         write!(f, "{}", self.build)?;
+        Ok(())
+    }
+}
+
+///////////////////////
+// Exhaustive Search //
+///////////////////////
+
+/// Input for exhaustive (brute-force) multi-vector KNN search using Chamfer distance.
+///
+/// This computes exact K-nearest neighbors for each query and writes the results
+/// to a binary groundtruth file.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct ExhaustiveSearch {
+    /// Path to the multi-vector dataset file.
+    pub(crate) data: InputFile,
+    /// Path to the multi-vector queries file.
+    pub(crate) queries: InputFile,
+    /// Path for the output groundtruth file (.bin format).
+    pub(crate) output: String,
+    /// Number of nearest neighbors to find per query.
+    pub(crate) num_nearest_neighbors: usize,
+    /// Number of threads for parallel search.
+    pub(crate) num_threads: NonZeroUsize,
+}
+
+impl ExhaustiveSearch {
+    pub(crate) const fn tag() -> &'static str {
+        "exhaustive-multi-vector"
+    }
+}
+
+impl Example for ExhaustiveSearch {
+    fn example() -> Self {
+        Self {
+            data: InputFile::new("path/to/data.mvbin"),
+            queries: InputFile::new("path/to/queries.mvbin"),
+            output: "groundtruth.bin".to_string(),
+            num_nearest_neighbors: 100,
+            num_threads: NonZeroUsize::new(8).unwrap(),
+        }
+    }
+}
+
+impl CheckDeserialization for ExhaustiveSearch {
+    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        self.data.check_deserialization(checker)?;
+        self.queries.check_deserialization(checker)?;
+
+        if self.num_nearest_neighbors == 0 {
+            anyhow::bail!("num_nearest_neighbors must be greater than 0");
+        }
+
+        // Resolve output path relative to output directory if set
+        let output_path = std::path::Path::new(&self.output);
+        let output_filename = output_path
+            .file_name()
+            .unwrap_or_else(|| output_path.as_os_str());
+        let resolved_path = checker.register_output(output_path.parent())?;
+        let full_path = resolved_path.join(output_filename);
+        self.output = full_path.to_string_lossy().to_string();
+
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for ExhaustiveSearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Exhaustive Multi-Vector Search (Chamfer Distance)\n")?;
+        write_field!(f, "tag", Self::tag())?;
+        write_field!(f, "data", self.data.display())?;
+        write_field!(f, "queries", self.queries.display())?;
+        write_field!(f, "output", self.output)?;
+        write_field!(f, "number of nearest neighbors", self.num_nearest_neighbors)?;
+        write_field!(f, "number of threads", self.num_threads)?;
         Ok(())
     }
 }

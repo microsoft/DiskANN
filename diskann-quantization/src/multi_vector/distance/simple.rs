@@ -282,7 +282,7 @@ mod tests {
                 }
 
                 // Check that SimpleKernel is also correct.
-                SimpleKernel::max_sim_kernel(query, doc, |i, score| {
+                SimpleKernel::max_sim_kernel(*query, doc, |i, score| {
                     assert!((scores[i] - score).abs() <= 1e-6)
                 });
 
@@ -310,7 +310,7 @@ mod tests {
             // No query vectors means sum is 0
             assert_eq!(result, 0.0);
 
-            let result = Chamfer::evaluate(doc.into(), query.deref().reborrow());
+            let result = Chamfer::evaluate(doc, query.deref().reborrow());
 
             assert_eq!(result, 0.0);
         }

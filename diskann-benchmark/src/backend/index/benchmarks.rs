@@ -36,7 +36,7 @@ use serde::Serialize;
 
 use super::{
     build::{self, load_index, save_index, single_or_multi_insert, BuildStats},
-    product, scalar, search, spherical,
+    multi, product, scalar, search, spherical,
 };
 use crate::{
     backend::index::{
@@ -84,53 +84,54 @@ macro_rules! register_streaming {
 pub(super) use register;
 
 pub(super) fn register_benchmarks(benchmarks: &mut diskann_benchmark_runner::registry::Benchmarks) {
-    // Full Precision
-    register!(
-        benchmarks,
-        "async-full-precision-f32",
-        FullPrecision<'static, f32>
-    );
-    register!(
-        benchmarks,
-        "async-full-precision-f16",
-        FullPrecision<'static, f16>
-    );
-    register!(
-        benchmarks,
-        "async-full-precision-u8",
-        FullPrecision<'static, u8>
-    );
-    register!(
-        benchmarks,
-        "async-full-precision-i8",
-        FullPrecision<'static, i8>
-    );
+    // // Full Precision
+    // register!(
+    //     benchmarks,
+    //     "async-full-precision-f32",
+    //     FullPrecision<'static, f32>
+    // );
+    // register!(
+    //     benchmarks,
+    //     "async-full-precision-f16",
+    //     FullPrecision<'static, f16>
+    // );
+    // register!(
+    //     benchmarks,
+    //     "async-full-precision-u8",
+    //     FullPrecision<'static, u8>
+    // );
+    // register!(
+    //     benchmarks,
+    //     "async-full-precision-i8",
+    //     FullPrecision<'static, i8>
+    // );
 
-    // Dynamic Full Precision
-    register_streaming!(
-        benchmarks,
-        "async-dynamic-full-precision-f32",
-        DynamicFullPrecision<'static, f32>
-    );
-    register_streaming!(
-        benchmarks,
-        "async-dynamic-full-precision-f16",
-        DynamicFullPrecision<'static, f16>
-    );
-    register_streaming!(
-        benchmarks,
-        "async-dynamic-full-precision-u8",
-        DynamicFullPrecision<'static, u8>
-    );
-    register_streaming!(
-        benchmarks,
-        "async-dynamic-full-precision-i8",
-        DynamicFullPrecision<'static, i8>
-    );
+    // // Dynamic Full Precision
+    // register_streaming!(
+    //     benchmarks,
+    //     "async-dynamic-full-precision-f32",
+    //     DynamicFullPrecision<'static, f32>
+    // );
+    // register_streaming!(
+    //     benchmarks,
+    //     "async-dynamic-full-precision-f16",
+    //     DynamicFullPrecision<'static, f16>
+    // );
+    // register_streaming!(
+    //     benchmarks,
+    //     "async-dynamic-full-precision-u8",
+    //     DynamicFullPrecision<'static, u8>
+    // );
+    // register_streaming!(
+    //     benchmarks,
+    //     "async-dynamic-full-precision-i8",
+    //     DynamicFullPrecision<'static, i8>
+    // );
 
     product::register_benchmarks(benchmarks);
     scalar::register_benchmarks(benchmarks);
     spherical::register_benchmarks(benchmarks);
+    multi::register_benchmarks(benchmarks);
 }
 
 //////////////
