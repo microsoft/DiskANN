@@ -22,7 +22,6 @@ use futures_util::FutureExt;
 use hashbrown::HashSet;
 use thiserror::Error;
 use tokio::task::JoinSet;
-use tracing::{debug, trace};
 
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, RangeSearchParams, SearchParams,
@@ -51,7 +50,7 @@ use crate::{
         DataProvider, Delete, ElementStatus, ExecutionContext, Guard, NeighborAccessor,
         NeighborAccessorMut, SetElement,
     },
-    tracked_error,
+    tracked_debug, tracked_error, tracked_trace,
     utils::{
         IntoUsize, TryIntoVectorId, VectorId,
         async_tools::{self, DynamicBalancer, VectorIdBoxSlice},
@@ -443,9 +442,10 @@ where
                 scratch.clear();
             }
 
-            trace!(
+            tracked_trace!(
                 "Inserting out edges for vector_id: {} new_out_neighbors: {:?}",
-                internal_id, new_neighbors,
+                internal_id,
+                new_neighbors,
             );
 
             // insert out edges
@@ -1927,16 +1927,17 @@ where
 
             // If nothing was deleted & prune not required, do nothing and return
             if deleted_neighbors.is_empty() && pool.len() <= degree {
-                debug!(
+                tracked_debug!(
                     "Consolidate_vector: Nothing to do for vector_id: {}",
                     vector_id
                 );
                 return Ok(ConsolidateKind::Complete);
             }
 
-            trace!(
+            tracked_trace!(
                 "Consolidate_vector: Setting new AdjList for vector_id {} to {:?}.",
-                vector_id, pool,
+                vector_id,
+                pool,
             );
 
             accessor.set_neighbors(vector_id, &pool).await?;
@@ -1964,7 +1965,7 @@ where
                 .escalate("`consolidate_vector` should only be called on valid IDs")?
                 .is_deleted();
             if is_deleted {
-                trace!("Called consolidate on deleted vector");
+                tracked_trace!("Called consolidate on deleted vector");
                 return Ok(ConsolidateKind::Deleted);
             }
             let degree = self.pruned_degree();
@@ -1988,7 +1989,7 @@ where
 
             // If nothing was deleted & prune not required, do nothing and return
             if deleted_neighbors.is_empty() && pool.len() <= degree {
-                debug!(
+                tracked_debug!(
                     "Consolidate_vector: Nothing to do for vector_id: {}",
                     vector_id
                 );
@@ -2048,9 +2049,10 @@ where
                 }
             };
 
-            trace!(
+            tracked_trace!(
                 "Consolidate_vector: Setting new AdjList for vector_id {} to {:?}.",
-                vector_id, adj_list
+                vector_id,
+                adj_list
             );
 
             accessor.set_neighbors(vector_id, &adj_list).await?;
@@ -3126,16 +3128,17 @@ where
 
             let num_new_edges = adj_list.extend_from_slice(targets);
             if num_new_edges == 0 && !did_remove {
-                trace!(
+                tracked_trace!(
                     "Skipping edge insertion from {} to {:?} all edges already exist",
-                    source, targets,
+                    source,
+                    targets,
                 );
                 return Ok(());
             }
 
             if adj_list.len() <= self.max_degree_with_slack() {
                 // No pruning is needed; we can just append.
-                trace!("Appending back-edge from {} to {:?}.", source, targets,);
+                tracked_trace!("Appending back-edge from {} to {:?}.", source, targets,);
                 if did_remove {
                     accessor.set_neighbors(source, &adj_list).await?;
                 } else if let Some(edges) = adj_list.last(num_new_edges) {
@@ -3161,9 +3164,10 @@ where
                 .await
                 .escalate("retrieving inserted vector must succeed")?;
 
-                trace!(
+                tracked_trace!(
                     "Setting new AdjList for vector_id {} to {:?}.",
-                    source, scratch.neighbors
+                    source,
+                    scratch.neighbors
                 );
 
                 accessor.set_neighbors(source, &scratch.neighbors).await?;
