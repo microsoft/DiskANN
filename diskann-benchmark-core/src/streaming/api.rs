@@ -13,7 +13,7 @@ use std::any::Any;
 /// * `insert`: Insert new points into the index that do not already exist.
 /// * `replace`: Replace existing points in the index with new data.
 /// * `delete`: Remove points from the index.
-/// * `maintain`: Perform maintance operations on the index. Examples may
+/// * `maintain`: Perform maintenance operations on the index. Examples may
 ///   include fully removing deleted points from internal references.
 ///
 /// This trait is parameterized by an [`Arguments`] proxy trait, which defines the
@@ -68,10 +68,10 @@ pub trait Arguments: 'static {
     type Maintain<'a>;
 }
 
-/// A sequential exector for [`Stream`]s.
+/// A sequential executor for [`Stream`]s.
 ///
 /// Implementations invoke the operations of a [`Stream`] in a structured way (which should
-/// be reflected in the associated documentation) and aggreate the results.
+/// be reflected in the associated documentation) and aggregate the results.
 pub trait Executor {
     /// The argument collection type for the underlying [`Stream`].
     type Args: Arguments;
