@@ -77,22 +77,6 @@ jobs:
       - name: "clippy --workspace --all-targets"
         run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG"
 
-  # TODO: Re-enable docs check later
-  # docs:
-  #   name: docs
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Install Rust ${{ env.rust_stable }}
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: ${{ env.rust_stable }}
-  #     - uses: Swatinem/rust-cache@v2
-  #     - name: "doc --workspace --no-deps"
-  #       run: cargo doc --workspace --no-deps --document-private-items
-  #       env:
-  #         RUSTDOCFLAGS: -Dwarnings
-
   clippy-no-default-features:
     name: clippy ${{ matrix.crate }} (no default features)
     runs-on: ubuntu-latest
@@ -130,7 +114,28 @@ jobs:
           key: ${{ matrix.crate }}
 
       - name: Clippy ${{ matrix.crate }} (no default features)
-        run: cargo clippy --locked --package ${{ matrix.crate }} --no-default-features --profile ci --no-deps
+        run: cargo clippy --locked --package ${{ matrix.crate }} \
+          --no-default-features \
+          --profile ci \
+          --no-deps \
+          --config "$RUST_CONFIG"
+
+  # TODO: Re-enable docs check later
+  # docs:
+  #   name: docs
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Install Rust ${{ env.rust_stable }}
+  #       uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         toolchain: ${{ env.rust_stable }}
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: "doc --workspace --no-deps"
+  #       run: cargo doc --workspace --no-deps --document-private-items
+  #       env:
+  #         RUSTDOCFLAGS: -Dwarnings
+
 
   # This is a quick test to ensure that micro-architecture detection and dispatching works.
   #
