@@ -114,11 +114,12 @@ jobs:
           key: ${{ matrix.crate }}
 
       - name: Clippy ${{ matrix.crate }} (no default features)
-        run: cargo clippy --locked --package ${{ matrix.crate }} \
-          --no-default-features \
-          --profile ci \
-          --no-deps \
-          --config "$RUST_CONFIG"
+        run: |
+          cargo clippy --locked --package ${{ matrix.crate }} \
+            --no-default-features \
+            --profile ci \
+            --no-deps \
+            --config "$RUST_CONFIG"
 
   # TODO: Re-enable docs check later
   # docs:
