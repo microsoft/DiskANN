@@ -76,7 +76,7 @@ impl SimpleKernel {
     /// * `f` - Callback invoked with `(query_index, similarity)` for each query vector
     #[inline]
     pub(crate) fn max_sim_kernel<F, T: Copy>(
-        query: QueryMatRef<'_, Standard<T>>,
+        query: MatRef<'_, Standard<T>>,
         doc: MatRef<'_, Standard<T>>,
         mut f: F,
     ) where
@@ -128,7 +128,7 @@ where
             return Err(MaxSimError::InvalidBufferLength(size, n_queries));
         }
 
-        SimpleKernel::max_sim_kernel(query, doc, |i, score| {
+        SimpleKernel::max_sim_kernel(*query, doc, |i, score| {
             // SAFETY: We asserted that self.size() == query.num_vectors(),
             // and i < query.num_vectors() due to the kernel loop bound.
             unsafe { *self.scores.get_unchecked_mut(i) = score };
@@ -142,13 +142,13 @@ where
 // Chamfer //
 /////////////
 
-impl<T: Copy> PureDistanceFunction<QueryMatRef<'_, Standard<T>>, MatRef<'_, Standard<T>>, f32>
+impl<T: Copy> PureDistanceFunction<MatRef<'_, Standard<T>>, MatRef<'_, Standard<T>>, f32>
     for Chamfer
 where
     InnerProduct: for<'a, 'b> PureDistanceFunction<&'a [T], &'b [T], f32>,
 {
     #[inline(always)]
-    fn evaluate(query: QueryMatRef<'_, Standard<T>>, doc: MatRef<'_, Standard<T>>) -> f32 {
+    fn evaluate(query: MatRef<'_, Standard<T>>, doc: MatRef<'_, Standard<T>>) -> f32 {
         let mut sum = 0.0f32;
 
         SimpleKernel::max_sim_kernel(query, doc, |_i, score| {
@@ -156,6 +156,17 @@ where
         });
 
         sum
+    }
+}
+
+impl<T: Copy> PureDistanceFunction<QueryMatRef<'_, Standard<T>>, MatRef<'_, Standard<T>>, f32>
+    for Chamfer
+where
+    Self: for<'a, 'b> PureDistanceFunction<MatRef<'a, Standard<T>>, MatRef<'b, Standard<T>>, f32>,
+{
+    #[inline(always)]
+    fn evaluate(query: QueryMatRef<'_, Standard<T>>, doc: MatRef<'_, Standard<T>>) -> f32 {
+        Self::evaluate(*query, doc)
     }
 }
 

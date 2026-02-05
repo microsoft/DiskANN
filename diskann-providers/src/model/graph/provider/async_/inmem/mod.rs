@@ -25,6 +25,8 @@ pub use full_precision::{
 };
 pub(super) use full_precision::{GetFullPrecision, Rerank};
 
+pub mod multi;
+
 #[cfg(test)]
 pub mod product;
 #[cfg(test)]

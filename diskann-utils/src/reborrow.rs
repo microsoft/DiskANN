@@ -308,6 +308,9 @@ where
 
 /// A container for types `T` providing an implementation `Deref<Target = T>` as well as
 /// reborrowing functionality mapped to `T as Deref` and `T as DerefMut`.
+///
+/// Additionally, [`Place`] can be used in situations where a type `T` needs to [`Lower`]
+/// to itself.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(transparent)]
 pub struct Place<T>(pub T);
@@ -344,6 +347,15 @@ where
         self
     }
 }
+
+impl<'a, T> Lower<'a, T> for Place<T>
+{
+    type Proxy = &'a T;
+    fn lower(&'a self) -> Self::Proxy {
+        &self.0
+    }
+}
+
 
 /// A container that reborrows by cloning the contained value.
 ///

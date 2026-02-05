@@ -805,7 +805,7 @@ pub trait DefaultAccessor: DataProvider {
 /// A light-weight struct implementing [`ExecutionContext`].
 ///
 /// Used for situations where a more refined execution context is not needed.
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct DefaultContext;
 
 impl std::fmt::Display for DefaultContext {

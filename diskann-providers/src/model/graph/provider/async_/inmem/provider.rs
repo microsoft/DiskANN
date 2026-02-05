@@ -230,6 +230,7 @@ use crate::{
 ///     TableBasedDeletes,
 /// );
 /// ```
+#[derive(Debug)]
 pub struct DefaultProvider<U, V = NoStore, D = NoDeletes, Ctx = DefaultContext> {
     /// The primary vector store that holds the main representation of vectors.
     pub base_vectors: U,

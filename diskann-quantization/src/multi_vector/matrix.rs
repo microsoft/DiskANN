@@ -242,6 +242,14 @@ pub unsafe trait NewOwned<T>: ReprOwned {
 #[derive(Debug, Clone, Copy)]
 pub struct Defaulted;
 
+///////////////
+// Auxiliary //
+///////////////
+
+pub trait NewCloned: ReprOwned {
+    fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self>;
+}
+
 //////////////
 // Standard //
 //////////////
@@ -442,6 +450,18 @@ where
     }
 }
 
+// TODO: The `Default` bound is super unfortunate.
+impl<T> NewCloned for Standard<T>
+where
+    T: Copy + Default,
+{
+    fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
+        let mut new = Mat::new(*v.repr(), Defaulted).unwrap();
+        new.rows_mut().zip(v.rows()).for_each(|(dst, src)| dst.copy_from_slice(src));
+        new
+    }
+}
+
 /////////
 // Mat //
 /////////
@@ -575,6 +595,15 @@ impl<T: ReprOwned> Drop for Mat<T> {
     }
 }
 
+impl<T> Clone for Mat<T>
+where
+    T: NewCloned,
+{
+    fn clone(&self) -> Self {
+        T::new_cloned(self.reborrow())
+    }
+}
+
 impl<T: Copy> Mat<Standard<T>> {
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
@@ -659,6 +688,13 @@ impl<'a, T: Repr> MatRef<'a, T> {
     /// Returns an iterator over immutable row references.
     pub fn rows(&self) -> Rows<'_, T> {
         Rows::new(*self)
+    }
+
+    pub fn to_owned(&self) -> Mat<T>
+    where
+        T: NewCloned,
+    {
+        T::new_cloned(*self)
     }
 
     /// Construct a new [`MatRef`] over the raw pointer and representation without performing

@@ -632,7 +632,7 @@ pub enum IndexSource {
 }
 
 impl CheckDeserialization for IndexSource {
-    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+     fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         match self {
             IndexSource::Load(load) => load.check_deserialization(checker),
             IndexSource::Build(build) => build.check_deserialization(checker),
