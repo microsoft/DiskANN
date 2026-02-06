@@ -555,6 +555,24 @@ impl Builder {
     /// Construct a new builder with the basic values.
     ///
     /// All other parameters will use their default values.
+    ///
+    /// # Note
+    ///
+    /// The choice of [`prune_kind`](PruneKind) is distance-function-dependent and can have a
+    /// profoundly negative impact on the graph quality if chosen incorrectly. When in doubt
+    /// prefer to use [`diskann_vector::distance::Metric`]'s conversion function like the
+    /// example below:
+    /// ```rust
+    /// use diskann::graph::{Config, config};
+    /// use diskann_vector::distance::Metric;
+    ///
+    /// let _ = config::Builder::new(
+    ///     10,
+    ///     config::MaxDegree::default_slack(),
+    ///     20,
+    ///     (Metric::L2).into()
+    /// );
+    /// ```
     pub fn new(
         pruned_degree: usize,
         max_degree: MaxDegree,
