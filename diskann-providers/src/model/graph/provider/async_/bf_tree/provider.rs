@@ -1785,6 +1785,14 @@ pub struct BfTreeParams {
     pub leaf_page_size: usize,
 }
 
+impl BfTreeParams {
+    /// Apply the saved BfTree parameters to a Config.
+    pub fn apply(&self, config: &mut Config) {
+        config.cb_max_record_size(self.max_record_size);
+        config.leaf_page_size(self.leaf_page_size);
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct QuantParams {
     pub num_pq_bytes: usize,
@@ -1911,14 +1919,12 @@ where
 
         let vector_path = BfTreePaths::vectors_bftree(&saved_params.prefix);
         let mut vector_config = Config::new(&vector_path, saved_params.params_vector.bytes);
-        vector_config.cb_max_record_size(saved_params.params_vector.max_record_size);
-        vector_config.leaf_page_size(saved_params.params_vector.leaf_page_size);
+        saved_params.params_vector.apply(&mut vector_config);
         vector_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let neighbor_path = BfTreePaths::neighbors_bftree(&saved_params.prefix);
         let mut neighbor_config = Config::new(&neighbor_path, saved_params.params_neighbor.bytes);
-        neighbor_config.cb_max_record_size(saved_params.params_neighbor.max_record_size);
-        neighbor_config.leaf_page_size(saved_params.params_neighbor.leaf_page_size);
+        saved_params.params_neighbor.apply(&mut neighbor_config);
         neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let vector_index =
@@ -2048,20 +2054,17 @@ where
 
         let vector_path = BfTreePaths::vectors_bftree(&saved_params.prefix);
         let mut vector_config = Config::new(&vector_path, saved_params.params_vector.bytes);
-        vector_config.cb_max_record_size(saved_params.params_vector.max_record_size);
-        vector_config.leaf_page_size(saved_params.params_vector.leaf_page_size);
+        saved_params.params_vector.apply(&mut vector_config);
         vector_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let neighbor_path = BfTreePaths::neighbors_bftree(&saved_params.prefix);
         let mut neighbor_config = Config::new(&neighbor_path, saved_params.params_neighbor.bytes);
-        neighbor_config.cb_max_record_size(saved_params.params_neighbor.max_record_size);
-        neighbor_config.leaf_page_size(saved_params.params_neighbor.leaf_page_size);
+        saved_params.params_neighbor.apply(&mut neighbor_config);
         neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let quant_path = BfTreePaths::quant_bftree(&saved_params.prefix);
         let mut quant_config = Config::new(&quant_path, quant_params.params_quant.bytes);
-        quant_config.cb_max_record_size(quant_params.params_quant.max_record_size);
-        quant_config.leaf_page_size(quant_params.params_quant.leaf_page_size);
+        quant_params.params_quant.apply(&mut quant_config);
         quant_config.storage_backend(bf_tree::StorageBackend::Std);
 
         let vector_index =
