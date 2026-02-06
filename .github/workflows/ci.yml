@@ -296,11 +296,28 @@ jobs:
             --workspace \
             --lcov --output-path lcov.info
 
+      - name: Generate miri code coverage
+        run: |
+          cargo llvm-cov nextest --locked --cargo-profile ci \
+            --config 'build.rustflags=["-Dwarnings", "--cfg", "miri"]' \
+            --package diskann-quantization \
+            --lcov --output-path lcov_miri.info
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: lcov.info
           fail_ci_if_error: true
+          flags: unittests
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload miri coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov_miri.info
+          fail_ci_if_error: true
+          flags: miri
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
