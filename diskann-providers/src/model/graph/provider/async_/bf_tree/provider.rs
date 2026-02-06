@@ -1786,10 +1786,13 @@ pub struct BfTreeParams {
 }
 
 impl BfTreeParams {
-    /// Apply the saved BfTree parameters to a Config.
-    pub fn apply(&self, config: &mut Config) {
+    /// Build a BfTree Config from the saved parameters and a file path.
+    pub fn to_config(&self, path: &std::path::Path) -> Config {
+        let mut config = Config::new(path, self.bytes);
         config.cb_max_record_size(self.max_record_size);
         config.leaf_page_size(self.leaf_page_size);
+        config.storage_backend(bf_tree::StorageBackend::Std);
+        config
     }
 }
 
@@ -1917,15 +1920,12 @@ where
         let metric = Metric::from_str(&saved_params.metric)
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
-        let vector_path = BfTreePaths::vectors_bftree(&saved_params.prefix);
-        let mut vector_config = Config::new(&vector_path, saved_params.params_vector.bytes);
-        saved_params.params_vector.apply(&mut vector_config);
-        vector_config.storage_backend(bf_tree::StorageBackend::Std);
-
-        let neighbor_path = BfTreePaths::neighbors_bftree(&saved_params.prefix);
-        let mut neighbor_config = Config::new(&neighbor_path, saved_params.params_neighbor.bytes);
-        saved_params.params_neighbor.apply(&mut neighbor_config);
-        neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
+        let vector_config = saved_params
+            .params_vector
+            .to_config(&BfTreePaths::vectors_bftree(&saved_params.prefix));
+        let neighbor_config = saved_params
+            .params_neighbor
+            .to_config(&BfTreePaths::neighbors_bftree(&saved_params.prefix));
 
         let vector_index =
             BfTree::new_from_snapshot(vector_config.clone(), None).map_err(super::ConfigError)?;
@@ -2052,20 +2052,15 @@ where
         let metric = Metric::from_str(&saved_params.metric)
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
-        let vector_path = BfTreePaths::vectors_bftree(&saved_params.prefix);
-        let mut vector_config = Config::new(&vector_path, saved_params.params_vector.bytes);
-        saved_params.params_vector.apply(&mut vector_config);
-        vector_config.storage_backend(bf_tree::StorageBackend::Std);
-
-        let neighbor_path = BfTreePaths::neighbors_bftree(&saved_params.prefix);
-        let mut neighbor_config = Config::new(&neighbor_path, saved_params.params_neighbor.bytes);
-        saved_params.params_neighbor.apply(&mut neighbor_config);
-        neighbor_config.storage_backend(bf_tree::StorageBackend::Std);
-
-        let quant_path = BfTreePaths::quant_bftree(&saved_params.prefix);
-        let mut quant_config = Config::new(&quant_path, quant_params.params_quant.bytes);
-        quant_params.params_quant.apply(&mut quant_config);
-        quant_config.storage_backend(bf_tree::StorageBackend::Std);
+        let vector_config = saved_params
+            .params_vector
+            .to_config(&BfTreePaths::vectors_bftree(&saved_params.prefix));
+        let neighbor_config = saved_params
+            .params_neighbor
+            .to_config(&BfTreePaths::neighbors_bftree(&saved_params.prefix));
+        let quant_config = quant_params
+            .params_quant
+            .to_config(&BfTreePaths::quant_bftree(&saved_params.prefix));
 
         let vector_index =
             BfTree::new_from_snapshot(vector_config.clone(), None).map_err(super::ConfigError)?;
