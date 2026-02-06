@@ -563,7 +563,7 @@ impl Builder {
     /// prefer to use [`diskann_vector::distance::Metric`]'s conversion function like the
     /// example below:
     /// ```rust
-    /// use diskann::graph::{Config, config};
+    /// use diskann::graph::config;
     /// use diskann_vector::distance::Metric;
     ///
     /// let _ = config::Builder::new(
