@@ -16,6 +16,7 @@ use diskann::{
 use thiserror::Error;
 
 use super::super::common::TestCallCount;
+use super::ConfigError;
 
 pub struct VectorProvider<T: VectorRepr, I: VectorId = u32> {
     dim: usize,
@@ -33,17 +34,17 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
         dim: usize,
         num_start_points: usize,
         config: Config,
-    ) -> Self {
-        let vector_index = BfTree::with_config(config, None);
+    ) -> ANNResult<Self> {
+        let vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
 
-        Self {
+        Ok(Self {
             dim,
             max_vectors,
             num_start_points,
             vector_index,
             num_get_calls: TestCallCount::default(),
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Create a new instance from an existing BfTree (for loading from snapshot)
@@ -211,12 +212,9 @@ mod tests {
     async fn test_parallel_tree_traversal() {
         let num_points = 100;
         let bf_tree_config = Config::default();
-        let vector_provider = Arc::new(VectorProvider::<f32>::new_with_config(
-            num_points,
-            3,
-            2,
-            bf_tree_config,
-        ));
+        let vector_provider = Arc::new(
+            VectorProvider::<f32>::new_with_config(num_points, 3, 2, bf_tree_config).unwrap(),
+        );
         let mut set = JoinSet::new();
         for i in 0..num_points {
             let vector = vec![i as f32, (i + 1) as f32, (i + 2) as f32];
@@ -252,12 +250,10 @@ mod tests {
         let dim = 3;
         let bf_tree_config = Config::default();
 
-        let provider = Arc::new(VectorProvider::<f32>::new_with_config(
-            num_points,
-            dim,
-            frozen_points,
-            bf_tree_config,
-        ));
+        let provider = Arc::new(
+            VectorProvider::<f32>::new_with_config(num_points, dim, frozen_points, bf_tree_config)
+                .unwrap(),
+        );
 
         let mut set = JoinSet::new();
         for _ in 0..5 {
@@ -289,7 +285,7 @@ mod tests {
     /// Test new_from_bftree constructor
     #[tokio::test]
     async fn test_new_from_bftree() {
-        let bftree = BfTree::with_config(Config::default(), None);
+        let bftree = BfTree::with_config(Config::default(), None).expect("Failed to create BfTree");
         let provider = VectorProvider::<f32>::new_from_bftree(100, 3, 2, bftree);
 
         // Verify fields are set correctly

@@ -3800,9 +3800,36 @@ pub(crate) mod tests {
     #[cfg(feature = "experimental_diversity_search")]
     #[tokio::test]
     async fn test_inmemory_search_diversity_search() {
-        use diskann::neighbor::PlaceholderAttributeValueProvider;
+        use diskann::neighbor::AttributeValueProvider;
         use rand::Rng;
         use std::collections::HashMap;
+
+        // Simple test attribute provider
+        #[derive(Debug, Clone)]
+        struct TestAttributeProvider {
+            attributes: HashMap<u32, u32>,
+        }
+        impl TestAttributeProvider {
+            fn new() -> Self {
+                Self {
+                    attributes: HashMap::new(),
+                }
+            }
+            fn insert(&mut self, id: u32, attribute: u32) {
+                self.attributes.insert(id, attribute);
+            }
+        }
+        impl diskann::provider::HasId for TestAttributeProvider {
+            type Id = u32;
+        }
+
+        impl AttributeValueProvider for TestAttributeProvider {
+            type Value = u32;
+
+            fn get(&self, id: Self::Id) -> Option<Self::Value> {
+                self.attributes.get(&id).copied()
+            }
+        }
 
         // Create test data (256 vectors of 128 dimensions)
         let dim = 128;
@@ -3840,11 +3867,16 @@ pub(crate) mod tests {
         }
 
         // Create attribute provider with labels (1 to 5)
-        let mut attr_provider = PlaceholderAttributeValueProvider::new();
+        let mut attribute_provider = TestAttributeProvider::new();
         for i in 0..num_points {
             let label = ((i % 5) + 1) as u32;
-            attr_provider.insert(i, label);
+            attribute_provider.insert(i as u32, label);
         }
+        // Also add attribute for the start point (ID = num_points = 256)
+        // Start points are stored at indices starting from max_points
+        attribute_provider.insert(num_points as u32, 1);
+        // Wrap in Arc once to avoid cloning the HashMap later
+        let attribute_provider = std::sync::Arc::new(attribute_provider);
 
         // Perform diversity search on a query vector
         let query = vec![0.5f32; dim];
@@ -3857,11 +3889,11 @@ pub(crate) mod tests {
         let mut result_output_buffer =
             diskann::graph::IdDistance::new(&mut indices, &mut distances);
 
-        let diverse_params = diskann::graph::DiverseSearchParams {
-            diverse_attribute_id: 0,
+        let diverse_params = diskann::graph::DiverseSearchParams::new(
+            0, // diverse_attribute_id
             diverse_results_k,
-            attr_provider: attr_provider.clone(),
-        };
+            attribute_provider.clone(),
+        );
 
         let search_params = diskann::graph::SearchParams::new(
             return_list_size,
@@ -3907,10 +3939,10 @@ pub(crate) mod tests {
         println!("{:<10} {:<15} {:<10}", "Vertex ID", "Distance", "Label");
         println!("{}", "-".repeat(35));
         for i in 0..stats.result_count as usize {
-            let attr_value = attr_provider.get(indices[i] as usize).unwrap_or(0);
+            let attribute_value = attribute_provider.get(indices[i]).unwrap_or(0);
             println!(
                 "{:<10} {:<15.2} {:<10}",
-                indices[i], distances[i], attr_value
+                indices[i], distances[i], attribute_value
             );
         }
 
@@ -3926,8 +3958,8 @@ pub(crate) mod tests {
         // Verify diversity: Check that we have diverse attribute values in the results
         let mut attribute_counts = HashMap::new();
         for item in indices.iter().take(stats.result_count as usize) {
-            if let Some(attr_value) = attr_provider.get(*item as usize) {
-                *attribute_counts.entry(attr_value).or_insert(0) += 1;
+            if let Some(attribute_value) = attribute_provider.get(*item) {
+                *attribute_counts.entry(attribute_value).or_insert(0) += 1;
             }
         }
 
@@ -3935,25 +3967,25 @@ pub(crate) mod tests {
         println!("\n=== Attribute Distribution ===");
         let mut sorted_attrs: Vec<_> = attribute_counts.iter().collect();
         sorted_attrs.sort_by_key(|(k, _)| *k);
-        for (attr_value, count) in &sorted_attrs {
+        for (attribute_value, count) in &sorted_attrs {
             println!(
                 "Label {}: {} occurrences (max allowed: {})",
-                attr_value, count, diverse_results_k
+                attribute_value, count, diverse_results_k
             );
         }
         println!("Total unique labels: {}", attribute_counts.len());
         println!("================================\n");
 
         // Verify diversity constraints
-        for (attr_value, count) in &attribute_counts {
+        for (attribute_value, count) in &attribute_counts {
             println!(
                 "Assert: Label {} has {} occurrences (max: {})",
-                attr_value, count, diverse_results_k
+                attribute_value, count, diverse_results_k
             );
             assert!(
                 *count <= diverse_results_k,
                 "Attribute value {} appears {} times, which exceeds diverse_results_k of {}",
-                attr_value,
+                attribute_value,
                 count,
                 diverse_results_k
             );

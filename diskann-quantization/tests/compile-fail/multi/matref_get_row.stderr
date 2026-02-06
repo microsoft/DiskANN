@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `mat` as mutable because it is also borrowed as immutable
+  --> tests/compile-fail/multi/matref_get_row.rs:16:13
+   |
+12 |     let view: MatRef<'_, Standard<f32>> = mat.as_view();
+   |                                           --- immutable borrow occurs here
+...
+16 |     let _ = mat.as_view_mut();
+   |             ^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+17 |     assert_eq!(row[0], 0.0);
+   |                ------ immutable borrow later used here

@@ -235,8 +235,8 @@ mod tests {
         delete_provider
     }
 
-    #[test]
     #[cfg(feature = "bf_tree")]
+    #[test]
     fn test_save_load_roundtrip() {
         let original = get_test_delete_table_provider(50, &[0, 5, 20, 34, 48]);
         let bytes = original.to_bytes();
@@ -248,8 +248,8 @@ mod tests {
         }
     }
 
-    #[test]
     #[cfg(feature = "bf_tree")]
+    #[test]
     fn test_from_bytes_size_mismatch() {
         // max_size=50 requires ceil(50/32) = 2 u32 values = 8 bytes
         // Provide wrong number of bytes (e.g., 4 bytes = 1 u32)

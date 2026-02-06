@@ -67,6 +67,17 @@ impl AsF64Lossy for MicroSeconds {
     }
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! timed {
+    ($($exprs:tt)*) => {{
+        let start = ::std::time::Instant::now();
+        let result = $($exprs)*;
+        let elapsed: $crate::utils::MicroSeconds = start.elapsed().into();
+        (elapsed, result)
+    }}
+}
+
 ///////////
 // Tests //
 ///////////

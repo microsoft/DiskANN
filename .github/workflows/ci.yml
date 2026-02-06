@@ -14,10 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUSTFLAGS: -Dwarnings
+  # Pass additional arguments to cargo using `--config build.rustflags=["...", "..."]`.
+  #
+  # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
+  RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
   # Use the Rust version specified in rust-toolchain.toml
-  rust_stable: "1.90"
+  rust_stable: "1.92"
 
 defaults:
   run:
@@ -34,6 +37,7 @@ jobs:
     needs:
       - clippy
       - fmt
+      - clippy-no-default-features
       # TODO: Re-enable docs check later
       # - docs
     steps:
@@ -71,7 +75,51 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Run clippy on workspace
       - name: "clippy --workspace --all-targets"
-        run: cargo clippy --workspace --all-targets --no-deps
+        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG"
+
+  clippy-no-default-features:
+    name: clippy ${{ matrix.crate }} (no default features)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          # Core crates
+          - diskann
+          - diskann-providers
+          - diskann-disk
+          - diskann-quantization
+          - diskann-utils
+          - diskann-vector
+          # Benchmark/tools crates
+          - diskann-benchmark-core
+          - diskann-benchmark-runner
+          - diskann-benchmark
+          - diskann-tools
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Cache per-crate to avoid conflicts
+          key: ${{ matrix.crate }}
+
+      - name: Clippy ${{ matrix.crate }} (no default features)
+        run: |
+          cargo clippy --locked --package ${{ matrix.crate }} \
+            --no-default-features \
+            --profile ci \
+            --no-deps \
+            --config "$RUST_CONFIG"
 
   # TODO: Re-enable docs check later
   # docs:
@@ -88,6 +136,59 @@ jobs:
   #       run: cargo doc --workspace --no-deps --document-private-items
   #       env:
   #         RUSTDOCFLAGS: -Dwarnings
+
+
+  # This is a quick test to ensure that micro-architecture detection and dispatching works.
+  #
+  # The crate `diskann-wide` is the primary driver for this mechanism.
+  #
+  # We test by:
+  #
+  # 1. Compiling the test binaries specifically for the old `x86-64` CPU target to ensure
+  #    the compiler does not emit `x86-64-v3` instructions.
+  #
+  # 2. We use QEMU to emulate an older CPU. QEMU will abort if an unrecognized instruction
+  #    is hit.
+  #
+  # The shell command for running tests is as follows:
+  #
+  # 1. `find ./target/**/deps`: Search for the generated artifacts from the test build.
+  #
+  # 2. `grep -e "dispatch-[a-f0-9]*$"`: Find a binary called `dispatch-a38d0...` that does
+  #    not end in ".d". In other words, the hash goes all the way to the end of the file name.
+  #
+  #    This means it's a test executable and not a library.
+  #
+  # 3. `xargs -n1`: Take the newline delimited executable and call the following command
+  #    once for each argument.
+  #
+  # 4. `qemu-x86_64 -cpu Nehalem`: Run the qemu binary using `Nehalem` as the target CPU.
+  #    This is a very old CPU model that will crash if any AVX/AVX2 instructions are executed.
+  #
+  # TODO: Enable whole test suite to run under QEMU. There are a few tests that need fixing.
+  qemu:
+    needs: basics
+    name: qemu-tests
+    runs-on: ubuntu-latest
+    env:
+      # For this test - we explicitly overwrite the flags in `.cargo/config.toml` because
+      # we want to ensure the `x86-64` target CPU.
+      RUSTFLAGS: "-Dwarnings -Ctarget-cpu=x86-64"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install QEMU user-mode
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
+      - name: "QEMU Tests"
+        run: |
+          set -euxo pipefail
+          cargo test --package diskann-wide --locked
+          find ./target -type f -regex ".*/deps/dispatch-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
+          find ./target -type f -regex ".*/deps/float16_conversion-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
+
 
   test-workspace:
     needs: basics
@@ -119,12 +220,12 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --workspace --cargo-profile ci
-          cargo test --doc --workspace --profile ci
+          cargo nextest run --locked --workspace --cargo-profile ci --config "$RUST_CONFIG"
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   test-workspace-features:
     needs: basics
-    name: test workspace
+    name: test workspace (all features)
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -152,16 +253,19 @@ jobs:
       - name: test workspace with nextest
         run: |
           set -euxo pipefail
-          cargo nextest run --workspace --cargo-profile ci \
+          cargo nextest run --locked --workspace \
+            --cargo-profile ci \
+            --config "$RUST_CONFIG" \
             --features \
               virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search
 
-          cargo test --doc --workspace --profile ci
+          cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
   coverage:
     needs: basics
     name: code coverage
     runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -188,7 +292,8 @@ jobs:
 
       - name: Generate code coverage
         run: |
-          cargo llvm-cov nextest --cargo-profile ci \
+          cargo llvm-cov nextest --locked --cargo-profile ci \
+            --config "$RUST_CONFIG" \
             --workspace \
             --lcov --output-path lcov.info
 
@@ -226,6 +331,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: miri
-        run: cargo +nightly miri nextest run --package diskann-quantization
+        run: cargo +nightly miri nextest run --locked --package diskann-quantization
         env:
           MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance

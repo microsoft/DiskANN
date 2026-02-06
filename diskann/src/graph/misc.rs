@@ -173,10 +173,31 @@ impl RangeSearchParams {
 // Parameters for diverse search
 #[cfg(feature = "experimental_diversity_search")]
 #[derive(Clone, Debug)]
-pub struct DiverseSearchParams {
+pub struct DiverseSearchParams<P>
+where
+    P: crate::neighbor::AttributeValueProvider,
+{
     pub diverse_attribute_id: usize,
     pub diverse_results_k: usize,
-    pub attr_provider: crate::neighbor::PlaceholderAttributeValueProvider,
+    pub attribute_provider: std::sync::Arc<P>,
+}
+
+#[cfg(feature = "experimental_diversity_search")]
+impl<P> DiverseSearchParams<P>
+where
+    P: crate::neighbor::AttributeValueProvider,
+{
+    pub fn new(
+        diverse_attribute_id: usize,
+        diverse_results_k: usize,
+        attribute_provider: std::sync::Arc<P>,
+    ) -> Self {
+        Self {
+            diverse_attribute_id,
+            diverse_results_k,
+            attribute_provider,
+        }
+    }
 }
 
 ///////////

@@ -19,12 +19,11 @@ pub struct Any {
 pub const MATCH_FAIL: FailureScore = FailureScore(10_000);
 
 impl Any {
-    /// A crate-local constructor.
+    /// Construct a new [`Any`] around `any` and associate it with the name `tag`.
     ///
-    /// We don't expose this as a public method to ensure that users go through
-    /// [`crate::Checker::any`] and therefore get the correct tag and run
-    /// [`crate::CheckDeserialization`].
-    pub(crate) fn new<T>(any: T, tag: &'static str) -> Self
+    /// The tag is included as merely a debugging and readability aid and usually should
+    /// belong to a [`crate::Input::tag`] that generated `any`.
+    pub fn new<T>(any: T, tag: &'static str) -> Self
     where
         T: serde::Serialize + std::fmt::Debug + 'static,
     {
@@ -34,16 +33,23 @@ impl Any {
         }
     }
 
-    /// Return a new [`Any`] without a tag.
+    /// A lower level API for constructing an [`Any`] that decouples the serialized
+    /// representation from the inmemory representation.
     ///
-    /// This method exists for examples and testing and generally should not be used.
+    /// When serialized, the **exact** representation of `repr` will be used.
     ///
-    /// Users should use [`crate::Checker::any`] to construct a properly tagged [`Any`].
-    pub fn untagged<T>(any: T) -> Self
+    /// This is useful in some contexts where as part of input resolution, a fully resolved
+    /// input struct contains elements that are not serializable.
+    ///
+    /// Like [`Any::new`], the tag is included for debugging and readability.
+    pub fn raw<T>(any: T, repr: serde_json::Value, tag: &'static str) -> Self
     where
-        T: serde::Serialize + std::fmt::Debug + 'static,
+        T: std::fmt::Debug + 'static,
     {
-        Self::new(any, "")
+        Self {
+            any: Box::new(Raw::new(any, repr)),
+            tag,
+        }
     }
 
     /// Return the benchmark tag associated with this benchmarks.
@@ -61,7 +67,7 @@ impl Any {
     /// ```rust
     /// use diskann_benchmark_runner::any::Any;
     ///
-    /// let value = Any::untagged(42usize);
+    /// let value = Any::new(42usize, "usize");
     /// assert!(value.is::<usize>());
     /// assert!(!value.is::<u32>());
     /// ```
@@ -80,7 +86,7 @@ impl Any {
     /// ```rust
     /// use diskann_benchmark_runner::any::Any;
     ///
-    /// let value = Any::untagged(42usize);
+    /// let value = Any::new(42usize, "usize");
     /// assert_eq!(*value.downcast_ref::<usize>().unwrap(), 42);
     /// assert!(value.downcast_ref::<u32>().is_none());
     /// ```
@@ -103,7 +109,7 @@ impl Any {
     ///     utils::datatype::{self, DataType, Type},
     /// };
     ///
-    /// let value = Any::untagged(DataType::Float32);
+    /// let value = Any::new(DataType::Float32, "datatype");
     ///
     /// // A successful down cast and successful match.
     /// assert_eq!(
@@ -118,7 +124,7 @@ impl Any {
     /// );
     ///
     /// // An unsuccessful down cast.
-    /// let value = Any::untagged(0usize);
+    /// let value = Any::new(0usize, "usize");
     /// assert_eq!(
     ///     value.try_match::<DataType, Type<f32>>().unwrap_err(),
     ///     diskann_benchmark_runner::any::MATCH_FAIL,
@@ -148,7 +154,7 @@ impl Any {
     ///     utils::datatype::{self, DataType, Type},
     /// };
     ///
-    /// let value = Any::untagged(DataType::Float32);
+    /// let value = Any::new(DataType::Float32, "datatype");
     ///
     /// // A successful down cast and successful conversion.
     /// let _: Type<f32> = value.convert::<DataType, _>().unwrap();
@@ -201,20 +207,20 @@ impl Any {
     ///
     /// // Matching contained value.
     /// assert_eq!(
-    ///     Display(Some(Any::untagged(DataType::Float32))).to_string(),
+    ///     Display(Some(Any::new(DataType::Float32, "datatype"))).to_string(),
     ///     "successful match",
     /// );
     ///
     /// // Successful down cast - unsuccessful match.
     /// assert_eq!(
-    ///     Display(Some(Any::untagged(DataType::UInt64))).to_string(),
+    ///     Display(Some(Any::new(DataType::UInt64, "datatype"))).to_string(),
     ///     "expected \"float32\" but found \"uint64\"",
     /// );
     ///
     /// // Unsuccessful down cast.
     /// assert_eq!(
-    ///     Display(Some(Any::untagged(0usize))).to_string(),
-    ///     "expected tag \"my-tag\" - instead got \"\"",
+    ///     Display(Some(Any::new(0usize, "another-tag"))).to_string(),
+    ///     "expected tag \"my-tag\" - instead got \"another-tag\"",
     /// );
     /// ```
     pub fn description<'a, T, U>(
@@ -279,6 +285,33 @@ where
     }
 }
 
+// A backend type that allows users to decouple the serialized representation from the
+// actual type.
+#[derive(Debug)]
+struct Raw<T> {
+    value: T,
+    repr: serde_json::Value,
+}
+
+impl<T> Raw<T> {
+    fn new(value: T, repr: serde_json::Value) -> Self {
+        Self { value, repr }
+    }
+}
+
+impl<T> SerializableAny for Raw<T>
+where
+    T: std::any::Any + std::fmt::Debug,
+{
+    fn as_any(&self) -> &dyn std::any::Any {
+        &self.value
+    }
+
+    fn dump(&self) -> Result<serde_json::Value, serde_json::Error> {
+        Ok(self.repr.clone())
+    }
+}
+
 ///////////
 // Tests //
 ///////////
@@ -290,17 +323,6 @@ mod tests {
     use crate::utils::datatype::{self, DataType, Type};
 
     #[test]
-    fn test_untagged() {
-        let x = Any::untagged(42usize);
-        assert_eq!(x.tag(), "");
-        assert_eq!(x.type_id(), std::any::TypeId::of::<usize>());
-        assert!(x.is::<usize>());
-        assert!(!x.is::<u32>());
-        assert_eq!(*x.downcast_ref::<usize>().unwrap(), 42);
-        assert!(x.downcast_ref::<u32>().is_none());
-    }
-
-    #[test]
     fn test_new() {
         let x = Any::new(42usize, "my-tag");
         assert_eq!(x.tag(), "my-tag");
@@ -310,9 +332,36 @@ mod tests {
         assert_eq!(*x.downcast_ref::<usize>().unwrap(), 42);
         assert!(x.downcast_ref::<u32>().is_none());
 
+        assert!(!x.is::<Raw<usize>>());
+        assert!(!x.is::<Raw<u32>>());
+        assert!(x.downcast_ref::<Raw<usize>>().is_none());
+        assert!(x.downcast_ref::<Raw<u32>>().is_none());
+
         assert_eq!(
             x.serialize().unwrap(),
             serde_json::Value::Number(serde_json::value::Number::from(42usize))
+        );
+    }
+
+    #[test]
+    fn test_raw() {
+        let repr = serde_json::json!(1.5);
+        let x = Any::raw(42usize, repr, "my-tag");
+        assert_eq!(x.tag(), "my-tag");
+        assert_eq!(x.type_id(), std::any::TypeId::of::<usize>());
+        assert!(x.is::<usize>());
+        assert!(!x.is::<u32>());
+        assert_eq!(*x.downcast_ref::<usize>().unwrap(), 42);
+        assert!(x.downcast_ref::<u32>().is_none());
+
+        assert!(!x.is::<Raw<usize>>());
+        assert!(!x.is::<Raw<u32>>());
+        assert!(x.downcast_ref::<Raw<usize>>().is_none());
+        assert!(x.downcast_ref::<Raw<u32>>().is_none());
+
+        assert_eq!(
+            x.serialize().unwrap(),
+            serde_json::Value::Number(serde_json::value::Number::from_f64(1.5).unwrap())
         );
     }
 
@@ -333,7 +382,7 @@ mod tests {
         );
 
         // An unsuccessful down cast.
-        let value = Any::untagged(0usize);
+        let value = Any::new(0usize, "");
         assert_eq!(
             value.try_match::<DataType, Type<f32>>().unwrap_err(),
             MATCH_FAIL,
@@ -379,19 +428,19 @@ mod tests {
 
         // Matching contained value.
         assert_eq!(
-            Display(Some(Any::untagged(DataType::Float32))).to_string(),
+            Display(Some(Any::new(DataType::Float32, ""))).to_string(),
             "successful match",
         );
 
         // Successful down cast - unsuccessful match.
         assert_eq!(
-            Display(Some(Any::untagged(DataType::UInt64))).to_string(),
+            Display(Some(Any::new(DataType::UInt64, ""))).to_string(),
             "expected \"float32\" but found \"uint64\"",
         );
 
         // Unsuccessful down cast.
         assert_eq!(
-            Display(Some(Any::untagged(0usize))).to_string(),
+            Display(Some(Any::new(0usize, ""))).to_string(),
             "expected tag \"my-tag\" - instead got \"\"",
         );
     }

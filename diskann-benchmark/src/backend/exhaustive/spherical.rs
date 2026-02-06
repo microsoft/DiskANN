@@ -196,11 +196,10 @@ mod imp {
                 })?;
 
                 let recalls = recall::compute_multiple_recalls(
-                    r.ids.as_view().into(),
-                    groundtruth.as_view().into(),
+                    &r.ids,
+                    &groundtruth,
                     &input.search.recalls.recall_k,
                     &input.search.recalls.recall_n,
-                    false,
                 )?;
 
                 search_results.push(SearchResults::new(

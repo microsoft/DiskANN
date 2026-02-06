@@ -1,0 +1,10 @@
+error[E0502]: cannot borrow `mat` as mutable because it is also borrowed as immutable
+  --> tests/compile-fail/multi/mat_as_view.rs:14:13
+   |
+12 |     let view = mat.as_view();
+   |                --- immutable borrow occurs here
+13 |     // This should fail: we cannot mutably borrow `mat` while `view` exists
+14 |     let _ = mat.as_view_mut();
+   |             ^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+15 |     let _ = view.num_vectors();
+   |             ---- immutable borrow later used here
