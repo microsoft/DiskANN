@@ -299,8 +299,8 @@ jobs:
 
       - name: Generate miri code coverage
         run: |
-          RUSTFLAGS="--cfg miri" cargo llvm-cov nextest --locked --cargo-profile ci \
-            --config "$RUST_CONFIG" \
+          cargo llvm-cov nextest --locked --cargo-profile ci \
+            --config 'build.rustflags=["-Dwarnings", "--cfg", "miri"]' \
             --workspace \
             --lcov --output-path lcov_miri.info
 
