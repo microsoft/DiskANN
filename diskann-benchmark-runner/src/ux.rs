@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 /// Steps taken:
 ///
 /// 1. All leading trailing whitespace is removed.
-/// 2. Windows line-endings `\n\r` are replaced with `\n`.
+/// 2. Windows line-endings `\r\n` are replaced with `\n`.
 #[doc(hidden)]
 pub fn normalize(s: String) -> String {
     let trimmed = s.trim().to_string();
