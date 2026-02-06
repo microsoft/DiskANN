@@ -129,7 +129,7 @@ impl Architecture for Scalar {
 
         // SAFETY: It's always safe to construct the `Scalar` architecture. Additionally,
         // since `Scalar` is a `Copy` zero-sized type, it is safe to wink into existence
-        // and is ABI compattible with `Hidden`.
+        // and is ABI compatible with `Hidden`.
         unsafe { arch::hide1(f) }
     }
 
@@ -143,7 +143,7 @@ impl Architecture for Scalar {
 
         // SAFETY: It's always safe to construct the `Scalar` architecture. Additionally,
         // since `Scalar` is a `Copy` zero-sized type, it is safe to wink into existence
-        // and is ABI compattible with `Hidden`.
+        // and is ABI compatible with `Hidden`.
         unsafe { arch::hide2(f) }
     }
 
@@ -159,7 +159,7 @@ impl Architecture for Scalar {
 
         // SAFETY: It's always safe to construct the `Scalar` architecture. Additionally,
         // since `Scalar` is a `Copy` zero-sized type, it is safe to wink into existence
-        // and is ABI compattible with `Hidden`.
+        // and is ABI compatible with `Hidden`.
         unsafe { arch::hide3(f) }
     }
 }

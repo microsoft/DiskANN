@@ -104,7 +104,7 @@
 //!    invokes the reference implementation may be all that's needed.
 //!
 //!    More complicated operations may require their own test harness (see
-//!    `test_tuils/dot_product.rs`).
+//!    `test_utils/dot_product.rs`).
 //!
 //!    Tests should go through the utilities in `test_utils::driver` to ensure adequate
 //!    coverage and low compile time.

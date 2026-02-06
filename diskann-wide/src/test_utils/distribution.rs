@@ -58,7 +58,7 @@ macro_rules! finite {
             /// Generate floating point numbers spread more-or-less uniformly across the
             /// distribution of floating point numbers.
             ///
-            /// Note that this is *not* a methematical uniform distribution over some range.
+            /// Note that this is *not* a mathematical uniform distribution over some range.
             /// For normal values, every normal floating point number is generated with equal
             /// probability.
             ///

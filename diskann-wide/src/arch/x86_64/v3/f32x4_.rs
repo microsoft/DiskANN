@@ -35,7 +35,8 @@ helpers::unsafe_map_binary_op!(f32x4, std::ops::Mul, mul, _mm_mul_ps, "sse");
 impl f32x4 {
     #[inline(always)]
     fn is_nan(self) -> mask32x4 {
-        // NOTE: `_CMP_UNORD_Q` returns `true` only if both arguments are NAN.
+        // NOTE: `_CMP_UNORD_Q` returns `true` if either argument is NaN. Since we compare
+        // `self` with `self`, this returns `true` exactly when `self` is NaN.
         mask32x4::from_underlying(
             self.arch(),
             // SAFETY: `_mm_castps_si128` requires SSE2 and `_mm_cmp_ps` requires AVX,

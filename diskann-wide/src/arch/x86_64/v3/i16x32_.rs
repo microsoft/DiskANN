@@ -7,9 +7,9 @@
 use super::{i8x32, i16x16, u8x32};
 use crate::{LoHi, SplitJoin, doubled};
 
-////////////////////
-// 16-bit integer //
-////////////////////
+///////////////////
+// 16-bit signed //
+///////////////////
 
 doubled::double_vector!(i16, 32, i16x16);
 doubled::double_scalar_shift!(Doubled<i16x16>);

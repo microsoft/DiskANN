@@ -323,10 +323,9 @@
 //!
 //! ### X86
 //!
+//! * [`crate::arch::x86_64::V4`]: Supporting AVX-512 and lower.
 //! * [`crate::arch::x86_64::V3`]: Supporting AVX2 and lower.
 //! * [`Scalar`]: Fallback architecture
-//!
-//! Upcoming will be `V4`, which will include support for AVX-512.
 //!
 //! ### Arm
 //!
@@ -822,7 +821,7 @@ where
 
 /// A variation of [`Target1`] that uses an associated function instead of a method.
 ///
-/// This is useful used in the function pointer API.
+/// This is used in the function pointer API.
 pub trait FTarget1<A, R, T0>
 where
     A: Architecture,
@@ -832,7 +831,7 @@ where
 
 /// A variation of [`Target2`] that uses an associated function instead of a method.
 ///
-/// This is useful used in the function pointer API.
+/// This is used in the function pointer API.
 pub trait FTarget2<A, R, T0, T1>
 where
     A: Architecture,
@@ -842,7 +841,7 @@ where
 
 /// A variation of [`Target3`] that uses an associated function instead of a method.
 ///
-/// This is useful used in the function pointer API.
+/// This is used in the function pointer API.
 pub trait FTarget3<A, R, T0, T1, T2>
 where
     A: Architecture,

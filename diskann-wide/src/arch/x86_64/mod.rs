@@ -437,7 +437,7 @@ mod tests {
     // These tests reach directly into the dispatch mechanism.
     //
     // There should only be a single test (this one) that does this, and all other tests
-    // involving dispatch should either be configured to work properly regarless of the
+    // involving dispatch should either be configured to work properly regardless of the
     // backend architecture, or be run in their own process.
     #[test]
     fn test_dispatch() {

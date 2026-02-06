@@ -23,12 +23,12 @@ use super::{
 /// using loops over arrays rather than dispatching to platform specific instructions.
 ///
 /// The idea behind this type is that it can be used on architecture where explicit backend
-/// support has not been added, or when an architecture does not support a given type/lengh
+/// support has not been added, or when an architecture does not support a given type/length
 /// pair well.
 ///
 /// Furthermore, it can be used when developing new back-ends to provide fallback
-/// implementations. This allows new back-ends to be developed one piece as a time instead
-/// of all at onces.
+/// implementations. This allows new back-ends to be developed one piece at a time instead
+/// of all at once.
 ///
 /// NOTE: The alignment requirements of an emulated vector *will* be different than the
 /// alignment requirements an actual intrinsic.
@@ -676,7 +676,7 @@ mod test_emulated {
         test_utils::test_load_simd::<u32, 4, Emulated<u32, 4>>(Scalar);
         test_utils::test_load_simd::<u32, 8, Emulated<u32, 8>>(Scalar);
 
-        // Unsigned Integers
+        // Signed Integers
         test_utils::test_load_simd::<i8, 8, Emulated<i8, 8>>(Scalar);
         test_utils::test_load_simd::<i8, 16, Emulated<i8, 16>>(Scalar);
 
@@ -709,7 +709,7 @@ mod test_emulated {
         test_utils::test_store_simd::<u32, 4, Emulated<u32, 4>>(Scalar);
         test_utils::test_store_simd::<u32, 8, Emulated<u32, 8>>(Scalar);
 
-        // Unsigned Integers
+        // Signed Integers
         test_utils::test_store_simd::<i8, 8, Emulated<i8, 8>>(Scalar);
         test_utils::test_store_simd::<i8, 16, Emulated<i8, 16>>(Scalar);
 

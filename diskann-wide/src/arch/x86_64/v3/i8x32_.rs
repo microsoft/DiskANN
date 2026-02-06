@@ -23,9 +23,9 @@ use crate::{
     traits::{AsSIMD, SIMDAbs, SIMDMask, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector},
 };
 
-////////////////////
-// 8-bit unsigned //
-////////////////////
+//////////////////
+// 8-bit signed //
+//////////////////
 
 macros::x86_define_register!(i8x32, __m256i, mask8x32, i8, 32, V3);
 macros::x86_define_splat!(i8x32 as i8, _mm256_set1_epi8, "avx");
@@ -150,7 +150,7 @@ impl SIMDPartialOrd for i8x32 {
     fn lt_simd(self, other: Self) -> Self::Mask {
         // Check that each lane in `self` is not equal to the element-wise maximum.
         //
-        // SAFETY: The intrinsics `_mm256_max_epi8`, `_mm256_empeq_epi8`, and
+        // SAFETY: The intrinsics `_mm256_max_epi8`, `_mm256_cmpeq_epi8`, and
         // `_mm256_xor_si256` require AVX2 - all of which are implied by `V3`.
         let m = unsafe {
             let max = _mm256_max_epi8(self.0, other.0);
@@ -163,7 +163,7 @@ impl SIMDPartialOrd for i8x32 {
     fn le_simd(self, other: Self) -> Self::Mask {
         // Check that each lane in `self` is not equal to the element-wise maximum.
         //
-        // SAFETY: The intrinsics `_mm256_min_epi8` and `_mm256_empeq_epi8` require AVX2
+        // SAFETY: The intrinsics `_mm256_min_epi8` and `_mm256_cmpeq_epi8` require AVX2
         // - implied by `V3`.
         let m = unsafe { _mm256_cmpeq_epi8(self.0, _mm256_min_epi8(self.0, other.0)) };
         Self::Mask::from_underlying(self.arch(), m)

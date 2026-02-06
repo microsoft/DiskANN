@@ -80,7 +80,7 @@ where
 ///   bit is set to 1.
 ///
 /// * On AVX-512 systems, the story is much simpler as the masks used in that instruction
-///   set are simply the correponsing bit mask.
+///   set are simply the corresponding bit mask.
 ///
 ///   So a mask for 8-wide operations is simply an 8-bit unsigned integer.
 ///
@@ -244,7 +244,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     /// a compatible architecture.
     fn arch(self) -> Self::Arch;
 
-    /// Return the default value for the type. This is always the numberic 0 for the
+    /// Return the default value for the type. This is always the numeric 0 for the
     /// associated scalar type.
     fn default(arch: Self::Arch) -> Self;
 
@@ -322,7 +322,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
         mask: <<Self as SIMDVector>::ConstLanes as BitMaskType<Self::Arch>>::Type,
     ) -> Self {
         // SAFETY: Bitmasks must be convertible to their corresponding logical mask.
-        // When the logical mask **is** a bitbask, this is a no-op.
+        // When the logical mask **is** a bitmask, this is a no-op.
         unsafe { Self::load_simd_masked_logical(arch, ptr, mask.into()) }
     }
 
@@ -406,7 +406,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
         mask: <<Self as SIMDVector>::ConstLanes as BitMaskType<Self::Arch>>::Type,
     ) {
         // SAFETY: Bitmasks must be convertible to their corresponding logical mask.
-        // When the logical mask **is** a bitbask, this is a no-op.
+        // When the logical mask **is** a bitmask, this is a no-op.
         unsafe { self.store_simd_masked_logical(ptr, mask.into()) }
     }
 

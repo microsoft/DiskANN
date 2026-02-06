@@ -46,8 +46,8 @@ helpers::unsafe_map_binary_op!(i16x16, std::ops::BitAnd, bitand, _mm256_and_si25
 helpers::unsafe_map_binary_op!(i16x16, std::ops::BitOr, bitor, _mm256_or_si256, "avx2");
 helpers::unsafe_map_binary_op!(i16x16, std::ops::BitXor, bitxor, _mm256_xor_si256, "avx2");
 
-helpers::unsafe_map_binary_op!(i16x16, std::ops::Shr, shr, _mm256_srav_epi16, "avx2");
-helpers::unsafe_map_binary_op!(i16x16, std::ops::Shl, shl, _mm256_sllv_epi16, "avx2");
+helpers::unsafe_map_binary_op!(i16x16, std::ops::Shr, shr, _mm256_srav_epi16, "avx512bw,avx512vl");
+helpers::unsafe_map_binary_op!(i16x16, std::ops::Shl, shl, _mm256_sllv_epi16, "avx512bw,avx512vl");
 helpers::scalar_shift_by_splat!(i16x16, i16);
 
 impl std::ops::Not for i16x16 {

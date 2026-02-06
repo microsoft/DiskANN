@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Tools to pass objects with lifetimes across the funtion pointer API.
+//! Tools to pass objects with lifetimes across the function pointer API.
 //!
 //! Useful helpers include
 //!

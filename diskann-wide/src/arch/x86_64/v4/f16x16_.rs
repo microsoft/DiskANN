@@ -25,7 +25,7 @@ use crate::{
 /////////////////////
 
 macros::x86_define_register!(f16x16, __m256i, BitMask<16, V4>, f16, 16, V4);
-macros::x86_define_default!(f16x16, _mm256_setzero_si256, "sse2");
+macros::x86_define_default!(f16x16, _mm256_setzero_si256, "avx");
 macros::x86_retarget!(f16x16 => v3::f16x16);
 macros::x86_splitjoin!(
     f16x16,
@@ -77,7 +77,7 @@ impl X86LoadStore for f16x16 {
     unsafe fn store_simd_masked_logical(self, ptr: *mut f16, mask: Self::Mask) {
         // SAFETY: Pointer access guaranteed by caller.
         //
-        // `_mm256_maskz_loadu_epi16` requires AVX512BW + AVX512VL - implied by V4.
+        // `_mm256_mask_storeu_epi16` requires AVX512BW + AVX512VL - implied by V4.
         unsafe { _mm256_mask_storeu_epi16(ptr.cast(), mask.0, self.0) }
     }
 }

@@ -37,7 +37,8 @@ helpers::unsafe_map_binary_op!(f32x8, std::ops::Mul, mul, _mm256_mul_ps, "avx");
 impl f32x8 {
     #[inline(always)]
     fn is_nan(self) -> mask32x8 {
-        // NOTE: `_CMP_UNORD_Q` returns `true` only if both arguments are NAN.
+        // NOTE: `_CMP_UNORD_Q` returns `true` if either argument is NaN. Since we compare
+        // `self` with `self`, this returns `true` exactly when `self` is NaN.
         mask32x8::from_underlying(
             self.arch(),
             // SAFETY: `_mm256_castps_si256` and `_mm256_cmp_ps` requires AVX, which is
