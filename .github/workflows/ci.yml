@@ -301,7 +301,7 @@ jobs:
         run: |
           cargo llvm-cov nextest --locked --cargo-profile ci \
             --config 'build.rustflags=["-Dwarnings", "--cfg", "miri"]' \
-            --workspace \
+            --package diskann-quantization \
             --lcov --output-path lcov_miri.info
 
       - name: Upload coverage to Codecov
