@@ -188,7 +188,7 @@ pub(crate) mod tests {
         utils::{IntoUsize, ONE, async_tools::VectorIdBoxSlice},
     };
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::views::Matrix;
+    use diskann_utils::{test_data_root, views::Matrix};
     use diskann_vector::{
         DistanceFunction, PureDistanceFunction,
         distance::{Metric, SquaredL2},
@@ -2363,11 +2363,7 @@ pub(crate) mod tests {
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
             + diskann::provider::SetElement<[f32]>,
     {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let (data_vec, npoints, dim) = file_util::load_bin(&storage, file, 0).unwrap();
         let data =
             Arc::new(Matrix::<f32>::try_from(data_vec.into_boxed_slice(), npoints, dim).unwrap());
@@ -2989,11 +2985,7 @@ pub(crate) mod tests {
         S::PruneStrategy: Clone,
     {
         let ctx = &DefaultContext;
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage = VirtualStorageProvider::new_overlay(test_data_root());
 
         let mut iter = VectorDataIterator::<_, crate::model::graph::traits::AdHoc<f32>>::new(
             file, None, &storage,
@@ -3047,11 +3039,7 @@ pub(crate) mod tests {
         for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
         S::PruneStrategy: Clone,
     {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let (train_data, npoints, dim) = file_util::load_bin(&storage, file, 0).unwrap();
 
         let train_data_view =

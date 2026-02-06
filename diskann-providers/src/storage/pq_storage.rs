@@ -436,6 +436,7 @@ impl PQStorage {
 mod pq_storage_tests {
 
     use crate::storage::VirtualStorageProvider;
+    use diskann_utils::test_data_root;
     use vfs::MemoryFS;
 
     use super::*;
@@ -481,11 +482,7 @@ mod pq_storage_tests {
 
     #[test]
     fn pivot_data_exist_test() {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let result = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
         assert!(result.pivot_data_exist(&storage_provider));
 
@@ -496,11 +493,7 @@ mod pq_storage_tests {
 
     #[test]
     fn read_pivot_metadata_test() {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let result = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
         let (npt, dim) = result
             .read_existing_pivot_metadata(&storage_provider)
@@ -512,11 +505,7 @@ mod pq_storage_tests {
 
     #[test]
     fn load_pivot_data_test() {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let result = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
         let (pq_pivot_data, centroids, chunk_offsets, _) = result
             .load_existing_pivot_data(&1, &256, &128, &storage_provider, false)
@@ -535,11 +524,7 @@ mod pq_storage_tests {
         // Create dummy OPQ matrix with test data
         let dummy_opq_matrix = vec![1.345; OPQ_MATRIX_SIZE];
 
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let pq_storage = PQStorage::new(PQ_PIVOT_PATH, PQ_COMPRESSED_PATH, Some(DATA_FILE));
 
         // Write OPQ test data

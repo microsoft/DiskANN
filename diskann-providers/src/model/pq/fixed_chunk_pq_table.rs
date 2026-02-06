@@ -763,6 +763,7 @@ mod fixed_chunk_pq_table_test {
 
     use crate::storage::{StorageReadProvider, VirtualStorageProvider};
     use approx::assert_relative_eq;
+    use diskann_utils::test_data_root;
     use diskann_vector::{
         PureDistanceFunction,
         distance::{InnerProduct, SquaredL2},
@@ -940,11 +941,7 @@ mod fixed_chunk_pq_table_test {
 
     #[test]
     fn load_pivot_test() {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
@@ -1015,11 +1012,7 @@ mod fixed_chunk_pq_table_test {
 
     #[test]
     fn preprocess_query_test() {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
         let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
@@ -1114,11 +1107,7 @@ mod fixed_chunk_pq_table_test {
 
     #[test]
     fn calculate_distances_tests() {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
         let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
 
