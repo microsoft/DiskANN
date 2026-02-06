@@ -146,8 +146,8 @@ mod normalizing_utils_test {
 
     #[test]
     fn test_normalize_data_file() {
-        let in_file_name = "/test_data/sift/siftsmall_learn_256pts.fbin";
-        let norm_file_name = "/test_data/sift/siftsmall_learn_256pts_normalized.fbin";
+        let in_file_name = "/sift/siftsmall_learn_256pts.fbin";
+        let norm_file_name = "/sift/siftsmall_learn_256pts_normalized.fbin";
         let out_file_name = "/siftsmall_learn_256pts_normalized.fbin";
 
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());

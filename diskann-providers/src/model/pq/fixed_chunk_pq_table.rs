@@ -942,7 +942,7 @@ mod fixed_chunk_pq_table_test {
     #[test]
     fn load_pivot_test() {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
-        let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
+        let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
         let fixed_chunk_pq_table = FixedChunkPQTable::new(
@@ -1014,7 +1014,7 @@ mod fixed_chunk_pq_table_test {
     fn preprocess_query_test() {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
+        let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();
         let fixed_chunk_pq_table = FixedChunkPQTable::new(
@@ -1109,7 +1109,7 @@ mod fixed_chunk_pq_table_test {
     fn calculate_distances_tests() {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let pq_pivots_path: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
+        let pq_pivots_path: &str = "/sift/siftsmall_learn_pq_pivots.bin";
 
         let (dim, pq_table, centroids, chunk_offsets) =
             load_pq_pivots_bin(pq_pivots_path, &1, &storage_provider).unwrap();

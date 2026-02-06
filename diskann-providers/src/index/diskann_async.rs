@@ -2130,7 +2130,7 @@ pub(crate) mod tests {
         }
     }
 
-    const SIFTSMALL: &str = "/test_data/sift/siftsmall_learn_256pts.fbin";
+    const SIFTSMALL: &str = "/sift/siftsmall_learn_256pts.fbin";
 
     #[rstest]
     #[tokio::test]

@@ -269,7 +269,7 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_load() {
         let save_path = "/index";
-        let file_path = "/test_data/sift/siftsmall_learn_256pts.fbin";
+        let file_path = "/sift/siftsmall_learn_256pts.fbin";
         let train_data = {
             let storage = VirtualStorageProvider::new_overlay(test_data_root());
             let (train_data, npoints, dim) = file_util::load_bin(&storage, file_path, 0).unwrap();

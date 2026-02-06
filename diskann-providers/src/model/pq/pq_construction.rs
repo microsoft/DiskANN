@@ -1236,7 +1236,7 @@ mod pq_test {
     fn read_pivot_metadata_existing_test() {
         // no real data except pivot data.
         const DATA_FILE: &str = "/test/test/fake.bin";
-        const PQ_PIVOT_PATH: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
+        const PQ_PIVOT_PATH: &str = "/sift/siftsmall_learn_pq_pivots.bin";
         const PQ_COMPRESSED_PATH: &str = "/test/test/fake.bin";
 
         let mut train_data = vec![0.0; 10 * 5];
@@ -1427,7 +1427,7 @@ mod pq_test {
         // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let data_file = "/test_data/sift/siftsmall_learn.bin";
+        let data_file = "/sift/siftsmall_learn.bin";
         let pq_pivots_path = "/pq_pivots_validation.bin";
         let pq_compressed_vectors_path = "/pq_validation.bin";
         let mut pq_storage: PQStorage =
@@ -1675,9 +1675,9 @@ mod pq_test {
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         type ReaderType = <VirtualStorageProvider<OverlayFS> as StorageReadProvider>::Reader;
 
-        let data_file = "/test_data/sift/siftsmall_learn.bin";
-        let pq_pivots_path = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
-        let ground_truth_path = "/test_data/sift/siftsmall_learn_pq_compressed.bin";
+        let data_file = "/sift/siftsmall_learn.bin";
+        let pq_pivots_path = "/sift/siftsmall_learn_pq_pivots.bin";
+        let ground_truth_path = "/sift/siftsmall_learn_pq_compressed.bin";
         let pq_compressed_vectors_path = "/validation.bin";
         let mut pq_storage =
             PQStorage::new(pq_pivots_path, pq_compressed_vectors_path, Some(data_file));
@@ -1776,7 +1776,7 @@ mod pq_test {
         // Creates a new filesystem using a read/write MemoryFS with PhysicalFS as a fall-back read-only filesystem.
         let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
 
-        let data_file = "/test_data/sift/siftsmall_learn.bin";
+        let data_file = "/sift/siftsmall_learn.bin";
         let pq_pivots_path = "/pq_pivots_validation.bin";
         let pq_compressed_vectors_path = "/pq_validation.bin";
         let pq_storage: PQStorage =

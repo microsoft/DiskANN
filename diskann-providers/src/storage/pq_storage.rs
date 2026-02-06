@@ -442,9 +442,9 @@ mod pq_storage_tests {
     use super::*;
     use crate::utils::{gen_random_slice, read_metadata};
 
-    const DATA_FILE: &str = "/test_data/sift/siftsmall_learn.bin";
-    const PQ_PIVOT_PATH: &str = "/test_data/sift/siftsmall_learn_pq_pivots.bin";
-    const PQ_COMPRESSED_PATH: &str = "/test_data/sift/empty_pq_compressed.bin";
+    const DATA_FILE: &str = "/sift/siftsmall_learn.bin";
+    const PQ_PIVOT_PATH: &str = "/sift/siftsmall_learn_pq_pivots.bin";
+    const PQ_COMPRESSED_PATH: &str = "/sift/empty_pq_compressed.bin";
 
     #[test]
     fn new_test() {
