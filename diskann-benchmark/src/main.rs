@@ -63,8 +63,8 @@ impl Cli {
 
     #[cfg(target_arch = "x86_64")]
     fn check_target(&self, mut output: &mut dyn runner::Output) -> anyhow::Result<()> {
-        use std::io::Write;
         use diskann_wide::Architecture;
+        use std::io::Write;
 
         // The trick we use here is to inspect the compile-time architecture of `diskann-wide`.
         //
