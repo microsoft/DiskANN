@@ -546,6 +546,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "diskann-inmem"
+version = "0.45.0"
+dependencies = [
+ "diskann",
+ "diskann-providers",
+ "diskann-quantization",
+ "diskann-utils",
+ "diskann-vector",
+ "rstest",
+ "thiserror 2.0.17",
+ "tokio",
+ "vfs",
+]
+
+[[package]]
 name = "diskann-label-filter"
 version = "0.45.0"
 dependencies = [
@@ -606,6 +621,7 @@ dependencies = [
  "cfg-if",
  "criterion",
  "diskann",
+ "diskann-inmem",
  "diskann-linalg",
  "diskann-platform",
  "diskann-quantization",

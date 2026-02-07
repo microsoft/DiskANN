@@ -30,7 +30,19 @@ pub mod product;
 #[cfg(test)]
 pub(crate) mod test;
 
+pub mod diskann_async;
+
 // Re-export `CreateVectorStore` from `diskann-providers` where it is defined.
 // The trait is re-exported here for convenience since it is primarily used by the
 // in-mem providers.
 pub use diskann_providers::model::graph::provider::async_::common::CreateVectorStore;
+
+// Implement `HasStartingPoints` for `DefaultProvider` so the generalized `SaveWith`
+// impls in `diskann-providers` work with our provider.
+impl<U, V, D, Ctx> diskann_providers::storage::index_storage::HasStartingPoints
+    for DefaultProvider<U, V, D, Ctx>
+{
+    fn starting_points(&self) -> diskann::ANNResult<Vec<u32>> {
+        self.starting_points()
+    }
+}

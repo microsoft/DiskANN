@@ -7,7 +7,7 @@ pub mod experimental;
 pub mod common;
 pub use common::{PrefetchCacheLineLevel, StartPoints, VectorGuard};
 
-pub(crate) mod postprocess;
+pub mod postprocess;
 
 pub mod distances;
 

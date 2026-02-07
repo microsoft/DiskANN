@@ -20,6 +20,10 @@ thiserror.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 rstest.workspace = true
+vfs.workspace = true
+diskann-providers = { workspace = true, default-features = false, features = [
+    "virtual_storage",
+] }
 
 # Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`
 [lints.rust]

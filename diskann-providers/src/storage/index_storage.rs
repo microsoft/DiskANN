@@ -24,7 +24,7 @@ pub trait HasStartingPoints {
 
 impl<DP> SaveWith<AsyncIndexMetadata> for DiskANNIndex<DP>
 where
-    DP: HasStartingPoints + SaveWith<(u32, AsyncIndexMetadata), Error = ANNError> + Send + Sync,
+    DP: DataProvider + HasStartingPoints + SaveWith<(u32, AsyncIndexMetadata), Error = ANNError> + Send + Sync,
 {
     type Ok = ();
     type Error = ANNError;
@@ -46,7 +46,7 @@ where
 // This implementation saves only graph and not the vector/quant data.
 impl<DP> SaveWith<(u32, DiskGraphOnly)> for DiskANNIndex<DP>
 where
-    DP: HasStartingPoints + SaveWith<(u32, u32, DiskGraphOnly), Error = ANNError> + Send + Sync,
+    DP: DataProvider + HasStartingPoints + SaveWith<(u32, u32, DiskGraphOnly), Error = ANNError> + Send + Sync,
 {
     type Ok = ();
     type Error = ANNError;

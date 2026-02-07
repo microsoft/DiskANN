@@ -3,60 +3,12 @@
  * Licensed under the MIT license.
  */
 
-use std::sync::Arc;
+use diskann::ANNResult;
 
-use diskann::{
-    ANNResult,
-    graph::{Config, DiskANNIndex},
-    utils::VectorRepr,
-};
-use diskann_utils::future::AsyncFriendly;
+use crate::model;
 
-use crate::model::{
-    self,
-    graph::provider::async_::{
-        common::{CreateDeleteProvider, CreateVectorStore, NoDeletes, NoStore},
-        inmem::{
-            CreateFullPrecision, DefaultProvider, DefaultProviderParameters, DefaultQuant,
-            FullPrecisionProvider,
-        },
-    },
-};
-
-/////////////////////////
-// Helper Constructors //
-/////////////////////////
-
-#[cfg(test)]
-pub(crate) fn simplified_builder(
-    l_search: usize,
-    pruned_degree: usize,
-    metric: diskann_vector::distance::Metric,
-    dim: usize,
-    max_points: usize,
-    modify: impl FnOnce(&mut diskann::graph::config::Builder),
-) -> ANNResult<(Config, DefaultProviderParameters)> {
-    let config = diskann::graph::config::Builder::new_with(
-        pruned_degree,
-        diskann::graph::config::MaxDegree::default_slack(),
-        l_search,
-        metric.into(),
-        modify,
-    )
-    .build()?;
-
-    let params = DefaultProviderParameters {
-        max_points,
-        frozen_points: diskann::utils::ONE,
-        metric,
-        dim,
-        prefetch_lookahead: None,
-        prefetch_cache_line_level: None,
-        max_degree: config.max_degree_u32().get(),
-    };
-
-    Ok((config, params))
-}
+// Type aliases and index construction functions that depend on the in-memory
+// providers have been moved to the `diskann-inmem` crate.
 
 pub fn train_pq<Pool>(
     data: diskann_utils::views::MatrixView<f32>,
@@ -98,63 +50,6 @@ where
         offsets.into(),
         None,
     )
-}
-
-pub type MemoryIndex<T, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionProvider<T, NoStore, D>>>;
-
-pub type QuantMemoryIndex<T, Q, D = NoDeletes> = Arc<DiskANNIndex<FullPrecisionProvider<T, Q, D>>>;
-
-pub type PQMemoryIndex<T, D = NoDeletes> = QuantMemoryIndex<T, DefaultQuant, D>;
-
-pub type QuantOnlyIndex<Q, D = NoDeletes> = DiskANNIndex<DefaultProvider<NoStore, Q, D>>;
-
-pub fn new_index<T, D>(
-    config: Config,
-    params: DefaultProviderParameters,
-    deleter: D,
-) -> ANNResult<MemoryIndex<T, D::Target>>
-where
-    T: VectorRepr,
-    D: CreateDeleteProvider,
-    D::Target: AsyncFriendly,
-{
-    let fp_precursor = CreateFullPrecision::new(params.dim, params.prefetch_cache_line_level);
-    let data_provider = DefaultProvider::new_empty(params, fp_precursor, NoStore, deleter)?;
-    Ok(Arc::new(DiskANNIndex::new(config, data_provider, None)))
-}
-
-pub fn new_quant_index<T, Q, D>(
-    config: Config,
-    params: DefaultProviderParameters,
-    quant: Q,
-    deleter: D,
-) -> ANNResult<QuantMemoryIndex<T, Q::Target, D::Target>>
-where
-    T: VectorRepr,
-    Q: CreateVectorStore,
-    Q::Target: AsyncFriendly,
-    D: CreateDeleteProvider,
-    D::Target: AsyncFriendly,
-{
-    let fp_precursor = CreateFullPrecision::new(params.dim, params.prefetch_cache_line_level);
-    let data_provider = DefaultProvider::new_empty(params, fp_precursor, quant, deleter)?;
-    Ok(Arc::new(DiskANNIndex::new(config, data_provider, None)))
-}
-
-pub fn new_quant_only_index<Q, D>(
-    config: Config,
-    params: DefaultProviderParameters,
-    quant: Q,
-    deleter: D,
-) -> ANNResult<QuantOnlyIndex<Q::Target, D::Target>>
-where
-    Q: CreateVectorStore,
-    Q::Target: AsyncFriendly,
-    D: CreateDeleteProvider,
-    D::Target: AsyncFriendly,
-{
-    let data = DefaultProvider::new_empty(params, NoStore, quant, deleter)?;
-    Ok(DiskANNIndex::new(config, data, None))
 }
 
 ///////////
@@ -202,7 +97,6 @@ pub(crate) mod tests {
             async_::{
                 TableDeleteProviderAsync,
                 common::{FullPrecision, Hybrid, NoDeletes, Quantized, TableBasedDeletes},
-                inmem::{self, DefaultQuant, SetStartPoints},
             },
             layers::BetaFilter,
         },
@@ -211,6 +105,7 @@ pub(crate) mod tests {
         },
         utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests, file_util},
     };
+    use diskann_inmem::{self as inmem, DefaultQuant, SetStartPoints};
 
     // Callbacks for use with `simplified_builder`.
     fn no_modify(_: &mut diskann::graph::config::Builder) {}

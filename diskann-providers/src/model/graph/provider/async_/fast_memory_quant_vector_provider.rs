@@ -82,7 +82,7 @@ impl FastMemoryQuantVectorProviderAsync {
     }
 
     /// Return the metric associated with this provider.
-    pub(crate) fn metric(&self) -> Metric {
+    pub fn metric(&self) -> Metric {
         self.metric
     }
     /// Return the total number of points (including frozen points) included in `self.
@@ -136,7 +136,7 @@ impl FastMemoryQuantVectorProviderAsync {
     ///
     /// 2. Be okay with racey data.
     #[inline(always)]
-    pub(crate) unsafe fn get_vector_sync(&self, i: usize) -> &[u8] {
+    pub unsafe fn get_vector_sync(&self, i: usize) -> &[u8] {
         self.num_get_calls.increment();
         // SAFETY: The function called here has the same pre and post-conditions as the caller.
         unsafe { self.quant_vectors.get_slice(i) }
