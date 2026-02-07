@@ -495,7 +495,13 @@ impl<T: ReprOwned> Mat<T> {
         }
     }
 
-    pub(crate) unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
+    /// Returns the i-th row without bounds checking.
+    ///
+    /// # Safety
+    ///
+    /// `i` must be less than `self.num_vectors()`.
+    #[inline]
+    pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors(). The constructors for this type
         // ensure that `ptr` is compatible with `T`.
         unsafe { self.repr.get_row(self.ptr, i) }
@@ -581,6 +587,17 @@ impl<T: Copy> Mat<Standard<T>> {
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
     }
+
+    /// Returns the underlying data as a contiguous slice.
+    ///
+    /// The data is stored in row-major order: `[row0_col0, row0_col1, ..., row0_colN, row1_col0, ...]`.
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
+        let len = self.repr.nrows() * self.repr.ncols();
+        // SAFETY: Standard representation guarantees contiguous row-major layout.
+        // The Mat was constructed with valid data of the correct length.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast::<T>(), len) }
+    }
 }
 
 ////////////
@@ -651,7 +668,7 @@ impl<'a, T: Repr> MatRef<'a, T> {
     ///
     /// `i` must be less than `self.num_vectors()`.
     #[inline]
-    pub(crate) unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
+    pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors().
         unsafe { self.repr.get_row(self.ptr, i) }
     }
@@ -682,6 +699,17 @@ impl<'a, T: Copy> MatRef<'a, Standard<T>> {
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    /// Returns the underlying data as a contiguous slice.
+    ///
+    /// The data is stored in row-major order: `[row0_col0, row0_col1, ..., row0_colN, row1_col0, ...]`.
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
+        let len = self.repr.nrows() * self.repr.ncols();
+        // SAFETY: Standard representation guarantees contiguous row-major layout.
+        // The MatRef was constructed with valid data of the correct length.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr().cast::<T>(), len) }
     }
 }
 
@@ -784,7 +812,7 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
     ///
     /// `i` must be less than `self.num_vectors()`.
     #[inline]
-    pub(crate) unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
+    pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors().
         unsafe { self.repr.get_row(self.ptr, i) }
     }

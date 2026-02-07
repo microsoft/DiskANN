@@ -1,0 +1,1267 @@
+[
+  {
+    "input": {
+      "content": {
+        "approach": "simd",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 16,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          }
+        ],
+        "verify": false
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 2619.02,
+          "median": 2236.5,
+          "p90": 3932,
+          "p99": 5626
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 9659.88,
+          "median": 9224.0,
+          "p90": 11661,
+          "p99": 16490
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 49105.44,
+          "median": 47882.0,
+          "p90": 57101,
+          "p99": 59022
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 5260.0,
+          "median": 4653.5,
+          "p90": 7481,
+          "p99": 10543
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 28620.08,
+          "median": 25809.0,
+          "p90": 36768,
+          "p99": 53266
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 104133.9,
+          "median": 101093.0,
+          "p90": 110701,
+          "p99": 139688
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 8787.02,
+          "median": 8239.0,
+          "p90": 9846,
+          "p99": 19058
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 16,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 8881.02,
+          "median": 8411.5,
+          "p90": 10288,
+          "p99": 16025
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 38982.54,
+          "median": 38161.5,
+          "p90": 41242,
+          "p99": 51669
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 176903.96,
+          "median": 171430.5,
+          "p90": 213961,
+          "p99": 235763
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "transposed_simd",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 16,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          }
+        ],
+        "verify": false
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 2583.94,
+          "median": 1668.0,
+          "p90": 5592,
+          "p99": 8338
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 6965.02,
+          "median": 6473.5,
+          "p90": 8112,
+          "p99": 13699
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 40871.14,
+          "median": 36205.5,
+          "p90": 65956,
+          "p99": 95103
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 3999.1,
+          "median": 3695.0,
+          "p90": 4938,
+          "p99": 9665
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 17661.14,
+          "median": 16528.5,
+          "p90": 21241,
+          "p99": 33413
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 73454.08,
+          "median": 71689.5,
+          "p90": 80504,
+          "p99": 92498
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 7163.36,
+          "median": 6726.0,
+          "p90": 8500,
+          "p99": 12427
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 16,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 6511.42,
+          "median": 5956.0,
+          "p90": 7538,
+          "p99": 13942
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 31328.02,
+          "median": 29352.0,
+          "p90": 36458,
+          "p99": 53238
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 115811.66,
+          "median": 112375.5,
+          "p90": 133449,
+          "p99": 165565
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "transposed_with_tiling",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 16,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          }
+        ],
+        "verify": false
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 2050.04,
+          "median": 1281.5,
+          "p90": 4716,
+          "p99": 5114
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 5369.06,
+          "median": 4458.5,
+          "p90": 7185,
+          "p99": 20556
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 29915.1,
+          "median": 25710.5,
+          "p90": 47347,
+          "p99": 69910
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 3458.14,
+          "median": 2758.0,
+          "p90": 5144,
+          "p99": 10795
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 15840.54,
+          "median": 13289.0,
+          "p90": 26007,
+          "p99": 37759
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 65014.14,
+          "median": 59231.5,
+          "p90": 92056,
+          "p99": 105748
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 5269.28,
+          "median": 4641.5,
+          "p90": 7368,
+          "p99": 11010
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 16,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 5924.42,
+          "median": 5094.5,
+          "p90": 8496,
+          "p99": 14387
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 27112.44,
+          "median": 25971.5,
+          "p90": 32414,
+          "p99": 57985
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 93114.02,
+          "median": 88488.0,
+          "p90": 114377,
+          "p99": 126912
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "query_transposed_with_tiling",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 16,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          }
+        ],
+        "verify": false
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 2737.42,
+          "median": 2125.0,
+          "p90": 3948,
+          "p99": 8440
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 4736.12,
+          "median": 3923.0,
+          "p90": 6618,
+          "p99": 14193
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 20463.8,
+          "median": 18123.5,
+          "p90": 34167,
+          "p99": 38949
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 5325.46,
+          "median": 4119.5,
+          "p90": 10821,
+          "p99": 15835
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 12167.86,
+          "median": 10770.0,
+          "p90": 18693,
+          "p99": 24051
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 38737.54,
+          "median": 37825.5,
+          "p90": 44695,
+          "p99": 60780
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 4805.74,
+          "median": 4073.0,
+          "p90": 7665,
+          "p99": 11767
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 16,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 7505.82,
+          "median": 6493.0,
+          "p90": 9394,
+          "p99": 20680
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 23943.58,
+          "median": 22457.5,
+          "p90": 32867,
+          "p99": 36549
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 85142.66,
+          "median": 84216.5,
+          "p90": 99213,
+          "p99": 115430
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "sgemm",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 128,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 256,
+            "loops_per_measurement": 10,
+            "num_doc_token": 16,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 32,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 8
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 64,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 16
+          },
+          {
+            "dim": 384,
+            "loops_per_measurement": 10,
+            "num_doc_token": 128,
+            "num_measurements": 50,
+            "num_points": 100,
+            "num_query_token": 32
+          }
+        ],
+        "verify": false
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 2816.1,
+          "median": 1974.5,
+          "p90": 5313,
+          "p99": 10544
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 6950.22,
+          "median": 6217.0,
+          "p90": 8113,
+          "p99": 16349
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 28288.28,
+          "median": 25519.0,
+          "p90": 40668,
+          "p99": 71398
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 5934.08,
+          "median": 4850.5,
+          "p90": 12171,
+          "p99": 23287
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 14509.7,
+          "median": 13783.0,
+          "p90": 16174,
+          "p99": 26689
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 53404.38,
+          "median": 51651.0,
+          "p90": 60145,
+          "p99": 68631
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 5853.86,
+          "median": 5245.5,
+          "p90": 7933,
+          "p99": 9907
+        },
+        "run": {
+          "dim": 256,
+          "loops_per_measurement": 10,
+          "num_doc_token": 16,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 7287.5,
+          "median": 6784.5,
+          "p90": 9495,
+          "p99": 13360
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 32,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 8
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 23220.62,
+          "median": 23043.0,
+          "p90": 26293,
+          "p99": 34596
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 64,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 16
+        }
+      },
+      {
+        "percentiles": {
+          "mean": 83098.88,
+          "median": 79397.5,
+          "p90": 96292,
+          "p99": 141549
+        },
+        "run": {
+          "dim": 384,
+          "loops_per_measurement": 10,
+          "num_doc_token": 128,
+          "num_measurements": 50,
+          "num_points": 100,
+          "num_query_token": 32
+        }
+      }
+    ]
+  }
+]
