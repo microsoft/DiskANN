@@ -381,7 +381,7 @@ impl Level {
 
 cfg_if::cfg_if! {
     if #[cfg(any(target_arch = "x86_64", doc))] {
-        // Delegate to the architecture selection within the `x86_64` module,.
+        // Delegate to the architecture selection within the `x86_64` module.
         pub mod x86_64;
 
         use x86_64::LevelInner;
