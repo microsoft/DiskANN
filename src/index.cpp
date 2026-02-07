@@ -15,6 +15,9 @@
 #if defined(RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS) && defined(DISKANN_BUILD)
 #include "gperftools/malloc_extension.h"
 #endif
+#ifdef _ANN_ALLOCATOR
+#include "thread_context.h"
+#endif
 
 #ifdef _WINDOWS
 #include <xmmintrin.h>
@@ -1790,7 +1793,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
     diskann::Timer link_timer;
 
+#ifdef _ANN_ALLOCATOR
+    OmpParallelContext context;
+#pragma omp parallel for schedule(dynamic, 2048) firstprivate(context)
+#else
 #pragma omp parallel for schedule(dynamic, 2048)
+#endif
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
         auto node = visit_order[node_ctr];
@@ -1829,7 +1837,11 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     {
         diskann::cout << "Starting final cleanup.." << std::flush;
     }
+#ifdef _ANN_ALLOCATOR
+#pragma omp parallel for schedule(dynamic, 2048) firstprivate(context)
+#else
 #pragma omp parallel for schedule(dynamic, 2048)
+#endif
     for (int64_t node_ctr = 0; node_ctr < (int64_t)(visit_order.size()); node_ctr++)
     {
         auto node = visit_order[node_ctr];
@@ -1873,7 +1885,12 @@ void Index<T, TagT, LabelT>::prune_all_neighbors(const uint32_t max_degree, cons
     _filtered_index = true;
 
     diskann::Timer timer;
+#ifdef _ANN_ALLOCATOR
+    OmpParallelContext context;
+#pragma omp parallel for firstprivate(context)
+#else
 #pragma omp parallel for
+#endif
     for (int64_t node = 0; node < (int64_t)(_max_points + _num_frozen_pts); node++)
     {
         if ((size_t)node < _nd || (size_t)node >= _max_points)
@@ -3030,7 +3047,12 @@ consolidation_report Index<T, TagT, LabelT>::consolidate_deletes(const IndexWrit
 
     uint32_t num_calls_to_process_delete = 0;
     diskann::Timer timer;
+#ifdef  _ANN_ALLOCATOR
+    OmpParallelContext context;
+#pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192) reduction(+ : num_calls_to_process_delete) firstprivate(context)
+#else
 #pragma omp parallel for num_threads(num_threads) schedule(dynamic, 8192) reduction(+ : num_calls_to_process_delete)
+#endif
     for (int64_t loc = 0; loc < (int64_t)_max_points; loc++)
     {
         if (old_delete_set->find((uint32_t)loc) == old_delete_set->end() && !_empty_slots.is_in_set((uint32_t)loc))
