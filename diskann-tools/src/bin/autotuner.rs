@@ -552,3 +552,178 @@ fn save_json<T: serde::Serialize>(path: &Path, data: &T) -> Result<()> {
     serde_json::to_writer_pretty(file, data)
         .with_context(|| format!("Failed to write JSON to: {}", path.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sweep_config_serialization() {
+        let config = SweepConfig {
+            max_degree: Some(vec![16, 32, 64]),
+            l_build: Some(vec![50, 100]),
+            search_l: Some(vec![10, 20, 30]),
+            num_pq_chunks: Some(vec![8, 16]),
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: SweepConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(config.max_degree, deserialized.max_degree);
+        assert_eq!(config.l_build, deserialized.l_build);
+        assert_eq!(config.search_l, deserialized.search_l);
+        assert_eq!(config.num_pq_chunks, deserialized.num_pq_chunks);
+    }
+
+    #[test]
+    fn test_generate_configurations() {
+        let base_config = serde_json::json!({
+            "search_directories": ["test_data"],
+            "jobs": [{
+                "type": "async-index-build",
+                "content": {
+                    "source": {
+                        "index-source": "Build",
+                        "data_type": "float32",
+                        "data": "data.fbin",
+                        "distance": "squared_l2",
+                        "max_degree": 32,
+                        "l_build": 50,
+                        "alpha": 1.2,
+                        "num_threads": 1
+                    },
+                    "search_phase": {
+                        "search-type": "topk",
+                        "queries": "queries.fbin",
+                        "groundtruth": "gt.bin",
+                        "reps": 1,
+                        "num_threads": [1],
+                        "runs": [{
+                            "search_n": 10,
+                            "search_l": [20],
+                            "recall_k": 10
+                        }]
+                    }
+                }
+            }]
+        });
+
+        let sweep_config = SweepConfig {
+            max_degree: Some(vec![16, 32]),
+            l_build: Some(vec![50, 100]),
+            search_l: Some(vec![10, 20, 30]),
+            num_pq_chunks: None,
+        };
+
+        let configs = generate_configurations(&base_config, &sweep_config).unwrap();
+
+        // Should generate 2 max_degree * 2 l_build = 4 configurations
+        assert_eq!(configs.len(), 4);
+
+        // Check that parameters are correctly set
+        for (config_id, config, params) in configs {
+            assert!(config_id.contains("R"));
+            assert!(config_id.contains("L"));
+            assert!(params.contains_key("max_degree"));
+            assert!(params.contains_key("l_build"));
+            assert!(params.contains_key("search_l"));
+
+            // Verify the config has updated values
+            let job = &config["jobs"][0];
+            let source = &job["content"]["source"];
+            let max_degree = source["max_degree"].as_u64().unwrap() as u32;
+            let l_build = source["l_build"].as_u64().unwrap() as u32;
+
+            assert!(max_degree == 16 || max_degree == 32);
+            assert!(l_build == 50 || l_build == 100);
+        }
+    }
+
+    #[test]
+    fn test_benchmark_metrics() {
+        let metrics = BenchmarkMetrics {
+            qps: vec![1000.0, 2000.0, 1500.0],
+            recall: vec![0.95, 0.97, 0.99],
+            latency_p50: None,
+            latency_p90: None,
+            latency_p99: None,
+        };
+
+        // Test serialization
+        let json = serde_json::to_string(&metrics).unwrap();
+        let deserialized: BenchmarkMetrics = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(metrics.qps, deserialized.qps);
+        assert_eq!(metrics.recall, deserialized.recall);
+    }
+
+    #[test]
+    fn test_find_best_configuration_qps() {
+        let results = vec![
+            SweepResult {
+                config_id: "config1".to_string(),
+                parameters: HashMap::new(),
+                metrics: BenchmarkMetrics {
+                    qps: vec![1000.0, 1500.0],
+                    recall: vec![0.94, 0.96],
+                    latency_p50: None,
+                    latency_p90: None,
+                    latency_p99: None,
+                },
+                output_file: PathBuf::from("output1.json"),
+            },
+            SweepResult {
+                config_id: "config2".to_string(),
+                parameters: HashMap::new(),
+                metrics: BenchmarkMetrics {
+                    qps: vec![2000.0, 2500.0],
+                    recall: vec![0.96, 0.98],
+                    latency_p50: None,
+                    latency_p90: None,
+                    latency_p99: None,
+                },
+                output_file: PathBuf::from("output2.json"),
+            },
+        ];
+
+        let best = find_best_configuration(&results, "qps", Some(0.95)).unwrap();
+        
+        // config2 has higher QPS at recall >= 0.95
+        assert_eq!(best.config_id, "config2");
+    }
+
+    #[test]
+    fn test_find_best_configuration_recall() {
+        let results = vec![
+            SweepResult {
+                config_id: "config1".to_string(),
+                parameters: HashMap::new(),
+                metrics: BenchmarkMetrics {
+                    qps: vec![1000.0],
+                    recall: vec![0.95],
+                    latency_p50: None,
+                    latency_p90: None,
+                    latency_p99: None,
+                },
+                output_file: PathBuf::from("output1.json"),
+            },
+            SweepResult {
+                config_id: "config2".to_string(),
+                parameters: HashMap::new(),
+                metrics: BenchmarkMetrics {
+                    qps: vec![800.0],
+                    recall: vec![0.99],
+                    latency_p50: None,
+                    latency_p90: None,
+                    latency_p99: None,
+                },
+                output_file: PathBuf::from("output2.json"),
+            },
+        ];
+
+        let best = find_best_configuration(&results, "recall", None).unwrap();
+        
+        // config2 has higher recall
+        assert_eq!(best.config_id, "config2");
+    }
+}
