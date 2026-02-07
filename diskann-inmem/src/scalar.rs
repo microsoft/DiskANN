@@ -21,16 +21,14 @@ use diskann::{
 use diskann_quantization::{
     AsFunctor, CompressInto,
     bits::{Representation, Unsigned},
-    meta::NotCanonical,
     scalar::{
         CompensatedCosineNormalized, CompensatedIP, CompensatedSquaredL2, CompensatedVector,
-        CompensatedVectorRef, InputContainsNaN, MeanNormMissing, MutCompensatedVectorRef,
+        CompensatedVectorRef, MutCompensatedVectorRef,
         ScalarQuantizer,
     },
 };
 use diskann_utils::{Reborrow, ReborrowMut, future::AsyncFriendly};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
-use thiserror::Error;
 
 use super::{DefaultProvider, GetFullPrecision, Rerank};
 use crate::CreateVectorStore;

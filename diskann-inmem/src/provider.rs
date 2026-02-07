@@ -10,10 +10,8 @@ use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::neighbor::Neighbor;
 use diskann::{
     ANNError, ANNResult,
-    graph::AdjacencyList,
     provider::{
-        DataProvider, DefaultAccessor, DefaultContext, Delete, ElementStatus, ExecutionContext,
-        NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
+        DataProvider, DefaultAccessor, DefaultContext, Delete, ElementStatus, ExecutionContext, NoopGuard, SetElement,
     },
     utils::{IntoUsize, ONE, VectorRepr},
 };

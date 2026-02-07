@@ -26,7 +26,6 @@ use diskann_quantization::{
     spherical,
 };
 use diskann_utils::future::AsyncFriendly;
-use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use super::{GetFullPrecision, Rerank};
@@ -53,24 +52,23 @@ use crate::{DefaultProvider, FullPrecisionProvider, FullPrecisionStore};
 // Error Promotion //
 /////////////////////
 
-impl From<Bridge<QueryComputerError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<QueryComputerError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
+// `From<Bridge<QueryComputerError>> for ANNError` is an orphan rule violation because:
+//   - From is defined in std
+//   - Bridge is defined in diskann-providers
+//   - ANNError is defined in diskann
+//   - QueryComputerError is defined in diskann-inmem (local)
+// Neither the trait (From) nor the implementing type (ANNError) is local.
+// Workaround: Use a local newtype wrapper for the error conversion.
 
-impl From<Bridge<diskann_quantization::spherical::CompressionError>> for ANNError {
-    #[track_caller]
-    fn from(err: Bridge<diskann_quantization::spherical::CompressionError>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
-    }
-}
+/// Local wrapper to allow conversion from `Bridge<QueryComputerError>` to `ANNError`.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct BridgedQueryComputerError(pub Bridge<QueryComputerError>);
 
-impl From<Bridge<spherical::UnsupportedMetric>> for ANNError {
+impl From<BridgedQueryComputerError> for ANNError {
     #[track_caller]
-    fn from(err: Bridge<spherical::UnsupportedMetric>) -> Self {
-        ANNError::new(ANNErrorKind::SQError, err)
+    fn from(err: BridgedQueryComputerError) -> Self {
+        ANNError::new(ANNErrorKind::SQError, err.0)
     }
 }
 
@@ -246,29 +244,20 @@ impl VectorStore for SphericalStore {
 // Data Provider //
 ///////////////////
 
-macro_rules! create_vector_store {
-    ($N:literal) => {
-        impl CreateVectorStore for spherical::iface::Impl<$N> {
-            type Target = SphericalStore;
-
-            fn create(
-                self,
-                max_points: usize,
-                metric: Metric,
-                prefetch_lookahead: Option<usize>,
-            ) -> Self::Target {
-                assert_eq!(self.quantizer().metric(), metric, "mismatched metrics!");
-                SphericalStore::new(self, max_points, prefetch_lookahead)
-            }
-        }
-    };
-    ($N:literal, $($Ns:literal),*) => {
-        create_vector_store!($N);
-        $(create_vector_store!($Ns);)*
-    };
-}
-
-create_vector_store!(1, 2, 4);
+// NOTE: `impl CreateVectorStore for spherical::iface::Impl<N>` impls are orphan rule
+// violations in diskann-inmem because:
+//   - CreateVectorStore is defined in diskann-providers
+//   - spherical::iface::Impl is defined in diskann-quantization
+//   - SphericalStore (the Target) is defined in diskann-inmem
+// None of these types are local to the same crate, so the impl cannot satisfy Rust's
+// orphan rules. This requires a design change: either move CreateVectorStore to
+// diskann-inmem, or move SphericalStore to diskann-providers, or create a newtype
+// wrapper in diskann-inmem.
+//
+// The impls that would need to exist are:
+//   impl CreateVectorStore for spherical::iface::Impl<1>
+//   impl CreateVectorStore for spherical::iface::Impl<2>
+//   impl CreateVectorStore for spherical::iface::Impl<4>
 
 ////////////////
 // SetElement //
@@ -449,7 +438,7 @@ where
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    type QueryComputerError = Bridge<QueryComputerError>;
+    type QueryComputerError = BridgedQueryComputerError;
     type QueryComputer =
         UnwrapErr<spherical::iface::QueryComputer, spherical::iface::QueryDistanceError>;
 
@@ -462,6 +451,7 @@ where
             .query_computer(query, self.layout, self.is_search)
             .bridge_err()
             .map(UnwrapErr::new)
+            .map_err(BridgedQueryComputerError)
     }
 }
 
