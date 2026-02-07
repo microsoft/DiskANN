@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Native (DiskANN built-in) data providers and strategies for async index build and search.
+//! Native (DiskANN built-in) in-memory data providers and strategies for async index build and search.
 
 mod provider;
 
@@ -23,9 +23,14 @@ mod full_precision;
 pub use full_precision::{
     CreateFullPrecision, FullAccessor, FullPrecisionProvider, FullPrecisionStore,
 };
-pub(super) use full_precision::{GetFullPrecision, Rerank};
+pub(crate) use full_precision::{GetFullPrecision, Rerank};
 
 #[cfg(test)]
 pub mod product;
 #[cfg(test)]
 pub(crate) mod test;
+
+// Re-export `CreateVectorStore` from `diskann-providers` where it is defined.
+// The trait is re-exported here for convenience since it is primarily used by the
+// in-mem providers.
+pub use diskann_providers::model::graph::provider::async_::common::CreateVectorStore;

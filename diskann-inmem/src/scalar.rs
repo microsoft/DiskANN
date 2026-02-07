@@ -33,22 +33,23 @@ use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::M
 use thiserror::Error;
 
 use super::{DefaultProvider, GetFullPrecision, Rerank};
-use crate::{
+use crate::CreateVectorStore;
+use diskann_providers::{
     common::IgnoreLockPoison,
     model::graph::{
         provider::async_::{
             FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
             common::{
-                AlignedMemoryVectorStore, CreateVectorStore, NoStore, Quantized, SetElementHelper,
+                AlignedMemoryVectorStore, NoStore, Quantized, SetElementHelper,
                 TestCallCount, VectorStore,
             },
-            inmem::{FullPrecisionProvider, FullPrecisionStore},
             postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
         },
         traits::AdHoc,
     },
     storage::{self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
 };
+use crate::{FullPrecisionProvider, FullPrecisionStore};
 
 type CVRef<'a, const NBITS: usize> = CompensatedVectorRef<'a, NBITS>;
 

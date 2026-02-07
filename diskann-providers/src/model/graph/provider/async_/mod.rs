@@ -29,8 +29,8 @@ pub use fast_memory_vector_provider::FastMemoryVectorProviderAsync;
 pub mod fast_memory_quant_vector_provider;
 pub use fast_memory_quant_vector_provider::FastMemoryQuantVectorProviderAsync;
 
-// The default `inmem` data provider for the async index.
-pub mod inmem;
+// The default `inmem` data provider for the async index has been moved to the
+// `diskann-inmem` crate.
 
 // Bf-tree based data provider for the async index
 #[cfg(feature = "bf_tree")]

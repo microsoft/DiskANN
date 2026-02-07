@@ -447,3 +447,30 @@ mod tests {
         }
     }
 }
+
+// NeighborAccessor and NeighborAccessorMut impls for &SimpleNeighborProviderAsync<u32>
+// These live here because both the type (SimpleNeighborProviderAsync) and the impls must
+// be in the same crate. These impls were previously in the inmem module.
+
+impl diskann::provider::NeighborAccessor for &SimpleNeighborProviderAsync<u32> {
+    async fn get_neighbors(
+        self,
+        id: Self::Id,
+        neighbors: &mut AdjacencyList<Self::Id>,
+    ) -> ANNResult<Self> {
+        self.get_neighbors_sync(diskann::utils::IntoUsize::into_usize(id), neighbors)?;
+        Ok(self)
+    }
+}
+
+impl diskann::provider::NeighborAccessorMut for &SimpleNeighborProviderAsync<u32> {
+    async fn set_neighbors(self, id: u32, neighbors: &[u32]) -> ANNResult<Self> {
+        self.set_neighbors_sync(diskann::utils::IntoUsize::into_usize(id), neighbors)?;
+        Ok(self)
+    }
+
+    async fn append_vector(self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<Self> {
+        self.append_vector_sync(diskann::utils::IntoUsize::into_usize(id), new_neighbor_ids)?;
+        Ok(self)
+    }
+}

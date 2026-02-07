@@ -30,23 +30,24 @@ use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use super::{GetFullPrecision, Rerank};
-use crate::{
+use crate::CreateVectorStore;
+use diskann_providers::{
     common::IgnoreLockPoison,
     model::graph::{
         provider::async_::{
             FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
             common::{
-                AlignedMemoryVectorStore, CreateVectorStore, NoStore, SetElementHelper,
+                AlignedMemoryVectorStore, NoStore, SetElementHelper,
                 TestCallCount, VectorStore,
             },
             distances::UnwrapErr,
-            inmem::{DefaultProvider, FullPrecisionProvider, FullPrecisionStore},
             postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
         },
         traits::AdHoc,
     },
     utils::{Bridge, BridgeErr},
 };
+use crate::{DefaultProvider, FullPrecisionProvider, FullPrecisionStore};
 
 /////////////////////
 // Error Promotion //
