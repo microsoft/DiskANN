@@ -14,22 +14,19 @@ use diskann::{
     utils::VectorRepr,
     ANNError, ANNResult,
 };
+use diskann_inmem::{
+    DefaultProvider, DefaultProviderParameters, DefaultQuant, FullPrecisionProvider, SQStore,
+    SetStartPoints, diskann_async, storage::load_fp_index, storage::load_index,
+};
 use diskann_providers::storage::{DynWriteProvider, StorageReadProvider, WriteProviderWrapper};
 use diskann_providers::{
-    index::diskann_async,
     model::{
-        graph::provider::async_::{
-            common::{FullPrecision, NoDeletes, NoStore, Quantized, SetElementHelper, VectorStore},
-            inmem::{
-                DefaultProvider, DefaultProviderParameters, DefaultQuant, FullPrecisionProvider,
-                SQStore, SetStartPoints,
-            },
+        graph::provider::async_::common::{
+            FullPrecision, NoDeletes, NoStore, Quantized, SetElementHelper, VectorStore,
         },
         IndexConfiguration,
     },
-    storage::{
-        index_storage::load_index, load_fp_index, AsyncIndexMetadata, DiskGraphOnly, SaveWith,
-    },
+    storage::{AsyncIndexMetadata, DiskGraphOnly, SaveWith},
 };
 use diskann_utils::future::{AsyncFriendly, SendFuture};
 

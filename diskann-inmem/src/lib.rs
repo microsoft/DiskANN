@@ -32,6 +32,8 @@ pub(crate) mod test;
 
 pub mod diskann_async;
 
+pub mod storage;
+
 // Re-export `CreateVectorStore` from `diskann-providers` where it is defined.
 // The trait is re-exported here for convenience since it is primarily used by the
 // in-mem providers.

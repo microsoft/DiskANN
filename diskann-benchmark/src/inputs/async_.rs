@@ -15,11 +15,9 @@ use diskann_benchmark_core::streaming::executors::bigann;
 use diskann_benchmark_runner::{
     files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
 };
+use diskann_inmem::DefaultProviderParameters;
 use diskann_providers::{
-    model::{
-        configuration::IndexConfiguration,
-        graph::provider::async_::inmem::DefaultProviderParameters,
-    },
+    model::configuration::IndexConfiguration,
     utils::load_metadata_from_file,
 };
 use serde::{Deserialize, Serialize};

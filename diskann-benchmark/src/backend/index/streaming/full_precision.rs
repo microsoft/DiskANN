@@ -12,9 +12,9 @@ use diskann::{
     ANNError, ANNErrorKind, ANNResult,
 };
 use diskann_benchmark_core::recall::Rows;
+use diskann_inmem::{self as inmem, DefaultProvider};
 use diskann_providers::model::graph::provider::async_::{
     common,
-    inmem::{self, DefaultProvider},
     TableDeleteProviderAsync,
 };
 use diskann_utils::{
