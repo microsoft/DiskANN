@@ -18,6 +18,14 @@ pub mod v4;
 pub use v3::V3;
 pub use v4::V4;
 
+// The ordering is `Scalar < V3 < V4`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum LevelInner {
+    Scalar,
+    V3,
+    V4,
+}
+
 ////////////////////////////
 // Architecture Selection //
 ////////////////////////////
@@ -526,5 +534,34 @@ mod tests {
             assert_eq!(x, 20);
             assert_eq!(y, "foo");
         }
+    }
+
+    #[test]
+    fn test_level_ordering() {
+        use crate::Architecture;
+
+        let scalar = Scalar::level();
+        let v3 = V3::level();
+        let v4 = V4::level();
+
+        // Scalar < V3 < V4
+        assert!(scalar < v3);
+        assert!(scalar < v4);
+        assert!(v3 < v4);
+
+        // Reverse
+        assert!(v4 > v3);
+        assert!(v4 > scalar);
+        assert!(v3 > scalar);
+
+        // Equality
+        assert_eq!(scalar, Scalar::level());
+        assert_eq!(v3, V3::level());
+        assert_eq!(v4, V4::level());
+
+        // Not equal across levels
+        assert_ne!(scalar, v3);
+        assert_ne!(scalar, v4);
+        assert_ne!(v3, v4);
     }
 }

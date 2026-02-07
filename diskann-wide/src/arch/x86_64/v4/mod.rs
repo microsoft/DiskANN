@@ -181,7 +181,7 @@ mod conversion;
 /// * `avx512bitalg` (upcoming - pending CI resources)
 /// * `avx512vpopcntdq` (upcoming - pending CI resources)
 ///
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct V4(Hidden);
 
 impl arch::Sealed for V4 {}
@@ -443,6 +443,10 @@ impl V4 {
 impl Architecture for V4 {
     arch::maskdef!();
     arch::typedef!();
+
+    fn level() -> arch::Level {
+        arch::Level::v4()
+    }
 
     #[inline(always)]
     fn run<F, R>(self, f: F) -> R

@@ -96,7 +96,7 @@ mod conversion;
 
 /// An [`Architecture`] supporting all the requirements of the
 /// [`x86-64-v3`](https://en.wikipedia.org/wiki/X86-64#Microarchitecture_levels).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct V3(Hidden);
 
 impl arch::sealed::Sealed for V3 {}
@@ -342,6 +342,10 @@ impl V3 {
 impl Architecture for V3 {
     arch::maskdef!();
     arch::typedef!();
+
+    fn level() -> arch::Level {
+        arch::Level::v3()
+    }
 
     #[inline(always)]
     fn run<F, R>(self, f: F) -> R
