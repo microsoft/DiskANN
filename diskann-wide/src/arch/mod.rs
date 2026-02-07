@@ -364,11 +364,12 @@ pub use emulated::Scalar;
 /// Checking if the compile-time architecture meets a minimum capability:
 ///
 /// ```
+/// #[cfg(target_arch = "x86_64")]
 /// use diskann_wide::{Architecture, arch};
 ///
 /// // Check at compile time whether we were built with AVX2+ support.
 /// #[cfg(target_arch = "x86_64")]
-/// let meets_v3 = arch::Current::level() >= arch::x86_64::V3::level();
+/// let _meets_v3 = arch::Current::level() >= arch::x86_64::V3::level();
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Level(LevelInner);

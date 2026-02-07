@@ -76,7 +76,7 @@ impl Cli {
             let message = r#"
 WARNING
 
-> This application was compiled for the `x86-64` target CPU.
+> This application was compiled without AVX2 support.
 > It is recommended to set the target CPU to at least
 > `x86-64-v3` for best performance.
 >
