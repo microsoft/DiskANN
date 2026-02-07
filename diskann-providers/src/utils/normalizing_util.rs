@@ -139,21 +139,18 @@ pub fn normalize_data_internal<Pool: AsThreadPool>(
 #[cfg(test)]
 mod normalizing_utils_test {
     use crate::storage::{StorageReadProvider, VirtualStorageProvider};
+    use diskann_utils::test_data_root;
 
     use super::*;
     use crate::utils::{create_thread_pool_for_test, storage_utils::*};
 
     #[test]
     fn test_normalize_data_file() {
-        let in_file_name = "/test_data/sift/siftsmall_learn_256pts.fbin";
-        let norm_file_name = "/test_data/sift/siftsmall_learn_256pts_normalized.fbin";
+        let in_file_name = "/sift/siftsmall_learn_256pts.fbin";
+        let norm_file_name = "/sift/siftsmall_learn_256pts_normalized.fbin";
         let out_file_name = "/siftsmall_learn_256pts_normalized.fbin";
 
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let pool = create_thread_pool_for_test();
         normalize_data_file(in_file_name, out_file_name, &storage_provider, &pool).unwrap();
 

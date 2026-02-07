@@ -223,7 +223,7 @@ mod tests {
         utils::{IntoUsize, ONE},
     };
     use diskann_utils::{
-        Reborrow,
+        Reborrow, test_data_root,
         views::{Matrix, MatrixView},
     };
     use diskann_vector::distance::Metric;
@@ -269,13 +269,9 @@ mod tests {
     #[tokio::test]
     async fn test_save_and_load() {
         let save_path = "/index";
-        let file_path = "/test_data/sift/siftsmall_learn_256pts.fbin";
+        let file_path = "/sift/siftsmall_learn_256pts.fbin";
         let train_data = {
-            let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .to_path_buf();
-            let storage = VirtualStorageProvider::new_overlay(workspace_root);
+            let storage = VirtualStorageProvider::new_overlay(test_data_root());
             let (train_data, npoints, dim) = file_util::load_bin(&storage, file_path, 0).unwrap();
             Matrix::<f32>::try_from(train_data.into(), npoints, dim).unwrap()
         };
