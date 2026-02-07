@@ -7,26 +7,116 @@ mod backend;
 mod inputs;
 mod utils;
 
+use diskann_benchmark_runner as runner;
+
 fn main() -> Result<(), anyhow::Error> {
-    run_program(
-        &diskann_benchmark_runner::App::parse(),
-        &mut diskann_benchmark_runner::output::default(),
-    )
+    let cli = Cli::parse();
+    let mut output = runner::output::default();
+    cli.run(&mut output)
 }
 
-fn run_program(
-    app: &diskann_benchmark_runner::App,
-    output: &mut dyn diskann_benchmark_runner::Output,
-) -> anyhow::Result<()> {
-    // Collect inputs.
-    let mut inputs = diskann_benchmark_runner::registry::Inputs::new();
-    inputs::register_inputs(&mut inputs)?;
+/// The top-level CLI for the benchmark binary.
+///
+/// We have some additional arguments on top of [`runner::App`] for performance warnings.
+#[derive(Debug, clap::Parser)]
+struct Cli {
+    /// Suppress compilation target related performance warnings.
+    #[arg(long, action)]
+    quiet: bool,
 
-    // Collect benchmarks.
-    let mut benchmarks = diskann_benchmark_runner::registry::Benchmarks::new();
-    backend::register_benchmarks(&mut benchmarks);
+    #[command(flatten)]
+    app: runner::App,
+}
 
-    app.run(&inputs, &benchmarks, output)
+// This controls printing of a banner warning if the benchmark tool is compiled for the
+// `x86-64` target CPU instead of `x86-64-v3`. The former will likely lead to misleading
+// performance, but is Rust's default when building for `x86-64` and can thus be a common
+// source of performance confusion.
+//
+// The diagnostic can be suppressed by passing the `--quiet` flag.
+impl Cli {
+    fn parse() -> Self {
+        <Self as clap::Parser>::parse()
+    }
+
+    fn run(&self, output: &mut dyn runner::Output) -> anyhow::Result<()> {
+        self.check_target(output)?;
+
+        // Collect inputs.
+        let mut inputs = runner::registry::Inputs::new();
+        inputs::register_inputs(&mut inputs)?;
+
+        // Collect benchmarks.
+        let mut benchmarks = runner::registry::Benchmarks::new();
+        backend::register_benchmarks(&mut benchmarks);
+
+        self.app.run(&inputs, &benchmarks, output)
+    }
+
+    #[cfg(test)]
+    fn from_commands(commands: runner::app::Commands, quiet: bool) -> Self {
+        Self {
+            quiet,
+            app: runner::App::from_commands(commands),
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn check_target(&self, mut output: &mut dyn runner::Output) -> anyhow::Result<()> {
+        use std::io::Write;
+        use diskann_wide::Architecture;
+
+        // The trick we use here is to inspect the compile-time architecture of `diskann-wide`.
+        //
+        // If the `x86_64::V3` architecture is reachable from `diskann_wide::ARCH`, then we know
+        // that most of the optimizations we care about should be present.
+        if !self.quiet
+            && diskann_wide::arch::Current::level() < diskann_wide::arch::x86_64::V3::level()
+        {
+            let message = r#"
+WARNING
+
+> This application was compiled for the `x86-64` target CPU.
+> It is recommended to set the target CPU to at least
+> `x86-64-v3` for best performance.
+>
+> This can be done by using the environment variable
+>     RUSTFLAGS="-Ctarget-cpu=x86-64-v3"
+> before compiling this binary with Cargo.
+>
+> This warning can be suppressed by passing the `--quiet` flag
+> before any of the documented commands.
+"#;
+            writeln!(output, "{}", message)?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn check_target(&self, mut output: &mut dyn runner::Output) -> anyhow::Result<()> {
+        use std::io::Write;
+        if !self.quiet {
+            let message = r#"
+WARNING
+
+> Support for AArch64 has not yet been optimized.
+>
+> Performance may not be representative.
+>
+> This warning can be suppressed by passing the `--quiet` flag
+> before any of the documented commands.
+"#;
+            writeln!(output, "{}", message)?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    fn check_target(&self, mut _output: &mut dyn runner::Output) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 ///////////
@@ -40,7 +130,7 @@ mod tests {
 
     use super::*;
 
-    use diskann_benchmark_runner::{app::Commands, output::Memory, App};
+    use diskann_benchmark_runner::{app::Commands, output::Memory};
     use diskann_providers::storage::FileStorageProvider;
     use diskann_tools::utils::{compute_ground_truth_from_datafiles, GraphDataF32Vector};
     use diskann_vector::distance::Metric;
@@ -190,10 +280,10 @@ mod tests {
             output_file: output_path.to_owned(),
             dry_run: false,
         };
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        run_program(&app, &mut output).unwrap();
+        cli.run(&mut output).unwrap();
         println!(
             "output = {}",
             String::from_utf8(output.into_inner()).unwrap()
@@ -234,10 +324,10 @@ mod tests {
             dry_run: false,
         };
 
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        run_program(&app, &mut output).unwrap();
+        cli.run(&mut output).unwrap();
         println!(
             "output = {}",
             String::from_utf8(output.into_inner()).unwrap()
@@ -254,10 +344,10 @@ mod tests {
             output_file: output_path.to_owned(),
             dry_run: false,
         };
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        let err = run_program(&app, &mut output).unwrap_err();
+        let err = cli.run(&mut output).unwrap_err();
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
@@ -299,10 +389,10 @@ mod tests {
             dry_run: false,
         };
 
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        run_program(&app, &mut output).unwrap();
+        cli.run(&mut output).unwrap();
         println!(
             "output = {}",
             String::from_utf8(output.into_inner()).unwrap()
@@ -319,10 +409,10 @@ mod tests {
             output_file: output_path.to_owned(),
             dry_run: false,
         };
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        let err = run_program(&app, &mut output).unwrap_err();
+        let err = cli.run(&mut output).unwrap_err();
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
@@ -367,10 +457,10 @@ mod tests {
             dry_run: false,
         };
 
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        run_program(&app, &mut output).unwrap();
+        cli.run(&mut output).unwrap();
         println!(
             "output = {}",
             String::from_utf8(output.into_inner()).unwrap()
@@ -387,10 +477,10 @@ mod tests {
             output_file: output_path.to_owned(),
             dry_run: false,
         };
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        let err = run_program(&app, &mut output).unwrap_err();
+        let err = cli.run(&mut output).unwrap_err();
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
@@ -426,10 +516,10 @@ mod tests {
             output_file: output_path.to_owned(),
             dry_run: false,
         };
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        run_program(&app, &mut output).unwrap();
+        cli.run(&mut output).unwrap();
         println!(
             "output = {}",
             String::from_utf8(output.into_inner()).unwrap()
@@ -480,10 +570,10 @@ mod tests {
             output_file: output_path.to_owned(),
             dry_run: false,
         };
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        run_program(&app, &mut output).unwrap();
+        cli.run(&mut output).unwrap();
         println!(
             "output = {}",
             String::from_utf8(output.into_inner()).unwrap()
@@ -563,10 +653,10 @@ mod tests {
             output_file: output_path.to_owned(),
             dry_run: false,
         };
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        run_program(&app, &mut output).unwrap();
+        cli.run(&mut output).unwrap();
         println!(
             "output = {}",
             String::from_utf8(output.into_inner()).unwrap()
@@ -637,10 +727,10 @@ mod tests {
             dry_run: false,
         };
 
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        run_program(&app, &mut output).unwrap();
+        cli.run(&mut output).unwrap();
         println!(
             "output = {}",
             String::from_utf8(output.into_inner()).unwrap()
@@ -657,10 +747,10 @@ mod tests {
             output_file: output_path.to_owned(),
             dry_run: false,
         };
-        let app = App::from_commands(command);
+        let cli = Cli::from_commands(command, true);
         let mut output = Memory::new();
 
-        let err = run_program(&app, &mut output).unwrap_err();
+        let err = cli.run(&mut output).unwrap_err();
         println!("err = {:?}", err);
 
         let output = String::from_utf8(output.into_inner()).unwrap();
@@ -669,5 +759,24 @@ mod tests {
 
         // The output file should not have been created because we failed the test.
         assert!(!output_path.exists());
+    }
+
+    #[test]
+    fn quiet_suppresses_check_target_warning() {
+        let cli = Cli::from_commands(Commands::Skeleton, true);
+        let mut output = Memory::new();
+        cli.check_target(&mut output).unwrap();
+        assert!(output.into_inner().is_empty());
+    }
+
+    // Smoke test: `check_target` should succeed regardless of the `--quiet` flag or the
+    // compile-time architecture level. We intentionally do not assert on the output content
+    // because whether a warning is emitted depends on the target CPU the tests were compiled
+    // for.
+    #[test]
+    fn check_target_smoke_test() {
+        let cli = Cli::from_commands(Commands::Skeleton, false);
+        let mut output = Memory::new();
+        cli.check_target(&mut output).unwrap();
     }
 }

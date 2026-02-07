@@ -321,12 +321,16 @@
 //!
 //! ## Hierarchies
 //!
+//! Each [`Architecture`] exposes a [`Level`] via [`Architecture::level()`] that
+//! can be used to compare capabilities without instantiating the architecture.
+//!
 //! ### X86
 //!
-//! * [`crate::arch::x86_64::V3`]: Supporting AVX2 and lower.
-//! * [`Scalar`]: Fallback architecture
+//! * [`x86_64::V4`]: Supporting AVX-512 (and AVX2 and lower).
+//! * [`x86_64::V3`]: Supporting AVX2 and lower.
+//! * [`Scalar`]: Fallback architecture.
 //!
-//! Upcoming will be `V4`, which will include support for AVX-512.
+//! The ordering is `Scalar` < `V3` < `V4`.
 //!
 //! ### Arm
 //!
@@ -345,10 +349,43 @@ pub(crate) mod emulated;
 /// compiler for optimization.
 pub use emulated::Scalar;
 
+/// An opaque representation of an [`Architecture`]'s capability level.
+///
+/// `Level` allows comparing the relative capabilities of different architectures
+/// without requiring an instance of the architecture type. This is useful for
+/// compile-time checks against [`crate::ARCH`] where constructing architecture
+/// types like [`x86_64::V3`] would require `unsafe`.
+///
+/// Levels are totally ordered within an ISA family, with greater values indicating
+/// more capable instruction sets. [`Scalar`] is always the lowest level.
+///
+/// # Examples
+///
+/// Checking if the compile-time architecture meets a minimum capability:
+///
+/// ```
+/// use diskann_wide::{Architecture, arch};
+///
+/// // Check at compile time whether we were built with AVX2+ support.
+/// #[cfg(target_arch = "x86_64")]
+/// let meets_v3 = arch::Current::level() >= arch::x86_64::V3::level();
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Level(LevelInner);
+
+impl Level {
+    const fn scalar() -> Self {
+        Self(LevelInner::Scalar)
+    }
+}
+
 cfg_if::cfg_if! {
     if #[cfg(any(target_arch = "x86_64", doc))] {
         // Delegate to the architecture selection within the `x86_64` module,.
         pub mod x86_64;
+
+        use x86_64::LevelInner;
+
         pub use x86_64::current;
         pub use x86_64::Current;
 
@@ -361,8 +398,24 @@ cfg_if::cfg_if! {
         pub use x86_64::dispatch1_no_features;
         pub use x86_64::dispatch2_no_features;
         pub use x86_64::dispatch3_no_features;
+
+        impl Level {
+            const fn v3() -> Self {
+                Self(LevelInner::V3)
+            }
+
+            const fn v4() -> Self {
+                Self(LevelInner::V4)
+            }
+        }
     } else {
         pub type Current = Scalar;
+
+        // There is only one architecture present in this mode.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        enum LevelInner {
+            Scalar,
+        }
 
         pub const fn current() -> Current {
             Scalar::new()
@@ -615,6 +668,23 @@ pub trait Architecture: sealed::Sealed {
     //---------//
     // Methods //
     //---------//
+
+    /// Return an opaque [`Level`] representing the capabilities of this architecture.
+    ///
+    /// Levels that compare greater represent architectures that are more capable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use diskann_wide::{Architecture, arch};
+    ///
+    /// // Scalar is the baseline — every other architecture compares greater.
+    /// assert_eq!(arch::Scalar::level(), arch::Scalar::level());
+    ///
+    /// #[cfg(target_arch = "x86_64")]
+    /// assert!(arch::Scalar::level() < arch::x86_64::V3::level());
+    /// ```
+    fn level() -> Level;
 
     /// Run the provided closure targeting this architecture.
     ///
@@ -907,7 +977,7 @@ where
 }
 
 /// A hidden architecture for use in the function pointer API.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 struct Hidden;
 
 const _ASSERT_ZST: () = assert!(

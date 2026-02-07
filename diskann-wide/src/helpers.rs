@@ -3,11 +3,6 @@
  * Licensed under the MIT license.
  */
 
-// #![cfg_attr(
-//     not(all(target_arch = "x86_64", target_feature = "avx2")),
-//     allow(unused_macros, unused_imports)
-// )]
-
 /// Utility macro for defining simple operations that lower to a single intrinsic.
 ///
 /// SAFETY: It is the invoker's responsibility to ensure that the intrinsic is safe to call
