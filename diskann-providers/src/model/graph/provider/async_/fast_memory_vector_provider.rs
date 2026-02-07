@@ -14,7 +14,7 @@
 use std::sync::Mutex;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann::{ANNError, ANNResult, utils::VectorRepr};
+use diskann::{ANNError, ANNResult, utils::{IntoUsize, VectorRepr}};
 use diskann_vector::distance::Metric;
 
 use super::common::{AlignedMemoryVectorStore, PrefetchCacheLineLevel, TestCallCount};
@@ -248,6 +248,15 @@ where
 
     fn count_for_get_vector(&self) -> usize {
         self.num_get_calls.get()
+    }
+}
+
+impl<T> super::common::SetElementHelper<T> for FastMemoryVectorProviderAsync<crate::model::graph::traits::AdHoc<T>>
+where
+    T: VectorRepr,
+{
+    fn set_element(&self, id: &u32, element: &[T]) -> Result<(), ANNError> {
+        unsafe { self.set_vector_sync(id.into_usize(), element) }
     }
 }
 

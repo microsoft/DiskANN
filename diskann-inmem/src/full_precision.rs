@@ -6,7 +6,7 @@
 use std::{collections::HashMap, fmt::Debug, future::Future};
 
 use diskann::{
-    ANNError, ANNResult,
+    ANNResult,
     graph::{
         SearchOutputBuffer,
         glue::{
@@ -30,7 +30,7 @@ use diskann_providers::model::graph::{
         FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
         common::{
             FullPrecision, Internal, NoDeletes, NoStore, Panics,
-            PrefetchCacheLineLevel, SetElementHelper,
+            PrefetchCacheLineLevel,
         },
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
@@ -91,16 +91,6 @@ where
 ////////////////
 // SetElement //
 ////////////////
-
-impl<T> SetElementHelper<T> for FullPrecisionStore<T>
-where
-    T: VectorRepr,
-{
-    /// Set the element at the given index.
-    fn set_element(&self, id: &u32, element: &[T]) -> Result<(), ANNError> {
-        unsafe { self.set_vector_sync(id.into_usize(), element) }
-    }
-}
 
 //////////////////
 // FullAccessor //
