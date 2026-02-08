@@ -68,6 +68,7 @@ jobs:
         runner:
           - ubuntu-latest
           - ubuntu-24.04-arm
+      fail-fast: false
     name: clippy (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     steps:
