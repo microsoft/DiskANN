@@ -683,6 +683,11 @@ mod tests {
     fn test_update_distances() {
         let mut rng = StdRng::seed_from_u64(0x56c94b53c73e4fd9);
         for num_points in 0..48 {
+            #[cfg(miri)]
+            if num_points % 7 != 0 {
+                continue;
+            }
+
             for dim in 1..4 {
                 test_update_distances_impl(num_points, dim, &mut rng);
             }
@@ -695,6 +700,7 @@ mod tests {
 
     // Kmeans++ sanity checks - if there are only `N` distinct and we want `N` centers,
     // then all `N` should be selected without repeats.
+    #[cfg(not(miri))]
     fn sanity_check_impl<R: Rng>(ncenters: usize, dim: usize, rng: &mut R) {
         let repeats_per_center = 3;
         let context = lazy_format!(
@@ -756,6 +762,7 @@ mod tests {
 
     // This test is like the sanity check - but instead of exact repeats, we use slightly
     // perturbed values to test that the proportionality is of distances is respected.
+    #[cfg(not(miri))]
     fn fuzzy_sanity_check_impl<R: Rng>(ncenters: usize, dim: usize, rng: &mut R) {
         let repeats_per_center = 3;
 

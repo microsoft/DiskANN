@@ -387,6 +387,7 @@ where
 ///////////
 
 #[cfg(test)]
+#[cfg(not(miri))]
 mod tests {
     use diskann_utils::lazy_format;
     use rand::{rngs::StdRng, SeedableRng};

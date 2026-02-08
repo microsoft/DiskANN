@@ -337,6 +337,7 @@ impl_functor!(MinMaxCosineNormalized);
 // Tests //
 ///////////
 #[cfg(test)]
+#[cfg(not(miri))]
 mod minmax_quantizer_tests {
     use std::num::NonZeroUsize;
 
