@@ -271,7 +271,7 @@ mod tests {
         .unwrap();
 
         CachingProvider::new(
-            DebugProvider::new(config, Arc::new(table)).unwrap(),
+            DebugProvider::new(config, table).unwrap(),
             ExampleCache::new(PowerOfTwo::new(1024 * 16).unwrap(), uncacheable),
         )
     }
@@ -649,7 +649,7 @@ mod tests {
         .unwrap();
 
         let provider = CachingProvider::new(
-            DebugProvider::new(test_config, Arc::new(table)).unwrap(),
+            DebugProvider::new(test_config, table).unwrap(),
             ExampleCache::new(cache_size, None),
         );
         let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
@@ -868,7 +868,7 @@ mod tests {
         let index = DiskANNIndex::new(
             index_config,
             CachingProvider::new(
-                DebugProvider::new(test_config, Arc::new(table)).unwrap(),
+                DebugProvider::new(test_config, table).unwrap(),
                 ExampleCache::new(cache_size, None),
             ),
             None,

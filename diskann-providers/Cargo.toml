@@ -31,7 +31,7 @@ diskann-wide = { workspace = true }
 arc-swap.workspace = true
 tracing.workspace = true
 diskann-linalg = { workspace = true }
-diskann = { workspace = true }
+diskann = { workspace = true, features = ["testing"] }
 diskann-utils = { workspace = true }
 diskann-quantization = { workspace = true, features = ["rayon"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
@@ -90,4 +90,3 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 # Commenting out for now. It would give warnings.
 # undocumented_unsafe_blocks = "warn"
 uninlined_format_args = "allow"
-

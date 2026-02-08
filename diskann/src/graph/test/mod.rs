@@ -4,6 +4,7 @@
  */
 
 pub mod provider;
+pub mod debug_provider;
 pub mod synthetic;
 
 #[cfg(test)]

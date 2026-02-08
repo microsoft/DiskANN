@@ -3,7 +3,9 @@
  * Licensed under the MIT license.
  */
 
-use diskann::{ANNError, ANNResult, utils::IntoUsize};
+use std::sync::Arc;
+
+use diskann::{ANNError, ANNResult, graph::test::debug_provider::DebugQuantizer, utils::IntoUsize};
 use diskann_linalg::{self, Transpose};
 use diskann_quantization::{
     CompressInto,
@@ -14,7 +16,7 @@ use diskann_utils::views::{self, MatrixBase, MatrixView};
 use diskann_vector::{PureDistanceFunction, distance};
 use diskann_wide::ARCH;
 
-use super::NUM_PQ_CENTROIDS;
+use super::{NUM_PQ_CENTROIDS, distance as pq_distance};
 use crate::utils::{Bridge, BridgeErr};
 
 /// PQ Pivot table loading and calculate distance
@@ -1500,5 +1502,34 @@ mod aggregate_coords_test {
             )
             .is_err()
         );
+    }
+}
+
+impl DebugQuantizer for FixedChunkPQTable {
+    type DistanceComputer = pq_distance::DistanceComputer<Arc<FixedChunkPQTable>>;
+    type QueryComputer = pq_distance::QueryComputer<Arc<FixedChunkPQTable>>;
+
+    fn num_chunks(&self) -> usize {
+        self.get_num_chunks()
+    }
+
+    fn compress_into(&self, input: &[f32], output: &mut [u8]) -> ANNResult<()> {
+        diskann_quantization::CompressInto::compress_into(self, input, output).bridge_err()?;
+        Ok(())
+    }
+
+    fn build_distance_computer(
+        &self,
+        metric: diskann_vector::distance::Metric,
+    ) -> ANNResult<Self::DistanceComputer> {
+        pq_distance::DistanceComputer::new(Arc::new(self.clone()), metric).map_err(ANNError::from)
+    }
+
+    fn build_query_computer(
+        &self,
+        metric: diskann_vector::distance::Metric,
+        query: &[f32],
+    ) -> ANNResult<Self::QueryComputer> {
+        pq_distance::QueryComputer::new(Arc::new(self.clone()), metric, query, None)
     }
 }
