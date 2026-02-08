@@ -18,7 +18,7 @@ use diskann::{
 ///
 /// This **must not** be used as a general replacement for [`diskann::provider::Delete`].
 /// This must only be used as a performance improvement for [`RemoveDeletedIdsAndCopy`].
-pub(crate) trait AsDeletionCheck {
+pub trait AsDeletionCheck {
     type Checker: DeletionCheck;
     fn as_deletion_check(&self) -> &Self::Checker;
 }
@@ -28,7 +28,7 @@ pub(crate) trait AsDeletionCheck {
 ///
 /// For the [`NoDeletes`] case, we rely on constant-propagation and dead code elimination
 /// to optimize away filters.
-pub(crate) trait DeletionCheck {
+pub trait DeletionCheck {
     fn deletion_check(&self, id: u32) -> bool;
 }
 

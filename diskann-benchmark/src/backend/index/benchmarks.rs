@@ -22,10 +22,8 @@ use diskann_benchmark_runner::{
     utils::datatype,
     Any, Checkpoint,
 };
-use diskann_providers::{
-    index::diskann_async,
-    model::{configuration::IndexConfiguration, graph::provider::async_::common},
-};
+use diskann_inmem::diskann_async;
+use diskann_providers::model::{configuration::IndexConfiguration, graph::provider::async_::common};
 use diskann_utils::{
     future::AsyncFriendly,
     sampling::WithApproximateNorm,

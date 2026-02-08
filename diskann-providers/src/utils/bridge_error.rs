@@ -27,3 +27,24 @@ impl<T, E> BridgeErr<T, E> for Result<T, E> {
         self.map_err(Bridge)
     }
 }
+
+// Bridge error conversions to ANNError for spherical quantization types.
+// These live here to satisfy the orphan rule since Bridge is defined in this crate.
+
+impl From<Bridge<diskann_quantization::spherical::CompressionError>> for diskann::ANNError {
+    #[track_caller]
+    fn from(
+        err: Bridge<diskann_quantization::spherical::CompressionError>,
+    ) -> Self {
+        diskann::ANNError::new(diskann::ANNErrorKind::SQError, err)
+    }
+}
+
+impl From<Bridge<diskann_quantization::spherical::UnsupportedMetric>> for diskann::ANNError {
+    #[track_caller]
+    fn from(
+        err: Bridge<diskann_quantization::spherical::UnsupportedMetric>,
+    ) -> Self {
+        diskann::ANNError::new(diskann::ANNErrorKind::SQError, err)
+    }
+}

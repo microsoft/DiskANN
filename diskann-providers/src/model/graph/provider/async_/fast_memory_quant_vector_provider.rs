@@ -17,7 +17,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
     ANNError, ANNResult,
     error::IntoANNResult,
-    utils::{VectorRepr, object_pool::ObjectPool},
+    utils::{IntoUsize, VectorRepr, object_pool::ObjectPool},
 };
 use diskann_quantization::CompressInto;
 use diskann_vector::distance::Metric;
@@ -82,7 +82,7 @@ impl FastMemoryQuantVectorProviderAsync {
     }
 
     /// Return the metric associated with this provider.
-    pub(crate) fn metric(&self) -> Metric {
+    pub fn metric(&self) -> Metric {
         self.metric
     }
     /// Return the total number of points (including frozen points) included in `self.
@@ -136,7 +136,7 @@ impl FastMemoryQuantVectorProviderAsync {
     ///
     /// 2. Be okay with racey data.
     #[inline(always)]
-    pub(crate) unsafe fn get_vector_sync(&self, i: usize) -> &[u8] {
+    pub unsafe fn get_vector_sync(&self, i: usize) -> &[u8] {
         self.num_get_calls.increment();
         // SAFETY: The function called here has the same pre and post-conditions as the caller.
         unsafe { self.quant_vectors.get_slice(i) }
@@ -161,7 +161,7 @@ impl FastMemoryQuantVectorProviderAsync {
     ///    the same ID.
     ///
     /// 2. Be okay with racey data.
-    pub(crate) unsafe fn set_vector_sync<T>(&self, i: usize, v: &[T]) -> ANNResult<()>
+    pub unsafe fn set_vector_sync<T>(&self, i: usize, v: &[T]) -> ANNResult<()>
     where
         T: VectorRepr,
     {
@@ -286,6 +286,25 @@ impl FastMemoryQuantVectorProviderAsync {
     {
         self.save_pivots(provider, pivots)?;
         storage::bin::save_to_bin(self, provider, data)
+    }
+}
+
+impl super::common::VectorStore for FastMemoryQuantVectorProviderAsync {
+    fn total(&self) -> usize {
+        self.total()
+    }
+
+    fn count_for_get_vector(&self) -> usize {
+        self.num_get_calls.get()
+    }
+}
+
+impl<T> super::common::SetElementHelper<T> for FastMemoryQuantVectorProviderAsync
+where
+    T: VectorRepr,
+{
+    fn set_element(&self, id: &u32, element: &[T]) -> ANNResult<()> {
+        unsafe { self.set_vector_sync(id.into_usize(), element) }
     }
 }
 

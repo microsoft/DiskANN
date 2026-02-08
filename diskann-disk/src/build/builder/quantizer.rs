@@ -4,12 +4,13 @@
  */
 //! Disk index quantizer implementation.
 use diskann::{ANNError, ANNResult};
+use diskann_inmem::WithBits;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     index::diskann_async::train_pq,
     model::{
         graph::{
-            provider::async_::{common::NoStore, inmem::WithBits},
+            provider::async_::common::NoStore,
             traits::GraphDataType,
         },
         FixedChunkPQTable, IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE,

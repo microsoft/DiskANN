@@ -64,10 +64,9 @@ mod imp {
         utils::{datatype, MicroSeconds},
         Any, Checkpoint, Output,
     };
-    use diskann_providers::{
-        index::diskann_async::{self},
-        model::graph::provider::async_::{common::NoDeletes, inmem},
-    };
+    use diskann_inmem as inmem;
+    use diskann_inmem::diskann_async;
+    use diskann_providers::model::graph::provider::async_::common::NoDeletes;
     use diskann_quantization::alloc::GlobalAllocator;
     use diskann_utils::views::Matrix;
     use rand::SeedableRng;

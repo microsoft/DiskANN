@@ -16,9 +16,10 @@ use diskann_benchmark_runner::{
     output::Output,
     utils::{percentiles, MicroSeconds},
 };
+use diskann_inmem::SetStartPoints;
 use diskann_providers::{
     self,
-    model::{configuration::IndexConfiguration, graph::provider::async_::inmem::SetStartPoints},
+    model::configuration::IndexConfiguration,
     storage::{AsyncIndexMetadata, LoadWith, SaveWith},
 };
 use diskann_utils::{

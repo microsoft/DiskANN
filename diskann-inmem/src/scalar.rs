@@ -5,7 +5,7 @@
 
 use std::{future::Future, sync::Mutex};
 
-use crate::storage::{StorageReadProvider, StorageWriteProvider};
+use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
@@ -21,34 +21,33 @@ use diskann::{
 use diskann_quantization::{
     AsFunctor, CompressInto,
     bits::{Representation, Unsigned},
-    meta::NotCanonical,
     scalar::{
         CompensatedCosineNormalized, CompensatedIP, CompensatedSquaredL2, CompensatedVector,
-        CompensatedVectorRef, InputContainsNaN, MeanNormMissing, MutCompensatedVectorRef,
+        CompensatedVectorRef, MutCompensatedVectorRef,
         ScalarQuantizer,
     },
 };
 use diskann_utils::{Reborrow, ReborrowMut, future::AsyncFriendly};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction, distance::Metric};
-use thiserror::Error;
 
 use super::{DefaultProvider, GetFullPrecision, Rerank};
-use crate::{
+use crate::CreateVectorStore;
+use diskann_providers::{
     common::IgnoreLockPoison,
     model::graph::{
         provider::async_::{
             FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
             common::{
-                AlignedMemoryVectorStore, CreateVectorStore, NoStore, Quantized, SetElementHelper,
+                AlignedMemoryVectorStore, NoStore, Quantized, SetElementHelper,
                 TestCallCount, VectorStore,
             },
-            inmem::{FullPrecisionProvider, FullPrecisionStore},
             postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
         },
         traits::AdHoc,
     },
     storage::{self, AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, SaveWith},
 };
+use crate::{FullPrecisionProvider, FullPrecisionStore};
 
 type CVRef<'a, const NBITS: usize> = CompensatedVectorRef<'a, NBITS>;
 
@@ -794,40 +793,13 @@ impl<const NBITS: usize> storage::bin::GetData for SQStore<NBITS> {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum SQError {
-    #[error("Issue with canonical layout of data: {0:?}")]
-    CanonicalLayoutError(#[from] NotCanonical),
-
-    #[error("Input contains NaN values.")]
-    InputContainsNaN(#[from] InputContainsNaN),
-
-    #[error("Input full-precision conversion error : {0}")]
-    FullPrecisionConversionErr(String),
-
-    #[error("Mean Norm is missing in the quantizer.")]
-    MeanNormMissing(#[from] MeanNormMissing),
-
-    #[error("Unsupported distance metric: {0:?}")]
-    UnsupportedDistanceMetric(Metric),
-
-    #[error("Error while loading quantizer proto struct from file: {0:?}")]
-    ProtoStorageError(#[from] crate::storage::protos::ProtoStorageError),
-
-    #[error("Error while converting proto struct to Scalar Qunatizer: {0:?}")]
-    QuantizerDecodeError(#[from] crate::storage::protos::ProtoConversionError),
-}
-
-impl From<SQError> for ANNError {
-    #[cold]
-    fn from(err: SQError) -> Self {
-        ANNError::log_sq_error(err)
-    }
-}
+// SQError is defined in diskann-providers::storage::sq_storage and re-exported
+// from diskann-inmem for backward compatibility.
+pub use diskann_providers::storage::SQError;
 
 #[cfg(test)]
 mod tests {
-    use crate::storage::VirtualStorageProvider;
+    use diskann_providers::storage::VirtualStorageProvider;
     use diskann::utils::ONE;
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
     use diskann_utils::views::MatrixView;

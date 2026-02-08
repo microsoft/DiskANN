@@ -6,10 +6,47 @@
 use std::io::Result;
 
 use super::{StorageReadProvider, StorageWriteProvider};
-use diskann_quantization::scalar::ScalarQuantizer;
+use diskann::{ANNError, ANNResult};
+use diskann_quantization::{
+    meta::NotCanonical,
+    scalar::{InputContainsNaN, MeanNormMissing, ScalarQuantizer},
+};
+use diskann_vector::distance::Metric;
+use thiserror::Error;
 
 use super::protos;
-use crate::model::graph::provider::async_::inmem::SQError;
+
+/// Error type for scalar quantization operations.
+#[derive(Debug, Error)]
+pub enum SQError {
+    #[error("Issue with canonical layout of data: {0:?}")]
+    CanonicalLayoutError(#[from] NotCanonical),
+
+    #[error("Input contains NaN values.")]
+    InputContainsNaN(#[from] InputContainsNaN),
+
+    #[error("Input full-precision conversion error : {0}")]
+    FullPrecisionConversionErr(String),
+
+    #[error("Mean Norm is missing in the quantizer.")]
+    MeanNormMissing(#[from] MeanNormMissing),
+
+    #[error("Unsupported distance metric: {0:?}")]
+    UnsupportedDistanceMetric(Metric),
+
+    #[error("Error while loading quantizer proto struct from file: {0:?}")]
+    ProtoStorageError(#[from] protos::ProtoStorageError),
+
+    #[error("Error while converting proto struct to Scalar Qunatizer: {0:?}")]
+    QuantizerDecodeError(#[from] protos::ProtoConversionError),
+}
+
+impl From<SQError> for ANNError {
+    #[cold]
+    fn from(err: SQError) -> Self {
+        ANNError::log_sq_error(err)
+    }
+}
 
 /// The suffix for the compressed SQ vectors file.
 const COMPRESSED_DATA_FILE_NAME_SUFFIX: &str = "sq_compressed.bin";

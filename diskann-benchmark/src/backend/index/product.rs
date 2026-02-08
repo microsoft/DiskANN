@@ -36,8 +36,9 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
 mod imp {
     use std::{io::Write, sync::Arc};
 
+    use diskann_inmem::diskann_async;
     use diskann_providers::{
-        index::diskann_async::{self},
+        index::diskann_async::train_pq,
         model::{graph::provider::async_::common, IndexConfiguration},
     };
     use diskann_utils::views::{Matrix, MatrixView};
@@ -169,7 +170,7 @@ mod imp {
                                     data.ncols(),
                                 )?;
 
-                                diskann_async::train_pq(
+                                train_pq(
                                     train_data.as_view(),
                                     self.input.num_pq_chunks,
                                     &mut StdRng::seed_from_u64(self.input.seed),

@@ -20,6 +20,7 @@ targets = [
 # Core dependencies
 diskann = { workspace = true }
 diskann-utils = { workspace = true }
+diskann-inmem = { workspace = true }
 diskann-providers = { workspace = true }
 diskann-vector = { workspace = true }
 diskann-linalg = { workspace = true }

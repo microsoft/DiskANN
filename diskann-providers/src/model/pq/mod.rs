@@ -45,3 +45,15 @@ where
 {
     src.iter().copied().take(max).map(f).collect()
 }
+
+impl crate::model::graph::provider::async_::common::CreateVectorStore for FixedChunkPQTable {
+    type Target = crate::model::graph::provider::async_::FastMemoryQuantVectorProviderAsync;
+    fn create(
+        self,
+        max_points: usize,
+        metric: diskann_vector::distance::Metric,
+        _prefetch_lookahead: Option<usize>,
+    ) -> Self::Target {
+        Self::Target::new(metric, max_points, self)
+    }
+}

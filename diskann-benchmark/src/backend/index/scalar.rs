@@ -81,12 +81,11 @@ mod imp {
         utils::{datatype, MicroSeconds},
         Any, Checkpoint, Output,
     };
-    use diskann_providers::{
-        index::diskann_async::{self},
-        model::{
-            configuration::IndexConfiguration,
-            graph::provider::async_::{common, inmem},
-        },
+    use diskann_inmem as inmem;
+    use diskann_inmem::diskann_async;
+    use diskann_providers::model::{
+        configuration::IndexConfiguration,
+        graph::provider::async_::common,
     };
     use diskann_utils::views::{Matrix, MatrixView};
     use half::f16;

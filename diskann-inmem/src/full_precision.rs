@@ -6,7 +6,7 @@
 use std::{collections::HashMap, fmt::Debug, future::Future};
 
 use diskann::{
-    ANNError, ANNResult,
+    ANNResult,
     graph::{
         SearchOutputBuffer,
         glue::{
@@ -24,18 +24,19 @@ use diskann::{
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{DistanceFunction, distance::Metric};
 
-use crate::model::graph::{
+use crate::CreateVectorStore;
+use diskann_providers::model::graph::{
     provider::async_::{
         FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
         common::{
-            CreateVectorStore, FullPrecision, Internal, NoDeletes, NoStore, Panics,
-            PrefetchCacheLineLevel, SetElementHelper,
+            FullPrecision, Internal, NoDeletes, NoStore, Panics,
+            PrefetchCacheLineLevel,
         },
-        inmem::DefaultProvider,
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
     traits::AdHoc,
 };
+use crate::DefaultProvider;
 
 /// A type alias for the DefaultProvider with full-precision as the primary vector store.
 pub type FullPrecisionProvider<T, Q = NoStore, D = NoDeletes, Ctx = DefaultContext> =
@@ -90,16 +91,6 @@ where
 ////////////////
 // SetElement //
 ////////////////
-
-impl<T> SetElementHelper<T> for FullPrecisionStore<T>
-where
-    T: VectorRepr,
-{
-    /// Set the element at the given index.
-    fn set_element(&self, id: &u32, element: &[T]) -> Result<(), ANNError> {
-        unsafe { self.set_vector_sync(id.into_usize(), element) }
-    }
-}
 
 //////////////////
 // FullAccessor //

@@ -14,7 +14,7 @@
 use std::sync::Mutex;
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann::{ANNError, ANNResult, utils::VectorRepr};
+use diskann::{ANNError, ANNResult, utils::{IntoUsize, VectorRepr}};
 use diskann_vector::distance::Metric;
 
 use super::common::{AlignedMemoryVectorStore, PrefetchCacheLineLevel, TestCallCount};
@@ -97,7 +97,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
 
     /// Return a [`diskann_vector::DistanceFunction`] capable of computing distances on elements
     /// yielded by this provider.
-    pub(crate) fn distance(&self) -> &<Data::VectorDataType as VectorRepr>::Distance {
+    pub fn distance(&self) -> &<Data::VectorDataType as VectorRepr>::Distance {
         &self.distance
     }
 
@@ -142,7 +142,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
     ///
     /// 2. Be okay with racey data.
     #[inline(always)]
-    pub(crate) unsafe fn set_vector_sync(
+    pub unsafe fn set_vector_sync(
         &self,
         i: usize,
         v: &[Data::VectorDataType],
@@ -210,7 +210,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
     /// Prefetch the first few cache lines of the data for vector `i` with a specific cache line level.
     /// the cache line level determines how many cache lines to prefetch
     #[inline(always)]
-    pub(crate) fn prefetch_hint(&self, i: usize) {
+    pub fn prefetch_hint(&self, i: usize) {
         // SAFETY: Racing on the underlying data is okay because we are dispatching to
         // an architectural primitive for prefetching that doesn't care about the data
         // itself, just its address.
@@ -233,7 +233,7 @@ impl<Data: GraphDataType> FastMemoryVectorProviderAsync<Data> {
 
     /// Returns the prefetch lookahead for full-precision bulk operations.
     #[inline(always)]
-    pub(crate) fn prefetch_lookahead(&self) -> usize {
+    pub fn prefetch_lookahead(&self) -> usize {
         self.prefetch_lookahead
     }
 }
@@ -248,6 +248,15 @@ where
 
     fn count_for_get_vector(&self) -> usize {
         self.num_get_calls.get()
+    }
+}
+
+impl<T> super::common::SetElementHelper<T> for FastMemoryVectorProviderAsync<crate::model::graph::traits::AdHoc<T>>
+where
+    T: VectorRepr,
+{
+    fn set_element(&self, id: &u32, element: &[T]) -> Result<(), ANNError> {
+        unsafe { self.set_vector_sync(id.into_usize(), element) }
     }
 }
 
