@@ -1816,6 +1816,26 @@ pub struct SavedParams {
     pub quant_params: Option<QuantParams>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BfTreeParamsInput {
+    pub bytes: usize,
+    pub max_record_size: usize,
+    pub leaf_page_size: usize,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct QuantParamsInput {
+    pub params_quant: BfTreeParamsInput,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SavedParamsInput {
+    pub prefix: String,
+    pub params_vector: BfTreeParamsInput,
+    pub params_neighbor: BfTreeParamsInput,
+    pub quant_params: Option<QuantParamsInput>,
+}
+
 /// Helper struct for generating consistent file paths for BfTreeProvider persistence.
 /// Centralizes all path patterns to avoid hardcoded strings throughout the codebase.
 pub struct BfTreePaths;
@@ -1854,7 +1874,7 @@ impl BfTreePaths {
 
 // SaveWith/LoadWith for BfTreeProvider with TableDeleteProviderAsync
 
-impl<T> SaveWith<SavedParams> for BfTreeProvider<T, NoStore, TableDeleteProviderAsync>
+impl<T> SaveWith<SavedParamsInput> for BfTreeProvider<T, NoStore, TableDeleteProviderAsync>
 where
     T: VectorRepr,
 {
@@ -1864,15 +1884,36 @@ where
     async fn save_with<P>(
         &self,
         storage: &P,
-        saved_params: &SavedParams,
+        saved_params_input: &SavedParamsInput,
     ) -> Result<Self::Ok, Self::Error>
     where
         P: StorageWriteProvider,
     {
+        let saved_params = SavedParams {
+            max_points: self.max_points(),
+            frozen_points: NonZeroUsize::new(self.num_start_points())
+                .ok_or_else(|| ANNError::log_index_error("num_start_points is zero"))?,
+            dim: self.dim(),
+            metric: self.metric().as_str().to_string(),
+            max_degree: self.max_degree(),
+            prefix: saved_params_input.prefix.clone(),
+            params_vector: BfTreeParams {
+                bytes: saved_params_input.params_vector.bytes,
+                max_record_size: saved_params_input.params_vector.max_record_size,
+                leaf_page_size: saved_params_input.params_vector.leaf_page_size,
+            },
+            params_neighbor: BfTreeParams {
+                bytes: saved_params_input.params_neighbor.bytes,
+                max_record_size: saved_params_input.params_neighbor.max_record_size,
+                leaf_page_size: saved_params_input.params_neighbor.leaf_page_size,
+            },
+            quant_params: None, // No quantization parameters
+        };
+
         // Save only essential parameters as JSON
         {
             let params_filename = BfTreePaths::params_json(&saved_params.prefix);
-            let params_json = serde_json::to_string(saved_params).map_err(|e| {
+            let params_json = serde_json::to_string(&saved_params).map_err(|e| {
                 ANNError::log_index_error(format!("Failed to serialize params: {}", e))
             })?;
             let mut params_writer = storage.create_for_write(&params_filename)?;
@@ -1967,7 +2008,8 @@ where
     }
 }
 
-impl<T> SaveWith<SavedParams> for BfTreeProvider<T, QuantVectorProvider, TableDeleteProviderAsync>
+impl<T> SaveWith<SavedParamsInput>
+    for BfTreeProvider<T, QuantVectorProvider, TableDeleteProviderAsync>
 where
     T: VectorRepr,
 {
@@ -1977,15 +2019,47 @@ where
     async fn save_with<P>(
         &self,
         storage: &P,
-        saved_params: &SavedParams,
+        saved_params_input: &SavedParamsInput,
     ) -> Result<Self::Ok, Self::Error>
     where
         P: StorageWriteProvider,
     {
+        let saved_params = SavedParams {
+            max_points: self.max_points(),
+            frozen_points: NonZeroUsize::new(self.num_start_points())
+                .ok_or_else(|| ANNError::log_index_error("num_start_points is zero"))?,
+            dim: self.dim(),
+            metric: self.metric().as_str().to_string(),
+            max_degree: self.max_degree(),
+            prefix: saved_params_input.prefix.clone(),
+            params_vector: BfTreeParams {
+                bytes: saved_params_input.params_vector.bytes,
+                max_record_size: saved_params_input.params_vector.max_record_size,
+                leaf_page_size: saved_params_input.params_vector.leaf_page_size,
+            },
+            params_neighbor: BfTreeParams {
+                bytes: saved_params_input.params_neighbor.bytes,
+                max_record_size: saved_params_input.params_neighbor.max_record_size,
+                leaf_page_size: saved_params_input.params_neighbor.leaf_page_size,
+            },
+            quant_params: saved_params_input
+                .quant_params
+                .as_ref()
+                .map(|qp| QuantParams {
+                    num_pq_bytes: self.quant_vectors.pq_chunks(),
+                    max_fp_vecs_per_fill: self.max_fp_vecs_per_fill,
+                    params_quant: BfTreeParams {
+                        bytes: qp.params_quant.bytes,
+                        max_record_size: qp.params_quant.max_record_size,
+                        leaf_page_size: qp.params_quant.leaf_page_size,
+                    },
+                }),
+        };
+
         // Save only essential parameters as JSON
         {
             let params_filename = BfTreePaths::params_json(&saved_params.prefix);
-            let params_json = serde_json::to_string(saved_params).map_err(|e| {
+            let params_json = serde_json::to_string(&saved_params).map_err(|e| {
                 ANNError::log_index_error(format!("Failed to serialize params: {}", e))
             })?;
             let mut params_writer = storage.create_for_write(&params_filename)?;
@@ -2413,20 +2487,14 @@ mod tests {
 
         let storage = FileStorageProvider;
 
-        let metric_str = params.metric.as_str();
-        let saved_params = SavedParams {
-            max_points: params.max_points,
-            frozen_points: params.num_start_points,
-            dim: params.dim,
-            metric: metric_str.to_string(),
-            max_degree: params.max_degree,
+        let saved_params = SavedParamsInput {
             prefix: prefix.clone(),
-            params_vector: BfTreeParams {
+            params_vector: BfTreeParamsInput {
                 bytes: bytes_vector,
                 leaf_page_size: vector_config.get_leaf_page_size(),
                 max_record_size: vector_config.get_cb_max_record_size(),
             },
-            params_neighbor: BfTreeParams {
+            params_neighbor: BfTreeParamsInput {
                 bytes: bytes_neighbor,
                 leaf_page_size: neighbor_config.get_leaf_page_size(),
                 max_record_size: neighbor_config.get_cb_max_record_size(),
@@ -2603,29 +2671,20 @@ mod tests {
         let storage = FileStorageProvider;
 
         // Create SavedParamsQuant outside of save_with
-        let metric_str = params.metric.as_str();
-        let num_pq_bytes = pq_table.get_num_chunks();
-        let saved_params = SavedParams {
-            max_points: params.max_points,
-            frozen_points: params.num_start_points,
-            dim: params.dim,
-            metric: metric_str.to_string(),
-            max_degree: params.max_degree,
+        let saved_params = SavedParamsInput {
             prefix: prefix.clone(),
-            params_vector: BfTreeParams {
+            params_vector: BfTreeParamsInput {
                 bytes: bytes_vector,
                 leaf_page_size: vector_config.get_leaf_page_size(),
                 max_record_size: vector_config.get_cb_max_record_size(),
             },
-            params_neighbor: BfTreeParams {
+            params_neighbor: BfTreeParamsInput {
                 bytes: bytes_neighbor,
                 leaf_page_size: neighbor_config.get_leaf_page_size(),
                 max_record_size: neighbor_config.get_cb_max_record_size(),
             },
-            quant_params: Some(QuantParams {
-                num_pq_bytes,
-                max_fp_vecs_per_fill: params.max_fp_vecs_per_fill.unwrap_or(0),
-                params_quant: BfTreeParams {
+            quant_params: Some(QuantParamsInput {
+                params_quant: BfTreeParamsInput {
                     bytes: bytes_quant,
                     leaf_page_size: quant_config.get_leaf_page_size(),
                     max_record_size: quant_config.get_cb_max_record_size(),
