@@ -15,9 +15,7 @@ use crate::{
     utils::aligned_file_reader::{traits::AlignedFileReader, AlignedRead},
 };
 
-const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
-
-/// Sector graph read from disk index
+/// Sector graph read from diskindex
 pub struct DiskSectorGraph<AlignedReaderType: AlignedFileReader> {
     /// Ensure `sector_reader` is dropped before `sectors_data` by placing it before `sectors_data`.
     /// Graph storage to read sectors
@@ -57,19 +55,11 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
         header: &GraphHeader,
         max_n_batch_sector_read: usize,
     ) -> ANNResult<Self> {
-        let mut block_size = header.block_size() as usize;
-        let version = header.layout_version();
-        if (version.major_version() == 0 && version.minor_version() == 0) || block_size == 0 {
-            block_size = DEFAULT_DISK_SECTOR_LEN;
-        }
+        let block_size = header.effective_block_size();
 
         let num_nodes_per_sector = header.metadata().num_nodes_per_block;
         let node_len = header.metadata().node_len;
-        let num_sectors_per_node = if num_nodes_per_sector > 0 {
-            1
-        } else {
-            (node_len as usize).div_ceil(block_size)
-        };
+        let num_sectors_per_node = header.num_sectors_per_node();
 
         Ok(Self {
             sector_reader,
@@ -152,23 +142,21 @@ impl<AlignedReaderType: AlignedFileReader> DiskSectorGraph<AlignedReaderType> {
     /// Get offset of node in sectors_data
     #[inline]
     fn get_node_offset(&self, vertex_id: u32) -> usize {
-        if self.num_nodes_per_sector == 0 {
-            // multi-sector node
-            0
-        } else {
-            // multi node in a sector
-            (vertex_id as u64 % self.num_nodes_per_sector * self.node_len) as usize
-        }
+        crate::search::sector_math::node_offset_in_sector(
+            vertex_id,
+            self.num_nodes_per_sector,
+            self.node_len,
+        )
     }
 
     #[inline]
     /// Gets the index for the sector that contains the node with the given vertex_id
     pub fn node_sector_index(&self, vertex_id: u32) -> u64 {
-        1 + if self.num_nodes_per_sector > 0 {
-            vertex_id as u64 / self.num_nodes_per_sector
-        } else {
-            vertex_id as u64 * self.num_sectors_per_node as u64
-        }
+        crate::search::sector_math::node_sector_index(
+            vertex_id,
+            self.num_nodes_per_sector,
+            self.num_sectors_per_node,
+        )
     }
 }
 
@@ -189,6 +177,8 @@ mod disk_sector_graph_test {
 
     use super::*;
     use crate::data_model::{GraphLayoutVersion, GraphMetadata};
+
+    const DEFAULT_DISK_SECTOR_LEN: usize = 4096;
 
     fn test_index_path() -> String {
         test_data_root()

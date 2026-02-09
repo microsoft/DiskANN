@@ -9,12 +9,13 @@ use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, sync::Arc, time::
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
-use diskann::utils::VectorRepr;
+use diskann::{utils::VectorRepr, ANNResult};
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::CachingStrategy,
     search::provider::{
-        disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
+        disk_provider::{DiskIndexSearcher, SearchResult},
+        disk_vertex_provider_factory::DiskVertexProviderFactory,
     },
     search::traits::VertexProviderFactory,
     storage::disk_index_reader::DiskIndexReader,
@@ -158,6 +159,96 @@ impl DiskSearchResult {
     }
 }
 
+/// Write a single query's search result into pre-allocated buffers.
+fn write_query_result(
+    result: ANNResult<SearchResult<()>>,
+    recall_at: usize,
+    stats: &mut QueryStatistics,
+    rc: &mut u32,
+    id_chunk: &mut [u32],
+    dist_chunk: &mut [f32],
+    has_any_search_failed: &AtomicBool,
+    error_label: &str,
+) {
+    match result {
+        Ok(search_result) => {
+            *stats = search_result.stats.query_statistics;
+            *rc = search_result.results.len() as u32;
+            let actual_results = search_result.results.len().min(recall_at);
+            for (i, result_item) in search_result.results.iter().take(actual_results).enumerate() {
+                id_chunk[i] = result_item.vertex_id;
+                dist_chunk[i] = result_item.distance;
+            }
+        }
+        Err(e) => {
+            eprintln!("{} failed for query: {:?}", error_label, e);
+            *rc = 0;
+            id_chunk.fill(0);
+            dist_chunk.fill(0.0);
+            has_any_search_failed.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+/// Execute the per-L search iteration loop, handling buffer allocation, timing,
+/// span management, error checking, and result aggregation.
+fn run_search_loop(
+    search_list: &[u32],
+    recall_at: u32,
+    beam_width: usize,
+    num_queries: usize,
+    span_prefix: &str,
+    has_any_search_failed: &AtomicBool,
+    gt_context: &GroundTruthContext,
+    mut iteration_body: impl FnMut(u32, &mut [QueryStatistics], &mut [u32], &mut [u32], &mut [f32]),
+) -> anyhow::Result<Vec<DiskSearchResult>> {
+    let mut results = Vec::with_capacity(search_list.len());
+
+    for &l in search_list.iter() {
+        let mut statistics_vec = vec![QueryStatistics::default(); num_queries];
+        let mut result_counts = vec![0u32; num_queries];
+        let mut result_ids = vec![0u32; (recall_at as usize) * num_queries];
+        let mut result_dists = vec![0.0f32; (recall_at as usize) * num_queries];
+
+        let start = Instant::now();
+
+        let mut l_span = {
+            let tracer = global::tracer("");
+            let span_name = format!("{}-with-L={}-bw={}", span_prefix, l, beam_width);
+            tracer.start(span_name)
+        };
+
+        iteration_body(
+            l,
+            &mut statistics_vec,
+            &mut result_counts,
+            &mut result_ids,
+            &mut result_dists,
+        );
+
+        let total_time = start.elapsed();
+
+        if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
+            anyhow::bail!("One or more searches failed. See logs for details.");
+        }
+
+        let search_result = DiskSearchResult::new(
+            &statistics_vec,
+            &result_ids,
+            &result_counts,
+            l,
+            total_time.as_secs_f32(),
+            num_queries,
+            gt_context,
+        )?;
+
+        l_span.end();
+        results.push(search_result);
+    }
+
+    Ok(results)
+}
+
 pub(super) fn search_disk_index<T, StorageType>(
     index_load: &DiskIndexLoad,
     search_params: &DiskSearchPhase,
@@ -222,7 +313,7 @@ where
     let vertex_provider_factory = DiskVertexProviderFactory::new(reader_factory, caching_strategy)?;
 
     let pool = create_thread_pool(search_params.num_threads)?;
-    let mut search_results_per_l = Vec::with_capacity(search_params.search_list.len());
+    let search_results_per_l;
     let has_any_search_failed = AtomicBool::new(false);
 
     match &search_params.search_mode {
@@ -238,97 +329,54 @@ where
 
             logger.log_checkpoint("index_loaded");
 
-            for &l in search_params.search_list.iter() {
-                let mut statistics_vec: Vec<QueryStatistics> =
-                    vec![QueryStatistics::default(); num_queries];
-                let mut result_counts: Vec<u32> = vec![0; num_queries];
-                let mut result_ids: Vec<u32> =
-                    vec![0; (search_params.recall_at as usize) * num_queries];
-                let mut result_dists: Vec<f32> =
-                    vec![0.0; (search_params.recall_at as usize) * num_queries];
+            search_results_per_l = run_search_loop(
+                &search_params.search_list,
+                search_params.recall_at,
+                search_params.beam_width,
+                num_queries,
+                "search",
+                &has_any_search_failed,
+                &gt_context,
+                |l, statistics_vec, result_counts, result_ids, result_dists| {
+                    let zipped = queries
+                        .par_row_iter()
+                        .zip(vector_filters.par_iter())
+                        .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
+                        .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+                        .zip(statistics_vec.par_iter_mut())
+                        .zip(result_counts.par_iter_mut());
 
-                let start = Instant::now();
+                    zipped.for_each_in_pool(
+                        &pool,
+                        |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
+                            let vector_filter = if search_params.vector_filters_file.is_none() {
+                                None
+                            } else {
+                                Some(Box::new(move |vid: &u32| vf.contains(vid))
+                                    as Box<dyn Fn(&u32) -> bool + Send + Sync>)
+                            };
 
-                let mut l_span = {
-                    let tracer = global::tracer("");
-                    let span_name =
-                        format!("search-with-L={}-bw={}", l, search_params.beam_width);
-                    tracer.start(span_name)
-                };
-
-                let zipped = queries
-                    .par_row_iter()
-                    .zip(vector_filters.par_iter())
-                    .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-                    .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
-                    .zip(statistics_vec.par_iter_mut())
-                    .zip(result_counts.par_iter_mut());
-
-                zipped.for_each_in_pool(
-                    &pool,
-                    |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-                        let vector_filter = if search_params.vector_filters_file.is_none() {
-                            None
-                        } else {
-                            Some(Box::new(move |vid: &u32| vf.contains(vid))
-                                as Box<dyn Fn(&u32) -> bool + Send + Sync>)
-                        };
-
-                        match searcher.search(
-                            q,
-                            search_params.recall_at,
-                            l,
-                            Some(search_params.beam_width),
-                            vector_filter,
-                            search_params.is_flat_search,
-                        ) {
-                            Ok(search_result) => {
-                                *stats = search_result.stats.query_statistics;
-                                *rc = search_result.results.len() as u32;
-                                let actual_results = search_result
-                                    .results
-                                    .len()
-                                    .min(search_params.recall_at as usize);
-                                for (i, result_item) in search_result
-                                    .results
-                                    .iter()
-                                    .take(actual_results)
-                                    .enumerate()
-                                {
-                                    id_chunk[i] = result_item.vertex_id;
-                                    dist_chunk[i] = result_item.distance;
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("Search failed for query: {:?}", e);
-                                *rc = 0;
-                                id_chunk.fill(0);
-                                dist_chunk.fill(0.0);
-                                has_any_search_failed
-                                    .store(true, std::sync::atomic::Ordering::Release);
-                            }
-                        }
-                    },
-                );
-                let total_time = start.elapsed();
-
-                if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
-                    anyhow::bail!("One or more searches failed. See logs for details.");
-                }
-
-                let search_result = DiskSearchResult::new(
-                    &statistics_vec,
-                    &result_ids,
-                    &result_counts,
-                    l,
-                    total_time.as_secs_f32(),
-                    num_queries,
-                    &gt_context,
-                )?;
-
-                l_span.end();
-                search_results_per_l.push(search_result);
-            }
+                            write_query_result(
+                                searcher.search(
+                                    q,
+                                    search_params.recall_at,
+                                    l,
+                                    Some(search_params.beam_width),
+                                    vector_filter,
+                                    search_params.is_flat_search,
+                                ),
+                                search_params.recall_at as usize,
+                                stats,
+                                rc,
+                                id_chunk,
+                                dist_chunk,
+                                &has_any_search_failed,
+                                "Search",
+                            );
+                        },
+                    );
+                },
+            )?;
         }
         // PipeANN pipelined search — for read-only search on completed (static) indices only.
         // Searcher is created once; internal ObjectPool handles per-thread scratch allocation.
@@ -337,20 +385,17 @@ where
             initial_beam_width,
             relaxed_monotonicity_l,
             sqpoll_idle_ms,
-            iopoll,
         } => {
             #[cfg(target_os = "linux")]
             {
                 let graph_header = vertex_provider_factory.get_header()?;
                 let pq_data = index_reader.get_pq_data();
                 let metric = search_params.distance.into();
-                let search_io_limit = search_params.search_io_limit.unwrap_or(usize::MAX);
                 let initial_beam_width = *initial_beam_width;
                 let relaxed_monotonicity_l = *relaxed_monotonicity_l;
 
                 let reader_config = PipelinedReaderConfig {
                     sqpoll_idle_ms: *sqpoll_idle_ms,
-                    iopoll: *iopoll,
                 };
 
                 // Create searcher once — pool handles per-thread scratch allocation
@@ -358,7 +403,6 @@ where
                     graph_header.clone(),
                     pq_data.clone(),
                     metric,
-                    search_io_limit,
                     initial_beam_width,
                     relaxed_monotonicity_l,
                     disk_index_path.clone(),
@@ -367,93 +411,50 @@ where
 
                 logger.log_checkpoint("index_loaded");
 
-                for &l in search_params.search_list.iter() {
-                    let mut statistics_vec: Vec<QueryStatistics> =
-                        vec![QueryStatistics::default(); num_queries];
-                    let mut result_counts: Vec<u32> = vec![0; num_queries];
-                    let mut result_ids: Vec<u32> =
-                        vec![0; (search_params.recall_at as usize) * num_queries];
-                    let mut result_dists: Vec<f32> =
-                        vec![0.0; (search_params.recall_at as usize) * num_queries];
+                search_results_per_l = run_search_loop(
+                    &search_params.search_list,
+                    search_params.recall_at,
+                    search_params.beam_width,
+                    num_queries,
+                    "pipesearch",
+                    &has_any_search_failed,
+                    &gt_context,
+                    |l, statistics_vec, result_counts, result_ids, result_dists| {
+                        let pipe_searcher = pipe_searcher.clone();
 
-                    let start = Instant::now();
+                        let zipped = queries
+                            .par_row_iter()
+                            .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
+                            .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+                            .zip(statistics_vec.par_iter_mut())
+                            .zip(result_counts.par_iter_mut());
 
-                    let mut l_span = {
-                        let tracer = global::tracer("");
-                        let span_name =
-                            format!("pipesearch-with-L={}-bw={}", l, search_params.beam_width);
-                        tracer.start(span_name)
-                    };
-
-                    let pipe_searcher = pipe_searcher.clone(); // Arc clone for this L iteration
-
-                    let zipped = queries
-                        .par_row_iter()
-                        .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-                        .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
-                        .zip(statistics_vec.par_iter_mut())
-                        .zip(result_counts.par_iter_mut());
-
-                    zipped.for_each_in_pool(
-                        &pool,
-                        |((((q, id_chunk), dist_chunk), stats), rc)| {
-                            match pipe_searcher.search(
-                                q,
-                                search_params.recall_at,
-                                l,
-                                search_params.beam_width,
-                            ) {
-                                Ok(search_result) => {
-                                    *stats = search_result.stats.query_statistics;
-                                    *rc = search_result.results.len() as u32;
-                                    let actual_results = search_result
-                                        .results
-                                        .len()
-                                        .min(search_params.recall_at as usize);
-                                    for (i, result_item) in search_result
-                                        .results
-                                        .iter()
-                                        .take(actual_results)
-                                        .enumerate()
-                                    {
-                                        id_chunk[i] = result_item.vertex_id;
-                                        dist_chunk[i] = result_item.distance;
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("PipeSearch failed for query: {:?}", e);
-                                    *rc = 0;
-                                    id_chunk.fill(0);
-                                    dist_chunk.fill(0.0);
-                                    has_any_search_failed
-                                        .store(true, std::sync::atomic::Ordering::Release);
-                                }
-                            }
-                        },
-                    );
-                    let total_time = start.elapsed();
-
-                    if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
-                        anyhow::bail!("One or more searches failed. See logs for details.");
-                    }
-
-                    let search_result = DiskSearchResult::new(
-                        &statistics_vec,
-                        &result_ids,
-                        &result_counts,
-                        l,
-                        total_time.as_secs_f32(),
-                        num_queries,
-                        &gt_context,
-                    )?;
-
-                    l_span.end();
-                    search_results_per_l.push(search_result);
-                }
+                        zipped.for_each_in_pool(
+                            &pool,
+                            |((((q, id_chunk), dist_chunk), stats), rc)| {
+                                write_query_result(
+                                    pipe_searcher.search(
+                                        q,
+                                        search_params.recall_at,
+                                        l,
+                                        search_params.beam_width,
+                                    ),
+                                    search_params.recall_at as usize,
+                                    stats,
+                                    rc,
+                                    id_chunk,
+                                    dist_chunk,
+                                    &has_any_search_failed,
+                                    "PipeSearch",
+                                );
+                            },
+                        );
+                    },
+                )?;
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (initial_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms, iopoll);
+                let _ = (initial_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms);
                 anyhow::bail!("PipeSearch is only supported on Linux");
             }
         }

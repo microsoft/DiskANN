@@ -1162,7 +1162,6 @@ pub(crate) mod disk_index_builder_tests {
             graph_header,
             pq_data,
             params.metric,
-            usize::MAX,
             4,
             None,
             real_index_path_str.to_string(),

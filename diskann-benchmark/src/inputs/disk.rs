@@ -88,10 +88,29 @@ pub(crate) enum SearchMode {
         /// Enable kernel-side SQ polling (ms idle timeout). None = disabled.
         #[serde(default)]
         sqpoll_idle_ms: Option<u32>,
-        /// Enable busy-wait IO polling. Default: false.
-        #[serde(default)]
-        iopoll: bool,
     },
+}
+
+impl fmt::Display for SearchMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SearchMode::BeamSearch => write!(f, "BeamSearch"),
+            SearchMode::PipeSearch {
+                initial_beam_width,
+                relaxed_monotonicity_l,
+                sqpoll_idle_ms,
+            } => {
+                write!(f, "PipeSearch(bw={}", initial_beam_width)?;
+                if let Some(rm) = relaxed_monotonicity_l {
+                    write!(f, ",rm={}", rm)?;
+                }
+                if let Some(sq) = sqpoll_idle_ms {
+                    write!(f, ",sqpoll={}ms", sq)?;
+                }
+                write!(f, ")")
+            }
+        }
+    }
 }
 
 fn default_initial_beam_width() -> usize {

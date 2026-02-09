@@ -9,11 +9,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use byteorder::{ByteOrder, LittleEndian};
-use diskann::{utils::VectorRepr, ANNResult};
+use diskann::{utils::VectorRepr, ANNError, ANNResult};
 use diskann_providers::model::{compute_pq_distance, pq::quantizer_preprocess, PQData, PQScratch};
 use diskann_vector::{distance::Metric, DistanceFunction};
 
 use super::pipelined_reader::PipelinedReader;
+use crate::search::sector_math::{node_offset_in_sector, node_sector_index};
 
 /// A candidate in the sorted candidate pool.
 struct Candidate {
@@ -54,30 +55,6 @@ pub struct PipeSearchStats {
     pub hops: u32,
 }
 
-/// Compute the sector index that contains a given vertex.
-#[inline]
-fn node_sector_index(
-    vertex_id: u32,
-    num_nodes_per_sector: u64,
-    num_sectors_per_node: usize,
-) -> u64 {
-    1 + if num_nodes_per_sector > 0 {
-        vertex_id as u64 / num_nodes_per_sector
-    } else {
-        vertex_id as u64 * num_sectors_per_node as u64
-    }
-}
-
-/// Compute the byte offset of a node within its sector.
-#[inline]
-fn node_offset_in_sector(vertex_id: u32, num_nodes_per_sector: u64, node_len: u64) -> usize {
-    if num_nodes_per_sector == 0 {
-        0
-    } else {
-        (vertex_id as u64 % num_nodes_per_sector * node_len) as usize
-    }
-}
-
 /// Parse a node from raw sector buffer bytes.
 fn parse_node(
     sector_buf: &[u8],
@@ -85,13 +62,33 @@ fn parse_node(
     num_nodes_per_sector: u64,
     node_len: u64,
     fp_vector_len: u64,
-) -> LoadedNode {
+) -> ANNResult<LoadedNode> {
     let offset = node_offset_in_sector(vertex_id, num_nodes_per_sector, node_len);
-    let node_data = &sector_buf[offset..offset + node_len as usize];
+    let end = offset + node_len as usize;
+    let node_data = sector_buf.get(offset..end).ok_or_else(|| {
+        ANNError::log_index_error(format_args!(
+            "Node data out of bounds: vertex {} offset {}..{} in buffer of len {}",
+            vertex_id,
+            offset,
+            end,
+            sector_buf.len()
+        ))
+    })?;
 
-    let fp_vector = node_data[..fp_vector_len as usize].to_vec();
+    let fp_vector_len_usize = fp_vector_len as usize;
+    if fp_vector_len_usize > node_data.len() {
+        return Err(ANNError::log_index_error(format_args!(
+            "fp_vector_len {} exceeds node_data len {}",
+            fp_vector_len_usize,
+            node_data.len()
+        )));
+    }
 
-    let neighbor_data = &node_data[fp_vector_len as usize..];
+    // Copy required: the slot buffer will be reused for subsequent IOs while
+    // the parsed node remains in id_buf_map until visited.
+    let fp_vector = node_data[..fp_vector_len_usize].to_vec();
+
+    let neighbor_data = &node_data[fp_vector_len_usize..];
     let num_neighbors = LittleEndian::read_u32(&neighbor_data[..4]) as usize;
     // Clamp to the available data to avoid out-of-bounds reads.
     let max_neighbors = (neighbor_data.len().saturating_sub(4)) / 4;
@@ -102,10 +99,10 @@ fn parse_node(
         adjacency_list.push(LittleEndian::read_u32(&neighbor_data[start..start + 4]));
     }
 
-    LoadedNode {
+    Ok(LoadedNode {
         fp_vector,
         adjacency_list,
-    }
+    })
 }
 
 /// Insert a candidate into the sorted retset, maintaining sort order by distance.
@@ -284,7 +281,7 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                         num_nodes_per_sector,
                         node_len,
                         fp_vector_len,
-                    );
+                    )?;
                     // Track convergence: is this node still in the top of retset?
                     if cur_list_size > 0 {
                         let last_dist = retset[cur_list_size - 1].distance;
@@ -455,7 +452,7 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                             num_nodes_per_sector,
                             node_len,
                             fp_vector_len,
-                        );
+                        )?;
                         id_buf_map.insert(io.vertex_id, node);
                     } else {
                         remaining.push_back(io);
@@ -682,7 +679,7 @@ mod tests {
         let node_len = fp_vector_len + 4 + 3 * 4; // vec + count + 3 neighbors
 
         let buf = build_sector_buf(0, &fp_vec, &neighbors, 4096);
-        let node = parse_node(&buf, 0, 1, node_len, fp_vector_len);
+        let node = parse_node(&buf, 0, 1, node_len, fp_vector_len).unwrap();
 
         assert_eq!(node.fp_vector, fp_vec);
         assert_eq!(node.adjacency_list, vec![10, 20, 30]);
@@ -706,7 +703,7 @@ mod tests {
         }
 
         // Parse node at index 2 (vertex_id=2 within same sector)
-        let node = parse_node(&buf, 2, num_nodes_per_sector, node_len, fp_vector_len);
+        let node = parse_node(&buf, 2, num_nodes_per_sector, node_len, fp_vector_len).unwrap();
         let expected_fp: Vec<u8> = (0..8).map(|b| b + 20).collect();
         assert_eq!(node.fp_vector, expected_fp);
         assert_eq!(node.adjacency_list, vec![102, 202]);
@@ -720,7 +717,7 @@ mod tests {
         let node_len = fp_vector_len + 4; // vec + count only
 
         let buf = build_sector_buf(0, &fp_vec, &neighbors, 4096);
-        let node = parse_node(&buf, 0, 1, node_len, fp_vector_len);
+        let node = parse_node(&buf, 0, 1, node_len, fp_vector_len).unwrap();
 
         assert_eq!(node.fp_vector, vec![42u8; 16]);
         assert!(node.adjacency_list.is_empty());

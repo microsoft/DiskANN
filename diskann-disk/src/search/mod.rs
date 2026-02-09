@@ -8,5 +8,7 @@
 pub mod provider;
 pub mod traits;
 
+pub(crate) mod sector_math;
+
 #[cfg(target_os = "linux")]
 pub mod pipelined;
