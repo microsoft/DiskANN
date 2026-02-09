@@ -110,12 +110,7 @@ fn parse_node(
 fn insert_into_pool(retset: &mut Vec<Candidate>, pool_size: &mut usize, candidate: Candidate) -> usize {
     // Binary search for insertion point
     let pos = retset[..*pool_size]
-        .binary_search_by(|probe| {
-            probe
-                .distance
-                .partial_cmp(&candidate.distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .binary_search_by(|probe| probe.distance.total_cmp(&candidate.distance))
         .unwrap_or_else(|x| x);
 
     // If pool is full and candidate is worse than all existing, don't insert
@@ -172,6 +167,7 @@ pub(crate) fn pipe_search<T: VectorRepr>(
 
     let num_pq_chunks = pq_data.get_num_chunks();
     let pq_compressed = pq_data.pq_compressed_data().get_data();
+    let num_pts = pq_compressed.len() / num_pq_chunks;
 
     let num_sectors_per_node = if num_nodes_per_sector > 0 {
         1
@@ -379,7 +375,7 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                     // Expand neighbors
                     let mut nbors_to_compute: Vec<u32> = Vec::new();
                     for &nbr_id in &node.adjacency_list {
-                        if visited.insert(nbr_id) {
+                        if (nbr_id as usize) < num_pts && visited.insert(nbr_id) {
                             nbors_to_compute.push(nbr_id);
                         }
                     }
@@ -474,8 +470,8 @@ pub(crate) fn pipe_search<T: VectorRepr>(
         }
     }
 
-    // Sort full_retset and return top-k
-    full_retset.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Sort full_retset and return top-k (total_cmp handles NaN correctly)
+    full_retset.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     // Deduplicate
     let mut ids = Vec::with_capacity(k);
