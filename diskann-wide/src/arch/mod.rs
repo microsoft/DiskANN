@@ -371,7 +371,7 @@ pub use emulated::Scalar;
 /// #[cfg(target_arch = "x86_64")]
 /// let _meets_v3 = arch::Current::level() >= arch::x86_64::V3::level();
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Level(LevelInner);
 
 impl Level {
@@ -413,7 +413,7 @@ cfg_if::cfg_if! {
         pub type Current = Scalar;
 
         // There is only one architecture present in this mode.
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
         enum LevelInner {
             Scalar,
         }

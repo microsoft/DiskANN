@@ -19,7 +19,7 @@ pub use v3::V3;
 pub use v4::V4;
 
 // The ordering is `Scalar < V3 < V4`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub(super) enum LevelInner {
     Scalar,
     V3,
