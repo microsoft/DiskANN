@@ -1119,6 +1119,95 @@ pub(crate) mod disk_index_builder_tests {
         Ok(())
     }
 
+    /// Verifies search results via PipelinedSearcher (PipeANN) have good recall
+    /// against ground truth computed from the dataset.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn verify_search_result_with_ground_truth_pipelined<
+        G: GraphDataType<VectorIdType = u32, AssociatedDataType = ()>,
+    >(
+        params: &TestParams,
+        top_k: usize,
+        search_l: u32,
+        storage_provider: &Arc<VirtualStorageProvider<OverlayFS>>,
+    ) -> ANNResult<()> {
+        use crate::search::pipelined::{PipelinedSearcher, PipelinedReaderConfig};
+        use crate::search::traits::vertex_provider_factory::VertexProviderFactory;
+
+        let pq_pivot_path = get_pq_pivot_file(&params.index_path_prefix);
+        let pq_compressed_path = get_compressed_pq_file(&params.index_path_prefix);
+
+        let index_reader = DiskIndexReader::<G::VectorDataType>::new(
+            pq_pivot_path,
+            pq_compressed_path,
+            storage_provider.as_ref(),
+        )?;
+        let pq_data = index_reader.get_pq_data();
+
+        let vertex_provider_factory = DiskVertexProviderFactory::<G, _>::new(
+            VirtualAlignedReaderFactory::new(
+                get_disk_index_file(&params.index_path_prefix),
+                Arc::clone(storage_provider),
+            ),
+            CachingStrategy::None,
+        )?;
+        let graph_header = vertex_provider_factory.get_header()?;
+
+        // Resolve real filesystem path (PipelinedSearcher uses O_DIRECT).
+        let vfs_suffix = params.index_path_prefix.trim_start_matches('/');
+        let real_index_path = diskann_utils::test_data_root()
+            .join(format!("{}_disk.index", vfs_suffix));
+        let real_index_path_str = real_index_path.to_str().unwrap();
+
+        let pipe_searcher = PipelinedSearcher::<G>::new(
+            graph_header,
+            pq_data,
+            params.metric,
+            usize::MAX,
+            4,
+            None,
+            real_index_path_str.to_string(),
+            PipelinedReaderConfig::default(),
+        )?;
+
+        let (data, npoints, dim) = file_util::load_bin::<G::VectorDataType, _>(
+            storage_provider.as_ref(),
+            &params.data_path,
+            0,
+        )?;
+        let data =
+            diskann_utils::views::Matrix::try_from(data.into(), npoints, dim).bridge_err()?;
+        let distance = <G::VectorDataType>::distance(params.metric, Some(dim));
+
+        for (q, query_data) in data.row_iter().enumerate() {
+            let gt =
+                diskann_providers::test_utils::groundtruth(data.as_view(), query_data, |a, b| {
+                    distance.evaluate_similarity(a, b)
+                });
+
+            let result =
+                pipe_searcher.search(query_data, top_k as u32, search_l, 4)?;
+            let result_ids: Vec<u32> =
+                result.results.iter().map(|item| item.vertex_id).collect();
+
+            let gt_ids: Vec<u32> = gt.iter().take(top_k).map(|n| n.id).collect();
+            let matching = result_ids
+                .iter()
+                .filter(|id| gt_ids.contains(id))
+                .count();
+            let recall = matching as f32 / top_k as f32;
+            assert!(
+                recall >= 0.8,
+                "PipeANN recall {:.0}% < 80% for query {}, got {:?}, expected {:?}",
+                recall * 100.0,
+                q,
+                result_ids,
+                gt_ids,
+            );
+        }
+
+        Ok(())
+    }
+
     // Compare that the index built in test is the same as the truth index. The truth index doesn't have associated data, we are only comparing the vector and neighbor data.
     pub fn compare_disk_index_graphs(graph_data: &[u8], truth_graph_data: &[u8]) {
         let graph_header = GraphHeader::try_from(&graph_data[8..]).unwrap();

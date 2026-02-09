@@ -17,6 +17,20 @@ use io_uring::IoUring;
 /// Maximum number of concurrent IO operations supported by the ring.
 pub const MAX_IO_CONCURRENCY: usize = 128;
 
+/// Configuration for io_uring-based pipelined reader.
+#[derive(Debug, Clone, Default)]
+pub struct PipelinedReaderConfig {
+    /// Enable kernel-side SQ polling. If `Some(idle_ms)`, a kernel thread polls
+    /// the submission queue, eliminating the syscall per submit. After `idle_ms`
+    /// milliseconds of inactivity the kernel thread sleeps (resumed automatically
+    /// on next `submit()`). Requires Linux kernel >= 5.11 (>= 5.13 unprivileged).
+    pub sqpoll_idle_ms: Option<u32>,
+    /// Enable busy-wait polling for IO completions (IORING_SETUP_IOPOLL).
+    /// Reduces latency at the cost of higher CPU usage. Requires O_DIRECT and
+    /// a file system that supports polling.
+    pub iopoll: bool,
+}
+
 /// A pipelined IO reader that wraps `io_uring` for non-blocking submit/poll.
 ///
 /// Unlike `LinuxAlignedFileReader` which uses `submit_and_wait` (blocking),
@@ -32,6 +46,8 @@ pub struct PipelinedReader {
     max_slots: usize,
     /// Number of currently in-flight (submitted but not completed) reads.
     in_flight: usize,
+    /// Whether IOPOLL mode is active (requires active polling for completions).
+    iopoll: bool,
     /// Keep the file handle alive for the lifetime of the reader.
     _file: std::fs::File,
 }
@@ -49,6 +65,7 @@ impl PipelinedReader {
         max_slots: usize,
         slot_size: usize,
         alignment: usize,
+        config: &PipelinedReaderConfig,
     ) -> ANNResult<Self> {
         let file = OpenOptions::new()
             .read(true)
@@ -56,7 +73,19 @@ impl PipelinedReader {
             .open(file_path)
             .map_err(ANNError::log_io_error)?;
 
-        let ring = IoUring::new(max_slots.min(MAX_IO_CONCURRENCY) as u32)?;
+        let entries = max_slots.min(MAX_IO_CONCURRENCY) as u32;
+        let ring = if config.sqpoll_idle_ms.is_some() || config.iopoll {
+            let mut builder = IoUring::builder();
+            if let Some(idle_ms) = config.sqpoll_idle_ms {
+                builder.setup_sqpoll(idle_ms);
+            }
+            if config.iopoll {
+                builder.setup_iopoll();
+            }
+            builder.build(entries)?
+        } else {
+            IoUring::new(entries)?
+        };
         let fd = file.as_raw_fd();
         ring.submitter().register_files(std::slice::from_ref(&fd))?;
 
@@ -68,6 +97,7 @@ impl PipelinedReader {
             slot_size,
             max_slots,
             in_flight: 0,
+            iopoll: config.iopoll,
             _file: file,
         })
     }
@@ -107,10 +137,18 @@ impl PipelinedReader {
         Ok(())
     }
 
-    /// Non-blocking poll of completed IO operations.
+    /// Poll for completed IO operations.
     ///
-    /// Returns the slot_ids of all completed reads since the last poll.
+    /// In default mode, this is non-blocking (drains already-completed CQEs).
+    /// In IOPOLL mode, this actively polls the kernel for at least one completion
+    /// when there are in-flight IOs, since IOPOLL completions require active reaping.
     pub fn poll_completions(&mut self) -> ANNResult<Vec<usize>> {
+        // IOPOLL requires the kernel to actively poll for completions.
+        // Without this, ring.completion() will always be empty.
+        if self.iopoll && self.in_flight > 0 {
+            self.ring.submit_and_wait(1)?;
+        }
+
         let mut completed = Vec::new();
         for cqe in self.ring.completion() {
             if cqe.result() < 0 {
@@ -130,6 +168,13 @@ impl PipelinedReader {
     pub fn get_slot_buf(&self, slot_id: usize) -> &[u8] {
         let start = slot_id * self.slot_size;
         &self.slot_bufs[start..start + self.slot_size]
+    }
+
+    /// Reset the reader for reuse: clear in-flight count and drain remaining CQEs.
+    pub fn reset(&mut self) {
+        self.in_flight = 0;
+        // Drain any remaining completions from the ring.
+        for _cqe in self.ring.completion() {}
     }
 
     /// Returns the number of submitted but not yet completed reads.

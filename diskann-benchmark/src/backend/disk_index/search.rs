@@ -4,7 +4,7 @@
  */
 
 use rayon::prelude::*;
-use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, time::Instant};
+use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, sync::Arc, time::Instant};
 
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
@@ -21,7 +21,7 @@ use diskann_disk::{
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
 };
 #[cfg(target_os = "linux")]
-use diskann_disk::search::pipelined::PipelinedSearcher;
+use diskann_disk::search::pipelined::{PipelinedSearcher, PipelinedReaderConfig};
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     storage::{
@@ -330,9 +330,14 @@ where
                 search_results_per_l.push(search_result);
             }
         }
+        // PipeANN pipelined search — for read-only search on completed (static) indices only.
+        // Searcher is created once; internal ObjectPool handles per-thread scratch allocation.
+        // Build's internal search always uses BeamSearch above.
         SearchMode::PipeSearch {
             initial_beam_width,
             relaxed_monotonicity_l,
+            sqpoll_idle_ms,
+            iopoll,
         } => {
             #[cfg(target_os = "linux")]
             {
@@ -342,6 +347,23 @@ where
                 let search_io_limit = search_params.search_io_limit.unwrap_or(usize::MAX);
                 let initial_beam_width = *initial_beam_width;
                 let relaxed_monotonicity_l = *relaxed_monotonicity_l;
+
+                let reader_config = PipelinedReaderConfig {
+                    sqpoll_idle_ms: *sqpoll_idle_ms,
+                    iopoll: *iopoll,
+                };
+
+                // Create searcher once — pool handles per-thread scratch allocation
+                let pipe_searcher = Arc::new(PipelinedSearcher::<GraphData<T>>::new(
+                    graph_header.clone(),
+                    pq_data.clone(),
+                    metric,
+                    search_io_limit,
+                    initial_beam_width,
+                    relaxed_monotonicity_l,
+                    disk_index_path.clone(),
+                    reader_config,
+                )?);
 
                 logger.log_checkpoint("index_loaded");
 
@@ -363,6 +385,8 @@ where
                         tracer.start(span_name)
                     };
 
+                    let pipe_searcher = pipe_searcher.clone(); // Arc clone for this L iteration
+
                     let zipped = queries
                         .par_row_iter()
                         .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
@@ -373,28 +397,6 @@ where
                     zipped.for_each_in_pool(
                         &pool,
                         |((((q, id_chunk), dist_chunk), stats), rc)| {
-                            let pipe_searcher =
-                                match PipelinedSearcher::<GraphData<T>>::new(
-                                    graph_header.clone(),
-                                    pq_data.clone(),
-                                    metric,
-                                    search_io_limit,
-                                    initial_beam_width,
-                                    relaxed_monotonicity_l,
-                                    disk_index_path.clone(),
-                                ) {
-                                    Ok(s) => s,
-                                    Err(e) => {
-                                        eprintln!("Failed to create PipelinedSearcher: {:?}", e);
-                                        *rc = 0;
-                                        id_chunk.fill(0);
-                                        dist_chunk.fill(0.0);
-                                        has_any_search_failed
-                                            .store(true, std::sync::atomic::Ordering::Release);
-                                        return;
-                                    }
-                                };
-
                             match pipe_searcher.search(
                                 q,
                                 search_params.recall_at,
@@ -451,7 +453,7 @@ where
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (initial_beam_width, relaxed_monotonicity_l);
+                let _ = (initial_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms, iopoll);
                 anyhow::bail!("PipeSearch is only supported on Linux");
             }
         }

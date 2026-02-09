@@ -93,6 +93,9 @@ fn parse_node(
 
     let neighbor_data = &node_data[fp_vector_len as usize..];
     let num_neighbors = LittleEndian::read_u32(&neighbor_data[..4]) as usize;
+    // Clamp to the available data to avoid out-of-bounds reads.
+    let max_neighbors = (neighbor_data.len().saturating_sub(4)) / 4;
+    let num_neighbors = num_neighbors.min(max_neighbors);
     let mut adjacency_list = Vec::with_capacity(num_neighbors);
     for i in 0..num_neighbors {
         let start = 4 + i * 4;

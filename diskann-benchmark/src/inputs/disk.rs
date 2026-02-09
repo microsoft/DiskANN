@@ -85,6 +85,12 @@ pub(crate) enum SearchMode {
         initial_beam_width: usize,
         /// Optional relaxed monotonicity parameter for early termination.
         relaxed_monotonicity_l: Option<usize>,
+        /// Enable kernel-side SQ polling (ms idle timeout). None = disabled.
+        #[serde(default)]
+        sqpoll_idle_ms: Option<u32>,
+        /// Enable busy-wait IO polling. Default: false.
+        #[serde(default)]
+        iopoll: bool,
     },
 }
 
