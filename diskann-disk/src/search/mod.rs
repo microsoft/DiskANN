@@ -7,3 +7,6 @@
 
 pub mod provider;
 pub mod traits;
+
+#[cfg(target_os = "linux")]
+pub mod pipelined;

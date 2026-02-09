@@ -16,9 +16,12 @@ use diskann_disk::{
     search::provider::{
         disk_provider::DiskIndexSearcher, disk_vertex_provider_factory::DiskVertexProviderFactory,
     },
+    search::traits::VertexProviderFactory,
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
 };
+#[cfg(target_os = "linux")]
+use diskann_disk::search::pipelined::PipelinedSearcher;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     storage::{
@@ -32,7 +35,7 @@ use serde::Serialize;
 
 use crate::{
     backend::disk_index::{graph_data_type::GraphData, json_spancollector::JsonSpanCollector},
-    inputs::disk::{DiskIndexLoad, DiskSearchPhase},
+    inputs::disk::{DiskIndexLoad, DiskSearchPhase, SearchMode},
     utils::{datafiles, SimilarityMeasure},
 };
 
@@ -44,6 +47,7 @@ pub(super) struct DiskSearchStats {
     pub(crate) is_flat_search: bool,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) uses_vector_filters: bool,
+    pub(super) search_mode: String,
     pub(super) num_nodes_to_cache: Option<usize>,
     pub(super) search_results_per_l: Vec<DiskSearchResult>,
     span_metrics: serde_json::Value,
@@ -214,113 +218,243 @@ where
         CachingStrategy::None
     };
 
-    let reader_factory = AlignedFileReaderFactory::new(disk_index_path);
+    let reader_factory = AlignedFileReaderFactory::new(disk_index_path.clone());
     let vertex_provider_factory = DiskVertexProviderFactory::new(reader_factory, caching_strategy)?;
-
-    let searcher = &DiskIndexSearcher::<GraphData<T>, _>::new(
-        search_params.num_threads,
-        if let Some(lim) = search_params.search_io_limit {
-            lim
-        } else {
-            usize::MAX
-        },
-        &index_reader,
-        vertex_provider_factory,
-        search_params.distance.into(),
-        None,
-    )?;
-
-    logger.log_checkpoint("index_loaded");
 
     let pool = create_thread_pool(search_params.num_threads)?;
     let mut search_results_per_l = Vec::with_capacity(search_params.search_list.len());
     let has_any_search_failed = AtomicBool::new(false);
 
-    // Execute search iterations
-    for &l in search_params.search_list.iter() {
-        let mut statistics_vec: Vec<QueryStatistics> =
-            vec![QueryStatistics::default(); num_queries];
-        let mut result_counts: Vec<u32> = vec![0; num_queries];
-        let mut result_ids: Vec<u32> = vec![0; (search_params.recall_at as usize) * num_queries];
-        let mut result_dists: Vec<f32> =
-            vec![0.0; (search_params.recall_at as usize) * num_queries];
+    match &search_params.search_mode {
+        SearchMode::BeamSearch => {
+            let searcher = &DiskIndexSearcher::<GraphData<T>, _>::new(
+                search_params.num_threads,
+                search_params.search_io_limit.unwrap_or(usize::MAX),
+                &index_reader,
+                vertex_provider_factory,
+                search_params.distance.into(),
+                None,
+            )?;
 
-        let start = Instant::now();
+            logger.log_checkpoint("index_loaded");
 
-        let mut l_span = {
-            let tracer = global::tracer("");
-            let span_name = format!("search-with-L={}-bw={}", l, search_params.beam_width);
-            tracer.start(span_name)
-        };
+            for &l in search_params.search_list.iter() {
+                let mut statistics_vec: Vec<QueryStatistics> =
+                    vec![QueryStatistics::default(); num_queries];
+                let mut result_counts: Vec<u32> = vec![0; num_queries];
+                let mut result_ids: Vec<u32> =
+                    vec![0; (search_params.recall_at as usize) * num_queries];
+                let mut result_dists: Vec<f32> =
+                    vec![0.0; (search_params.recall_at as usize) * num_queries];
 
-        let zipped = queries
-            .par_row_iter()
-            .zip(vector_filters.par_iter())
-            .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-            .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
-            .zip(statistics_vec.par_iter_mut())
-            .zip(result_counts.par_iter_mut());
+                let start = Instant::now();
 
-        zipped.for_each_in_pool(&pool, |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
-            let vector_filter = if search_params.vector_filters_file.is_none() {
-                None
-            } else {
-                Some(Box::new(move |vid: &u32| vf.contains(vid))
-                    as Box<dyn Fn(&u32) -> bool + Send + Sync>)
-            };
+                let mut l_span = {
+                    let tracer = global::tracer("");
+                    let span_name =
+                        format!("search-with-L={}-bw={}", l, search_params.beam_width);
+                    tracer.start(span_name)
+                };
 
-            match searcher.search(
-                q,
-                search_params.recall_at,
-                l,
-                Some(search_params.beam_width),
-                vector_filter,
-                search_params.is_flat_search,
-            ) {
-                Ok(search_result) => {
-                    *stats = search_result.stats.query_statistics;
-                    *rc = search_result.results.len() as u32;
-                    let actual_results = search_result
-                        .results
-                        .len()
-                        .min(search_params.recall_at as usize);
-                    for (i, result_item) in search_result
-                        .results
-                        .iter()
-                        .take(actual_results)
-                        .enumerate()
-                    {
-                        id_chunk[i] = result_item.vertex_id;
-                        dist_chunk[i] = result_item.distance;
-                    }
+                let zipped = queries
+                    .par_row_iter()
+                    .zip(vector_filters.par_iter())
+                    .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
+                    .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+                    .zip(statistics_vec.par_iter_mut())
+                    .zip(result_counts.par_iter_mut());
+
+                zipped.for_each_in_pool(
+                    &pool,
+                    |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
+                        let vector_filter = if search_params.vector_filters_file.is_none() {
+                            None
+                        } else {
+                            Some(Box::new(move |vid: &u32| vf.contains(vid))
+                                as Box<dyn Fn(&u32) -> bool + Send + Sync>)
+                        };
+
+                        match searcher.search(
+                            q,
+                            search_params.recall_at,
+                            l,
+                            Some(search_params.beam_width),
+                            vector_filter,
+                            search_params.is_flat_search,
+                        ) {
+                            Ok(search_result) => {
+                                *stats = search_result.stats.query_statistics;
+                                *rc = search_result.results.len() as u32;
+                                let actual_results = search_result
+                                    .results
+                                    .len()
+                                    .min(search_params.recall_at as usize);
+                                for (i, result_item) in search_result
+                                    .results
+                                    .iter()
+                                    .take(actual_results)
+                                    .enumerate()
+                                {
+                                    id_chunk[i] = result_item.vertex_id;
+                                    dist_chunk[i] = result_item.distance;
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Search failed for query: {:?}", e);
+                                *rc = 0;
+                                id_chunk.fill(0);
+                                dist_chunk.fill(0.0);
+                                has_any_search_failed
+                                    .store(true, std::sync::atomic::Ordering::Release);
+                            }
+                        }
+                    },
+                );
+                let total_time = start.elapsed();
+
+                if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
+                    anyhow::bail!("One or more searches failed. See logs for details.");
                 }
-                Err(e) => {
-                    eprintln!("Search failed for query: {:?}", e);
-                    *rc = 0;
-                    id_chunk.fill(0);
-                    dist_chunk.fill(0.0);
-                    has_any_search_failed.store(true, std::sync::atomic::Ordering::Release);
+
+                let search_result = DiskSearchResult::new(
+                    &statistics_vec,
+                    &result_ids,
+                    &result_counts,
+                    l,
+                    total_time.as_secs_f32(),
+                    num_queries,
+                    &gt_context,
+                )?;
+
+                l_span.end();
+                search_results_per_l.push(search_result);
+            }
+        }
+        SearchMode::PipeSearch {
+            initial_beam_width,
+            relaxed_monotonicity_l,
+        } => {
+            #[cfg(target_os = "linux")]
+            {
+                let graph_header = vertex_provider_factory.get_header()?;
+                let pq_data = index_reader.get_pq_data();
+                let metric = search_params.distance.into();
+                let search_io_limit = search_params.search_io_limit.unwrap_or(usize::MAX);
+                let initial_beam_width = *initial_beam_width;
+                let relaxed_monotonicity_l = *relaxed_monotonicity_l;
+
+                logger.log_checkpoint("index_loaded");
+
+                for &l in search_params.search_list.iter() {
+                    let mut statistics_vec: Vec<QueryStatistics> =
+                        vec![QueryStatistics::default(); num_queries];
+                    let mut result_counts: Vec<u32> = vec![0; num_queries];
+                    let mut result_ids: Vec<u32> =
+                        vec![0; (search_params.recall_at as usize) * num_queries];
+                    let mut result_dists: Vec<f32> =
+                        vec![0.0; (search_params.recall_at as usize) * num_queries];
+
+                    let start = Instant::now();
+
+                    let mut l_span = {
+                        let tracer = global::tracer("");
+                        let span_name =
+                            format!("pipesearch-with-L={}-bw={}", l, search_params.beam_width);
+                        tracer.start(span_name)
+                    };
+
+                    let zipped = queries
+                        .par_row_iter()
+                        .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
+                        .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+                        .zip(statistics_vec.par_iter_mut())
+                        .zip(result_counts.par_iter_mut());
+
+                    zipped.for_each_in_pool(
+                        &pool,
+                        |((((q, id_chunk), dist_chunk), stats), rc)| {
+                            let pipe_searcher =
+                                match PipelinedSearcher::<GraphData<T>>::new(
+                                    graph_header.clone(),
+                                    pq_data.clone(),
+                                    metric,
+                                    search_io_limit,
+                                    initial_beam_width,
+                                    relaxed_monotonicity_l,
+                                    disk_index_path.clone(),
+                                ) {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        eprintln!("Failed to create PipelinedSearcher: {:?}", e);
+                                        *rc = 0;
+                                        id_chunk.fill(0);
+                                        dist_chunk.fill(0.0);
+                                        has_any_search_failed
+                                            .store(true, std::sync::atomic::Ordering::Release);
+                                        return;
+                                    }
+                                };
+
+                            match pipe_searcher.search(
+                                q,
+                                search_params.recall_at,
+                                l,
+                                search_params.beam_width,
+                            ) {
+                                Ok(search_result) => {
+                                    *stats = search_result.stats.query_statistics;
+                                    *rc = search_result.results.len() as u32;
+                                    let actual_results = search_result
+                                        .results
+                                        .len()
+                                        .min(search_params.recall_at as usize);
+                                    for (i, result_item) in search_result
+                                        .results
+                                        .iter()
+                                        .take(actual_results)
+                                        .enumerate()
+                                    {
+                                        id_chunk[i] = result_item.vertex_id;
+                                        dist_chunk[i] = result_item.distance;
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("PipeSearch failed for query: {:?}", e);
+                                    *rc = 0;
+                                    id_chunk.fill(0);
+                                    dist_chunk.fill(0.0);
+                                    has_any_search_failed
+                                        .store(true, std::sync::atomic::Ordering::Release);
+                                }
+                            }
+                        },
+                    );
+                    let total_time = start.elapsed();
+
+                    if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
+                        anyhow::bail!("One or more searches failed. See logs for details.");
+                    }
+
+                    let search_result = DiskSearchResult::new(
+                        &statistics_vec,
+                        &result_ids,
+                        &result_counts,
+                        l,
+                        total_time.as_secs_f32(),
+                        num_queries,
+                        &gt_context,
+                    )?;
+
+                    l_span.end();
+                    search_results_per_l.push(search_result);
                 }
             }
-        });
-        let total_time = start.elapsed();
-
-        if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
-            anyhow::bail!("One or more searches failed. See logs for details.");
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (initial_beam_width, relaxed_monotonicity_l);
+                anyhow::bail!("PipeSearch is only supported on Linux");
+            }
         }
-
-        let search_result = DiskSearchResult::new(
-            &statistics_vec,
-            &result_ids,
-            &result_counts,
-            l,
-            total_time.as_secs_f32(),
-            num_queries,
-            &gt_context,
-        )?;
-
-        l_span.end();
-        search_results_per_l.push(search_result);
     }
 
     // Log search completed checkpoint
@@ -343,6 +477,7 @@ where
         is_flat_search: search_params.is_flat_search,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
+        search_mode: format!("{:?}", search_params.search_mode),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
         search_results_per_l,
         span_metrics,
@@ -427,6 +562,7 @@ impl fmt::Display for DiskSearchStats {
         writeln!(f, "Flat search,      : {}", self.is_flat_search)?;
         writeln!(f, "Distance,         : {}", self.distance)?;
         writeln!(f, "Vector filters,   : {}", self.uses_vector_filters)?;
+        writeln!(f, "Search mode,      : {}", self.search_mode)?;
         writeln!(
             f,
             "Nodes to cache,   : {}",

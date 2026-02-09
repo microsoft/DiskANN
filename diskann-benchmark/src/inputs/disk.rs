@@ -71,6 +71,27 @@ pub(crate) struct DiskIndexBuild {
     pub(crate) save_path: String,
 }
 
+/// Search algorithm to use for disk index search.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(tag = "mode")]
+pub(crate) enum SearchMode {
+    /// Standard beam search (default, current behavior).
+    #[default]
+    BeamSearch,
+    /// PipeANN pipelined search with IO/compute overlap.
+    PipeSearch {
+        /// Initial beam width before adaptive adjustment (default: 4).
+        #[serde(default = "default_initial_beam_width")]
+        initial_beam_width: usize,
+        /// Optional relaxed monotonicity parameter for early termination.
+        relaxed_monotonicity_l: Option<usize>,
+    },
+}
+
+fn default_initial_beam_width() -> usize {
+    4
+}
+
 /// Search phase configuration
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct DiskSearchPhase {
@@ -85,6 +106,9 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
     pub(crate) search_io_limit: Option<usize>,
+    /// Search algorithm to use (defaults to BeamSearch).
+    #[serde(default)]
+    pub(crate) search_mode: SearchMode,
 }
 
 /////////
@@ -234,6 +258,14 @@ impl CheckDeserialization for DiskSearchPhase {
                 anyhow::bail!("search_io_limit must be positive if specified");
             }
         }
+        match &self.search_mode {
+            SearchMode::BeamSearch => {}
+            SearchMode::PipeSearch { initial_beam_width, .. } => {
+                if *initial_beam_width == 0 {
+                    anyhow::bail!("initial_beam_width must be positive");
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -272,6 +304,7 @@ impl Example for DiskIndexOperation {
             vector_filters_file: None,
             num_nodes_to_cache: None,
             search_io_limit: None,
+            search_mode: SearchMode::default(),
         };
 
         Self {
@@ -397,6 +430,7 @@ impl DiskSearchPhase {
             Some(lim) => write_field!(f, "Search IO Limit", format!("{lim}"))?,
             None => write_field!(f, "Search IO Limit", "none (defaults to `usize::MAX`)")?,
         }
+        write_field!(f, "Search Mode", format!("{:?}", self.search_mode))?;
         Ok(())
     }
 }

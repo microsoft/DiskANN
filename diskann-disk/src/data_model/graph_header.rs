@@ -12,6 +12,7 @@ use thiserror::Error;
 use super::{GraphLayoutVersion, GraphMetadata};
 
 /// GraphHeader. The header is stored in the first sector of the disk index file, or the first segment of the JET stream.
+#[derive(Clone)]
 pub struct GraphHeader {
     // Graph metadata.
     metadata: GraphMetadata,
