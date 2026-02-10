@@ -28,7 +28,6 @@ defaults:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   # Basic checks that must pass before we kick off more expensive tests.
@@ -130,30 +129,33 @@ jobs:
   codeql:
     name: CodeQL security analysis
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
-      with:
-        languages: rust
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
 
-    - name: Install Rust ${{ env.rust_stable }}
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: ${{ env.rust_stable }}
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
 
-    - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
 
-    - name: Build workspace
-      run: cargo build --workspace --locked
+      - name: Build workspace
+        run: cargo build --workspace --locked --profile ci
 
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
-      with:
-        category: "/language:rust"
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"
 
   # TODO: Re-enable docs check later
   # docs:
