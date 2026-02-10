@@ -83,7 +83,7 @@ pub(crate) unsafe fn __load_first_of_16_bytes(arch: V3, ptr: *const u8, first: u
         };
     }
 
-    // For first > 8, use two overlapping 8-byte loads combined with `pshufb`.
+    // For `first > 8`, use the optimized two-load method.
     if first > 8 {
         // SAFETY: `first` is in `(8, 16)` and `[ptr, ptr + first)` is valid.
         return unsafe {
@@ -91,7 +91,7 @@ pub(crate) unsafe fn __load_first_of_16_bytes(arch: V3, ptr: *const u8, first: u
         };
     }
 
-    // For first <= 8, everything fits in general purpose registers.
+    // For `first <= 8`, everything fits in general purpose registers.
     //
     // Use two overlapping reads whose results are combined with a single shift + OR.
     //
@@ -137,14 +137,13 @@ pub(crate) unsafe fn __load_first_u16_of_16_bytes(
     let byte_ptr = ptr as *const u8;
     let bytes = first * 2;
 
-    // For bytes > 8 (i.e., first >= 5), use two overlapping 8-byte loads
-    // combined with `pshufb`.
+    // For `bytes > 8` (i.e., `first > 4`), use the optimized two-load method.
     if bytes > 8 {
         // SAFETY: `bytes` is in `(8, 16)` and `[byte_ptr, byte_ptr + bytes)` is valid.
         return unsafe { __load_8_to_16_bytes(arch, byte_ptr, bytes) };
     }
 
-    // For bytes <= 8, everything fits in general purpose registers.
+    // For `bytes <= 8`, everything fits in general purpose registers.
     //
     // SAFETY: All reads are within `[ptr, ptr + first)`, which the caller
     // asserts is valid.
