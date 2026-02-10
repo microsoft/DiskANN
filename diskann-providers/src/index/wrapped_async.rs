@@ -346,7 +346,7 @@ where
                     DiskANNIndex::<DP>::new_with_current_thread_runtime(index_config.config, dp);
                 Ok(index)
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         }
     }
 }
