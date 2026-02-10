@@ -6,14 +6,14 @@
 
 coverage:
   status:
-    # Project coverage (overall) - informational only
+    # Project coverage (overall) - blocks PRs if below 90%
     project:
       default:
-        target: auto
-        threshold: 1%
-        informational: true
+        target: 90%
+        threshold: 0%
+        informational: false
 
-    # Patch coverage (changed lines only) - this will block PRs
+    # Patch coverage (changed lines only) - blocks PRs if below 90%
     patch:
       default:
         target: 90%
