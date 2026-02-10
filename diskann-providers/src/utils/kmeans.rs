@@ -424,11 +424,10 @@ pub fn k_means_clustering<Pool: AsThreadPool>(
 
 #[cfg(test)]
 mod kmeans_test {
-    use std::path::PathBuf;
-
     use crate::storage::{StorageReadProvider, VirtualStorageProvider};
     use approx::assert_relative_eq;
     use diskann::ANNErrorKind;
+    use diskann_utils::test_data_root;
     use rstest::rstest;
 
     use super::*;
@@ -713,17 +712,13 @@ mod kmeans_test {
 
     #[test]
     fn k_meanspp_selecting_pivots_should_not_hang() {
-        let test_data_path: &str = "/test_data/kmeans_test_data_file.fbin";
+        let test_data_path: &str = "/kmeans_test_data_file.fbin";
         let dim = 1;
         let num_points = 256;
         let num_centers = 75; // Number of unique points in this dataset
         let mut data: Vec<f32> = Vec::with_capacity(256);
 
-        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage_provider = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage_provider = VirtualStorageProvider::new_overlay(test_data_root());
         let mut reader =
             std::io::BufReader::new(storage_provider.open_reader(test_data_path).unwrap());
         for _ in 0..256 {
