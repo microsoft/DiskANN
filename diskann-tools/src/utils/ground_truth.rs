@@ -4,7 +4,7 @@
  */
 
 use bit_set::BitSet;
-use diskann_label_filter::{eval_query_expr, read_and_parse_queries, read_baselabels};
+use diskann_label_filter::{eval_query_expr, read_and_parse_queries, read_baselabels, ASTExpr};
 
 use std::{io::Write, mem::size_of, str::FromStr};
 
@@ -25,8 +25,57 @@ use diskann_utils::views::Matrix;
 use diskann_vector::{distance::Metric, DistanceFunction};
 use itertools::Itertools;
 use rayon::prelude::*;
+use serde_json::{Map, Value};
 
 use crate::utils::{search_index_utils, CMDResult, CMDToolError};
+
+/// Expands a JSON object with array-valued fields into multiple objects with scalar values.
+/// For example: {"country": ["AU", "NZ"], "year": 2007}
+/// becomes: [{"country": "AU", "year": 2007}, {"country": "NZ", "year": 2007}]
+/// 
+/// If multiple fields have arrays, all combinations are generated.
+fn expand_array_fields(value: &Value) -> Vec<Value> {
+    match value {
+        Value::Object(map) => {
+            // Start with a single empty object
+            let mut results: Vec<Map<String, Value>> = vec![Map::new()];
+            
+            for (key, val) in map.iter() {
+                if let Value::Array(arr) = val {
+                    // Expand: for each existing result, create copies for each array element
+                    let mut new_results: Vec<Map<String, Value>> = Vec::new();
+                    for existing in results.iter() {
+                        for item in arr.iter() {
+                            let mut new_map: Map<String, Value> = existing.clone();
+                            new_map.insert(key.clone(), item.clone());
+                            new_results.push(new_map);
+                        }
+                    }
+                    // If array is empty, keep existing results without this key
+                    if !arr.is_empty() {
+                        results = new_results;
+                    }
+                } else {
+                    // Non-array field: add to all existing results
+                    for existing in results.iter_mut() {
+                        existing.insert(key.clone(), val.clone());
+                    }
+                }
+            }
+            
+            results.into_iter().map(Value::Object).collect()
+        }
+        // If not an object, return as-is
+        _ => vec![value.clone()],
+    }
+}
+
+/// Evaluates a query expression against a label, expanding array fields first.
+/// Returns true if any expanded variant matches the query.
+fn eval_query_with_array_expansion(query_expr: &ASTExpr, label: &Value) -> bool {
+    let expanded = expand_array_fields(label);
+    expanded.iter().any(|item| eval_query_expr(query_expr, item))
+}
 
 pub fn read_labels_and_compute_bitmap(
     base_label_filename: &str,
@@ -34,9 +83,39 @@ pub fn read_labels_and_compute_bitmap(
 ) -> CMDResult<Vec<BitSet>> {
     // Read base labels
     let base_labels = read_baselabels(base_label_filename)?;
+    tracing::info!(
+        "Loaded {} base labels from {}",
+        base_labels.len(),
+        base_label_filename
+    );
+
+    // Print first few base labels for debugging
+    for (i, label) in base_labels.iter().take(3).enumerate() {
+        tracing::debug!(
+            "Base label sample [{}]: doc_id={}, label={}",
+            i,
+            label.doc_id,
+            label.label
+        );
+    }
 
     // Parse queries and evaluate against labels
     let parsed_queries = read_and_parse_queries(query_label_filename)?;
+    tracing::info!(
+        "Loaded {} queries from {}",
+        parsed_queries.len(),
+        query_label_filename
+    );
+
+    // Print first few queries for debugging
+    for (i, (query_id, query_expr)) in parsed_queries.iter().take(3).enumerate() {
+        tracing::debug!(
+            "Query sample [{}]: query_id={}, expr={:?}",
+            i,
+            query_id,
+            query_expr
+        );
+    }
 
     // using the global threadpool is fine here
     #[allow(clippy::disallowed_methods)]
@@ -45,13 +124,53 @@ pub fn read_labels_and_compute_bitmap(
         .map(|(_query_id, query_expr)| {
             let mut bitmap = BitSet::new();
             for base_label in base_labels.iter() {
-                if eval_query_expr(query_expr, &base_label.label) {
+                // Handle case where base_label.label is an array - check if any element matches
+                // Also expand array-valued fields within objects (e.g., {"country": ["AU", "NZ"]})
+                let matches = if let Some(array) = base_label.label.as_array() {
+                    array.iter().any(|item| eval_query_with_array_expansion(query_expr, item))
+                } else {
+                    eval_query_with_array_expansion(query_expr, &base_label.label)
+                };
+                
+                if matches {
                     bitmap.insert(base_label.doc_id);
                 }
             }
             bitmap
         })
         .collect();
+
+    // Debug: Print match statistics for each query
+    let total_matches: usize = query_bitmaps.iter().map(|b| b.len()).sum();
+    let queries_with_matches = query_bitmaps.iter().filter(|b| !b.is_empty()).count();
+    tracing::info!(
+        "Filter matching summary: {} total matches across {} queries ({} queries have matches)",
+        total_matches,
+        query_bitmaps.len(),
+        queries_with_matches
+    );
+
+    // Print per-query match counts
+    for (i, bitmap) in query_bitmaps.iter().enumerate() {
+        if i < 10 || bitmap.is_empty() {
+            tracing::debug!(
+                "Query {}: {} base vectors matched the filter",
+                i,
+                bitmap.len()
+            );
+        }
+    }
+
+    // If no matches, print more diagnostic info
+    if total_matches == 0 {
+        tracing::warn!("WARNING: No base vectors matched any query filters!");
+        tracing::warn!("This could indicate a format mismatch between base labels and query filters.");
+        
+        // Try to identify what keys exist in base labels vs queries
+        if let Some(first_label) = base_labels.first() {
+            tracing::warn!("First base label (full): doc_id={}, label={}", first_label.doc_id, first_label.label);
+        }
+    }
 
     Ok(query_bitmaps)
 }
@@ -194,6 +313,44 @@ pub fn compute_ground_truth_from_datafiles<
     let (ground_truth, id_to_associated_data) = ground_truth_result?;
 
     assert_ne!(ground_truth.len(), 0, "No ground-truth results computed");
+
+    // Debug: Print top K matches for each query
+    tracing::info!(
+        "Ground truth computed for {} queries with recall_at={}",
+        ground_truth.len(),
+        recall_at
+    );
+    for (query_idx, npq) in ground_truth.iter().enumerate() {
+        let neighbors: Vec<_> = npq.iter().collect();
+        let neighbor_count = neighbors.len();
+        
+        if query_idx < 10 {
+            // Print top K IDs and distances for first 10 queries
+            let top_ids: Vec<u32> = neighbors.iter().take(10).map(|n| n.id).collect();
+            let top_dists: Vec<f32> = neighbors.iter().take(10).map(|n| n.distance).collect();
+            tracing::debug!(
+                "Query {}: {} neighbors found. Top IDs: {:?}, Top distances: {:?}",
+                query_idx,
+                neighbor_count,
+                top_ids,
+                top_dists
+            );
+        }
+        
+        if neighbor_count == 0 {
+            tracing::warn!("Query {} has 0 neighbors in ground truth!", query_idx);
+        }
+    }
+
+    // Summary stats
+    let total_neighbors: usize = ground_truth.iter().map(|npq| npq.iter().count()).sum();
+    let queries_with_neighbors = ground_truth.iter().filter(|npq| npq.iter().count() > 0).count();
+    tracing::info!(
+        "Ground truth summary: {} total neighbors, {} queries have neighbors, {} queries have 0 neighbors",
+        total_neighbors,
+        queries_with_neighbors,
+        ground_truth.len() - queries_with_neighbors
+    );
 
     if has_vector_filters || has_query_bitmaps {
         let ground_truth_collection = ground_truth

@@ -5,6 +5,7 @@
 
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
+use std::io::Write;
 
 use serde_json::Value;
 use thiserror::Error;

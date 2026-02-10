@@ -15,7 +15,9 @@ pub struct Document {
     /// label in raw json format
     #[serde(flatten)]
     pub label: serde_json::Value,
+
 }
+
 
 /// Represents a query expression as defined in the RFC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
