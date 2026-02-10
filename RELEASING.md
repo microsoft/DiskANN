@@ -77,7 +77,10 @@ The crates are published in the following order to respect dependencies:
 4. **Layer 4 - Quantization**: `diskann-quantization`
 5. **Layer 5 - Core Algorithm**: `diskann`
 6. **Layer 6 - Providers**: `diskann-providers`, `diskann-disk`, `diskann-label-filter`
-7. **Layer 7 - Infrastructure**: `diskann-benchmark-core`, `diskann-benchmark-runner`, `diskann-benchmark-simd`, `diskann-benchmark`, `diskann-tools`
+7. **Layer 7 - Benchmark Runner**: `diskann-benchmark-runner`
+8. **Layer 8 - Benchmark Support**: `diskann-benchmark-simd`, `diskann-benchmark-core`
+9. **Layer 9 - Tools**: `diskann-tools`
+10. **Layer 10 - Benchmark**: `diskann-benchmark`
 
 ## Troubleshooting
 
@@ -121,11 +124,11 @@ cargo publish --package diskann
 cargo publish --package diskann-providers
 cargo publish --package diskann-disk
 cargo publish --package diskann-label-filter
-cargo publish --package diskann-benchmark-core
 cargo publish --package diskann-benchmark-runner
 cargo publish --package diskann-benchmark-simd
-cargo publish --package diskann-benchmark
+cargo publish --package diskann-benchmark-core
 cargo publish --package diskann-tools
+cargo publish --package diskann-benchmark
 ```
 
 **Note**: Wait 30-60 seconds between each publish to ensure dependencies are available on crates.io.

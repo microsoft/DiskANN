@@ -163,21 +163,24 @@ jobs:
           wait_for_crate "diskann-label-filter" "$VERSION"
           
           # Layer 7: Infrastructure (benchmarks and tools)
-          echo "=== Publishing Layer 7: Infrastructure ==="
-          publish_crate "diskann-benchmark-core"
-          wait_for_crate "diskann-benchmark-core" "$VERSION"
-          
+          echo "=== Publishing Layer 7: Infrastructure - Benchmark Runner ==="
           publish_crate "diskann-benchmark-runner"
           wait_for_crate "diskann-benchmark-runner" "$VERSION"
           
+          echo "=== Publishing Layer 8: Infrastructure - Benchmark SIMD and Core ==="
           publish_crate "diskann-benchmark-simd"
           wait_for_crate "diskann-benchmark-simd" "$VERSION"
           
-          publish_crate "diskann-benchmark"
-          wait_for_crate "diskann-benchmark" "$VERSION"
+          publish_crate "diskann-benchmark-core"
+          wait_for_crate "diskann-benchmark-core" "$VERSION"
           
+          echo "=== Publishing Layer 9: Infrastructure - Tools ==="
           publish_crate "diskann-tools"
           wait_for_crate "diskann-tools" "$VERSION"
+          
+          echo "=== Publishing Layer 10: Infrastructure - Benchmark ==="
+          publish_crate "diskann-benchmark"
+          wait_for_crate "diskann-benchmark" "$VERSION"
           
           echo "=== All crates published successfully! ==="
       
