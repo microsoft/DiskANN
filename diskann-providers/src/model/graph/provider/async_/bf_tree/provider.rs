@@ -1816,26 +1816,6 @@ pub struct SavedParams {
     pub quant_params: Option<QuantParams>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct BfTreeParamsInput {
-    pub bytes: usize,
-    pub max_record_size: usize,
-    pub leaf_page_size: usize,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct QuantParamsInput {
-    pub params_quant: BfTreeParamsInput,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct SavedParamsInput {
-    pub prefix: String,
-    pub params_vector: BfTreeParamsInput,
-    pub params_neighbor: BfTreeParamsInput,
-    pub quant_params: Option<QuantParamsInput>,
-}
-
 /// Helper struct for generating consistent file paths for BfTreeProvider persistence.
 /// Centralizes all path patterns to avoid hardcoded strings throughout the codebase.
 pub struct BfTreePaths;
@@ -1874,7 +1854,7 @@ impl BfTreePaths {
 
 // SaveWith/LoadWith for BfTreeProvider with TableDeleteProviderAsync
 
-impl<T> SaveWith<SavedParamsInput> for BfTreeProvider<T, NoStore, TableDeleteProviderAsync>
+impl<T> SaveWith<String> for BfTreeProvider<T, NoStore, TableDeleteProviderAsync>
 where
     T: VectorRepr,
 {
@@ -1884,7 +1864,7 @@ where
     async fn save_with<P>(
         &self,
         storage: &P,
-        saved_params_input: &SavedParamsInput,
+        prefix: &String,
     ) -> Result<Self::Ok, Self::Error>
     where
         P: StorageWriteProvider,
@@ -1896,16 +1876,16 @@ where
             dim: self.dim(),
             metric: self.metric().as_str().to_string(),
             max_degree: self.max_degree(),
-            prefix: saved_params_input.prefix.clone(),
+            prefix: prefix.clone(),
             params_vector: BfTreeParams {
-                bytes: saved_params_input.params_vector.bytes,
-                max_record_size: saved_params_input.params_vector.max_record_size,
-                leaf_page_size: saved_params_input.params_vector.leaf_page_size,
+                bytes: self.full_vectors.config().get_cb_size_byte(),
+                max_record_size: self.full_vectors.config().get_cb_max_record_size(),
+                leaf_page_size: self.full_vectors.config().get_leaf_page_size(),
             },
             params_neighbor: BfTreeParams {
-                bytes: saved_params_input.params_neighbor.bytes,
-                max_record_size: saved_params_input.params_neighbor.max_record_size,
-                leaf_page_size: saved_params_input.params_neighbor.leaf_page_size,
+                bytes: self.neighbor_provider.config().get_cb_size_byte(),
+                max_record_size: self.neighbor_provider.config().get_cb_max_record_size(),
+                leaf_page_size: self.neighbor_provider.config().get_leaf_page_size(),
             },
             quant_params: None, // No quantization parameters
         };
@@ -2008,7 +1988,7 @@ where
     }
 }
 
-impl<T> SaveWith<SavedParamsInput>
+impl<T> SaveWith<String>
     for BfTreeProvider<T, QuantVectorProvider, TableDeleteProviderAsync>
 where
     T: VectorRepr,
@@ -2019,7 +1999,7 @@ where
     async fn save_with<P>(
         &self,
         storage: &P,
-        saved_params_input: &SavedParamsInput,
+        prefix: &String,
     ) -> Result<Self::Ok, Self::Error>
     where
         P: StorageWriteProvider,
@@ -2031,29 +2011,26 @@ where
             dim: self.dim(),
             metric: self.metric().as_str().to_string(),
             max_degree: self.max_degree(),
-            prefix: saved_params_input.prefix.clone(),
+            prefix: prefix.clone(),
             params_vector: BfTreeParams {
-                bytes: saved_params_input.params_vector.bytes,
-                max_record_size: saved_params_input.params_vector.max_record_size,
-                leaf_page_size: saved_params_input.params_vector.leaf_page_size,
+                bytes: self.full_vectors.config().get_cb_size_byte(),
+                max_record_size: self.full_vectors.config().get_cb_max_record_size(),
+                leaf_page_size: self.full_vectors.config().get_leaf_page_size(),
             },
             params_neighbor: BfTreeParams {
-                bytes: saved_params_input.params_neighbor.bytes,
-                max_record_size: saved_params_input.params_neighbor.max_record_size,
-                leaf_page_size: saved_params_input.params_neighbor.leaf_page_size,
+                bytes: self.neighbor_provider.config().get_cb_size_byte(),
+                max_record_size: self.neighbor_provider.config().get_cb_max_record_size(),
+                leaf_page_size: self.neighbor_provider.config().get_leaf_page_size(),
             },
-            quant_params: saved_params_input
-                .quant_params
-                .as_ref()
-                .map(|qp| QuantParams {
-                    num_pq_bytes: self.quant_vectors.pq_chunks(),
-                    max_fp_vecs_per_fill: self.max_fp_vecs_per_fill,
-                    params_quant: BfTreeParams {
-                        bytes: qp.params_quant.bytes,
-                        max_record_size: qp.params_quant.max_record_size,
-                        leaf_page_size: qp.params_quant.leaf_page_size,
-                    },
-                }),
+            quant_params: Some(QuantParams {
+                num_pq_bytes: self.quant_vectors.pq_chunks(),
+                max_fp_vecs_per_fill: self.max_fp_vecs_per_fill,
+                params_quant: BfTreeParams {
+                    bytes: self.quant_vectors.config().get_cb_size_byte(),
+                    max_record_size: self.quant_vectors.config().get_cb_max_record_size(),
+                    leaf_page_size: self.quant_vectors.config().get_leaf_page_size(),
+                },
+            }),
         };
 
         // Save only essential parameters as JSON
@@ -2487,22 +2464,7 @@ mod tests {
 
         let storage = FileStorageProvider;
 
-        let saved_params = SavedParamsInput {
-            prefix: prefix.clone(),
-            params_vector: BfTreeParamsInput {
-                bytes: bytes_vector,
-                leaf_page_size: vector_config.get_leaf_page_size(),
-                max_record_size: vector_config.get_cb_max_record_size(),
-            },
-            params_neighbor: BfTreeParamsInput {
-                bytes: bytes_neighbor,
-                leaf_page_size: neighbor_config.get_leaf_page_size(),
-                max_record_size: neighbor_config.get_cb_max_record_size(),
-            },
-            quant_params: None,
-        };
-
-        provider.save_with(&storage, &saved_params).await.unwrap();
+        provider.save_with(&storage, &prefix).await.unwrap();
 
         // Load using trait method (includes delete bitmap)
         let loaded_provider = BfTreeProvider::<f32, NoStore, TableDeleteProviderAsync>::load_with(
@@ -2670,29 +2632,7 @@ mod tests {
 
         let storage = FileStorageProvider;
 
-        // Create SavedParamsQuant outside of save_with
-        let saved_params = SavedParamsInput {
-            prefix: prefix.clone(),
-            params_vector: BfTreeParamsInput {
-                bytes: bytes_vector,
-                leaf_page_size: vector_config.get_leaf_page_size(),
-                max_record_size: vector_config.get_cb_max_record_size(),
-            },
-            params_neighbor: BfTreeParamsInput {
-                bytes: bytes_neighbor,
-                leaf_page_size: neighbor_config.get_leaf_page_size(),
-                max_record_size: neighbor_config.get_cb_max_record_size(),
-            },
-            quant_params: Some(QuantParamsInput {
-                params_quant: BfTreeParamsInput {
-                    bytes: bytes_quant,
-                    leaf_page_size: quant_config.get_leaf_page_size(),
-                    max_record_size: quant_config.get_cb_max_record_size(),
-                },
-            }),
-        };
-
-        provider.save_with(&storage, &saved_params).await.unwrap();
+        provider.save_with(&storage, &prefix).await.unwrap();
 
         // Load using trait method (includes delete bitmap and quantization)
         let loaded_provider =
