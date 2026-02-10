@@ -154,7 +154,7 @@ fn flatten_json_pointer_inner(
             }
             Value::Array(arr) => {
                 for (i, item) in arr.iter().enumerate() {
-                    flatten_recursive(item, stack.push(&String::from(""), separator), out, separator);
+                    flatten_recursive(item, stack.push(&i, separator), out, separator);
                 }
             }
             _ => {
