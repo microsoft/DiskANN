@@ -91,6 +91,9 @@ pub(crate) enum SearchMode {
     },
     /// Unified pipelined search through the generic search loop (queue-based ExpandBeam).
     UnifiedPipeSearch {
+        /// Start with a smaller beam and grow adaptively. Defaults to true.
+        #[serde(default = "default_true")]
+        adaptive_beam_width: bool,
         /// Optional relaxed monotonicity parameter for early termination.
         #[serde(default)]
         relaxed_monotonicity_l: Option<usize>,
@@ -118,17 +121,25 @@ impl fmt::Display for SearchMode {
                 }
                 write!(f, ")")
             }
-            SearchMode::UnifiedPipeSearch { relaxed_monotonicity_l, sqpoll_idle_ms } => {
+            SearchMode::UnifiedPipeSearch { adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms } => {
                 write!(f, "UnifiedPipeSearch")?;
+                let has_abw = *adaptive_beam_width;
                 let has_rm = relaxed_monotonicity_l.is_some();
                 let has_sq = sqpoll_idle_ms.is_some();
-                if has_rm || has_sq {
+                if has_abw || has_rm || has_sq {
                     write!(f, "(")?;
+                    let mut first = true;
+                    if has_abw {
+                        write!(f, "abw")?;
+                        first = false;
+                    }
                     if let Some(rm) = relaxed_monotonicity_l {
+                        if !first { write!(f, ", ")?; }
                         write!(f, "rm_l={}", rm)?;
-                        if has_sq { write!(f, ", ")?; }
+                        first = false;
                     }
                     if let Some(sq) = sqpoll_idle_ms {
+                        if !first { write!(f, ", ")?; }
                         write!(f, "sqpoll={}ms", sq)?;
                     }
                     write!(f, ")")?;
@@ -141,6 +152,10 @@ impl fmt::Display for SearchMode {
 
 fn default_initial_beam_width() -> usize {
     4
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Search phase configuration

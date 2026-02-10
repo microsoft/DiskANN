@@ -550,6 +550,8 @@ pub struct PipelinedConfig<Data: GraphDataType<VectorIdType = u32>> {
     pub disk_index_path: String,
     pub reader_config: PipelinedReaderConfig,
     pub beam_width: usize,
+    /// Start with a smaller beam and grow adaptively.
+    pub adaptive_beam_width: bool,
     /// Optional relaxed monotonicity: continue exploring this many extra
     /// comparisons after the candidate list converges.
     pub relaxed_monotonicity_l: Option<usize>,
@@ -709,9 +711,11 @@ where
             return_list_size as usize,
             search_list_size as usize,
             Some(beam_width),
-        )?
-        .with_adaptive_beam_width();
+        )?;
 
+        if config.adaptive_beam_width {
+            search_params = search_params.with_adaptive_beam_width();
+        }
         if let Some(rm_l) = config.relaxed_monotonicity_l {
             search_params = search_params.with_relaxed_monotonicity(rm_l);
         }

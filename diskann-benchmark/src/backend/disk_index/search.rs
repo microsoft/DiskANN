@@ -461,7 +461,7 @@ where
                 anyhow::bail!("PipeSearch is only supported on Linux");
             }
         }
-        SearchMode::UnifiedPipeSearch { relaxed_monotonicity_l, sqpoll_idle_ms } => {
+        SearchMode::UnifiedPipeSearch { adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms } => {
             #[cfg(target_os = "linux")]
             {
                 use diskann_disk::data_model::Cache;
@@ -489,6 +489,7 @@ where
                     disk_index_path: disk_index_path.clone(),
                     reader_config,
                     beam_width: search_params.beam_width,
+                    adaptive_beam_width: *adaptive_beam_width,
                     relaxed_monotonicity_l: *relaxed_monotonicity_l,
                     node_cache,
                 });
@@ -539,7 +540,7 @@ where
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (relaxed_monotonicity_l, sqpoll_idle_ms);
+                let _ = (adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms);
                 anyhow::bail!("UnifiedPipeSearch is only supported on Linux");
             }
         }
