@@ -2111,17 +2111,29 @@ where
             }
 
             let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
+            // Tracks how many nodes were expanded last iteration, so the
+            // pipelined submit can match its rate (process-N-submit-N).
+            let mut last_expanded: usize = 0;
 
             while (scratch.best.has_notvisited_node() || accessor.has_pending())
                 && !accessor.terminate_early()
             {
-                // Select beam_width closest unvisited nodes
+                let has_pending = accessor.has_pending();
+
+                // When pipelining, match the number of new submits to the number
+                // we just expanded (process-N-submit-N), keeping the pipeline
+                // steadily full without over-committing speculative reads.
+                // On the first iteration (nothing expanded yet), prime the pipe
+                // with cur_beam_width IOs. For non-pipelined, submit everything.
+                let submit_limit = if has_pending {
+                    last_expanded.max(1)
+                } else {
+                    cur_beam_width
+                };
+
                 scratch.beam_nodes.clear();
-                let available = cur_beam_width.saturating_sub(
-                    if accessor.has_pending() { cur_beam_width / 2 } else { 0 }
-                );
                 while scratch.best.has_notvisited_node()
-                    && scratch.beam_nodes.len() < available
+                    && scratch.beam_nodes.len() < submit_limit
                 {
                     let closest_node = scratch.best.closest_notvisited();
                     search_record.record(closest_node, scratch.hops, scratch.cmps);
@@ -2131,7 +2143,10 @@ where
                 // Submit to expansion queue (no-op for non-pipelined)
                 accessor.submit_expand(scratch.beam_nodes.iter().copied());
 
-                // Expand whatever is available (all for non-pipelined, completed IO for pipelined)
+                // Expand available nodes. When pipelining, expand one at a time
+                // so we loop back to submit new IOs sooner (process-one-submit-one).
+                // For non-pipelined, expand all (usize::MAX).
+                let expand_limit = if has_pending { 1 } else { usize::MAX };
                 neighbors.clear();
                 let expanded = accessor
                     .expand_available(
@@ -2139,8 +2154,10 @@ where
                         computer,
                         glue::NotInMut::new(&mut scratch.visited),
                         |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        expand_limit,
                     )
                     .await?;
+                last_expanded = expanded;
 
                 neighbors
                     .iter()

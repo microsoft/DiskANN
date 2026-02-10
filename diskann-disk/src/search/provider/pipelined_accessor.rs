@@ -428,13 +428,16 @@ where
         }
     }
 
-    /// Poll for completed reads and expand nodes whose data is available.
+    /// Poll for completed reads and expand up to `up_to` nodes.
+    /// Remaining loaded-but-unexpanded nodes stay buffered for the next call,
+    /// which lets the search loop submit new IOs sooner (process-few-submit-few).
     fn expand_available<P, F>(
         &mut self,
         _ids: impl Iterator<Item = Self::Id> + Send,
         _computer: &Self::QueryComputer,
         mut pred: P,
         mut on_neighbors: F,
+        up_to: usize,
     ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
     where
         P: HybridPredicate<Self::Id> + Send + Sync,
@@ -470,8 +473,9 @@ where
                 }
             }
 
-            // Expand loaded nodes: get neighbors, compute PQ distances
-            let loaded_ids: Vec<u32> = self.loaded_nodes.keys().copied().collect();
+            // Expand up to `up_to` loaded nodes. Unexpanded nodes remain buffered
+            // in loaded_nodes for the next call.
+            let loaded_ids: Vec<u32> = self.loaded_nodes.keys().copied().take(up_to).collect();
             let mut expanded = 0;
 
             for vid in loaded_ids {

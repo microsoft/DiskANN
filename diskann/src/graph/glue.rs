@@ -277,6 +277,10 @@ where
     /// completed IO operations and expands only the nodes whose data has arrived,
     /// returning immediately without blocking.
     ///
+    /// `up_to` limits how many nodes are expanded in a single call. Pipelined
+    /// providers should respect this to keep the IO pipeline full (expand fewer →
+    /// submit sooner). Non-pipelined providers may ignore it.
+    ///
     /// Returns the number of nodes that were expanded in this call.
     fn expand_available<P, F>(
         &mut self,
@@ -284,12 +288,14 @@ where
         computer: &Self::QueryComputer,
         pred: P,
         on_neighbors: F,
+        up_to: usize,
     ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
     where
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(f32, Self::Id) + Send,
     {
         async move {
+            let _ = up_to; // default impl processes everything
             let id_vec: Vec<Self::Id> = ids.collect();
             let count = id_vec.len();
             self.expand_beam(id_vec.into_iter(), computer, pred, on_neighbors)
