@@ -1,0 +1,205 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+# Workflow for publishing crates to crates.io
+#
+# This workflow is triggered when a version tag (e.g., v0.46.0) is pushed.
+# It will automatically publish all workspace crates to crates.io in the correct dependency order.
+#
+# Prerequisites:
+# 1. CRATES_IO_TOKEN secret must be set in repository settings
+# 2. Version numbers must be updated in Cargo.toml before tagging
+# 3. Tag format: v{major}.{minor}.{patch} (e.g., v0.46.0)
+
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  RUST_BACKTRACE: 1
+  rust_stable: "1.92"
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish crates to crates.io
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+      
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+      
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Verify version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -n1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Tag version: $TAG_VERSION"
+          echo "Cargo version: $CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "Error: Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+      
+      - name: Run tests
+        run: |
+          cargo test --locked --workspace --profile ci
+      
+      - name: Publish crates in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          set -euo pipefail
+          
+          # Function to publish a crate with retries
+          publish_crate() {
+            local crate=$1
+            local max_attempts=3
+            local attempt=1
+            
+            echo "Publishing $crate..."
+            
+            while [ $attempt -le $max_attempts ]; do
+              if cargo publish --locked --package "$crate"; then
+                echo "✓ Successfully published $crate"
+                return 0
+              else
+                echo "✗ Attempt $attempt failed for $crate"
+                if [ $attempt -lt $max_attempts ]; then
+                  echo "Retrying in 10 seconds..."
+                  sleep 10
+                fi
+                attempt=$((attempt + 1))
+              fi
+            done
+            
+            echo "Failed to publish $crate after $max_attempts attempts"
+            return 1
+          }
+          
+          # Wait for crate to be available on crates.io
+          wait_for_crate() {
+            local crate=$1
+            local version=$2
+            local max_wait=300  # 5 minutes
+            local elapsed=0
+            
+            echo "Waiting for $crate@$version to be available on crates.io..."
+            
+            while [ $elapsed -lt $max_wait ]; do
+              if cargo search "$crate" --limit 1 | grep -q "^$crate = \"$version\""; then
+                echo "✓ $crate@$version is now available"
+                return 0
+              fi
+              sleep 10
+              elapsed=$((elapsed + 10))
+            done
+            
+            echo "Warning: $crate@$version not found on crates.io after ${max_wait}s"
+            return 1
+          }
+          
+          VERSION=$(grep '^version = ' Cargo.toml | head -n1 | sed 's/.*"\(.*\)".*/\1/')
+          
+          # Publish in dependency order (base -> algorithm -> providers -> infrastructure)
+          
+          # Layer 1: Base libraries (no internal dependencies)
+          echo "=== Publishing Layer 1: Base libraries ==="
+          publish_crate "diskann-wide"
+          wait_for_crate "diskann-wide" "$VERSION"
+          
+          # Layer 2: Libraries depending only on diskann-wide
+          echo "=== Publishing Layer 2: Vector and platform libraries ==="
+          publish_crate "diskann-vector"
+          wait_for_crate "diskann-vector" "$VERSION"
+          
+          publish_crate "diskann-platform"
+          wait_for_crate "diskann-platform" "$VERSION"
+          
+          # Layer 3: Libraries depending on vector/wide
+          echo "=== Publishing Layer 3: Linalg and utils ==="
+          publish_crate "diskann-linalg"
+          wait_for_crate "diskann-linalg" "$VERSION"
+          
+          publish_crate "diskann-utils"
+          wait_for_crate "diskann-utils" "$VERSION"
+          
+          # Layer 4: Quantization (depends on utils, vector, linalg)
+          echo "=== Publishing Layer 4: Quantization ==="
+          publish_crate "diskann-quantization"
+          wait_for_crate "diskann-quantization" "$VERSION"
+          
+          # Layer 5: Core algorithm (depends on quantization, utils, vector, wide)
+          echo "=== Publishing Layer 5: Core algorithm ==="
+          publish_crate "diskann"
+          wait_for_crate "diskann" "$VERSION"
+          
+          # Layer 6: Providers (depends on diskann and others)
+          echo "=== Publishing Layer 6: Providers ==="
+          publish_crate "diskann-providers"
+          wait_for_crate "diskann-providers" "$VERSION"
+          
+          publish_crate "diskann-disk"
+          wait_for_crate "diskann-disk" "$VERSION"
+          
+          publish_crate "diskann-label-filter"
+          wait_for_crate "diskann-label-filter" "$VERSION"
+          
+          # Layer 7: Infrastructure (benchmarks and tools)
+          echo "=== Publishing Layer 7: Infrastructure ==="
+          publish_crate "diskann-benchmark-core"
+          wait_for_crate "diskann-benchmark-core" "$VERSION"
+          
+          publish_crate "diskann-benchmark-runner"
+          wait_for_crate "diskann-benchmark-runner" "$VERSION"
+          
+          publish_crate "diskann-benchmark-simd"
+          wait_for_crate "diskann-benchmark-simd" "$VERSION"
+          
+          publish_crate "diskann-benchmark"
+          wait_for_crate "diskann-benchmark" "$VERSION"
+          
+          publish_crate "diskann-tools"
+          wait_for_crate "diskann-tools" "$VERSION"
+          
+          echo "=== All crates published successfully! ==="
+      
+      - name: Create release notes
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/}"
+          echo "Release $TAG_VERSION completed successfully" > release-notes.txt
+          echo "" >> release-notes.txt
+          echo "Published crates:" >> release-notes.txt
+          echo "- diskann-wide" >> release-notes.txt
+          echo "- diskann-vector" >> release-notes.txt
+          echo "- diskann-linalg" >> release-notes.txt
+          echo "- diskann-utils" >> release-notes.txt
+          echo "- diskann-quantization" >> release-notes.txt
+          echo "- diskann-platform" >> release-notes.txt
+          echo "- diskann" >> release-notes.txt
+          echo "- diskann-providers" >> release-notes.txt
+          echo "- diskann-disk" >> release-notes.txt
+          echo "- diskann-label-filter" >> release-notes.txt
+          echo "- diskann-benchmark-core" >> release-notes.txt
+          echo "- diskann-benchmark-runner" >> release-notes.txt
+          echo "- diskann-benchmark-simd" >> release-notes.txt
+          echo "- diskann-benchmark" >> release-notes.txt
+          echo "- diskann-tools" >> release-notes.txt
+          cat release-notes.txt
