@@ -6,6 +6,41 @@ This document describes the automated release process for publishing DiskANN cra
 
 The DiskANN workspace consists of multiple crates that are published together with synchronized version numbers. The release process is automated through GitHub Actions and is triggered by pushing a version tag.
 
+## Testing the Release Process
+
+**Before publishing a real release**, you should test the workflow in dry-run mode to ensure everything works correctly.
+
+### Dry-Run Test
+
+The publish workflow can be manually triggered with a dry-run mode that validates everything without actually publishing to crates.io:
+
+1. **Navigate to GitHub Actions**
+   - Go to the repository on GitHub
+   - Click on the "Actions" tab
+   - Select "Publish to crates.io" from the left sidebar
+
+2. **Run Workflow Manually**
+   - Click "Run workflow" button on the right
+   - Select the branch (usually `main` or your release branch)
+   - Keep "Run in dry-run mode" set to **true** (default)
+   - Click "Run workflow"
+
+3. **Monitor the Dry-Run**
+   - Watch the workflow execution
+   - It will:
+     - ✓ Install Rust and dependencies
+     - ✓ Run the full test suite
+     - ✓ Validate all 15 crates with `cargo publish --dry-run`
+     - ✓ Check the dependency order
+     - ✗ NOT actually publish anything to crates.io
+
+4. **Verify Results**
+   - All steps should pass with green checkmarks
+   - Look for the message: "✅ Dry-run completed successfully!"
+   - Review any warnings or errors
+
+**Tip**: Run the dry-run test before creating your release tag to catch issues early.
+
 ## Automated Publishing
 
 ### Prerequisites
@@ -33,7 +68,14 @@ The DiskANN workspace consists of multiple crates that are published together wi
    
    Document the changes, new features, bug fixes, and breaking changes in the release.
 
-3. **Create and Push a Version Tag**
+3. **Test with Dry-Run** (Recommended)
+   
+   Before creating the tag, test the release process:
+   - Commit your version update to a branch
+   - Run the manual workflow in dry-run mode (see "Testing the Release Process" above)
+   - Verify all crates pass validation
+
+4. **Create and Push a Version Tag**
    
    ```bash
    # Create a tag matching the version
@@ -45,7 +87,7 @@ The DiskANN workspace consists of multiple crates that are published together wi
    
    **Important**: The tag format must be `v{major}.{minor}.{patch}` (e.g., `v0.46.0`).
 
-4. **Monitor the Release Workflow**
+5. **Monitor the Release Workflow**
    
    - Navigate to the Actions tab in the GitHub repository
    - Find the "Publish to crates.io" workflow run
@@ -144,6 +186,41 @@ Before creating a release tag:
 - [ ] Breaking changes are clearly documented
 - [ ] All tests pass locally: `cargo test --workspace`
 - [ ] Code builds without warnings: `cargo build --workspace --release`
+- [ ] **Dry-run workflow test passes successfully**
+
+## Dry-Run vs Live Mode
+
+### Dry-Run Mode (Testing)
+
+- **Purpose**: Validate the release process without actually publishing
+- **How to trigger**: Manual workflow dispatch with `dry_run: true`
+- **What it does**:
+  - ✓ Runs all tests
+  - ✓ Validates crate metadata and dependencies
+  - ✓ Checks that all crates can be packaged
+  - ✓ Verifies publish order
+  - ✗ Does NOT publish to crates.io
+  - ✗ Does NOT wait for crate availability
+  - ✗ Does NOT require version tag
+- **Use case**: Testing changes to the workflow, validating a new release before tagging
+
+### Live Mode (Production)
+
+- **Purpose**: Actually publish crates to crates.io
+- **How to trigger**: Push a version tag (e.g., `v0.46.0`)
+- **What it does**:
+  - ✓ Validates tag matches version
+  - ✓ Runs all tests
+  - ✓ Publishes all 15 crates to crates.io
+  - ✓ Waits for each crate to be available before publishing dependents
+  - ✓ Creates release notes
+- **Use case**: Official releases
+
+**Recommendation**: Always run a dry-run test before pushing a release tag, especially if:
+- You've modified the workflow
+- It's your first time releasing
+- The version number changed significantly
+- Dependencies have been updated
 
 ## Security Considerations
 

@@ -17,6 +17,16 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (test without actually publishing)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 env:
   RUST_BACKTRACE: 1
@@ -31,7 +41,7 @@ permissions:
 
 jobs:
   publish:
-    name: Publish crates to crates.io
+    name: ${{ github.event.inputs.dry_run == 'true' && 'Dry-run publish test' || 'Publish crates to crates.io' }}
     runs-on: ubuntu-latest
     
     steps:
@@ -48,6 +58,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       
       - name: Verify version matches tag
+        if: github.event_name == 'push'
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
           CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -n1 | sed 's/.*"\(.*\)".*/\1/')
@@ -65,8 +76,22 @@ jobs:
       - name: Publish crates in dependency order
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           set -euo pipefail
+          
+          # Determine dry-run flag
+          DRY_RUN_FLAG=""
+          if [ "$DRY_RUN" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+            echo "=========================================="
+            echo "🧪 DRY-RUN MODE: No actual publishing"
+            echo "=========================================="
+          else
+            echo "=========================================="
+            echo "📦 LIVE MODE: Publishing to crates.io"
+            echo "=========================================="
+          fi
           
           # Function to publish a crate with retries
           publish_crate() {
@@ -74,11 +99,19 @@ jobs:
             local max_attempts=3
             local attempt=1
             
-            echo "Publishing $crate..."
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "Publishing $crate (dry-run)..."
+            else
+              echo "Publishing $crate..."
+            fi
             
             while [ $attempt -le $max_attempts ]; do
-              if cargo publish --locked --package "$crate"; then
-                echo "✓ Successfully published $crate"
+              if cargo publish --locked --package "$crate" $DRY_RUN_FLAG; then
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "✓ Dry-run successful for $crate"
+                else
+                  echo "✓ Successfully published $crate"
+                fi
                 return 0
               else
                 echo "✗ Attempt $attempt failed for $crate"
@@ -94,10 +127,17 @@ jobs:
             return 1
           }
           
-          # Wait for crate to be available on crates.io
+          # Wait for crate to be available on crates.io (skip in dry-run)
           wait_for_crate() {
             local crate=$1
             local version=$2
+            
+            # Skip waiting in dry-run mode
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "⏭️  Skipping availability check in dry-run mode"
+              return 0
+            fi
+            
             local max_wait=300  # 5 minutes
             local elapsed=0
             
@@ -182,9 +222,19 @@ jobs:
           publish_crate "diskann-benchmark"
           wait_for_crate "diskann-benchmark" "$VERSION"
           
-          echo "=== All crates published successfully! ==="
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "=========================================="
+            echo "✅ Dry-run completed successfully!"
+            echo "All crates passed validation."
+            echo "=========================================="
+          else
+            echo "=========================================="
+            echo "✅ All crates published successfully!"
+            echo "=========================================="
+          fi
       
       - name: Create release notes
+        if: github.event_name == 'push'
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/}"
           echo "Release $TAG_VERSION completed successfully" > release-notes.txt
