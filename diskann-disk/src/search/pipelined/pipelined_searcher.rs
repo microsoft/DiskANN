@@ -76,8 +76,12 @@ impl TryAsPooled<&PipelinedScratchArgs<'_>> for PipelinedSearchScratch {
 
 /// A pipelined disk index searcher implementing the PipeANN algorithm.
 ///
-/// Analogous to `DiskIndexSearcher` but uses pipelined IO (non-blocking io_uring
-/// submit/poll) to overlap IO and compute within a single query.
+/// # Deprecation
+///
+/// This standalone searcher duplicates the generic search loop. Prefer using
+/// `DiskIndexSearcher::search_pipelined()` which integrates pipelined IO via the
+/// queue-based `ExpandBeam` trait, providing the same IO/compute overlap without
+/// code duplication.
 ///
 /// # Safety
 ///
@@ -95,6 +99,7 @@ impl TryAsPooled<&PipelinedScratchArgs<'_>> for PipelinedSearchScratch {
 /// Multiple concurrent `search()` calls on the same `PipelinedSearcher` are safe.
 /// Each search operates on its own `PipelinedReader` and `PQScratch` (pooled for
 /// amortized allocation). Shared state (`PQData`, `GraphHeader`) is immutable.
+#[deprecated(note = "Use DiskIndexSearcher::search_pipelined() instead for unified pipelined search")]
 pub struct PipelinedSearcher<Data: GraphDataType<VectorIdType = u32>> {
     #[allow(dead_code)]
     graph_header: GraphHeader,

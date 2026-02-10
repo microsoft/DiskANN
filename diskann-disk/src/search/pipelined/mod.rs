@@ -22,6 +22,8 @@ mod pipelined_reader;
 pub use pipelined_reader::PipelinedReader;
 #[cfg(target_os = "linux")]
 pub use pipelined_reader::PipelinedReaderConfig;
+#[cfg(target_os = "linux")]
+pub use pipelined_reader::MAX_IO_CONCURRENCY;
 
 #[cfg(target_os = "linux")]
 mod pipelined_search;

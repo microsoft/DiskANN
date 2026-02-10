@@ -89,6 +89,12 @@ pub(crate) enum SearchMode {
         #[serde(default)]
         sqpoll_idle_ms: Option<u32>,
     },
+    /// Unified pipelined search through the generic search loop (queue-based ExpandBeam).
+    UnifiedPipeSearch {
+        /// Enable kernel-side SQ polling (ms idle timeout). None = disabled.
+        #[serde(default)]
+        sqpoll_idle_ms: Option<u32>,
+    },
 }
 
 impl fmt::Display for SearchMode {
@@ -108,6 +114,13 @@ impl fmt::Display for SearchMode {
                     write!(f, ",sqpoll={}ms", sq)?;
                 }
                 write!(f, ")")
+            }
+            SearchMode::UnifiedPipeSearch { sqpoll_idle_ms } => {
+                write!(f, "UnifiedPipeSearch")?;
+                if let Some(sq) = sqpoll_idle_ms {
+                    write!(f, "(sqpoll={}ms)", sq)?;
+                }
+                Ok(())
             }
         }
     }
@@ -290,6 +303,7 @@ impl CheckDeserialization for DiskSearchPhase {
                     anyhow::bail!("initial_beam_width must be positive");
                 }
             }
+            SearchMode::UnifiedPipeSearch { .. } => {}
         }
         Ok(())
     }

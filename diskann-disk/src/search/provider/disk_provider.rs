@@ -71,19 +71,19 @@ where
     Data: GraphDataType<VectorIdType = u32>,
 {
     /// Holds the graph header information that contains metadata about disk-index file.
-    graph_header: GraphHeader,
+    pub(crate) graph_header: GraphHeader,
 
     // Full precision distance comparer used in post_process to reorder results.
-    distance_comparer: <Data::VectorDataType as VectorRepr>::Distance,
+    pub(crate) distance_comparer: <Data::VectorDataType as VectorRepr>::Distance,
 
     /// The PQ data used for quantization.
-    pq_data: Arc<PQData>,
+    pub(crate) pq_data: Arc<PQData>,
 
     /// The number of points in the graph.
-    num_points: usize,
+    pub(crate) num_points: usize,
 
     /// Metric used for distance computation.
-    metric: Metric,
+    pub(crate) metric: Metric,
 
     /// The number of IO operations that can be done in parallel.
     search_io_limit: usize,
@@ -373,8 +373,8 @@ where
 
 /// The query computer for the disk provider. This is used to compute the distance between the query vector and the PQ coordinates.
 pub struct DiskQueryComputer {
-    num_pq_chunks: usize,
-    query_centroid_l2_distance: Vec<f32>,
+    pub(crate) num_pq_chunks: usize,
+    pub(crate) query_centroid_l2_distance: Vec<f32>,
 }
 
 impl PreprocessedDistanceFunction<&[u8], f32> for DiskQueryComputer {
@@ -783,14 +783,18 @@ pub struct DiskIndexSearcher<
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
 {
-    index: DiskANNIndex<DiskProvider<Data>>,
-    runtime: Runtime,
+    pub(crate) index: DiskANNIndex<DiskProvider<Data>>,
+    pub(crate) runtime: Runtime,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: ProviderFactory,
 
     /// Scratch pool for disk search operations that need allocations.
     scratch_pool: Arc<ObjectPool<DiskSearchScratch<Data, ProviderFactory::VertexProviderType>>>,
+
+    /// Optional pipelined search configuration (Linux only, io_uring-based).
+    #[cfg(target_os = "linux")]
+    pub(crate) pipelined_config: Option<super::pipelined_accessor::PipelinedConfig>,
 }
 
 #[derive(Debug)]
@@ -891,6 +895,8 @@ where
             runtime,
             vertex_provider_factory,
             scratch_pool,
+            #[cfg(target_os = "linux")]
+            pipelined_config: None,
         })
     }
 

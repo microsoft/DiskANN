@@ -398,8 +398,10 @@ where
                 let mut search_record =
                     VisitedSearchRecord::new(self.estimate_visited_set_capacity(Some(search_l)));
 
+                let default_params = SearchParams::new(1, scratch.best.search_l(), None)
+                    .expect("valid default search params");
                 self.search_internal(
-                    None, // beam_width
+                    &default_params,
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -522,8 +524,10 @@ where
                     self.estimate_visited_set_capacity(Some(scratch.best.search_l())),
                 );
 
+                let default_params = SearchParams::new(1, scratch.best.search_l(), None)
+                    .expect("valid default search params");
                 self.search_internal(
-                    None, // beam_width
+                    &default_params,
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -1330,8 +1334,10 @@ where
 
             let mut scratch = self.search_scratch(l_value, start_ids.len());
 
+            let default_params = SearchParams::new(1, scratch.best.search_l(), None)
+                .expect("valid default search params");
             self.search_internal(
-                None, // beam_width
+                &default_params,
                 &start_ids,
                 &mut search_accessor,
                 &computer,
@@ -2063,7 +2069,7 @@ where
     // A is the accessor type, T is the query type used for BuildQueryComputer
     fn search_internal<A, T, SR, Q>(
         &self,
-        beam_width: Option<usize>,
+        search_params: &SearchParams,
         start_ids: &[DP::InternalId],
         accessor: &mut A,
         computer: &A::QueryComputer,
@@ -2077,7 +2083,17 @@ where
         Q: NeighborQueue<DP::InternalId>,
     {
         async move {
-            let beam_width = beam_width.unwrap_or(1);
+            let beam_width = search_params.beam_width.unwrap_or(1);
+
+            // Adaptive beam width: start smaller and grow based on convergence
+            let mut cur_beam_width = if search_params.adaptive_beam_width {
+                beam_width.min(4)
+            } else {
+                beam_width
+            };
+
+            // Relaxed monotonicity: continue exploring after convergence
+            let mut converge_size: Option<usize> = None;
 
             // paged search can call search_internal multiple times, we only need to initialize
             // state if not already initialized.
@@ -2095,20 +2111,30 @@ where
             }
 
             let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
-            while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
-                scratch.beam_nodes.clear();
 
-                // In this loop we are going to find the beam_width number of nodes that are closest to the query.
-                // Each of these nodes will be a frontier node.
-                while scratch.best.has_notvisited_node() && scratch.beam_nodes.len() < beam_width {
+            while (scratch.best.has_notvisited_node() || accessor.has_pending())
+                && !accessor.terminate_early()
+            {
+                // Select beam_width closest unvisited nodes
+                scratch.beam_nodes.clear();
+                let available = cur_beam_width.saturating_sub(
+                    if accessor.has_pending() { cur_beam_width / 2 } else { 0 }
+                );
+                while scratch.best.has_notvisited_node()
+                    && scratch.beam_nodes.len() < available
+                {
                     let closest_node = scratch.best.closest_notvisited();
                     search_record.record(closest_node, scratch.hops, scratch.cmps);
                     scratch.beam_nodes.push(closest_node.id);
                 }
 
+                // Submit to expansion queue (no-op for non-pipelined)
+                accessor.submit_expand(scratch.beam_nodes.iter().copied());
+
+                // Expand whatever is available (all for non-pipelined, completed IO for pipelined)
                 neighbors.clear();
-                accessor
-                    .expand_beam(
+                let expanded = accessor
+                    .expand_available(
                         scratch.beam_nodes.iter().copied(),
                         computer,
                         glue::NotInMut::new(&mut scratch.visited),
@@ -2116,16 +2142,32 @@ where
                     )
                     .await?;
 
-                // The predicate ensures that the contents of `neighbors` are unique.
-                //
-                // We insert into the priority queue outside of the expansion for
-                // code-locality purposes.
                 neighbors
                     .iter()
                     .for_each(|neighbor| scratch.best.insert(*neighbor));
 
                 scratch.cmps += neighbors.len() as u32;
-                scratch.hops += scratch.beam_nodes.len() as u32;
+                scratch.hops += expanded as u32;
+
+                // Adaptive beam width
+                if search_params.adaptive_beam_width && expanded > 0 {
+                    // All expanded nodes are useful by definition
+                    cur_beam_width = (cur_beam_width + 1).max(4).min(beam_width);
+                }
+
+                // Relaxed monotonicity: detect convergence and extend search
+                if let Some(rm_l) = search_params.relaxed_monotonicity_l {
+                    if rm_l > 0 {
+                        if !scratch.best.has_notvisited_node() && converge_size.is_none() {
+                            converge_size = Some(scratch.cmps as usize);
+                        }
+                        if let Some(cs) = converge_size {
+                            if (scratch.cmps as usize) >= cs + rm_l {
+                                break;
+                            }
+                        }
+                    }
+                }
             }
 
             Ok(InternalSearchStats {
@@ -2418,7 +2460,7 @@ where
 
             let stats = self
                 .search_internal(
-                    search_params.beam_width,
+                    search_params,
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -2615,9 +2657,11 @@ where
 
             let mut scratch = self.search_scratch(search_params.starting_l_value, start_ids.len());
 
+            let range_default_params = SearchParams::new(1, scratch.best.search_l(), search_params.beam_width)
+                .expect("valid default search params");
             let initial_stats = self
                 .search_internal(
-                    search_params.beam_width,
+                    &range_default_params,
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -2964,8 +3008,10 @@ where
                     .into_ann_result()?;
 
                 let start_ids = accessor.starting_points().await?;
+                let default_params = SearchParams::new(1, search_state.scratch.best.search_l(), None)
+                    .expect("valid default search params");
                 self.search_internal(
-                    None, // beam_width
+                    &default_params,
                     &start_ids,
                     &mut accessor,
                     &search_state.extra.1,
@@ -3713,7 +3759,7 @@ where
 
             let stats = self
                 .search_internal(
-                    search_params.beam_width,
+                    search_params,
                     &start_ids,
                     &mut accessor,
                     &computer,

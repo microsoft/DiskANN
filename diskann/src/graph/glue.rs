@@ -255,6 +255,64 @@ pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized
 where
     T: ?Sized,
 {
+    /// Submit IDs to the expansion queue.
+    ///
+    /// For non-pipelined providers (default), IDs are stored in an internal buffer and
+    /// processed synchronously in [`expand_available`]. For pipelined providers, this
+    /// submits non-blocking IO requests (e.g., io_uring reads) so that data loading
+    /// overlaps with other computation.
+    ///
+    /// The default implementation delegates to [`expand_beam`] from within
+    /// [`expand_available`], so overriding this method is only necessary for pipelined
+    /// providers that need to separate submission from completion.
+    fn submit_expand(&mut self, _ids: impl Iterator<Item = Self::Id> + Send) {
+        // Default: no-op. IDs are passed directly to expand_beam in expand_available.
+    }
+
+    /// Expand nodes whose data is available, invoking `on_neighbors` for each discovered
+    /// neighbor.
+    ///
+    /// For non-pipelined providers (default), this expands all the `ids` passed in
+    /// synchronously via [`expand_beam`]. For pipelined providers, this polls for
+    /// completed IO operations and expands only the nodes whose data has arrived,
+    /// returning immediately without blocking.
+    ///
+    /// Returns the number of nodes that were expanded in this call.
+    fn expand_available<P, F>(
+        &mut self,
+        ids: impl Iterator<Item = Self::Id> + Send,
+        computer: &Self::QueryComputer,
+        pred: P,
+        on_neighbors: F,
+    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
+    where
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(f32, Self::Id) + Send,
+    {
+        async move {
+            let id_vec: Vec<Self::Id> = ids.collect();
+            let count = id_vec.len();
+            self.expand_beam(id_vec.into_iter(), computer, pred, on_neighbors)
+                .await?;
+            Ok(count)
+        }
+    }
+
+    /// Returns true if there are submitted but not-yet-expanded nodes pending.
+    ///
+    /// For non-pipelined providers (default), this always returns `false` since
+    /// [`expand_available`] processes everything synchronously. Pipelined providers
+    /// return `true` when IO operations are in-flight.
+    fn has_pending(&self) -> bool {
+        false
+    }
+
+    /// Expand all `ids` synchronously: load data, get neighbors, compute distances.
+    ///
+    /// This is the original single-shot expansion method. For non-pipelined providers,
+    /// the default [`expand_available`] delegates to this. Pipelined providers may
+    /// override [`submit_expand`] and [`expand_available`] instead and leave this as
+    /// the default.
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,

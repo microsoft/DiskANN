@@ -23,6 +23,8 @@ use diskann_disk::{
 };
 #[cfg(target_os = "linux")]
 use diskann_disk::search::pipelined::{PipelinedSearcher, PipelinedReaderConfig};
+#[cfg(target_os = "linux")]
+use diskann_disk::search::provider::pipelined_accessor::PipelinedConfig;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     storage::{
@@ -457,6 +459,78 @@ where
             {
                 let _ = (initial_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms);
                 anyhow::bail!("PipeSearch is only supported on Linux");
+            }
+        }
+        SearchMode::UnifiedPipeSearch { sqpoll_idle_ms } => {
+            #[cfg(target_os = "linux")]
+            {
+                let reader_config = PipelinedReaderConfig {
+                    sqpoll_idle_ms: *sqpoll_idle_ms,
+                };
+
+                let mut searcher = DiskIndexSearcher::<GraphData<T>, _>::new(
+                    search_params.num_threads,
+                    search_params.search_io_limit.unwrap_or(usize::MAX),
+                    &index_reader,
+                    vertex_provider_factory,
+                    search_params.distance.into(),
+                    None,
+                )?;
+
+                searcher.with_pipelined_config(PipelinedConfig {
+                    disk_index_path: disk_index_path.clone(),
+                    reader_config,
+                    beam_width: search_params.beam_width,
+                });
+
+                let searcher = &searcher;
+
+                logger.log_checkpoint("index_loaded");
+
+                search_results_per_l = run_search_loop(
+                    &search_params.search_list,
+                    search_params.recall_at,
+                    search_params.beam_width,
+                    num_queries,
+                    "unified_pipesearch",
+                    &has_any_search_failed,
+                    &gt_context,
+                    |l, statistics_vec, result_counts, result_ids, result_dists| {
+                        let zipped = queries
+                            .par_row_iter()
+                            .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
+                            .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
+                            .zip(statistics_vec.par_iter_mut())
+                            .zip(result_counts.par_iter_mut());
+
+                        zipped.for_each_in_pool(
+                            &pool,
+                            |((((q, id_chunk), dist_chunk), stats), rc)| {
+                                write_query_result(
+                                    searcher.search_pipelined(
+                                        q,
+                                        search_params.recall_at,
+                                        l,
+                                        search_params.beam_width,
+                                        None,
+                                    ),
+                                    search_params.recall_at as usize,
+                                    stats,
+                                    rc,
+                                    id_chunk,
+                                    dist_chunk,
+                                    &has_any_search_failed,
+                                    "UnifiedPipeSearch",
+                                );
+                            },
+                        );
+                    },
+                )?;
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = sqpoll_idle_ms;
+                anyhow::bail!("UnifiedPipeSearch is only supported on Linux");
             }
         }
     }
