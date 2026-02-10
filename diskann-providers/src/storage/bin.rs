@@ -24,7 +24,7 @@ use crate::{
 ///
 /// Furthermore, these are meant for data structures that use the identity mapping between
 /// internal and external IDs.
-pub(crate) trait SetData {
+pub trait SetData {
     /// The element type of input slices.
     type Item;
 
@@ -41,7 +41,7 @@ pub(crate) trait SetData {
 ///
 /// Furthermore, these are meant for data structures that use the identity mapping between
 /// internal and external IDs.
-pub(crate) trait GetData {
+pub trait GetData {
     /// The element type of output slices.
     type Element;
 
@@ -130,7 +130,7 @@ pub(crate) trait GetAdjacencyList {
 /// along with the vectors of length `dim`.
 ///
 /// See also [`save_to_bin`] for a description of the `.bin` file format.
-pub(crate) fn load_from_bin<T, P, F, S>(provider: &P, path: &str, create: F) -> ANNResult<S>
+pub fn load_from_bin<T, P, F, S>(provider: &P, path: &str, create: F) -> ANNResult<S>
 where
     P: StorageReadProvider,
     F: FnOnce(usize, usize) -> ANNResult<S>,
@@ -176,7 +176,7 @@ where
 /// * `dim` as `u32` in little-endian.
 /// * Vector data in a dense layout with each element store in its canonical binary
 ///   encoding using little-endian.
-pub(crate) fn save_to_bin<S, T, P>(data: &S, provider: &P, path: &str) -> ANNResult<usize>
+pub fn save_to_bin<S, T, P>(data: &S, provider: &P, path: &str) -> ANNResult<usize>
 where
     S: GetData<Element = T>,
     T: bytemuck::Pod,
@@ -234,7 +234,7 @@ where
 /// between `0` and `max_degree` and reflect the actual length of the saved adjacency list.
 ///
 /// See also [`save_graph`] for a description of the file format.
-pub(crate) fn load_graph<P, S, F>(provider: &P, path: &str, create: F) -> ANNResult<S>
+pub fn load_graph<P, S, F>(provider: &P, path: &str, create: F) -> ANNResult<S>
 where
     P: StorageReadProvider,
     S: SetAdjacencyList<Item = u32>,
@@ -329,7 +329,7 @@ where
 /// After the header, each adjacency list in stored densely, consisting of a `u32` encoding
 /// the length `L` of the adjacency list followed by `L` u32-values containing the
 /// out-neighbors of this node. These adjacency lists are stored in-order.
-pub(crate) fn save_graph<S, P>(
+pub fn save_graph<S, P>(
     graph: &S,
     provider: &P,
     start_point: u32,

@@ -371,6 +371,28 @@ impl CreateDeleteProvider for TableBasedDeletes {
     }
 }
 
+impl LoadWith<usize> for NoDeletes {
+    type Error = ANNError;
+
+    async fn load_with<P>(_: &P, _num_points: &usize) -> ANNResult<Self>
+    where
+        P: StorageReadProvider,
+    {
+        Ok(NoDeletes)
+    }
+}
+
+impl LoadWith<usize> for TableDeleteProviderAsync {
+    type Error = ANNError;
+
+    async fn load_with<P>(_: &P, num_points: &usize) -> ANNResult<Self>
+    where
+        P: StorageReadProvider,
+    {
+        Ok(TableDeleteProviderAsync::new(*num_points))
+    }
+}
+
 /// Operates entirely in full precision.
 ///
 /// All indexing and search operations use the uncompressed full-precision vectors.

@@ -18,67 +18,29 @@ use diskann::{
     utils::{IntoUsize, VectorRepr},
 };
 use diskann_utils::future::AsyncFriendly;
-use diskann_vector::distance::Metric;
 
-use crate::model::{
+use diskann_providers::model::{
     graph::{
         provider::async_::{
             FastMemoryQuantVectorProviderAsync, FastMemoryVectorProviderAsync,
             SimpleNeighborProviderAsync,
             common::{
-                CreateVectorStore, Hybrid, Internal, NoStore, Panics, Quantized, SetElementHelper,
-                VectorStore,
+                Hybrid, Internal, NoStore, Panics, Quantized,
             },
             distances,
-            inmem::{
-                DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
-                Rerank,
-            },
             postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
         },
         traits::AdHoc,
     },
     pq::{self, FixedChunkPQTable},
 };
+use crate::{
+    DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
+    Rerank,
+};
 
 /// The default quant provider.
 pub type DefaultQuant = FastMemoryQuantVectorProviderAsync;
-
-impl CreateVectorStore for FixedChunkPQTable {
-    type Target = DefaultQuant;
-    fn create(
-        self,
-        max_points: usize,
-        metric: Metric,
-        _prefetch_lookahead: Option<usize>,
-    ) -> Self::Target {
-        DefaultQuant::new(metric, max_points, self)
-    }
-}
-
-impl VectorStore for DefaultQuant {
-    fn total(&self) -> usize {
-        self.total()
-    }
-
-    fn count_for_get_vector(&self) -> usize {
-        self.num_get_calls.get()
-    }
-}
-
-////////////////
-// SetElement //
-////////////////
-
-/// Assign to PQ vector store.
-impl<T> SetElementHelper<T> for DefaultQuant
-where
-    T: VectorRepr,
-{
-    fn set_element(&self, id: &u32, element: &[T]) -> ANNResult<()> {
-        unsafe { self.set_vector_sync(id.into_usize(), element) }
-    }
-}
 
 ///////////////////
 // QuantAccessor //

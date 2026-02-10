@@ -5,26 +5,25 @@
 
 use std::{fmt::Debug, future::Future, num::NonZeroUsize};
 
-use crate::storage::{StorageReadProvider, StorageWriteProvider};
+use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 #[cfg(test)]
 use diskann::neighbor::Neighbor;
 use diskann::{
     ANNError, ANNResult,
-    graph::AdjacencyList,
     provider::{
-        DataProvider, DefaultAccessor, DefaultContext, Delete, ElementStatus, ExecutionContext,
-        NeighborAccessor, NeighborAccessorMut, NoopGuard, SetElement,
+        DataProvider, DefaultAccessor, DefaultContext, Delete, ElementStatus, ExecutionContext, NoopGuard, SetElement,
     },
     utils::{IntoUsize, ONE, VectorRepr},
 };
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
 
-use crate::{
+use crate::CreateVectorStore;
+use diskann_providers::{
     model::graph::provider::async_::{
         SimpleNeighborProviderAsync, StartPoints, TableDeleteProviderAsync,
         common::{
-            CreateDeleteProvider, CreateVectorStore, NoDeletes, NoStore, PrefetchCacheLineLevel,
+            CreateDeleteProvider, NoDeletes, NoStore, PrefetchCacheLineLevel,
             SetElementHelper, VectorStore,
         },
     },
@@ -100,13 +99,11 @@ use crate::{
 /// use std::num::NonZeroUsize;
 ///
 /// use diskann::provider::DefaultContext;
-/// use diskann_providers::model::graph::provider::async_::{
-///     inmem::{
-///         DefaultProvider, DefaultProviderParameters,
-///         CreateFullPrecision,
-///     },
-///     common::{NoStore, NoDeletes},
+/// use diskann_inmem::{
+///     DefaultProvider, DefaultProviderParameters,
+///     CreateFullPrecision,
 /// };
+/// use diskann_providers::model::graph::provider::async_::common::{NoStore, NoDeletes};
 /// use diskann_vector::distance::Metric;
 ///
 /// let dim = 4;
@@ -139,16 +136,12 @@ use crate::{
 /// use std::num::NonZeroUsize;
 ///
 /// use diskann::provider::DefaultContext;
-/// use diskann_providers::model::{
-///     pq::FixedChunkPQTable,
-///     graph::provider::async_::{
-///         inmem::{
-///             DefaultProvider, DefaultProviderParameters,
-///             CreateFullPrecision,
-///         },
-///         common::NoDeletes,
-///     },
+/// use diskann_providers::model::pq::FixedChunkPQTable;
+/// use diskann_inmem::{
+///     DefaultProvider, DefaultProviderParameters,
+///     CreateFullPrecision,
 /// };
+/// use diskann_providers::model::graph::provider::async_::common::NoDeletes;
 /// use diskann_vector::distance::Metric;
 ///
 /// // An example PQ table.
@@ -189,16 +182,12 @@ use crate::{
 /// use std::num::NonZeroUsize;
 ///
 /// use diskann::provider::DefaultContext;
-/// use diskann_providers::model::{
-///     pq::FixedChunkPQTable,
-///     graph::provider::async_::{
-///         inmem::{
-///             DefaultProvider, DefaultProviderParameters,
-///             CreateFullPrecision,
-///         },
-///         common::TableBasedDeletes,
-///     },
+/// use diskann_providers::model::pq::FixedChunkPQTable;
+/// use diskann_inmem::{
+///     DefaultProvider, DefaultProviderParameters,
+///     CreateFullPrecision,
 /// };
+/// use diskann_providers::model::graph::provider::async_::common::TableBasedDeletes;
 /// use diskann_vector::distance::Metric;
 ///
 /// // An example PQ table.
@@ -243,12 +232,12 @@ pub struct DefaultProvider<U, V = NoStore, D = NoDeletes, Ctx = DefaultContext> 
     /// The delete provider. If `D == NoDeletes`, then delete related operations are disabled.
     ///
     /// The size of this store must be kept in-sync with `quant_vectors` and `full-vectors`.
-    pub(super) deleted: D,
+    pub(crate) deleted: D,
 
     /// The metric to use for distances.
-    pub(super) metric: Metric,
+    pub(crate) metric: Metric,
 
-    pub(super) start_points: StartPoints,
+    pub(crate) start_points: StartPoints,
 
     context: std::marker::PhantomData<Ctx>,
 }
@@ -537,28 +526,6 @@ where
     }
 }
 
-impl LoadWith<usize> for NoDeletes {
-    type Error = ANNError;
-
-    async fn load_with<P>(_: &P, _num_points: &usize) -> ANNResult<Self>
-    where
-        P: StorageReadProvider,
-    {
-        Ok(NoDeletes)
-    }
-}
-
-impl LoadWith<usize> for TableDeleteProviderAsync {
-    type Error = ANNError;
-
-    async fn load_with<P>(_: &P, num_points: &usize) -> ANNResult<Self>
-    where
-        P: StorageReadProvider,
-    {
-        Ok(TableDeleteProviderAsync::new(*num_points))
-    }
-}
-
 ///////////////////
 // Data Provider //
 ///////////////////
@@ -655,29 +622,6 @@ where
     }
 }
 
-impl NeighborAccessor for &SimpleNeighborProviderAsync<u32> {
-    async fn get_neighbors(
-        self,
-        id: Self::Id,
-        neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> ANNResult<Self> {
-        self.get_neighbors_sync(id.into_usize(), neighbors)?;
-        Ok(self)
-    }
-}
-
-impl NeighborAccessorMut for &SimpleNeighborProviderAsync<u32> {
-    async fn set_neighbors(self, id: u32, neighbors: &[u32]) -> ANNResult<Self> {
-        self.set_neighbors_sync(id.into_usize(), neighbors)?;
-        Ok(self)
-    }
-
-    async fn append_vector(self, id: u32, new_neighbor_ids: &[u32]) -> ANNResult<Self> {
-        self.append_vector_sync(id.into_usize(), new_neighbor_ids)?;
-        Ok(self)
-    }
-}
-
 impl<U, V, D, Ctx> DefaultAccessor for DefaultProvider<U, V, D, Ctx>
 where
     U: AsyncFriendly,
@@ -736,10 +680,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::graph::provider::async_::{
-        common::{NoStore, TableBasedDeletes},
-        inmem::CreateFullPrecision,
-    };
+    use crate::CreateFullPrecision;
+    use diskann_providers::model::graph::provider::async_::common::{NoStore, TableBasedDeletes};
 
     #[tokio::test]
     async fn test_data_provider_and_delete_interface() {

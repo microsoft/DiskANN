@@ -21,9 +21,10 @@ use diskann::{
 };
 
 use super::{DefaultProvider, DefaultQuant};
-use crate::model::graph::provider::async_::{
-    SimpleNeighborProviderAsync, TableDeleteProviderAsync, inmem::FullPrecisionStore,
+use diskann_providers::model::graph::provider::async_::{
+    SimpleNeighborProviderAsync, TableDeleteProviderAsync,
 };
+use crate::FullPrecisionStore;
 
 /// A full-precision accessor that spuriously fails for non-start points with a controllable
 /// frequency.

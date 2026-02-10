@@ -15,13 +15,11 @@ use diskann::{
     utils::{async_tools, vecid_from_usize, TryIntoVectorId, VectorRepr, ONE},
     ANNError, ANNErrorKind, ANNResult,
 };
+use diskann_inmem::DefaultProviderParameters;
 use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     model::{
-        graph::{
-            provider::async_::inmem::DefaultProviderParameters,
-            traits::{AdHoc, GraphDataType},
-        },
+        graph::traits::{AdHoc, GraphDataType},
         IndexConfiguration, MAX_PQ_TRAINING_SET_SIZE, NUM_KMEANS_REPS_PQ, NUM_PQ_CENTROIDS,
     },
     storage::{AsyncIndexMetadata, DiskGraphOnly, PQStorage},
