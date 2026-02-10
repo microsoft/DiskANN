@@ -1,0 +1,4 @@
+parsing dataset "dataset" in file "<TEST_DIR>/runbook.yaml"
+
+Caused by:
+    Unrecognized runbook key: "unknown_key"

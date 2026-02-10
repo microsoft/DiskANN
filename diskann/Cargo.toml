@@ -28,6 +28,9 @@ tracing = { workspace = true, optional = true }
 diskann-vector = { workspace = true }
 diskann-wide = { workspace = true }
 
+# Optional Dependencies
+dashmap = { workspace = true, optional = true }
+
 [dev-dependencies]
 futures-util = { workspace = true, default-features = false  }
 pin-project.workspace = true
@@ -36,6 +39,7 @@ relative-path = "2.0.1"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "sync"] }
+dashmap = { workspace = true }
 
 # Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`
 [lints.rust]
@@ -56,7 +60,7 @@ default = ["tracing"]
 tracing = ["dep:tracing"]
 
 # Enable testing providers.
-testing = ["tokio/sync"]
+testing = ["dep:dashmap"]
 
 # Enable experimental diversity search
 experimental_diversity_search = []

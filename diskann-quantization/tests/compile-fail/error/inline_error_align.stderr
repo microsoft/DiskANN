@@ -18,7 +18,7 @@ note: erroneous constant encountered
     | |         };
     | |_________^
 
-note: the above error was encountered while instantiating `fn diskann_quantization::error::InlineError::new::<Error>`
+note: the above error was encountered while instantiating `fn InlineError::new::<Error>`
   --> tests/compile-fail/error/inline_error_align.rs:24:13
    |
 24 |     let _ = InlineError::<16>::new(Error(10));

@@ -4,7 +4,6 @@
  */
 
 use diskann_benchmark_core as benchmark_core;
-pub(crate) use benchmark_core::recall::knn;
 
 use serde::Serialize;
 

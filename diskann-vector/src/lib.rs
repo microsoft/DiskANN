@@ -22,7 +22,9 @@ mod half;
 pub use half::Half;
 
 mod traits;
-pub use traits::{DistanceFunction, Norm, PreprocessedDistanceFunction, PureDistanceFunction};
+pub use traits::{
+    DistanceFunction, DistanceFunctionMut, Norm, PreprocessedDistanceFunction, PureDistanceFunction,
+};
 
 mod value;
 pub use value::{MathematicalValue, SimilarityScore};

@@ -19,6 +19,7 @@ use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use super::super::common::TestCallCount;
+use super::ConfigError;
 use crate::{
     model::{
         distance::common::distance_table_pool,
@@ -48,11 +49,11 @@ impl QuantVectorProvider {
         num_start_points: usize,
         pq_chunk_table: FixedChunkPQTable,
         config: Config,
-    ) -> Self {
-        let quant_vector_index = BfTree::with_config(config, None);
+    ) -> ANNResult<Self> {
+        let quant_vector_index = BfTree::with_config(config, None).map_err(ConfigError)?;
         let vec_pool = Arc::new(distance_table_pool(&pq_chunk_table));
 
-        Self {
+        Ok(Self {
             max_vectors,
             num_start_points,
             quant_vector_index,
@@ -60,7 +61,7 @@ impl QuantVectorProvider {
             metric: dist_metric,
             num_get_calls: TestCallCount::default(),
             vec_pool,
-        }
+        })
     }
 
     /// Return the metric associated with this provider
@@ -285,7 +286,8 @@ mod tests {
 
         let bf_tree_config = Config::default();
         let provider =
-            QuantVectorProvider::new_with_config(Metric::L2, 10, 1, pq_chunk_table, bf_tree_config);
+            QuantVectorProvider::new_with_config(Metric::L2, 10, 1, pq_chunk_table, bf_tree_config)
+                .unwrap();
 
         // try to set an out of bounds vector
         let result = provider.set_quant_vector(20, &[]).unwrap_err();
@@ -323,7 +325,8 @@ mod tests {
             frozen_points,
             table,
             bf_tree_config,
-        );
+        )
+        .unwrap();
 
         assert_eq!(provider.total(), num_points + frozen_points);
         assert_eq!(provider.full_dim(), dim);
@@ -396,13 +399,10 @@ mod tests {
         .unwrap();
 
         let bf_tree_config = Config::default();
-        let provider = Arc::new(QuantVectorProvider::new_with_config(
-            Metric::L2,
-            10,
-            1,
-            pq_chunk_table,
-            bf_tree_config,
-        ));
+        let provider = Arc::new(
+            QuantVectorProvider::new_with_config(Metric::L2, 10, 1, pq_chunk_table, bf_tree_config)
+                .unwrap(),
+        );
         let mut set = JoinSet::new();
         for i in 0..11 {
             let vector = vec![i as f32, (i + 1) as f32];

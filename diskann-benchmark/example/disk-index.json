@@ -39,7 +39,7 @@
         "source": {
           "disk-index-source": "Load",
           "data_type": "float32",
-          "load_path": "disk-index/tests/data/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search"
+          "load_path": "test_data/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search"
         },
         "search_phase": {
           "queries": "disk_index_sample_query_10pts.fbin",

@@ -3,37 +3,56 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashMap, hash::Hash, num::NonZeroUsize};
-
-use crate::{
-    neighbor::{
-        Neighbor,
-        queue::{
-            BestCandidatesIterator, NeighborPriorityQueue, NeighborPriorityQueueIdType,
-            NeighborQueue,
-        },
-    },
-    utils::IntoUsize,
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    hash::Hash,
+    num::NonZeroUsize,
+    sync::Arc,
 };
+
+use crate::neighbor::{
+    Neighbor,
+    queue::{
+        BestCandidatesIterator, NeighborPriorityQueue, NeighborPriorityQueueIdType, NeighborQueue,
+    },
+};
+
+/// Trait combining all required bounds for attribute value types.
+/// This trait is automatically implemented for any type that satisfies all the bounds.
+pub trait Attribute: Hash + Eq + Copy + Default + Debug + Display + Send + Sync {}
+
+// Blanket implementation: any type satisfying these bounds automatically implements Attribute
+impl<T> Attribute for T where T: Hash + Eq + Copy + Default + Debug + Display + Send + Sync {}
 
 /// A wrapper type for (VectorIdType, attribute) tuples to implement required traits
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct VectorIdWithAttr<VectorIdType: NeighborPriorityQueueIdType> {
-    pub id: VectorIdType,
-    pub attr: u32,
+pub struct VectorIdWithAttribute<I, A>
+where
+    I: NeighborPriorityQueueIdType,
+    A: Attribute,
+{
+    pub id: I,
+    pub attribute: A,
 }
 
-impl<VectorIdType: NeighborPriorityQueueIdType> VectorIdWithAttr<VectorIdType> {
-    fn new(id: VectorIdType, attr: u32) -> Self {
-        Self { id, attr }
+impl<I, A> VectorIdWithAttribute<I, A>
+where
+    I: NeighborPriorityQueueIdType,
+    A: Attribute,
+{
+    fn new(id: I, attribute: A) -> Self {
+        Self { id, attribute }
     }
 }
 
-impl<VectorIdType: NeighborPriorityQueueIdType> std::fmt::Display
-    for VectorIdWithAttr<VectorIdType>
+impl<I, A> Display for VectorIdWithAttribute<I, A>
+where
+    I: NeighborPriorityQueueIdType,
+    A: Attribute,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({}, {})", self.id, self.attr)
+        write!(f, "({}, {})", self.id, self.attribute)
     }
 }
 
@@ -44,21 +63,27 @@ impl<VectorIdType: NeighborPriorityQueueIdType> std::fmt::Display
 /// This struct serves as a wrapper around NeighborPriorityQueue and can be extended
 /// in the future to implement diversity constraints or other specialized behaviors.
 #[derive(Debug, Clone)]
-pub struct DiverseNeighborQueue<VectorIdType: NeighborPriorityQueueIdType + Hash> {
+pub struct DiverseNeighborQueue<P>
+where
+    P: AttributeValueProvider,
+{
     /// The underlying priority queue that handles all core operations
-    /// Stores VectorIdWithAttr which contains (VectorIdType, attr_value)
-    global_queue: NeighborPriorityQueue<VectorIdWithAttr<VectorIdType>>,
+    /// Stores VectorIdWithAttribute which contains (VectorIdType, attribute_value)
+    global_queue: NeighborPriorityQueue<VectorIdWithAttribute<P::Id, P::Value>>,
     /// Map from attribute_id to local neighbor priority queue
-    local_queue_map: HashMap<u32, NeighborPriorityQueue<VectorIdType>>,
+    local_queue_map: HashMap<P::Value, NeighborPriorityQueue<P::Id>>,
     /// Attribute value provider for managing diversity attributes
-    attr_provider: PlaceholderAttributeValueProvider,
+    attribute_provider: Arc<P>,
     /// The calculated diverse_results_l for local queues
     diverse_results_l: usize,
     /// The target number of diverse results (k_value for diversity)
     diverse_results_k: usize,
 }
 
-impl<VectorIdType: NeighborPriorityQueueIdType + Hash> DiverseNeighborQueue<VectorIdType> {
+impl<P> DiverseNeighborQueue<P>
+where
+    P: AttributeValueProvider,
+{
     /// Create a new DiverseNeighborQueue with the specified capacity.
     ///
     /// This will implicitly set `l_value` to the provided capacity.
@@ -66,13 +91,13 @@ impl<VectorIdType: NeighborPriorityQueueIdType + Hash> DiverseNeighborQueue<Vect
         l_value: usize,
         k_value: NonZeroUsize,
         diverse_results_k: usize,
-        attr_provider: PlaceholderAttributeValueProvider,
+        attribute_provider: Arc<P>,
     ) -> Self {
         let diverse_results_l = diverse_results_k * l_value / k_value.get();
         Self {
             global_queue: NeighborPriorityQueue::new(l_value),
             local_queue_map: HashMap::new(),
-            attr_provider,
+            attribute_provider,
             diverse_results_l,
             diverse_results_k,
         }
@@ -113,85 +138,101 @@ impl<VectorIdType: NeighborPriorityQueueIdType + Hash> DiverseNeighborQueue<Vect
     }
 }
 
-impl<VectorIdType: NeighborPriorityQueueIdType + Hash + IntoUsize> NeighborQueue<VectorIdType>
-    for DiverseNeighborQueue<VectorIdType>
+impl<P> NeighborQueue<P::Id> for DiverseNeighborQueue<P>
+where
+    P: AttributeValueProvider,
 {
     type Iter<'a>
-        = BestCandidatesIterator<'a, VectorIdType, Self>
+        = BestCandidatesIterator<'a, P::Id, Self>
     where
         Self: 'a,
-        VectorIdType: 'a;
+        P::Id: 'a;
 
-    fn insert(&mut self, nbr: Neighbor<VectorIdType>) {
-        // Get the attribute_id for the current neighbor
-        // TODO: This is a hack to user placeholder attribute provider. To be replaced with actual provider in future PRs.
-        let cur_id_usize = nbr.id.into_usize();
-        let attr_value = self.attr_provider.get(cur_id_usize).unwrap_or(0);
+    fn insert(&mut self, nbr: Neighbor<P::Id>) {
+        // Get the attribute value for the current neighbor.
+        // We explicitly skip neighbors without attributes (returning None) rather than using
+        // unwrap_or_default(), because using a default value would conflate "missing attribute"
+        // with "attribute value 0" (or whatever the default is). This could violate diversity
+        // constraints by incorrectly grouping neighbors without attributes together with
+        // neighbors that legitimately have the default attribute value.
+        let Some(attribute_value) = self.attribute_provider.get(nbr.id) else {
+            return;
+        };
 
         // Ensure local queue exists for this attribute and get mutable reference
         let local_queue = self
             .local_queue_map
-            .entry(attr_value)
+            .entry(attribute_value)
             .or_insert_with(|| NeighborPriorityQueue::new(self.diverse_results_l));
 
         let local_queue_full = local_queue.is_full();
         let global_queue_full = self.global_queue.is_full();
 
-        // Create a neighbor with VectorIdWithAttr for global_queue
-        let nbr_with_attr = Neighbor::new(VectorIdWithAttr::new(nbr.id, attr_value), nbr.distance);
+        // Create a neighbor with VectorIdWithAttribute for global_queue
+        let nbr_with_attribute = Neighbor::new(
+            VectorIdWithAttribute::new(nbr.id, attribute_value),
+            nbr.distance,
+        );
 
         if !local_queue_full && !global_queue_full {
             // Case 1: Both local queue and global queue have space
             local_queue.insert(nbr);
-            self.global_queue.insert(nbr_with_attr);
+            self.global_queue.insert(nbr_with_attribute);
         } else if local_queue_full {
             // Case 2: Local queue is full
             if nbr.distance < local_queue.get(self.diverse_results_l - 1).distance {
                 // Get the worst neighbor in the local queue
                 let worst_neighbor = local_queue.get(self.diverse_results_l - 1);
                 // Create the corresponding neighbor with attribute for removal from global queue
-                let worst_neighbor_with_attr = Neighbor::new(
-                    VectorIdWithAttr::new(worst_neighbor.id, attr_value),
+                let worst_neighbor_with_attribute = Neighbor::new(
+                    VectorIdWithAttribute::new(worst_neighbor.id, attribute_value),
                     worst_neighbor.distance,
                 );
 
                 // Remove worst neighbor from global queue using the remove method
-                self.global_queue.remove(worst_neighbor_with_attr);
+                self.global_queue.remove(worst_neighbor_with_attribute);
 
                 // Insert new neighbor into both queues
                 local_queue.insert(nbr);
-                self.global_queue.insert(nbr_with_attr);
+                self.global_queue.insert(nbr_with_attribute);
             }
         } else if !local_queue_full && global_queue_full {
             // Case 3: Local queue has space but global queue is full
             let l_size = self.global_queue.search_l();
             if nbr.distance < self.global_queue.get(l_size - 1).distance {
                 let worst_global = self.global_queue.get(l_size - 1);
-                // Extract the attribute from VectorIdWithAttr
-                let attr_of_worst_global = worst_global.id.attr;
+                // Extract the attribute from VectorIdWithAttribute
+                let attribute_of_worst_global = worst_global.id.attribute;
 
                 // Insert new neighbor into both queues
                 local_queue.insert(nbr);
-                self.global_queue.insert(nbr_with_attr);
+                self.global_queue.insert(nbr_with_attribute);
 
                 // Remove worst neighbor from its local queue
-                if let Some(local_queue) = self.local_queue_map.get_mut(&attr_of_worst_global) {
-                    let worst_neighbor_without_attr =
+                if let Some(local_queue) = self.local_queue_map.get_mut(&attribute_of_worst_global)
+                {
+                    let worst_neighbor_without_attribute =
                         Neighbor::new(worst_global.id.id, worst_global.distance);
-                    local_queue.remove(worst_neighbor_without_attr);
+                    local_queue.remove(worst_neighbor_without_attribute);
                 }
             }
         }
     }
 
-    fn get(&self, index: usize) -> Neighbor<VectorIdType> {
-        let neighbor_with_attr = self.global_queue.get(index);
-        Neighbor::new(neighbor_with_attr.id.id, neighbor_with_attr.distance)
+    fn get(&self, index: usize) -> Neighbor<P::Id> {
+        let neighbor_with_attribute = self.global_queue.get(index);
+        Neighbor::new(
+            neighbor_with_attribute.id.id,
+            neighbor_with_attribute.distance,
+        )
     }
 
-    fn closest_notvisited(&mut self) -> Neighbor<VectorIdType> {
-        let neighbor_with_attr = self.global_queue.closest_notvisited();
-        Neighbor::new(neighbor_with_attr.id.id, neighbor_with_attr.distance)
+    fn closest_notvisited(&mut self) -> Neighbor<P::Id> {
+        let neighbor_with_attribute = self.global_queue.closest_notvisited();
+        Neighbor::new(
+            neighbor_with_attribute.id.id,
+            neighbor_with_attribute.distance,
+        )
     }
 
     fn has_notvisited_node(&self) -> bool {
@@ -215,75 +256,89 @@ impl<VectorIdType: NeighborPriorityQueueIdType + Hash + IntoUsize> NeighborQueue
         self.local_queue_map.clear();
     }
 
-    fn iter(&self) -> BestCandidatesIterator<'_, VectorIdType, Self> {
+    fn iter(&self) -> BestCandidatesIterator<'_, P::Id, Self> {
         let sz = self.global_queue.search_l().min(self.global_queue.size());
         BestCandidatesIterator::new(sz, self)
     }
 }
 
-/// A placeholder attribute value provider that stores attribute values for vector IDs.
-/// This is a simple in-memory store using a HashMap.
-/// TODO: Remove this and use actual attribute value provider in future PRs.
-#[derive(Debug, Clone)]
-pub struct PlaceholderAttributeValueProvider {
-    /// Map from vector_id to attribute value
-    attributes: HashMap<usize, u32>,
-}
-
-impl PlaceholderAttributeValueProvider {
-    /// Create a new empty PlaceholderAttributeValueProvider.
-    pub fn new() -> Self {
-        Self {
-            attributes: HashMap::new(),
-        }
-    }
-
-    /// Insert an attribute value for a given vector ID.
-    ///
-    /// # Arguments
-    /// * `vector_id` - The vector ID
-    /// * `attr_value` - The attribute value to store
-    pub fn insert(&mut self, vector_id: usize, attr_value: u32) {
-        self.attributes.insert(vector_id, attr_value);
-    }
+/// Trait for providing attribute values for vector IDs.
+/// Implementations of this trait can be used with diverse search to retrieve
+/// attribute values for vectors during search operations.
+pub trait AttributeValueProvider: crate::provider::HasId + Send + Sync + std::fmt::Debug {
+    type Value: Attribute;
 
     /// Get the attribute value for a given vector ID.
     ///
     /// # Arguments
-    /// * `vector_id` - The vector ID
+    /// * `id` - The vector ID
     ///
     /// # Returns
-    /// * `Option<u32>` - The attribute value if it exists, None otherwise
-    pub fn get(&self, vector_id: usize) -> Option<u32> {
-        self.attributes.get(&vector_id).copied()
-    }
-}
-
-impl Default for PlaceholderAttributeValueProvider {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// * `Option<Self::Value>` - The attribute value if it exists, None otherwise
+    fn get(&self, id: Self::Id) -> Option<Self::Value>;
 }
 
 #[cfg(test)]
 mod diverse_priority_queue_test {
     use super::*;
 
-    /// Helper function to create a test attribute provider
-    fn create_test_attr_provider() -> PlaceholderAttributeValueProvider {
-        let mut provider = PlaceholderAttributeValueProvider::new();
-        // Set up attributes: vectors 0-2 have attr 0, vectors 3-5 have attr 1, etc.
-        for i in 0..20 {
-            provider.insert(i, (i / 3) as u32);
+    /// A test attribute value provider that stores attribute values for vector IDs.
+    /// This is a simple in-memory store using a HashMap for testing purposes.
+    #[derive(Debug, Clone)]
+    struct TestAttributeValueProvider {
+        /// Map from vector_id to attribute value
+        attributes: HashMap<u32, u32>,
+    }
+
+    impl TestAttributeValueProvider {
+        /// Create a new empty TestAttributeValueProvider.
+        fn new() -> Self {
+            Self {
+                attributes: HashMap::new(),
+            }
         }
-        provider
+
+        /// Insert an attribute value for a given vector ID.
+        fn insert(&mut self, vector_id: u32, attribute_value: u32) {
+            self.attributes.insert(vector_id, attribute_value);
+        }
+    }
+
+    impl crate::provider::HasId for TestAttributeValueProvider {
+        type Id = u32;
+    }
+
+    impl AttributeValueProvider for TestAttributeValueProvider {
+        type Value = u32;
+
+        fn get(&self, id: Self::Id) -> Option<Self::Value> {
+            self.attributes.get(&id).copied()
+        }
+    }
+
+    impl Default for TestAttributeValueProvider {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    // Type alias for tests to make them more readable
+    type TestDiverseQueue = DiverseNeighborQueue<TestAttributeValueProvider>;
+
+    /// Helper function to create a test attribute provider wrapped in Arc
+    fn create_test_attribute_provider() -> Arc<TestAttributeValueProvider> {
+        let mut provider = TestAttributeValueProvider::new();
+        // Set up attributes: vectors 0-2 have attribute 0, vectors 3-5 have attribute 1, etc.
+        for i in 0..20 {
+            provider.insert(i, i / 3);
+        }
+        Arc::new(provider)
     }
 
     #[test]
     fn test_new() {
-        let attr_provider = create_test_attr_provider();
-        let queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+        let attribute_provider = create_test_attribute_provider();
+        let queue = TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         assert_eq!(queue.size(), 0);
         assert_eq!(queue.capacity(), 10);
@@ -293,9 +348,9 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_insert_single_attribute() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         // Insert neighbors with IDs 0, 1, 2 (all have attribute 0)
         queue.insert(Neighbor::new(0, 1.0));
@@ -309,14 +364,14 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_insert_multiple_attributes() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         // Insert neighbors with different attributes
-        queue.insert(Neighbor::new(0, 1.0)); // attr 0
-        queue.insert(Neighbor::new(3, 0.8)); // attr 1
-        queue.insert(Neighbor::new(6, 1.2)); // attr 2
+        queue.insert(Neighbor::new(0, 1.0)); // attribute 0
+        queue.insert(Neighbor::new(3, 0.8)); // attribute 1
+        queue.insert(Neighbor::new(6, 1.2)); // attribute 2
 
         assert_eq!(queue.size(), 3);
         assert_eq!(queue.local_queue_map.len(), 3);
@@ -327,9 +382,9 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_insert_maintains_order() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         queue.insert(Neighbor::new(0, 1.0));
         queue.insert(Neighbor::new(1, 0.5));
@@ -343,14 +398,18 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_insert_local_queue_full() {
-        let mut attr_provider = PlaceholderAttributeValueProvider::new();
-        // All IDs 10-15 have the same attribute (attr 0)
+        let mut attribute_provider = TestAttributeValueProvider::new();
+        // All IDs 10-15 have the same attribute (attribute 0)
         for i in 10..=15 {
-            attr_provider.insert(i, 0);
+            attribute_provider.insert(i, 0);
         }
         // l_value=20, k_value=20, diverse_results_k=3 => diverse_results_l = 3 * 20 / 20 = 3
-        let mut queue =
-            DiverseNeighborQueue::<u32>::new(20, NonZeroUsize::new(20).unwrap(), 3, attr_provider);
+        let mut queue = TestDiverseQueue::new(
+            20,
+            NonZeroUsize::new(20).unwrap(),
+            3,
+            Arc::new(attribute_provider),
+        );
 
         // Fill up the local queue for attribute 0 (diverse_results_l = 3)
         queue.insert(Neighbor::new(10, 1.0));
@@ -369,19 +428,19 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_insert_inner_queue_full() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(3, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(3, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         // Fill up inner queue (capacity = 3)
-        queue.insert(Neighbor::new(0, 1.0)); // attr 0
-        queue.insert(Neighbor::new(3, 0.8)); // attr 1
-        queue.insert(Neighbor::new(6, 1.2)); // attr 2
+        queue.insert(Neighbor::new(0, 1.0)); // attribute 0
+        queue.insert(Neighbor::new(3, 0.8)); // attribute 1
+        queue.insert(Neighbor::new(6, 1.2)); // attribute 2
 
         assert_eq!(queue.size(), 3);
 
         // Insert a better neighbor with a new attribute
-        queue.insert(Neighbor::new(9, 0.5)); // attr 3, better distance
+        queue.insert(Neighbor::new(9, 0.5)); // attribute 3, better distance
 
         assert_eq!(queue.size(), 3);
         assert_eq!(queue.get(0).id, 9); // Best should be the new one
@@ -389,9 +448,9 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_get() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         queue.insert(Neighbor::new(0, 1.0));
         queue.insert(Neighbor::new(1, 0.5));
@@ -407,9 +466,9 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_closest_notvisited() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         queue.insert(Neighbor::new(0, 1.0));
         queue.insert(Neighbor::new(1, 0.5));
@@ -434,9 +493,9 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_has_notvisited_node() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         assert!(!queue.has_notvisited_node());
 
@@ -449,9 +508,9 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_size() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         assert_eq!(queue.size(), 0);
 
@@ -464,25 +523,23 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_capacity() {
-        let attr_provider = create_test_attr_provider();
-        let queue =
-            DiverseNeighborQueue::<u32>::new(15, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+        let attribute_provider = create_test_attribute_provider();
+        let queue = TestDiverseQueue::new(15, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
         assert_eq!(queue.capacity(), 15);
     }
 
     #[test]
     fn test_search_l() {
-        let attr_provider = create_test_attr_provider();
-        let queue =
-            DiverseNeighborQueue::<u32>::new(20, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+        let attribute_provider = create_test_attribute_provider();
+        let queue = TestDiverseQueue::new(20, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
         assert_eq!(queue.search_l(), 20);
     }
 
     #[test]
     fn test_clear() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         queue.insert(Neighbor::new(0, 1.0));
         queue.insert(Neighbor::new(3, 0.5));
@@ -499,9 +556,9 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_iter_candidates() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         queue.insert(Neighbor::new(0, 1.0));
         queue.insert(Neighbor::new(1, 0.5));
@@ -517,9 +574,9 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_inner_and_inner_mut() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 5, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 5, attribute_provider);
 
         queue.insert(Neighbor::new(0, 1.0));
 
@@ -532,18 +589,18 @@ mod diverse_priority_queue_test {
     }
 
     #[test]
-    fn test_vector_id_with_attr() {
-        let vid_attr = VectorIdWithAttr::new(42u32, 7);
+    fn test_vector_id_with_attribute() {
+        let vid_attr = VectorIdWithAttribute::new(42u32, 7);
         assert_eq!(vid_attr.id, 42);
-        assert_eq!(vid_attr.attr, 7);
+        assert_eq!(vid_attr.attribute, 7);
 
         let formatted = format!("{}", vid_attr);
         assert_eq!(formatted, "(42, 7)");
     }
 
     #[test]
-    fn test_placeholder_attribute_value_provider() {
-        let mut provider = PlaceholderAttributeValueProvider::new();
+    fn test_attribute_value_provider() {
+        let mut provider = TestAttributeValueProvider::new();
 
         assert_eq!(provider.get(0), None);
 
@@ -559,51 +616,51 @@ mod diverse_priority_queue_test {
     }
 
     #[test]
-    fn test_placeholder_attribute_value_provider_default() {
-        let provider = PlaceholderAttributeValueProvider::default();
+    fn test_attribute_value_provider_default() {
+        let provider = TestAttributeValueProvider::default();
         assert_eq!(provider.get(0), None);
     }
 
     #[test]
     fn test_diverse_queue_complex_scenario() {
-        let attr_provider = create_test_attr_provider();
+        let attribute_provider = create_test_attribute_provider();
         let mut queue =
-            DiverseNeighborQueue::<u32>::new(10, NonZeroUsize::new(5).unwrap(), 3, attr_provider);
+            TestDiverseQueue::new(10, NonZeroUsize::new(5).unwrap(), 3, attribute_provider);
 
         // Insert multiple neighbors with different attributes
-        queue.insert(Neighbor::new(0, 1.0)); // attr 0
-        queue.insert(Neighbor::new(1, 0.5)); // attr 0
-        queue.insert(Neighbor::new(2, 1.5)); // attr 0
-        queue.insert(Neighbor::new(3, 0.8)); // attr 1
-        queue.insert(Neighbor::new(4, 1.2)); // attr 1
-        queue.insert(Neighbor::new(6, 0.7)); // attr 2
+        queue.insert(Neighbor::new(0, 1.0)); // attribute 0
+        queue.insert(Neighbor::new(1, 0.5)); // attribute 0
+        queue.insert(Neighbor::new(2, 1.5)); // attribute 0
+        queue.insert(Neighbor::new(3, 0.8)); // attribute 1
+        queue.insert(Neighbor::new(4, 1.2)); // attribute 1
+        queue.insert(Neighbor::new(6, 0.7)); // attribute 2
 
         assert_eq!(queue.size(), 6);
 
         // Try to add more to attribute 0 when its local queue is full (use unique ID 17)
-        // ID 17 has attr 5, so let's use ID 15 which has attr 5 but we'll manually set attr 0
-        let mut attr_provider_updated = PlaceholderAttributeValueProvider::new();
+        // ID 17 has attribute 5, so let's use ID 15 which has attribute 5 but we'll manually set attribute 0
+        let mut attribute_provider_updated = TestAttributeValueProvider::new();
         for i in 0..20 {
-            attr_provider_updated.insert(i, (i / 3) as u32);
+            attribute_provider_updated.insert(i, i / 3);
         }
-        attr_provider_updated.insert(17, 0); // Set ID 17 to have attr 0
+        attribute_provider_updated.insert(17, 0); // Set ID 17 to have attribute 0
 
         // Create a new queue with updated provider
-        let mut queue2 = DiverseNeighborQueue::<u32>::new(
+        let mut queue2 = TestDiverseQueue::new(
             10,
             NonZeroUsize::new(5).unwrap(),
             3,
-            attr_provider_updated,
+            Arc::new(attribute_provider_updated),
         );
-        queue2.insert(Neighbor::new(0, 1.0)); // attr 0
-        queue2.insert(Neighbor::new(1, 0.5)); // attr 0
-        queue2.insert(Neighbor::new(2, 1.5)); // attr 0
-        queue2.insert(Neighbor::new(3, 0.8)); // attr 1
-        queue2.insert(Neighbor::new(4, 1.2)); // attr 1
-        queue2.insert(Neighbor::new(6, 0.7)); // attr 2
+        queue2.insert(Neighbor::new(0, 1.0)); // attribute 0
+        queue2.insert(Neighbor::new(1, 0.5)); // attribute 0
+        queue2.insert(Neighbor::new(2, 1.5)); // attribute 0
+        queue2.insert(Neighbor::new(3, 0.8)); // attribute 1
+        queue2.insert(Neighbor::new(4, 1.2)); // attribute 1
+        queue2.insert(Neighbor::new(6, 0.7)); // attribute 2
 
-        // Now insert ID 17 with attr 0 and better distance
-        queue2.insert(Neighbor::new(17, 0.3)); // Should replace worst in attr 0
+        // Now insert ID 17 with attribute 0 and better distance
+        queue2.insert(Neighbor::new(17, 0.3)); // Should replace worst in attribute 0
 
         // Verify best neighbor is from the new insertion
         assert_eq!(queue2.get(0).id, 17);
@@ -612,16 +669,20 @@ mod diverse_priority_queue_test {
 
     #[test]
     fn test_post_process() {
-        let mut attr_provider = PlaceholderAttributeValueProvider::new();
-        // Set up attributes: IDs 0-2 have attr 0, IDs 3-5 have attr 1, IDs 6-8 have attr 2
+        let mut attribute_provider = TestAttributeValueProvider::new();
+        // Set up attributes: IDs 0-2 have attribute 0, IDs 3-5 have attribute 1, IDs 6-8 have attribute 2
         for i in 0..9 {
-            attr_provider.insert(i, (i / 3) as u32);
+            attribute_provider.insert(i, i / 3);
         }
 
         // Create queue with l_value=20, k_value=5, diverse_results_k=2
         // This gives diverse_results_l = 2 * 20 / 5 = 8
-        let mut queue =
-            DiverseNeighborQueue::<u32>::new(20, NonZeroUsize::new(5).unwrap(), 2, attr_provider);
+        let mut queue = TestDiverseQueue::new(
+            20,
+            NonZeroUsize::new(5).unwrap(),
+            2,
+            Arc::new(attribute_provider),
+        );
 
         // Insert more than diverse_results_k items for each attribute
         // Attribute 0
@@ -682,5 +743,92 @@ mod diverse_priority_queue_test {
         assert_eq!(queue.get(3).id, 3); // 0.8
         assert_eq!(queue.get(4).id, 8); // 0.9
         assert_eq!(queue.get(5).id, 0); // 1.0
+    }
+
+    #[test]
+    fn test_skip_neighbors_without_attributes() {
+        // Test that neighbors without attributes are silently skipped
+        // rather than being conflated with attribute value 0
+        let mut attribute_provider = TestAttributeValueProvider::new();
+
+        // Set up some vectors with attributes
+        attribute_provider.insert(0, 0); // ID 0 has attribute 0
+        attribute_provider.insert(1, 0); // ID 1 has attribute 0
+        attribute_provider.insert(2, 1); // ID 2 has attribute 1
+        // ID 3 has no attribute (not in the map)
+        attribute_provider.insert(4, 0); // ID 4 has attribute 0
+
+        let mut queue = TestDiverseQueue::new(
+            10,
+            NonZeroUsize::new(5).unwrap(),
+            5,
+            Arc::new(attribute_provider),
+        );
+
+        // Insert neighbors, including one without an attribute
+        queue.insert(Neighbor::new(0, 1.0)); // Has attribute 0
+        queue.insert(Neighbor::new(1, 0.5)); // Has attribute 0
+        queue.insert(Neighbor::new(2, 0.8)); // Has attribute 1
+        queue.insert(Neighbor::new(3, 0.3)); // No attribute - should be skipped
+        queue.insert(Neighbor::new(4, 1.2)); // Has attribute 0
+
+        // Queue should only contain 4 items (ID 3 was skipped)
+        assert_eq!(queue.size(), 4, "Expected 4 items, ID 3 should be skipped");
+
+        // Verify the local queue for attribute 0 has 3 items (IDs 0, 1, 4)
+        assert_eq!(
+            queue.local_queue_map[&0].size(),
+            3,
+            "Attribute 0 should have 3 items"
+        );
+
+        // Verify the local queue for attribute 1 has 1 item (ID 2)
+        assert_eq!(
+            queue.local_queue_map[&1].size(),
+            1,
+            "Attribute 1 should have 1 item"
+        );
+
+        // Verify ID 3 (without attribute) is not in the queue
+        let ids: Vec<u32> = queue.iter().map(|n| n.id).collect();
+        assert!(!ids.contains(&3), "ID 3 should not be in the queue");
+        assert_eq!(
+            ids,
+            vec![1, 2, 0, 4],
+            "Queue should contain IDs 1,2,0,4 in order of distance"
+        );
+    }
+
+    #[test]
+    fn test_attribute_zero_vs_missing_attribute() {
+        // Verify that attribute value 0 is distinct from missing attributes
+        let mut attribute_provider = TestAttributeValueProvider::new();
+
+        // ID 0 explicitly has attribute 0
+        attribute_provider.insert(0, 0);
+        // ID 1 has no attribute (missing)
+        // ID 2 explicitly has attribute 0
+        attribute_provider.insert(2, 0);
+
+        let mut queue = TestDiverseQueue::new(
+            10,
+            NonZeroUsize::new(5).unwrap(),
+            5,
+            Arc::new(attribute_provider),
+        );
+
+        queue.insert(Neighbor::new(0, 1.0)); // Has attribute 0
+        queue.insert(Neighbor::new(1, 0.5)); // Missing attribute - should be skipped
+        queue.insert(Neighbor::new(2, 0.8)); // Has attribute 0
+
+        // Only IDs 0 and 2 should be in the queue
+        assert_eq!(queue.size(), 2);
+        assert_eq!(queue.local_queue_map.len(), 1);
+        assert!(queue.local_queue_map.contains_key(&0));
+        assert_eq!(queue.local_queue_map[&0].size(), 2);
+
+        // Verify ID 1 is not in the queue
+        let ids: Vec<u32> = queue.iter().map(|n| n.id).collect();
+        assert_eq!(ids, vec![2, 0], "Queue should only contain IDs 2 and 0");
     }
 }

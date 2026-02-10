@@ -422,7 +422,7 @@ where
         reranked
             .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         // Store the reranked results.
-        std::future::ready(Ok(output.set_from(reranked.into_iter())))
+        std::future::ready(Ok(output.extend(reranked)))
     }
 }
 

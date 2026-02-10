@@ -375,7 +375,7 @@ mod tests {
     fn test_graph() {
         let tag = 42;
 
-        let cache = Cache::new(PowerOfTwo::new(128 * 1024).unwrap());
+        let cache = Cache::new(PowerOfTwo::new(128 * 1024).unwrap()).unwrap();
         let max_degree = 4;
         let keygen = Tag::<u32>::new(tag);
         let stats = HitStats::new();

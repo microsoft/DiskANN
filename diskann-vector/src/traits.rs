@@ -21,6 +21,15 @@ pub trait DistanceFunction<Left, Right, To = f32> {
     fn evaluate_similarity(&self, x: Left, y: Right) -> To;
 }
 
+/// A mutable version of [`DistanceFunction`] that allows mutation of `Self`.
+///
+/// This trait is useful for computing distances where the distance functor holds
+/// mutable state (e.g., a buffer to accumulate per-vector scores).
+pub trait DistanceFunctionMut<Left, Right, To = ()> {
+    /// Compute distances between the left and right arguments.
+    fn evaluate(&mut self, left: Left, right: Right) -> To;
+}
+
 /// A distance function where one argument is static and interned within `Self`.
 ///
 /// The method `self.evaluate_similarity` can then be invoked for arbitrarily many values of

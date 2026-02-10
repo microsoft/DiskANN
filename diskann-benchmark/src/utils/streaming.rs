@@ -3,12 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    num::NonZeroUsize,
-};
-
-use crate::inputs::async_::DynamicIndexRun;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Bookkeeping data structures for slot management in dynamic operations
 ///
@@ -24,6 +19,8 @@ pub struct TagSlotManager {
     pub tag_to_slot: HashMap<usize, u32>,
     /// Mapping from slot ID to tag ID
     pub slot_to_tag: HashMap<u32, usize>,
+    /// The total capacity (number of slots)
+    capacity: usize,
 }
 
 impl TagSlotManager {
@@ -34,6 +31,7 @@ impl TagSlotManager {
             deleted_slots: HashSet::new(),
             tag_to_slot: HashMap::new(),
             slot_to_tag: HashMap::new(),
+            capacity: max_capacity,
         }
     }
 
@@ -55,6 +53,21 @@ impl TagSlotManager {
             .collect();
 
         Ok(slots)
+    }
+
+    /// Return the number of deleted elements.
+    pub fn num_deleted(&self) -> usize {
+        self.deleted_slots.len()
+    }
+
+    /// Return the number of active elements (both valid and deleted).
+    pub fn num_active(&self) -> usize {
+        self.capacity() - self.empty_slots.len()
+    }
+
+    /// Return the total number of elements this object can manage.
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Find slots corresponding to a range of tag IDs
@@ -137,67 +150,6 @@ impl TagSlotManager {
             // Return slot to available pool
             self.empty_slots.push_back(slot);
         });
-    }
-}
-
-/// Configuration for dynamic streaming operations
-///
-/// This struct wraps the common parameters passed to dynamic operations
-/// like run_dynamic and run_update to simplify function signatures.
-#[derive(Debug, Clone)]
-pub struct DynamicConfig<'a, S, SI, D> {
-    /// Reference to the dynamic index run configuration
-    pub input: &'a DynamicIndexRun,
-    /// Search strategy for dynamic operations
-    pub search_strategy: S,
-    /// Insert strategy for dynamic operations
-    pub insert_strategy: SI,
-    /// Delete strategy for dynamic operations
-    pub delete_strategy: D,
-    /// Insert parameter L for organizing results
-    pub insert_l: NonZeroUsize,
-    /// Number of update threads to use
-    pub num_update_threads: NonZeroUsize,
-}
-
-impl<'a, S, SI, D> DynamicConfig<'a, S, SI, D> {
-    /// Create a new DynamicConfig with the given parameters
-    pub fn new(
-        input: &'a DynamicIndexRun,
-        search_strategy: S,
-        insert_strategy: SI,
-        delete_strategy: D,
-        insert_l: NonZeroUsize,
-        num_update_threads: NonZeroUsize,
-    ) -> Self {
-        Self {
-            input,
-            search_strategy,
-            insert_strategy,
-            delete_strategy,
-            insert_l,
-            num_update_threads,
-        }
-    }
-
-    /// Get the inplace delete method from the input configuration
-    pub fn inplace_delete_method(&self) -> diskann::graph::InplaceDeleteMethod {
-        self.input.runbook_params.ip_delete_method.into()
-    }
-
-    /// Get the number to replace from the input configuration
-    pub fn num_to_replace(&self) -> usize {
-        self.input.runbook_params.ip_delete_num_to_replace
-    }
-
-    /// Get the consolidate threshold from the input configuration
-    pub fn consolidate_threshold(&self) -> f32 {
-        self.input.runbook_params.consolidate_threshold
-    }
-
-    /// Calculate max capacity from runbook max_pts and consolidate threshold
-    pub fn max_capacity(&self, max_pts: usize) -> usize {
-        (max_pts as f32 * (1.0 + self.consolidate_threshold())).ceil() as usize
     }
 }
 

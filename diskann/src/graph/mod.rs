@@ -5,7 +5,7 @@
 
 pub mod search_output_buffer;
 pub use search_output_buffer::{
-    IdDistance, IdDistanceAssociatedData, IndexOutOfBounds, SearchOutputBuffer,
+    BufferState, IdDistance, IdDistanceAssociatedData, SearchOutputBuffer,
 };
 
 pub mod adjacencylist;

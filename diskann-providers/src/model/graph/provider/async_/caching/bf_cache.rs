@@ -11,6 +11,8 @@ use diskann_quantization::num::PowerOfTwo;
 use diskann_utils::future::AsyncFriendly;
 use thiserror::Error;
 
+use super::super::bf_tree::ConfigError;
+
 /// A cache capable of holding values with a configurable maximum capacity.
 pub struct Cache {
     cache: BfTree,
@@ -19,7 +21,7 @@ pub struct Cache {
 
 impl Cache {
     /// Construct a new `BFTree`-based cache with the specified capacity.
-    pub fn new(bytes: PowerOfTwo) -> Self {
+    pub fn new(bytes: PowerOfTwo) -> diskann::ANNResult<Self> {
         let mut config = bf_tree::Config::default();
 
         // N.B.: When `https://github.com/gim-home/Bf-Tree/issues/59` is resolved, set
@@ -29,10 +31,10 @@ impl Cache {
             .cache_only(false)
             .cb_size_byte(bytes.raw());
 
-        Self {
-            cache: bf_tree::BfTree::with_config(config, None),
+        Ok(Self {
+            cache: bf_tree::BfTree::with_config(config, None).map_err(ConfigError)?,
             bytes,
-        }
+        })
     }
 
     /// Return the capacity of the cache in bytes.
@@ -800,7 +802,7 @@ mod tests {
 
     #[test]
     fn test_cache() {
-        let cache = Cache::new(TEST_CACHE_SIZE);
+        let cache = Cache::new(TEST_CACHE_SIZE).unwrap();
         assert_eq!(cache.capacity(), TEST_CACHE_SIZE);
 
         let debug = format!("{:?}", cache);
@@ -962,7 +964,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_cache_panics_buffer_too_small() {
-        let cache = Cache::new(TEST_CACHE_SIZE);
+        let cache = Cache::new(TEST_CACHE_SIZE).unwrap();
         assert_eq!(cache.capacity(), TEST_CACHE_SIZE);
 
         let mut cacher = PodCacher::<usize>::new();
@@ -978,7 +980,7 @@ mod tests {
     // by the [`Deserialize`] and [`DeserializeInto`] methods.
     #[test]
     fn test_cache_error() {
-        let cache = Cache::new(TEST_CACHE_SIZE);
+        let cache = Cache::new(TEST_CACHE_SIZE).unwrap();
         let key: u32 = 5;
 
         // To work around BfTree panicking on a too-small read, we introduce a malformed
@@ -1188,7 +1190,7 @@ mod tests {
     #[test]
     fn test_metrics() {
         let capacity = 2usize.pow(20);
-        let cache = Cache::new(PowerOfTwo::new(capacity).unwrap());
+        let cache = Cache::new(PowerOfTwo::new(capacity).unwrap()).unwrap();
         assert_eq!(cache.capacity().raw(), capacity);
 
         let utilization = cache.estimate_utilization();

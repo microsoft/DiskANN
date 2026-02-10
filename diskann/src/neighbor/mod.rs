@@ -16,7 +16,7 @@ pub use queue::{NeighborPriorityQueue, NeighborPriorityQueueIdType, NeighborQueu
 mod diverse_priority_queue;
 #[cfg(feature = "experimental_diversity_search")]
 pub use diverse_priority_queue::{
-    DiverseNeighborQueue, PlaceholderAttributeValueProvider, VectorIdWithAttr,
+    Attribute, AttributeValueProvider, DiverseNeighborQueue, VectorIdWithAttribute,
 };
 
 //////////////
@@ -116,39 +116,82 @@ where
     }
 }
 
-impl<I> SearchOutputBuffer<I> for [Neighbor<I>]
+/// A [`SearchOutputBuffer`] wrapper around `&mut [Neighbor<I>]`. This can be used to
+/// populate such a mutable slice as the result of [`crate::graph::DiskANNIndex::search`].
+#[derive(Debug)]
+pub struct BackInserter<'a, I>
+where
+    I: Default + Eq,
+{
+    buffer: &'a mut [Neighbor<I>],
+    position: usize,
+}
+
+impl<'a, I> BackInserter<'a, I>
+where
+    I: Default + Eq,
+{
+    /// Construct a new [`BackInserter`] around the provided slice.
+    ///
+    /// THe buffer will have a capacity equal to the length of `buffer`.
+    pub fn new(buffer: &'a mut [Neighbor<I>]) -> Self {
+        Self {
+            buffer,
+            position: 0,
+        }
+    }
+
+    /// Return the overall capacity of the buffer buffer.
+    pub fn capacity(&self) -> usize {
+        self.buffer.len()
+    }
+}
+
+impl<I> SearchOutputBuffer<I> for BackInserter<'_, I>
 where
     I: Default + Eq,
 {
     fn size_hint(&self) -> Option<usize> {
-        Some(self.len())
+        // We maintain the invariant that `self.position <= self.buffer.len()`, so this
+        // subtraction should not underflow.
+        Some(self.buffer.len() - self.position)
     }
 
-    fn set(
-        &mut self,
-        i: usize,
-        id: I,
-        distance: f32,
-    ) -> Result<(), search_output_buffer::IndexOutOfBounds> {
-        match self.get_mut(i) {
-            None => Err(search_output_buffer::IndexOutOfBounds::new(i)),
-            Some(slot) => {
-                *slot = Neighbor::new(id, distance);
-                Ok(())
-            }
+    fn push(&mut self, id: I, distance: f32) -> search_output_buffer::BufferState {
+        if self.position == self.buffer.len() {
+            return search_output_buffer::BufferState::Full;
+        }
+
+        self.buffer[self.position] = Neighbor::new(id, distance);
+        self.position += 1;
+
+        // Return `Full` if we added the last item.
+        if self.position == self.buffer.len() {
+            search_output_buffer::BufferState::Full
+        } else {
+            search_output_buffer::BufferState::Available
         }
     }
 
-    fn set_from<Itr>(&mut self, itr: Itr) -> usize
+    fn current_len(&self) -> usize {
+        self.position
+    }
+
+    fn extend<Itr>(&mut self, itr: Itr) -> usize
     where
-        Itr: Iterator<Item = (I, f32)>,
+        Itr: IntoIterator<Item = (I, f32)>,
     {
-        let mut count = 0;
-        std::iter::zip(self.iter_mut(), itr).for_each(|(o, i)| {
-            *o = Neighbor::new(i.0, i.1);
-            count += 1;
-        });
-        count
+        let mut i = 0;
+        std::iter::zip(self.buffer.iter_mut().skip(self.position), itr).for_each(
+            |(neighbor, (id, distance))| {
+                i += 1;
+                *neighbor = Neighbor::new(id, distance);
+            },
+        );
+
+        self.position += i;
+
+        i
     }
 }
 
@@ -209,52 +252,98 @@ mod neighbor_test {
 
     #[test]
     fn test_search_output_buffer() {
-        fn test_scalar_interface(buffer: &mut [Neighbor<u32>]) {
-            let len = buffer.len();
-            assert_eq!(buffer.size_hint(), Some(len));
-            // All of these should work okay.
-            for i in 0..len {
-                buffer.set(i, i as u32, i as f32).unwrap();
-            }
+        const MAX_LENGTH: usize = 5;
 
-            // Setting one past the end should yield an error.
-            let err = buffer.set(len, 0, 0.0).unwrap_err();
-            assert_eq!(err.to_string(), format!("index {} is out-of-bounds", len));
-
-            // Check that the ids and distances are set correctly.
-            for (i, n) in buffer.iter().enumerate() {
-                assert_eq!(i, n.id as usize);
-                assert_eq!(i as f32, n.distance);
-            }
+        // Helps with typing.
+        fn f(i: usize) -> Neighbor<u32> {
+            Neighbor::new(i as u32, i as f32)
         }
 
-        // Scalar Interface
-        for len in 0..20 {
-            let mut buffer = vec![Neighbor::<u32>::default(); len];
-            test_scalar_interface(&mut buffer);
+        // All `push`.
+        {
+            let mut buffer = [Neighbor::<u32>::default(); MAX_LENGTH];
+            let mut inserter = BackInserter::new(&mut buffer);
+
+            assert_eq!(inserter.capacity(), MAX_LENGTH);
+            assert_eq!(inserter.size_hint(), Some(MAX_LENGTH));
+            assert_eq!(inserter.current_len(), 0);
+
+            assert!(inserter.push(1, 1.0).is_available());
+            assert_eq!(inserter.current_len(), 1);
+            assert_eq!(inserter.size_hint(), Some(MAX_LENGTH - 1));
+
+            assert!(inserter.push(2, 2.0).is_available());
+            assert_eq!(inserter.current_len(), 2);
+            assert_eq!(inserter.size_hint(), Some(MAX_LENGTH - 2));
+
+            assert!(inserter.push(3, 3.0).is_available());
+            assert_eq!(inserter.current_len(), 3);
+            assert_eq!(inserter.size_hint(), Some(MAX_LENGTH - 3));
+
+            assert!(inserter.push(4, 4.0).is_available());
+            assert_eq!(inserter.current_len(), 4);
+            assert_eq!(inserter.size_hint(), Some(MAX_LENGTH - 4));
+
+            // This should error since further attempts will not work.
+            assert!(inserter.push(5, 5.0).is_full());
+            assert_eq!(inserter.current_len(), 5);
+            assert_eq!(inserter.size_hint(), Some(0));
+
+            assert!(inserter.push(6, 6.0).is_full());
+            assert_eq!(inserter.current_len(), 5);
+            assert_eq!(inserter.size_hint(), Some(0));
+
+            assert_eq!(&buffer, &[f(1), f(2), f(3), f(4), f(5)]);
         }
 
-        // Iterator Interface
-        for len in 0..10 {
-            for input_len in 0..10 {
-                let mut buffer = vec![Neighbor::<u32>::default(); len];
+        // All `iterator`.
+        {
+            let mut buffer = [Neighbor::<u32>::default(); MAX_LENGTH];
+            let mut inserter = BackInserter::new(&mut buffer);
+            assert_eq!(inserter.capacity(), MAX_LENGTH);
+            assert_eq!(inserter.size_hint(), Some(MAX_LENGTH));
+            assert_eq!(inserter.current_len(), 0);
 
-                let source: Vec<_> = (0..input_len).map(|i| (i as u32, i as f32)).collect();
+            let set = inserter.extend([(1, 1.0), (2, 2.0), (3, 3.0), (4, 4.0), (5, 5.0), (6, 6.0)]);
+            assert_eq!(set, MAX_LENGTH);
+            assert_eq!(inserter.current_len(), MAX_LENGTH);
+            assert_eq!(inserter.size_hint(), Some(0));
 
-                let count = buffer.set_from(source.into_iter());
-                // The assigned count should be the minimum of the input and output lengths.
-                assert_eq!(count, input_len.min(len));
-                for (i, n) in buffer.iter().take(count).enumerate() {
-                    assert_eq!(i, n.id as usize);
-                    assert_eq!(i as f32, n.distance);
-                }
+            // Ensure that `pushing` respects the limit.
+            assert!(inserter.push(7, 7.0).is_full());
 
-                // THe upper values should be untouched.
-                for neighbor in buffer.iter().skip(count) {
-                    assert_eq!(neighbor.id, 0);
-                    assert_eq!(neighbor.distance, 0.0);
-                }
-            }
+            let set = inserter.extend([(10, 10.0), (20, 20.0)]);
+            assert_eq!(set, 0, "no more items can be added");
+
+            assert_eq!(&buffer, &[f(1), f(2), f(3), f(4), f(5)]);
+        }
+
+        // Mixture
+        {
+            let mut buffer = [Neighbor::<u32>::default(); MAX_LENGTH];
+            let mut inserter = BackInserter::new(&mut buffer);
+
+            assert!(inserter.push(1, 1.0).is_available());
+
+            let set = inserter.extend([(2, 2.0), (3, 3.0)]);
+            assert_eq!(set, 2, "only two items were pushed");
+
+            assert_eq!(inserter.current_len(), 3);
+            assert_eq!(inserter.size_hint(), Some(2));
+
+            assert!(inserter.push(4, 4.0).is_available());
+            assert_eq!(inserter.current_len(), 4);
+            assert_eq!(inserter.size_hint(), Some(1));
+
+            let set = inserter.extend([(5, 5.0), (6, 6.0)]);
+            assert_eq!(
+                set, 1,
+                "there should only be room for one more item in the buffer"
+            );
+            assert_eq!(inserter.current_len(), 5);
+            assert_eq!(inserter.size_hint(), Some(0));
+
+            assert_eq!(&buffer, &[f(1), f(2), f(3), f(4), f(5)]);
         }
     }
 }

@@ -57,6 +57,7 @@ pub(super) fn register_benchmarks(benchmarks: &mut Benchmarks) {
 #[cfg(feature = "spherical-quantization")]
 mod imp {
     use diskann::graph::StartPointStrategy;
+    use diskann_benchmark_core as benchmark_core;
     use diskann_benchmark_runner::{
         describeln,
         dispatcher::{self, DispatchRule, FailureScore, MatchScore},
@@ -76,10 +77,9 @@ mod imp {
     use crate::{
         backend::index::{
             benchmarks::BuildAndSearch,
-            build::{self, build_single_insert, SingleInsertBuildStats},
-            range_search::{run_range_search, RangeSearchSteps},
+            build::{self, only_single_insert, BuildStats},
             result::AggregatedSearchResults,
-            search::{run_search, SearchSteps},
+            search,
         },
         inputs::{
             async_::{SearchPhase, SphericalQuantBuild},
@@ -214,7 +214,7 @@ mod imp {
         quantized_dim: usize,
         quantized_bytes: usize,
         original_dim: usize,
-        build: SingleInsertBuildStats,
+        build: BuildStats,
         runs: Vec<SearchRun>,
     }
 
@@ -292,17 +292,13 @@ mod imp {
                     )?;
 
                     let original_dim = data.ncols();
-                    let build_stats = {
-                        let rt = utils::tokio::runtime(build.num_threads)?;
-
-                        rt.block_on(build_single_insert(
-                            index.clone(),
-                            inmem::spherical::Quantized::build(),
-                            data.clone(),
-                            build.num_threads,
-                            output,
-                        ))?
-                    };
+                    let build_stats = only_single_insert(
+                        index.clone(),
+                        inmem::spherical::Quantized::build(),
+                        data.clone(),
+                        &build,
+                        output,
+                    )?;
 
                     let mut result = SphericalBuildResult {
                         training_time,
@@ -328,22 +324,22 @@ mod imp {
                                 &search_phase.groundtruth,
                             ))?;
 
-                            let steps = SearchSteps::new(
+                            let steps = search::knn::SearchSteps::new(
                                 search_phase.reps,
                                 &search_phase.num_threads,
                                 &search_phase.runs,
                             );
 
                             for &layout in self.input.query_layouts.iter() {
-                                let strategy = inmem::spherical::Quantized::search(layout.into());
-                                let search_results = run_search(
+                                let knn = benchmark_core::search::graph::KNN::new(
                                     index.clone(),
-                                    Arc::new(vec![strategy.clone(); queries.nrows()]),
                                     queries.clone(),
-                                    groundtruth.as_view(),
-                                    steps,
+                                    benchmark_core::search::graph::Strategy::broadcast(
+                                        inmem::spherical::Quantized::search(layout.into()),
+                                    ),
                                 )?;
 
+                                let search_results = search::knn::run(&knn, &groundtruth, steps)?;
                                 result.append(SearchRun {
                                     layout,
                                     results: AggregatedSearchResults::Topk(search_results),
@@ -366,21 +362,23 @@ mod imp {
                                 datafiles::BinFile(&search_phase.groundtruth),
                             )?;
 
-                            let steps = RangeSearchSteps::new(
+                            let steps = search::range::RangeSearchSteps::new(
                                 search_phase.reps,
                                 &search_phase.num_threads,
                                 &search_phase.runs,
                             );
 
                             for &layout in self.input.query_layouts.iter() {
-                                let strategy = inmem::spherical::Quantized::search(layout.into());
-                                let search_results = run_range_search(
+                                let range = benchmark_core::search::graph::Range::new(
                                     index.clone(),
-                                    Arc::new(vec![strategy.clone(); queries.nrows()]),
                                     queries.clone(),
-                                    groundtruth.clone(),
-                                    steps,
+                                    benchmark_core::search::graph::Strategy::broadcast(
+                                        inmem::spherical::Quantized::search(layout.into()),
+                                    ),
                                 )?;
+
+                                let search_results =
+                                    search::range::run(&range, &groundtruth, steps)?;
 
                                 result.append(SearchRun {
                                     layout,
@@ -405,7 +403,7 @@ mod imp {
                                 datafiles::BinFile(&search_phase.groundtruth),
                             )?;
 
-                            let steps = SearchSteps::new(
+                            let steps = search::knn::SearchSteps::new(
                                 search_phase.reps,
                                 &search_phase.num_threads,
                                 &search_phase.runs,
@@ -416,25 +414,32 @@ mod imp {
                                 &search_phase.data_labels,
                             )?;
 
+                            let label_providers: Vec<_> = bit_maps
+                                .into_iter()
+                                .map(utils::filters::as_query_label_provider)
+                                .collect();
+
                             for &layout in self.input.query_layouts.iter() {
                                 let strategy = inmem::spherical::Quantized::search(layout.into());
                                 let search_strategies = setup_filter_strategies(
                                     search_phase.beta,
-                                    bit_maps.clone(),
+                                    label_providers.iter().cloned(),
                                     strategy.clone(),
+                                );
+
+                                let knn = benchmark_core::search::graph::KNN::new(
+                                    index.clone(),
+                                    queries.clone(),
+                                    benchmark_core::search::graph::Strategy::Collection(
+                                        search_strategies.into(),
+                                    ),
                                 )?;
 
-                                let search_stats = run_search(
-                                    index.clone(),
-                                    search_strategies.clone(),
-                                    queries.clone(),
-                                    groundtruth.clone(),
-                                    steps,
-                                )?;
+                                let search_results = search::knn::run(&knn, &groundtruth, steps)?;
 
                                 result.append(SearchRun {
                                     layout,
-                                    results: AggregatedSearchResults::Topk(search_stats),
+                                    results: AggregatedSearchResults::Topk(search_results),
                                 });
                             }
                             writeln!(output, "\n\n{}", result)?;
@@ -454,7 +459,7 @@ mod imp {
                                 &search_phase.groundtruth,
                             ))?;
 
-                            let steps = SearchSteps::new(
+                            let steps = search::knn::SearchSteps::new(
                                 search_phase.reps,
                                 &search_phase.num_threads,
                                 &search_phase.runs,
@@ -465,25 +470,26 @@ mod imp {
                                 &search_phase.data_labels,
                             )?;
 
+                            let bit_map_filters: Arc<[_]> = bit_maps
+                                .into_iter()
+                                .map(utils::filters::as_query_label_provider)
+                                .collect();
+
                             for &layout in self.input.query_layouts.iter() {
-                                let strategy = inmem::spherical::Quantized::search(layout.into());
-                                let search_strategies = setup_filter_strategies(
-                                    1.0, // beta
-                                    bit_maps.clone(),
-                                    strategy.clone(),
-                                )?;
-
-                                let search_stats = run_search(
+                                let multihop = benchmark_core::search::graph::MultiHop::new(
                                     index.clone(),
-                                    search_strategies.clone(),
                                     queries.clone(),
-                                    groundtruth.as_view(),
-                                    steps,
+                                    benchmark_core::search::graph::Strategy::broadcast(
+                                        inmem::spherical::Quantized::search(layout.into()),
+                                    ),
+                                    bit_map_filters.clone(),
                                 )?;
 
+                                let search_results =
+                                    search::knn::run(&multihop, &groundtruth, steps)?;
                                 result.append(SearchRun {
                                     layout,
-                                    results: AggregatedSearchResults::Topk(search_stats),
+                                    results: AggregatedSearchResults::Topk(search_results),
                                 });
                             }
                             writeln!(output, "\n\n{}", result)?;

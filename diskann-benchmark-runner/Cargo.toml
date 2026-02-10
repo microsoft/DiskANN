@@ -28,6 +28,9 @@ default = []
 # Enable building the test executable.
 test-app = []
 
+# Expose internal utilities for performing UX error message normalization.
+ux-tools = []
+
 [[bin]]
 name = "dev"
 path = "dev/main.rs"

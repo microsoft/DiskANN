@@ -70,11 +70,17 @@ impl From<&str> for BfTreeStoreError {
     }
 }
 
-impl BfTreeStore {
-    /// max key size is 4KB and total record size (key + value) cannot exceed 16KB.
-    pub const MAX_RECORD_TOTAL_SIZE: usize = 12 * 1024;
+impl From<bf_tree::ConfigError> for BfTreeStoreError {
+    fn from(e: bf_tree::ConfigError) -> Self {
+        BfTreeStoreError(format!("{:?}", e))
+    }
+}
 
-    pub const LEAF_PAGE_SIZE: usize = (Self::MAX_RECORD_TOTAL_SIZE + 4096) * 2;
+impl BfTreeStore {
+    pub const MAX_RECORD_TOTAL_SIZE: usize = 4 * 1024;
+
+    /// setting leaf page size to 16KB forces the minimum record size to be at least 16 * 1024 / 4096 = 4 bytes
+    pub const LEAF_PAGE_SIZE: usize = 16 * 1024;
     /// Default cache size (32MB)
     pub const DEFAULT_CACHE_SIZE: usize = 32 * 1024 * 1024;
 
@@ -94,7 +100,7 @@ impl BfTreeStore {
     /// let store = BfTreeStore::new(config)?;
     /// ```
     pub fn new(config: Config) -> Result<Self, BfTreeStoreError> {
-        let tree = BfTree::with_config(config, None);
+        let tree = BfTree::with_config(config, None)?;
         Ok(Self {
             tree: Arc::new(tree),
         })
@@ -268,6 +274,52 @@ impl KvStore for BfTreeStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_key_small_value() {
+        let store = BfTreeStore::memory().unwrap();
+        let key = b"key";
+        let value = b"v";
+
+        store.set(key, value).unwrap();
+        let retrieved = store.get(key).unwrap();
+        assert_eq!(retrieved, Some(value.to_vec()));
+    }
+
+    #[test]
+    fn larger_key_small_value() {
+        let store = BfTreeStore::memory().unwrap();
+        let key = &[b'k'; 1000];
+        let value = b"v";
+
+        store.set(key, value).unwrap();
+        let retrieved = store.get(key).unwrap();
+        assert_eq!(retrieved, Some(value.to_vec()));
+    }
+
+    #[test]
+    fn small_key_larger_value() {
+        let store = BfTreeStore::memory().unwrap();
+        let key = b"k";
+        let value = &[b'v'; 1000];
+
+        store.set(key, value).unwrap();
+        let retrieved = store.get(key).unwrap();
+        assert_eq!(retrieved, Some(value.to_vec()));
+    }
+
+    #[test]
+    fn larger_key_larger_value() {
+        println!("Test: larger_key_larger_value");
+        let store = BfTreeStore::memory().unwrap();
+        println!("Created in-memory BfTreeStore");
+        let key = &[b'k'; 1000];
+        let value = &[b'v'; 1000];
+
+        store.set(key, value).unwrap();
+        let retrieved = store.get(key).unwrap();
+        assert_eq!(retrieved, Some(value.to_vec()));
+    }
 
     #[test]
     fn test_basic_operations() {
