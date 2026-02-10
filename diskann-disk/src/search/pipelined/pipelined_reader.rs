@@ -186,6 +186,11 @@ impl PipelinedReader {
         self.slot_size
     }
 
+    /// Returns the maximum number of buffer slots.
+    pub fn max_slots(&self) -> usize {
+        self.max_slots
+    }
+
     /// Drain all in-flight IOs, blocking until they complete.
     /// Must be called before freeing the slot buffers.
     fn drain_all(&mut self) {

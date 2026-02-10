@@ -465,6 +465,10 @@ where
             #[cfg(target_os = "linux")]
             {
                 use diskann_disk::data_model::Cache;
+                use diskann_disk::search::provider::pipelined_accessor::{
+                    PipelinedScratch, PipelinedScratchArgs,
+                };
+                use diskann::utils::object_pool::ObjectPool;
 
                 let reader_config = PipelinedReaderConfig {
                     sqpoll_idle_ms: *sqpoll_idle_ms,
@@ -476,6 +480,31 @@ where
                     .clone()
                     .unwrap_or_else(|| Arc::new(Cache::new(0, 0).expect("empty cache")));
 
+                // Derive pool args from the graph header before moving factory into searcher
+                let graph_header = vertex_provider_factory.get_header()?;
+                let pq_data = index_reader.get_pq_data();
+                let metadata = graph_header.metadata();
+                let block_size = graph_header.effective_block_size();
+                let num_sectors_per_node = graph_header.num_sectors_per_node();
+                let slot_size = num_sectors_per_node * block_size;
+                let bw = search_params.beam_width;
+                let max_slots = (bw * 2).clamp(16, 128);
+
+                let scratch_args = PipelinedScratchArgs {
+                    disk_index_path: disk_index_path.clone(),
+                    max_slots,
+                    slot_size,
+                    alignment: block_size,
+                    graph_degree: graph_header.max_degree::<T>()?,
+                    dims: metadata.dims,
+                    num_pq_chunks: pq_data.get_num_chunks(),
+                    num_pq_centers: pq_data.get_num_centers(),
+                    reader_config,
+                };
+                let scratch_pool = Arc::new(
+                    ObjectPool::<PipelinedScratch>::try_new(scratch_args.clone(), 0, None)?
+                );
+
                 let mut searcher = DiskIndexSearcher::<GraphData<T>, _>::new(
                     search_params.num_threads,
                     search_params.search_io_limit.unwrap_or(usize::MAX),
@@ -486,12 +515,12 @@ where
                 )?;
 
                 searcher.with_pipelined_config(PipelinedConfig {
-                    disk_index_path: disk_index_path.clone(),
-                    reader_config,
                     beam_width: search_params.beam_width,
                     adaptive_beam_width: *adaptive_beam_width,
                     relaxed_monotonicity_l: *relaxed_monotonicity_l,
                     node_cache,
+                    scratch_pool,
+                    scratch_args,
                 });
 
                 let searcher = &searcher;

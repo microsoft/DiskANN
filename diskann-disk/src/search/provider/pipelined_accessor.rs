@@ -24,6 +24,7 @@ use diskann::{
     },
     neighbor::Neighbor,
     provider::{Accessor, BuildQueryComputer, DefaultContext, DelegateNeighbor, HasId, NeighborAccessor},
+    utils::object_pool::{ObjectPool, PoolOption, TryAsPooled},
     ANNError, ANNResult,
 };
 use diskann_providers::model::{
@@ -103,6 +104,61 @@ fn max_slots(beam_width: usize) -> usize {
     (beam_width * 2).clamp(16, MAX_IO_CONCURRENCY)
 }
 
+// ---------------------------------------------------------------------------
+// Poolable scratch: PipelinedReader + PQScratch, reused across queries
+// ---------------------------------------------------------------------------
+
+/// Reusable scratch state for pipelined search, pooled to avoid per-query
+/// allocation of io_uring rings, file descriptors, and PQ scratch buffers.
+pub struct PipelinedScratch {
+    pub reader: PipelinedReader,
+    pub pq_scratch: PQScratch,
+}
+
+/// Arguments for creating or resetting a [`PipelinedScratch`].
+#[derive(Clone)]
+pub struct PipelinedScratchArgs {
+    pub disk_index_path: String,
+    pub max_slots: usize,
+    pub slot_size: usize,
+    pub alignment: usize,
+    pub graph_degree: usize,
+    pub dims: usize,
+    pub num_pq_chunks: usize,
+    pub num_pq_centers: usize,
+    pub reader_config: PipelinedReaderConfig,
+}
+
+impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
+    type Error = ANNError;
+
+    fn try_create(args: PipelinedScratchArgs) -> Result<Self, Self::Error> {
+        let reader = PipelinedReader::new(
+            &args.disk_index_path,
+            args.max_slots,
+            args.slot_size,
+            args.alignment,
+            &args.reader_config,
+        )?;
+        let pq_scratch = PQScratch::new(
+            args.graph_degree,
+            args.dims,
+            args.num_pq_chunks,
+            args.num_pq_centers,
+        )?;
+        Ok(Self { reader, pq_scratch })
+    }
+
+    fn try_modify(&mut self, _args: PipelinedScratchArgs) -> Result<(), Self::Error> {
+        self.reader.reset();
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PipelinedDiskAccessor
+// ---------------------------------------------------------------------------
+
 /// Pipelined disk accessor that overlaps IO and compute via io_uring.
 ///
 /// Implements the `ExpandBeam` trait's queue-based methods:
@@ -111,8 +167,7 @@ fn max_slots(beam_width: usize) -> usize {
 /// - `has_pending`: returns true when IO operations are in-flight
 pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     provider: &'a DiskProvider<Data>,
-    reader: PipelinedReader,
-    pq_scratch: PQScratch,
+    scratch: PoolOption<PipelinedScratch>,
     query: &'a [Data::VectorDataType],
 
     // Graph geometry (cached from GraphHeader)
@@ -146,13 +201,11 @@ impl<'a, Data> PipelinedDiskAccessor<'a, Data>
 where
     Data: GraphDataType<VectorIdType = u32>,
 {
-    /// Create a new pipelined disk accessor.
+    /// Create a new pipelined disk accessor using a pooled scratch.
     pub fn new(
         provider: &'a DiskProvider<Data>,
         query: &'a [Data::VectorDataType],
-        disk_index_path: &str,
-        beam_width: usize,
-        reader_config: &PipelinedReaderConfig,
+        scratch: PoolOption<PipelinedScratch>,
         node_cache: Arc<Cache<Data>>,
         shared_io_stats: Arc<PipelinedIoStats>,
     ) -> ANNResult<Self> {
@@ -164,34 +217,11 @@ where
 
         let block_size = provider.graph_header.effective_block_size();
         let num_sectors_per_node = provider.graph_header.num_sectors_per_node();
-        let slot_size = num_sectors_per_node * block_size;
-        let slots = max_slots(beam_width);
-
-        let reader = PipelinedReader::new(
-            disk_index_path,
-            slots,
-            slot_size,
-            block_size,
-            reader_config,
-        )?;
-
-        let graph_degree = provider.graph_header.max_degree::<Data::VectorDataType>()?;
-        let mut pq_scratch = PQScratch::new(
-            graph_degree,
-            dims,
-            provider.pq_data.get_num_chunks(),
-            provider.pq_data.get_num_centers(),
-        )?;
-
-        // Preprocess PQ distance table for this query
-        let medoid = metadata.medoid as u32;
-        pq_scratch.set(dims, query, 1.0)?;
-        quantizer_preprocess(&mut pq_scratch, &provider.pq_data, provider.metric, &[medoid])?;
+        let slots = scratch.reader.max_slots();
 
         Ok(Self {
             provider,
-            reader,
-            pq_scratch,
+            scratch,
             query,
             num_nodes_per_sector,
             num_sectors_per_node,
@@ -211,21 +241,38 @@ where
         })
     }
 
+    /// Preprocess PQ distance tables for this query. Must be called before search.
+    pub fn preprocess_query(&mut self) -> ANNResult<()> {
+        let metadata = self.provider.graph_header.metadata();
+        let dims = metadata.dims;
+        let medoid = metadata.medoid as u32;
+        self.scratch.pq_scratch.set(dims, self.query, 1.0)?;
+        quantizer_preprocess(
+            &mut self.scratch.pq_scratch,
+            &self.provider.pq_data,
+            self.provider.metric,
+            &[medoid],
+        )?;
+        Ok(())
+    }
+
     /// Compute PQ distances for a set of neighbor IDs.
     fn pq_distances<F>(&mut self, ids: &[u32], mut f: F) -> ANNResult<()>
     where
         F: FnMut(f32, u32),
     {
+        let pq = &mut self.scratch.pq_scratch;
         compute_pq_distance(
             ids,
             self.provider.pq_data.get_num_chunks(),
-            &self.pq_scratch.aligned_pqtable_dist_scratch,
+            &pq.aligned_pqtable_dist_scratch,
             self.provider.pq_data.pq_compressed_data().get_data(),
-            &mut self.pq_scratch.aligned_pq_coord_scratch,
-            &mut self.pq_scratch.aligned_dist_scratch,
+            &mut pq.aligned_pq_coord_scratch,
+            &mut pq.aligned_dist_scratch,
         )?;
+        let pq = &self.scratch.pq_scratch;
         for (i, id) in ids.iter().enumerate() {
-            f(self.pq_scratch.aligned_dist_scratch[i], *id);
+            f(pq.aligned_dist_scratch[i], *id);
         }
         Ok(())
     }
@@ -245,7 +292,7 @@ where
         let completed_slots = if self.in_flight_ios.is_empty() {
             Vec::new()
         } else {
-            self.reader.poll_completions()?
+            self.scratch.reader.poll_completions()?
         };
 
         if !completed_slots.is_empty() {
@@ -254,7 +301,7 @@ where
             let mut remaining = VecDeque::new();
             while let Some(io) = self.in_flight_ios.pop_front() {
                 if completed_set.contains(&io.slot_id) {
-                    let sector_buf = self.reader.get_slot_buf(io.slot_id);
+                    let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
                     let node = parse_node(
                         sector_buf,
                         io.vertex_id,
@@ -359,6 +406,7 @@ where
         Ok(DiskQueryComputer {
             num_pq_chunks: self.provider.pq_data.get_num_chunks(),
             query_centroid_l2_distance: self
+                .scratch
                 .pq_scratch
                 .aligned_pqtable_dist_scratch
                 .as_slice()
@@ -417,7 +465,7 @@ where
             let sector_offset = sector_idx * self.block_size as u64;
             let slot_id = self.next_slot_id % self.max_slots;
             // Best-effort: if submission fails, the node will be retried
-            if self.reader.submit_read(sector_offset, slot_id).is_ok() {
+            if self.scratch.reader.submit_read(sector_offset, slot_id).is_ok() {
                 self.in_flight_ios.push_back(InFlightIo {
                     vertex_id: id,
                     slot_id,
@@ -449,14 +497,14 @@ where
 
             // If nothing is loaded yet and we have in-flight IO, wait for at least one
             if self.loaded_nodes.is_empty() && !self.in_flight_ios.is_empty() {
-                let completed = self.reader.wait_completions()?;
+                let completed = self.scratch.reader.wait_completions()?;
                 if !completed.is_empty() {
                     let completed_set: std::collections::HashSet<usize> =
                         completed.into_iter().collect();
                     let mut remaining = VecDeque::new();
                     while let Some(io) = self.in_flight_ios.pop_front() {
                         if completed_set.contains(&io.slot_id) {
-                            let sector_buf = self.reader.get_slot_buf(io.slot_id);
+                            let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
                             let node = parse_node(
                                 sector_buf,
                                 io.vertex_id,
@@ -551,8 +599,6 @@ where
 
 /// Configuration for creating a pipelined search through DiskIndexSearcher.
 pub struct PipelinedConfig<Data: GraphDataType<VectorIdType = u32>> {
-    pub disk_index_path: String,
-    pub reader_config: PipelinedReaderConfig,
     pub beam_width: usize,
     /// Start with a smaller beam and grow adaptively.
     pub adaptive_beam_width: bool,
@@ -561,6 +607,10 @@ pub struct PipelinedConfig<Data: GraphDataType<VectorIdType = u32>> {
     pub relaxed_monotonicity_l: Option<usize>,
     /// Shared node cache. Nodes found here skip disk IO entirely.
     pub node_cache: Arc<Cache<Data>>,
+    /// Pooled scratch (io_uring reader + PQ buffers), created once and reused.
+    pub scratch_pool: Arc<ObjectPool<PipelinedScratch>>,
+    /// Args for retrieving/creating pooled scratch instances.
+    pub scratch_args: PipelinedScratchArgs,
 }
 
 /// Shared IO statistics written by the accessor and read by the caller after search.
@@ -650,15 +700,19 @@ where
         provider: &'a DiskProvider<Data>,
         _context: &DefaultContext,
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        PipelinedDiskAccessor::new(
+        let scratch = PoolOption::try_pooled(
+            &self.config.scratch_pool,
+            self.config.scratch_args.clone(),
+        )?;
+        let mut accessor = PipelinedDiskAccessor::new(
             provider,
             self.query,
-            &self.config.disk_index_path,
-            self.config.beam_width,
-            &self.config.reader_config,
+            scratch,
             self.config.node_cache.clone(),
             self.io_stats.clone(),
-        )
+        )?;
+        accessor.preprocess_query()?;
+        Ok(accessor)
     }
 
     fn post_processor(&self) -> Self::PostProcessor {
