@@ -156,9 +156,29 @@ Before creating a release tag:
 If a release needs to be rolled back:
 
 1. **Yank the Version** (if critical bug or security issue):
+   
+   You'll need to yank all 15 crates that were published. Use the following commands:
+   
    ```bash
-   cargo yank --vers 0.46.0 diskann
-   # Repeat for all affected crates
+   # Replace 0.46.0 with the version to yank
+   VERSION="0.46.0"
+   
+   # Yank all crates in reverse dependency order
+   cargo yank --vers $VERSION diskann-benchmark
+   cargo yank --vers $VERSION diskann-tools
+   cargo yank --vers $VERSION diskann-benchmark-core
+   cargo yank --vers $VERSION diskann-benchmark-simd
+   cargo yank --vers $VERSION diskann-benchmark-runner
+   cargo yank --vers $VERSION diskann-label-filter
+   cargo yank --vers $VERSION diskann-disk
+   cargo yank --vers $VERSION diskann-providers
+   cargo yank --vers $VERSION diskann
+   cargo yank --vers $VERSION diskann-quantization
+   cargo yank --vers $VERSION diskann-utils
+   cargo yank --vers $VERSION diskann-linalg
+   cargo yank --vers $VERSION diskann-platform
+   cargo yank --vers $VERSION diskann-vector
+   cargo yank --vers $VERSION diskann-wide
    ```
 
 2. **Publish a Patch Release** with the fix as soon as possible

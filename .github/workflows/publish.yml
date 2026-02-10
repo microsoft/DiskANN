@@ -104,7 +104,7 @@ jobs:
             echo "Waiting for $crate@$version to be available on crates.io..."
             
             while [ $elapsed -lt $max_wait ]; do
-              if cargo search "$crate" --limit 1 | grep -q "^$crate = \"$version\""; then
+              if cargo search "$crate" --limit 1 | grep -q "$crate = \"$version\""; then
                 echo "✓ $crate@$version is now available"
                 return 0
               fi
