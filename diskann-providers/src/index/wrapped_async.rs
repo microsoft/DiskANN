@@ -3,8 +3,8 @@
  * Licensed under the MIT license.
  */
 
-use std::{num::NonZeroUsize, sync::Arc};
 use futures_executor::block_on;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann::{
     ANNError, ANNResult,
@@ -21,9 +21,13 @@ use diskann::{
     utils::{ONE, async_tools::VectorIdBoxSlice},
 };
 
-
-use crate::{model::IndexConfiguration,
-     storage::{StorageReadProvider, LoadWith, AsyncQuantLoadContext,AsyncIndexMetadata, file_storage_provider::FileStorageProvider}};
+use crate::{
+    model::IndexConfiguration,
+    storage::{
+        AsyncIndexMetadata, AsyncQuantLoadContext, LoadWith, StorageReadProvider,
+        file_storage_provider::FileStorageProvider,
+    },
+};
 
 pub struct DiskANNIndex<DP: DataProvider> {
     /// The underlying async DiskANNIndex.
@@ -323,23 +327,26 @@ where
     }
 }
 
-pub trait SyncLoadWith: Sized {
-
-    fn load_with(path: &str, index_config: IndexConfiguration) -> Self;
+pub trait SyncLoadWith<DP>: Sized {
+    fn load_with(path: &str, index_config: IndexConfiguration) -> ANNResult<Self>;
 }
 
 // Load static memory index from pre-built files synchronously
-impl<DP> SyncLoadWith for DiskANNIndex<DP>
+impl<DP> SyncLoadWith<DP> for DiskANNIndex<DP>
 where
     DP: DataProvider<InternalId = u32> + LoadWith<AsyncQuantLoadContext, Error = ANNError>,
 {
-    fn load_with(path: &str, index_config: IndexConfiguration) -> Self {
+    fn load_with(path: &str, index_config: IndexConfiguration) -> ANNResult<DiskANNIndex<DP>> {
         let storage = FileStorageProvider;
         let data_provider = create_data_provider(&storage, path, &index_config);
 
         match data_provider {
-            Ok(dp) => DiskANNIndex::<DP>::new_with_current_thread_runtime(index_config.config, dp),
-            Err(e) => panic!("Failed to create data provider: {}", e),
+            Ok(dp) => {
+                let index =
+                    DiskANNIndex::<DP>::new_with_current_thread_runtime(index_config.config, dp);
+                Ok(index)
+            }
+            Err(e) => return Err(e.into()),
         }
     }
 }
@@ -363,6 +370,6 @@ where
     };
 
     let data_provider = DP::load_with(provider, &pq_context);
-    
+
     block_on(data_provider)
 }
