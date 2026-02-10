@@ -91,6 +91,9 @@ pub(crate) enum SearchMode {
     },
     /// Unified pipelined search through the generic search loop (queue-based ExpandBeam).
     UnifiedPipeSearch {
+        /// Optional relaxed monotonicity parameter for early termination.
+        #[serde(default)]
+        relaxed_monotonicity_l: Option<usize>,
         /// Enable kernel-side SQ polling (ms idle timeout). None = disabled.
         #[serde(default)]
         sqpoll_idle_ms: Option<u32>,
@@ -115,10 +118,20 @@ impl fmt::Display for SearchMode {
                 }
                 write!(f, ")")
             }
-            SearchMode::UnifiedPipeSearch { sqpoll_idle_ms } => {
+            SearchMode::UnifiedPipeSearch { relaxed_monotonicity_l, sqpoll_idle_ms } => {
                 write!(f, "UnifiedPipeSearch")?;
-                if let Some(sq) = sqpoll_idle_ms {
-                    write!(f, "(sqpoll={}ms)", sq)?;
+                let has_rm = relaxed_monotonicity_l.is_some();
+                let has_sq = sqpoll_idle_ms.is_some();
+                if has_rm || has_sq {
+                    write!(f, "(")?;
+                    if let Some(rm) = relaxed_monotonicity_l {
+                        write!(f, "rm_l={}", rm)?;
+                        if has_sq { write!(f, ", ")?; }
+                    }
+                    if let Some(sq) = sqpoll_idle_ms {
+                        write!(f, "sqpoll={}ms", sq)?;
+                    }
+                    write!(f, ")")?;
                 }
                 Ok(())
             }
