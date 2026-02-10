@@ -131,6 +131,23 @@ impl PipelinedReader {
     ///
     /// Drains already-completed CQEs from the io_uring completion queue.
     pub fn poll_completions(&mut self) -> ANNResult<Vec<usize>> {
+        self.drain_cqes()
+    }
+
+    /// Block until at least one IO completes, then drain all available CQEs.
+    ///
+    /// Use this when [`poll_completions`] returned an empty vec but there are
+    /// in-flight reads — avoids busy-spinning while waiting for the kernel.
+    pub fn wait_completions(&mut self) -> ANNResult<Vec<usize>> {
+        if self.in_flight == 0 {
+            return Ok(Vec::new());
+        }
+        self.ring.submit_and_wait(1)?;
+        self.drain_cqes()
+    }
+
+    /// Drain all available CQEs from the completion queue.
+    fn drain_cqes(&mut self) -> ANNResult<Vec<usize>> {
         let mut completed = Vec::new();
         for cqe in self.ring.completion() {
             if cqe.result() < 0 {

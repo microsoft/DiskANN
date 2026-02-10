@@ -1184,7 +1184,7 @@ pub(crate) mod disk_index_builder_tests {
                 });
 
             let result =
-                pipe_searcher.search(query_data, top_k as u32, search_l, 4)?;
+                pipe_searcher.search(query_data, top_k as u32, search_l, 4, None)?;
             let result_ids: Vec<u32> =
                 result.results.iter().map(|item| item.vertex_id).collect();
 

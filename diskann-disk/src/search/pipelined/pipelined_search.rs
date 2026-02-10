@@ -157,6 +157,7 @@ pub(crate) fn pipe_search<T: VectorRepr>(
     pq_scratch: &mut PQScratch,
     relaxed_monotonicity_l: Option<usize>,
     metric: Metric,
+    vector_filter: Option<&(dyn Fn(&u32) -> bool + Send + Sync)>,
 ) -> ANNResult<PipeSearchResult> {
     let timer = Instant::now();
     let mut io_count: u32 = 0;
@@ -257,7 +258,8 @@ pub(crate) fn pipe_search<T: VectorRepr>(
             break;
         }
 
-        // Poll completions
+        // Poll completions (non-blocking). Keeping this non-blocking is critical
+        // for overlapping IO and compute — blocking here would serialize the pipeline.
         let io_poll_start = Instant::now();
         let completed_slots = reader.poll_completions()?;
         io_time += io_poll_start.elapsed();
@@ -367,10 +369,13 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                 hops += 1;
 
                 if let Some(node) = id_buf_map.get(&vid) {
-                    // Compute full-precision distance
+                    // Compute full-precision distance; only add to results if
+                    // filter is absent or the node passes the filter predicate.
                     let fp_vec: &[T] = bytemuck::cast_slice(&node.fp_vector);
                     let fp_dist = distance_comparer.evaluate_similarity(query, fp_vec);
-                    full_retset.push((vid, fp_dist));
+                    if vector_filter.map_or(true, |f| f(&vid)) {
+                        full_retset.push((vid, fp_dist));
+                    }
 
                     // Expand neighbors
                     let mut nbors_to_compute: Vec<u32> = Vec::new();
@@ -433,9 +438,9 @@ pub(crate) fn pipe_search<T: VectorRepr>(
 
     // In relaxed monotonicity mode: drain remaining IOs and process unvisited nodes
     if relaxed_monotonicity_l.is_some_and(|l| l > 0) {
-        // Drain all in-flight IOs
+        // Drain all in-flight IOs (block until each completes)
         while !on_flight_ios.is_empty() {
-            let completed_slots = reader.poll_completions()?;
+            let completed_slots = reader.wait_completions()?;
             if !completed_slots.is_empty() {
                 let completed_set: HashSet<usize> = completed_slots.into_iter().collect();
                 let mut remaining = VecDeque::new();
@@ -464,7 +469,9 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                     c.visited = true;
                     let fp_vec: &[T] = bytemuck::cast_slice(&node.fp_vector);
                     let fp_dist = distance_comparer.evaluate_similarity(query, fp_vec);
-                    full_retset.push((c.id, fp_dist));
+                    if vector_filter.map_or(true, |f| f(&c.id)) {
+                        full_retset.push((c.id, fp_dist));
+                    }
                 }
             }
         }

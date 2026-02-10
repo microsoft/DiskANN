@@ -2197,7 +2197,7 @@ mod disk_provider_tests {
         let mut total_recall = 0.0f32;
         for q in 0..num_queries {
             let query = &query_vector[q * dim..(q + 1) * dim];
-            let result = pipe_searcher.search(query, k as u32, l, 4).unwrap();
+            let result = pipe_searcher.search(query, k as u32, l, 4, None).unwrap();
             let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
             let truth_slice = &truth_result[q * k..(q + 1) * k];
 
@@ -2307,7 +2307,7 @@ mod disk_provider_tests {
             let truth_slice = &truth_ref[q * k..(q + 1) * k];
 
             // Pipe search (runs concurrently with beam search across rayon threads)
-            let pipe_result = pipe_ref.search(query, k as u32, l, 4).unwrap();
+            let pipe_result = pipe_ref.search(query, k as u32, l, 4, None).unwrap();
             let pipe_ids: Vec<u32> = pipe_result.results.iter().map(|r| r.vertex_id).collect();
 
             // Both should produce results with reasonable overlap.

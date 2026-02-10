@@ -438,6 +438,7 @@ where
                                         search_params.recall_at,
                                         l,
                                         search_params.beam_width,
+                                        None,
                                     ),
                                     search_params.recall_at as usize,
                                     stats,

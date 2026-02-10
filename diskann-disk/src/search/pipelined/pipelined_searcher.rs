@@ -208,12 +208,15 @@ where
     /// * `return_list_size` - Number of results to return (k).
     /// * `search_list_size` - Size of the candidate pool (L).
     /// * `beam_width` - Maximum beam width for pipelined IO.
+    /// * `vector_filter` - Optional predicate; only vertices passing the filter
+    ///   are included in the result set. Graph traversal is unaffected.
     pub fn search(
         &self,
         query: &[Data::VectorDataType],
         return_list_size: u32,
         search_list_size: u32,
         beam_width: usize,
+        vector_filter: Option<&(dyn Fn(&u32) -> bool + Send + Sync)>,
     ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
         let max_slots = (beam_width * 2).clamp(16, super::pipelined_reader::MAX_IO_CONCURRENCY);
 
@@ -251,6 +254,7 @@ where
             pq_scratch,
             self.relaxed_monotonicity_l,
             self.metric,
+            vector_filter,
         )?;
 
         let query_statistics = QueryStatistics {
@@ -367,8 +371,8 @@ mod tests {
         let searcher = create_test_searcher();
         let query = load_test_query();
 
-        let r1 = searcher.search(&query, 10, 40, 4).unwrap();
-        let r2 = searcher.search(&query, 10, 40, 4).unwrap();
+        let r1 = searcher.search(&query, 10, 40, 4, None).unwrap();
+        let r2 = searcher.search(&query, 10, 40, 4, None).unwrap();
 
         assert!(!r1.results.is_empty());
         assert!(!r2.results.is_empty());
@@ -387,7 +391,7 @@ mod tests {
 
         let results: Vec<_> = (0..4)
             .into_par_iter()
-            .map(|_| searcher.search(&query, 10, 40, 4).unwrap())
+            .map(|_| searcher.search(&query, 10, 40, 4, None).unwrap())
             .collect();
 
         for r in &results {
