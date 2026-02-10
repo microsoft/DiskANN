@@ -185,4 +185,24 @@ impl PipelinedReader {
     pub fn slot_size(&self) -> usize {
         self.slot_size
     }
+
+    /// Drain all in-flight IOs, blocking until they complete.
+    /// Must be called before freeing the slot buffers.
+    fn drain_all(&mut self) {
+        while self.in_flight > 0 {
+            let _ = self.ring.submit_and_wait(1);
+            for cqe in self.ring.completion() {
+                let _ = cqe;
+                self.in_flight = self.in_flight.saturating_sub(1);
+            }
+        }
+    }
+}
+
+impl Drop for PipelinedReader {
+    fn drop(&mut self) {
+        // Must wait for all in-flight kernel IOs to complete before freeing
+        // the slot buffers — otherwise the kernel may DMA into freed memory.
+        self.drain_all();
+    }
 }

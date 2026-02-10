@@ -406,6 +406,12 @@ where
                 continue;
             }
 
+            // Don't submit if all io_uring slots are occupied — prevents overwriting
+            // buffers that still have in-flight reads.
+            if self.in_flight_ios.len() >= self.max_slots {
+                break;
+            }
+
             let sector_idx =
                 node_sector_index(id, self.num_nodes_per_sector, self.num_sectors_per_node);
             let sector_offset = sector_idx * self.block_size as u64;
@@ -612,7 +618,7 @@ where
             })
             .collect();
 
-        reranked.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reranked.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         Ok(output.extend(reranked))
     }
 }
