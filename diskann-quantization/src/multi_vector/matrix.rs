@@ -17,6 +17,8 @@
 //! - [`Repr`]: Read-only matrix representation.
 //! - [`ReprMut`]: Mutable matrix representation.
 //! - [`ReprOwned`]: Owning matrix representation.
+//! - [`Dense`]: Dense contiguous element access.
+//! - [`DenseMut`]: Mutable dense contiguous element access.
 //!
 //! Each trait refinement has a corresponding constructor:
 //!
@@ -145,6 +147,63 @@ pub unsafe trait ReprOwned: ReprMut {
     /// - This method may only be called once for such a pointer.
     /// - After calling this method, the memory behind `ptr` may not be dereferenced at all.
     unsafe fn drop(self, ptr: NonNull<u8>);
+}
+
+/// Extension of [`Repr`] for representations that store elements contiguously in memory.
+///
+/// Dense representations allow viewing the entire matrix data as a flat `&[Element]` slice,
+/// in addition to the row-by-row access provided by [`Repr`].
+///
+/// # Safety
+///
+/// Implementations must ensure:
+///
+/// - [`as_slice`](Self::as_slice) returns a valid slice covering all elements.
+/// - The returned slice length must equal `self.nrows() * self.ncols()`.
+pub unsafe trait Dense: Repr {
+    /// The element type of the dense matrix.
+    type Element;
+
+    /// Returns the number of columns (elements per row) in the matrix.
+    ///
+    /// # Safety Contract
+    ///
+    /// This function must be loosely pure in the sense that for any given instance of
+    /// `self`, `self.ncols()` must return the same value.
+    fn ncols(&self) -> usize;
+
+    /// Returns the underlying data as an immutable contiguous slice.
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must point to memory compatible with [`Repr::layout`].
+    /// - The entire range for this slice must be within a single allocation.
+    /// - The memory must not be mutated for the duration of lifetime `'a`.
+    /// - The lifetime for the returned slice is inferred from its usage. Correct
+    ///   usage must properly tie the lifetime to a source.
+    unsafe fn as_slice<'a>(self, ptr: NonNull<u8>) -> &'a [Self::Element];
+}
+
+/// Extension of [`Dense`] that supports mutable slice access.
+///
+/// # Safety
+///
+/// Implementations must ensure:
+///
+/// - [`as_slice_mut`](Self::as_slice_mut) returns a valid mutable slice
+///   covering all elements.
+pub unsafe trait DenseMut: Dense + ReprMut {
+    /// Returns the underlying data as a mutable contiguous slice.
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must point to memory compatible with [`Repr::layout`].
+    /// - The entire range for this slice must be within a single allocation.
+    /// - The memory must not be accessed through any other reference for the
+    ///   duration of lifetime `'a`.
+    /// - The lifetime for the returned slice is inferred from its usage. Correct
+    ///   usage must properly tie the lifetime to a source.
+    unsafe fn as_slice_mut<'a>(self, ptr: NonNull<u8>) -> &'a mut [Self::Element];
 }
 
 /// A new-type version of `std::alloc::LayoutError` for cleaner error handling.
@@ -375,6 +434,36 @@ unsafe impl<T: Copy> ReprOwned for Standard<T> {
     }
 }
 
+// SAFETY: Standard stores elements contiguously in row-major order with no padding.
+// The slice length equals nrows * ncols, consistent with `Repr::layout`.
+unsafe impl<T: Copy> Dense for Standard<T> {
+    type Element = T;
+
+    fn ncols(&self) -> usize {
+        self.ncols
+    }
+
+    unsafe fn as_slice<'a>(self, ptr: NonNull<u8>) -> &'a [T] {
+        let len = self.nrows * self.ncols;
+        // SAFETY: The caller guarantees `ptr` is compatible with `Repr::layout` and
+        // within a single allocation. `len` equals `nrows * ncols`, matching the
+        // contiguous row-major layout of `Standard`.
+        unsafe { std::slice::from_raw_parts(ptr.as_ptr().cast::<T>(), len) }
+    }
+}
+
+// SAFETY: Standard stores elements contiguously, and mutable access to the full
+// slice is valid when exclusive access is guaranteed by the caller.
+unsafe impl<T: Copy> DenseMut for Standard<T> {
+    unsafe fn as_slice_mut<'a>(self, ptr: NonNull<u8>) -> &'a mut [T] {
+        let len = self.nrows * self.ncols;
+        // SAFETY: The caller guarantees `ptr` is compatible with `Repr::layout`,
+        // within a single allocation, and exclusively accessible. `len` equals
+        // `nrows * ncols`, matching the contiguous row-major layout of `Standard`.
+        unsafe { std::slice::from_raw_parts_mut(ptr.as_ptr().cast::<T>(), len) }
+    }
+}
+
 // SAFETY: The implementation uses guarantees from `Box` to ensure that the pointer
 // initialized by it is non-null and properly aligned to the underlying type.
 unsafe impl<T> NewOwned<T> for Standard<T>
@@ -495,7 +584,13 @@ impl<T: ReprOwned> Mat<T> {
         }
     }
 
-    pub(crate) unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
+    /// Returns the i-th row without bounds checking.
+    ///
+    /// # Safety
+    ///
+    /// `i` must be less than `self.num_vectors()`.
+    #[inline]
+    pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors(). The constructors for this type
         // ensure that `ptr` is compatible with `T`.
         unsafe { self.repr.get_row(self.ptr, i) }
@@ -575,11 +670,33 @@ impl<T: ReprOwned> Drop for Mat<T> {
     }
 }
 
-impl<T: Copy> Mat<Standard<T>> {
+impl<T: Dense + ReprOwned> Mat<T> {
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    /// Returns the underlying data as a contiguous slice.
+    ///
+    /// The data is stored in row-major order: `[row0_col0, row0_col1, ..., row0_colN, row1_col0, ...]`.
+    #[inline]
+    pub fn as_slice(&self) -> &[T::Element] {
+        // SAFETY: The Mat was constructed with valid data compatible with `Dense`.
+        unsafe { self.repr.as_slice(self.ptr) }
+    }
+
+    /// Returns the underlying data as a mutable contiguous slice.
+    ///
+    /// The data is stored in row-major order: `[row0_col0, row0_col1, ..., row0_colN, row1_col0, ...]`.
+    #[inline]
+    pub fn as_slice_mut(&mut self) -> &mut [T::Element]
+    where
+        T: DenseMut,
+    {
+        // SAFETY: We have exclusive access via `&mut self`, and the Mat was constructed
+        // with valid data compatible with `DenseMut`.
+        unsafe { self.repr.as_slice_mut(self.ptr) }
     }
 }
 
@@ -651,7 +768,7 @@ impl<'a, T: Repr> MatRef<'a, T> {
     ///
     /// `i` must be less than `self.num_vectors()`.
     #[inline]
-    pub(crate) unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
+    pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors().
         unsafe { self.repr.get_row(self.ptr, i) }
     }
@@ -677,11 +794,20 @@ impl<'a, T: Repr> MatRef<'a, T> {
     }
 }
 
-impl<'a, T: Copy> MatRef<'a, Standard<T>> {
+impl<'a, T: Dense> MatRef<'a, T> {
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    /// Returns the underlying data as a contiguous slice.
+    ///
+    /// The data is stored in row-major order: `[row0_col0, row0_col1, ..., row0_colN, row1_col0, ...]`.
+    #[inline]
+    pub fn as_slice(&self) -> &[T::Element] {
+        // SAFETY: The MatRef was constructed with valid data compatible with `Dense`.
+        unsafe { self.repr.as_slice(self.ptr) }
     }
 }
 
@@ -784,7 +910,7 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
     ///
     /// `i` must be less than `self.num_vectors()`.
     #[inline]
-    pub(crate) unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
+    pub unsafe fn get_row_unchecked(&self, i: usize) -> T::Row<'_> {
         // SAFETY: Caller must ensure i < self.num_vectors().
         unsafe { self.repr.get_row(self.ptr, i) }
     }
@@ -869,11 +995,33 @@ impl<'this, 'a, T: ReprMut> ReborrowMut<'this> for MatMut<'a, T> {
     }
 }
 
-impl<'a, T: Copy> MatMut<'a, Standard<T>> {
+impl<'a, T: Dense + ReprMut> MatMut<'a, T> {
     /// Returns the raw dimension (columns) of the vectors in the matrix.
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    /// Returns the underlying data as a contiguous slice.
+    ///
+    /// The data is stored in row-major order: `[row0_col0, row0_col1, ..., row0_colN, row1_col0, ...]`.
+    #[inline]
+    pub fn as_slice(&self) -> &[T::Element] {
+        // SAFETY: The MatMut was constructed with valid data compatible with `Dense`.
+        unsafe { self.repr.as_slice(self.ptr) }
+    }
+
+    /// Returns the underlying data as a mutable contiguous slice.
+    ///
+    /// The data is stored in row-major order: `[row0_col0, row0_col1, ..., row0_colN, row1_col0, ...]`.
+    #[inline]
+    pub fn as_slice_mut(&mut self) -> &mut [T::Element]
+    where
+        T: DenseMut,
+    {
+        // SAFETY: We have exclusive access via `&mut self`, and the MatMut was constructed
+        // with valid data compatible with `DenseMut`.
+        unsafe { self.repr.as_slice_mut(self.ptr) }
     }
 }
 

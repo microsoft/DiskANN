@@ -1,0 +1,230 @@
+[
+  {
+    "input": {
+      "content": {
+        "approach": "naive",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 1,
+            "num_doc_token": 32,
+            "num_measurements": 1,
+            "num_points": 10,
+            "num_query_token": 8
+          }
+        ],
+        "verify": true
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 384.0,
+          "median": 384.0,
+          "p90": 384,
+          "p99": 384
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 1,
+          "num_doc_token": 32,
+          "num_measurements": 1,
+          "num_points": 10,
+          "num_query_token": 8
+        },
+        "sample_distance_checksum": -2764.606689453125
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "simd",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 1,
+            "num_doc_token": 32,
+            "num_measurements": 1,
+            "num_points": 10,
+            "num_query_token": 8
+          }
+        ],
+        "verify": true
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 114.0,
+          "median": 114.0,
+          "p90": 114,
+          "p99": 114
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 1,
+          "num_doc_token": 32,
+          "num_measurements": 1,
+          "num_points": 10,
+          "num_query_token": 8
+        },
+        "sample_distance_checksum": -2764.606689453125
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "transposed_simd",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 1,
+            "num_doc_token": 32,
+            "num_measurements": 1,
+            "num_points": 10,
+            "num_query_token": 8
+          }
+        ],
+        "verify": true
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 47.0,
+          "median": 47.0,
+          "p90": 47,
+          "p99": 47
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 1,
+          "num_doc_token": 32,
+          "num_measurements": 1,
+          "num_points": 10,
+          "num_query_token": 8
+        },
+        "sample_distance_checksum": -2764.606689453125
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "transposed_with_tiling",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 1,
+            "num_doc_token": 32,
+            "num_measurements": 1,
+            "num_points": 10,
+            "num_query_token": 8
+          }
+        ],
+        "verify": true
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 75.0,
+          "median": 75.0,
+          "p90": 75,
+          "p99": 75
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 1,
+          "num_doc_token": 32,
+          "num_measurements": 1,
+          "num_points": 10,
+          "num_query_token": 8
+        },
+        "sample_distance_checksum": -2764.606689453125
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "query_transposed_with_tiling",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 1,
+            "num_doc_token": 32,
+            "num_measurements": 1,
+            "num_points": 10,
+            "num_query_token": 8
+          }
+        ],
+        "verify": true
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 93.0,
+          "median": 93.0,
+          "p90": 93,
+          "p99": 93
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 1,
+          "num_doc_token": 32,
+          "num_measurements": 1,
+          "num_points": 10,
+          "num_query_token": 8
+        },
+        "sample_distance_checksum": -2764.606689453125
+      }
+    ]
+  },
+  {
+    "input": {
+      "content": {
+        "approach": "sgemm",
+        "runs": [
+          {
+            "dim": 128,
+            "loops_per_measurement": 1,
+            "num_doc_token": 32,
+            "num_measurements": 1,
+            "num_points": 10,
+            "num_query_token": 8
+          }
+        ],
+        "verify": true
+      },
+      "type": "multivec-op"
+    },
+    "results": [
+      {
+        "percentiles": {
+          "mean": 235.0,
+          "median": 235.0,
+          "p90": 235,
+          "p99": 235
+        },
+        "run": {
+          "dim": 128,
+          "loops_per_measurement": 1,
+          "num_doc_token": 32,
+          "num_measurements": 1,
+          "num_points": 10,
+          "num_query_token": 8
+        },
+        "sample_distance_checksum": -2764.606689453125
+      }
+    ]
+  }
+]

@@ -1,0 +1,95 @@
+{
+  "search_directories": [],
+  "jobs": [
+    {
+      "type": "multivec-op",
+      "content": {
+        "approach": "simd",
+        "runs": [
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 16 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 }
+        ]
+      }
+    },
+    {
+      "type": "multivec-op",
+      "content": {
+        "approach": "transposed_simd",
+        "runs": [
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 16 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 }
+        ]
+      }
+    },
+    {
+      "type": "multivec-op",
+      "content": {
+        "approach": "transposed_with_tiling",
+        "runs": [
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 16 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 }
+        ]
+      }
+    },
+    {
+      "type": "multivec-op",
+      "content": {
+        "approach": "query_transposed_with_tiling",
+        "runs": [
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 16 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 }
+        ]
+      }
+    },
+    {
+      "type": "multivec-op",
+      "content": {
+        "approach": "sgemm",
+        "runs": [
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 128, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 },
+          { "dim": 256, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 16 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 8, "num_doc_token": 32 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 16, "num_doc_token": 64 },
+          { "dim": 384, "num_points": 100, "loops_per_measurement": 10, "num_measurements": 50, "num_query_token": 32, "num_doc_token": 128 }
+        ]
+      }
+    }
+  ]
+}
