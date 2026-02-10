@@ -464,9 +464,17 @@ where
         SearchMode::UnifiedPipeSearch { sqpoll_idle_ms } => {
             #[cfg(target_os = "linux")]
             {
+                use diskann_disk::data_model::Cache;
+
                 let reader_config = PipelinedReaderConfig {
                     sqpoll_idle_ms: *sqpoll_idle_ms,
                 };
+
+                // Extract the node cache before moving vertex_provider_factory into the searcher
+                let node_cache: Arc<Cache<GraphData<T>>> = vertex_provider_factory
+                    .cache
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(Cache::new(0, 0).expect("empty cache")));
 
                 let mut searcher = DiskIndexSearcher::<GraphData<T>, _>::new(
                     search_params.num_threads,
@@ -481,6 +489,7 @@ where
                     disk_index_path: disk_index_path.clone(),
                     reader_config,
                     beam_width: search_params.beam_width,
+                    node_cache,
                 });
 
                 let searcher = &searcher;

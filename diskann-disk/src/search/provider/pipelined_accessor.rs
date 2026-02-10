@@ -13,6 +13,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::ops::Range;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use byteorder::{ByteOrder, LittleEndian};
 use diskann::{
@@ -29,6 +31,7 @@ use diskann_providers::model::{
 };
 use diskann_vector::DistanceFunction;
 
+use crate::data_model::Cache;
 use crate::search::pipelined::{PipelinedReader, PipelinedReaderConfig, MAX_IO_CONCURRENCY};
 use crate::search::sector_math::{node_offset_in_sector, node_sector_index};
 use crate::search::traits::VertexProviderFactory;
@@ -120,6 +123,9 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     fp_vector_len: u64,
     num_points: usize,
 
+    // Node cache (shared, read-only) for avoiding disk IO on hot nodes
+    node_cache: Arc<Cache<Data>>,
+
     // IO state
     in_flight_ios: VecDeque<InFlightIo>,
     loaded_nodes: HashMap<u32, LoadedNode>,
@@ -128,6 +134,12 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
 
     // Distance cache for post-processing rerank
     distance_cache: HashMap<u32, f32>,
+
+    // IO statistics
+    io_count: u32,
+    cache_hits: u32,
+    // Shared stats written on drop so caller can read them after search
+    shared_io_stats: Arc<PipelinedIoStats>,
 }
 
 impl<'a, Data> PipelinedDiskAccessor<'a, Data>
@@ -141,6 +153,8 @@ where
         disk_index_path: &str,
         beam_width: usize,
         reader_config: &PipelinedReaderConfig,
+        node_cache: Arc<Cache<Data>>,
+        shared_io_stats: Arc<PipelinedIoStats>,
     ) -> ANNResult<Self> {
         let metadata = provider.graph_header.metadata();
         let dims = metadata.dims;
@@ -185,11 +199,15 @@ where
             node_len,
             fp_vector_len,
             num_points: provider.num_points,
+            node_cache,
             in_flight_ios: VecDeque::new(),
             loaded_nodes: HashMap::new(),
             next_slot_id: 0,
             max_slots: slots,
             distance_cache: HashMap::new(),
+            io_count: 0,
+            cache_hits: 0,
+            shared_io_stats,
         })
     }
 
@@ -210,6 +228,16 @@ where
             f(self.pq_scratch.aligned_dist_scratch[i], *id);
         }
         Ok(())
+    }
+
+    /// Returns the number of disk IO operations performed.
+    pub fn io_count(&self) -> u32 {
+        self.io_count
+    }
+
+    /// Returns the number of cache hits (nodes served from cache without IO).
+    pub fn cache_hits(&self) -> u32 {
+        self.cache_hits
     }
 
     /// Poll completed IOs and move data from reader buffers into loaded_nodes.
@@ -357,11 +385,27 @@ where
     Data: GraphDataType<VectorIdType = u32>,
 {
     /// Submit non-blocking io_uring reads for the given node IDs.
+    /// Nodes found in the node cache are placed directly into `loaded_nodes`,
+    /// skipping disk IO entirely.
     fn submit_expand(&mut self, ids: impl Iterator<Item = Self::Id> + Send) {
         for id in ids {
             if self.loaded_nodes.contains_key(&id) {
-                continue; // Already loaded
+                continue; // Already loaded from a previous IO
             }
+
+            // Check node cache first — if the node is cached, build a LoadedNode
+            // from the cache and skip IO entirely.
+            if let (Some(vec_data), Some(adj_list)) = (
+                self.node_cache.get_vector(&id),
+                self.node_cache.get_adjacency_list(&id),
+            ) {
+                let fp_vector: Vec<u8> = bytemuck::cast_slice(vec_data).to_vec();
+                let adjacency_list: Vec<u32> = adj_list.iter().copied().collect();
+                self.loaded_nodes.insert(id, LoadedNode { fp_vector, adjacency_list });
+                self.cache_hits += 1;
+                continue;
+            }
+
             let sector_idx =
                 node_sector_index(id, self.num_nodes_per_sector, self.num_sectors_per_node);
             let sector_offset = sector_idx * self.block_size as u64;
@@ -373,6 +417,7 @@ where
                     slot_id,
                 });
                 self.next_slot_id = (self.next_slot_id + 1) % self.max_slots;
+                self.io_count += 1;
             }
         }
     }
@@ -476,23 +521,56 @@ where
     }
 }
 
+impl<Data> Drop for PipelinedDiskAccessor<'_, Data>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+{
+    fn drop(&mut self) {
+        self.shared_io_stats
+            .io_count
+            .fetch_add(self.io_count, Ordering::Relaxed);
+        self.shared_io_stats
+            .cache_hits
+            .fetch_add(self.cache_hits, Ordering::Relaxed);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SearchStrategy + PostProcessor for pipelined search
 // ---------------------------------------------------------------------------
 
 /// Configuration for creating a pipelined search through DiskIndexSearcher.
-#[derive(Debug, Clone)]
-pub struct PipelinedConfig {
+pub struct PipelinedConfig<Data: GraphDataType<VectorIdType = u32>> {
     pub disk_index_path: String,
     pub reader_config: PipelinedReaderConfig,
     pub beam_width: usize,
+    /// Shared node cache. Nodes found here skip disk IO entirely.
+    pub node_cache: Arc<Cache<Data>>,
+}
+
+/// Shared IO statistics written by the accessor and read by the caller after search.
+/// Uses atomics so the accessor (which lives inside search_internal) can write stats
+/// that the caller can read after the search completes.
+pub struct PipelinedIoStats {
+    pub io_count: AtomicU32,
+    pub cache_hits: AtomicU32,
+}
+
+impl Default for PipelinedIoStats {
+    fn default() -> Self {
+        Self {
+            io_count: AtomicU32::new(0),
+            cache_hits: AtomicU32::new(0),
+        }
+    }
 }
 
 /// Search strategy that creates PipelinedDiskAccessor instances.
 pub struct PipelinedSearchStrategy<'a, Data: GraphDataType<VectorIdType = u32>> {
     query: &'a [Data::VectorDataType],
-    config: &'a PipelinedConfig,
+    config: &'a PipelinedConfig<Data>,
     vector_filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
+    io_stats: Arc<PipelinedIoStats>,
 }
 
 /// Post-processor for pipelined search that reranks using cached full-precision distances.
@@ -563,6 +641,8 @@ where
             &self.config.disk_index_path,
             self.config.beam_width,
             &self.config.reader_config,
+            self.config.node_cache.clone(),
+            self.io_stats.clone(),
         )
     }
 
@@ -583,7 +663,7 @@ where
     ProviderFactory: VertexProviderFactory<Data>,
 {
     /// Attach a pipelined configuration to this searcher.
-    pub fn with_pipelined_config(&mut self, config: PipelinedConfig) {
+    pub fn with_pipelined_config(&mut self, config: PipelinedConfig<Data>) {
         self.pipelined_config = Some(config);
     }
 
@@ -607,10 +687,13 @@ where
         let filter: &(dyn Fn(&u32) -> bool + Send + Sync) =
             vector_filter.unwrap_or(default_filter.as_ref());
 
+        let io_stats = Arc::new(PipelinedIoStats::default());
+
         let strategy = PipelinedSearchStrategy {
             query,
             config,
             vector_filter: filter,
+            io_stats: io_stats.clone(),
         };
 
         let search_params = SearchParams::new(
@@ -646,6 +729,9 @@ where
         query_stats.total_comparisons = stats.cmps;
         query_stats.search_hops = stats.hops;
         query_stats.total_execution_time_us = timer.elapsed().as_micros();
+        query_stats.total_io_operations = io_stats.io_count.load(Ordering::Relaxed);
+        query_stats.total_vertices_loaded =
+            io_stats.io_count.load(Ordering::Relaxed) + io_stats.cache_hits.load(Ordering::Relaxed);
 
         let mut search_result = SearchResult {
             results: Vec::with_capacity(return_list_size as usize),

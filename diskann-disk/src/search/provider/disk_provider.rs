@@ -794,7 +794,7 @@ pub struct DiskIndexSearcher<
 
     /// Optional pipelined search configuration (Linux only, io_uring-based).
     #[cfg(target_os = "linux")]
-    pub(crate) pipelined_config: Option<super::pipelined_accessor::PipelinedConfig>,
+    pub(crate) pipelined_config: Option<super::pipelined_accessor::PipelinedConfig<Data>>,
 }
 
 #[derive(Debug)]
