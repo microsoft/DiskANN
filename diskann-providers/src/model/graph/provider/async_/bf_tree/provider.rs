@@ -1861,11 +1861,7 @@ where
     type Ok = usize;
     type Error = ANNError;
 
-    async fn save_with<P>(
-        &self,
-        storage: &P,
-        prefix: &String,
-    ) -> Result<Self::Ok, Self::Error>
+    async fn save_with<P>(&self, storage: &P, prefix: &String) -> Result<Self::Ok, Self::Error>
     where
         P: StorageWriteProvider,
     {
@@ -1988,19 +1984,14 @@ where
     }
 }
 
-impl<T> SaveWith<String>
-    for BfTreeProvider<T, QuantVectorProvider, TableDeleteProviderAsync>
+impl<T> SaveWith<String> for BfTreeProvider<T, QuantVectorProvider, TableDeleteProviderAsync>
 where
     T: VectorRepr,
 {
     type Ok = usize;
     type Error = ANNError;
 
-    async fn save_with<P>(
-        &self,
-        storage: &P,
-        prefix: &String,
-    ) -> Result<Self::Ok, Self::Error>
+    async fn save_with<P>(&self, storage: &P, prefix: &String) -> Result<Self::Ok, Self::Error>
     where
         P: StorageWriteProvider,
     {
