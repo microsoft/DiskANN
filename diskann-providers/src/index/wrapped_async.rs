@@ -4,9 +4,10 @@
  */
 
 use std::{num::NonZeroUsize, sync::Arc};
+use futures_executor::block_on;
 
 use diskann::{
-    ANNResult,
+    ANNError, ANNResult,
     graph::{
         self, ConsolidateKind, InplaceDeleteMethod, SearchParams,
         glue::{
@@ -19,6 +20,10 @@ use diskann::{
     provider::{AsNeighbor, AsNeighborMut, DataProvider, Delete, SetElement},
     utils::{ONE, async_tools::VectorIdBoxSlice},
 };
+
+
+use crate::{model::IndexConfiguration,
+     storage::{StorageReadProvider, LoadWith, AsyncQuantLoadContext,AsyncIndexMetadata, file_storage_provider::FileStorageProvider}};
 
 pub struct DiskANNIndex<DP: DataProvider> {
     /// The underlying async DiskANNIndex.
@@ -316,4 +321,48 @@ where
     {
         self.handle.block_on(self.inner.get_degree_stats(accessor))
     }
+}
+
+pub trait SyncLoadWith: Sized {
+
+    fn load_with(path: &str, index_config: IndexConfiguration) -> Self;
+}
+
+// Load static memory index from pre-built files synchronously
+impl<DP> SyncLoadWith for DiskANNIndex<DP>
+where
+    DP: DataProvider<InternalId = u32> + LoadWith<AsyncQuantLoadContext, Error = ANNError>,
+{
+    fn load_with(path: &str, index_config: IndexConfiguration) -> Self {
+        let storage = FileStorageProvider;
+        let data_provider = create_data_provider(&storage, path, &index_config);
+
+        match data_provider {
+            Ok(dp) => DiskANNIndex::<DP>::new_with_current_thread_runtime(index_config.config, dp),
+            Err(e) => panic!("Failed to create data provider: {}", e),
+        }
+    }
+}
+
+pub fn create_data_provider<'a, P, DP>(
+    provider: &P,
+    path: &'a str,
+    index_config: &'a IndexConfiguration,
+) -> ANNResult<DP>
+where
+    P: StorageReadProvider,
+    DP: DataProvider + LoadWith<AsyncQuantLoadContext, Error = ANNError>,
+{
+    let pq_context = AsyncQuantLoadContext {
+        metadata: AsyncIndexMetadata::new(path),
+        num_frozen_points: index_config.num_frozen_pts,
+        metric: index_config.dist_metric,
+        prefetch_lookahead: index_config.prefetch_lookahead.map(|x| x.get()),
+        is_disk_index: false, // only support in-memory index loading here
+        prefetch_cache_line_level: index_config.prefetch_cache_line_level,
+    };
+
+    let data_provider = DP::load_with(provider, &pq_context);
+    
+    block_on(data_provider)
 }

@@ -612,6 +612,7 @@ dependencies = [
  "diskann-utils",
  "diskann-vector",
  "diskann-wide",
+ "futures-executor",
  "futures-util",
  "half",
  "hashbrown 0.16.1",
