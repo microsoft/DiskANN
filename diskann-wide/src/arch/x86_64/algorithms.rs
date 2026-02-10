@@ -19,10 +19,28 @@ use super::V3;
 unsafe fn __load_8_to_16_bytes(_: V3, ptr: *const u8, bytes: usize) -> __m128i {
     debug_assert!(bytes > 8 && bytes < 16);
 
-    // An identity shuffle adjusted by subtracting the shift amount. Lanes that underflow
-    // become negative (high bit set), which `pshufb` zeroes. Lanes beyond the loaded 8
-    // bytes read from the zero-extended upper half of `_mm_loadl_epi64`, producing zeros
-    // that are harmless under OR.
+    // The trick here is to use 2 8-byte loads. One (call it X) beginning at `ptr` loading
+    // `[ptr, ptr + 8)` and the other (call it Y) loading `[ptr + bytes - 8, ptr + bytes)`.
+    //
+    // Then, we need a way to glue Y after the first `bytes - 8` bytes of X (formulating the
+    // problem this way is done intentionally as we'll see below).
+    //
+    // We do this using the powerful `_mm_shuffle_epi8` instruction.
+    //
+    // This is set up by using an identity shuffle adjusted by subtracting the shift amount.
+    // Lanes that underflow become negative (high bit set), which `_mm_shuffle_epi8` zeroes.
+    // Lanes beyond the loaded 8 bytes read from the zero-extended upper half of
+    // `_mm_loadl_epi64`, producing zeros that are harmless under OR.
+    //
+    // For example, if `bytes` is 13 (8 + 5), the adjusted shuffle mask is
+    // ```
+    // [-X, -X, -X, -X, -X, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    // |-----------------|
+    //  output lanes here
+    //    will be zeroed
+    // ```
+    // This will effectively move the 8 bytes of Y each over by 5 lanes. When OR'ed with X,
+    // this becomes the 13 bytes we want.
     //
     // SAFETY: Both reads are within `[ptr, ptr + bytes)`. The intrinsics require SSSE3/SSE2,
     // available on V3.
