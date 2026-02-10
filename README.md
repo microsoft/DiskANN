@@ -22,6 +22,12 @@ contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additio
 
 See [guidelines](CONTRIBUTING.md) for contributing to this project.
 
+## Releases
+
+The Rust crates are automatically published to [crates.io](https://crates.io) when a version tag is pushed. See [RELEASING.md](RELEASING.md) for detailed release process documentation.
+
+Latest version: ![Crates.io Version](https://img.shields.io/crates/v/diskann)
+
 ## Legacy C++ Code
 
 Older C++ code is retained on the `cpp_main` branch, but is not actively developed or maintained.
