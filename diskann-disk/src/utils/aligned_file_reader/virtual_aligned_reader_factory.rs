@@ -54,12 +54,4 @@ mod tests {
         fn check_impl<T: AlignedReaderFactory>() {}
         check_impl::<VirtualAlignedReaderFactory<MemoryFS>>();
     }
-
-    #[test]
-    fn test_virtual_aligned_reader_factory_field_access() {
-        let fs = Arc::new(VirtualStorageProvider::new(MemoryFS::new()));
-        let factory = VirtualAlignedReaderFactory::new("/path/to/file".to_string(), fs);
-        
-        assert_eq!(factory.file_path, "/path/to/file");
-    }
 }

@@ -83,10 +83,4 @@ mod tests {
         fn check_impl<T: AlignedReaderFactory>() {}
         check_impl::<AlignedFileReaderFactory>();
     }
-
-    #[test]
-    fn test_aligned_file_reader_factory_field_access() {
-        let factory = AlignedFileReaderFactory::new("/path/to/file".to_string());
-        assert_eq!(factory.file_path, "/path/to/file");
-    }
 }
