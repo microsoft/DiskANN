@@ -23,8 +23,10 @@ use super::{StorageReadProvider, StorageWriteProvider};
 ///
 /// Use an in-memory filesystem instead of the normal filesystem to keep all test data in-memory
 /// ```
+/// use std::io::Write;
 /// use vfs::FileSystem;
 /// use diskann_providers::storage::VirtualStorageProvider;
+///
 /// let storage_provider = VirtualStorageProvider::new_memory();
 ///
 /// // Create the root directory
@@ -36,45 +38,6 @@ use super::{StorageReadProvider, StorageWriteProvider};
 ///     let mut file = storage_provider.filesystem().create_file("/test_root/input_data.bin").expect("Could not create test file");
 ///     file.write_all(b"This is test data").expect("Unable to write test data");
 /// }
-/// ```
-///
-/// Use the physical filesystem with custom root instead of the normal filesystem.  This prevents
-/// the test from writing outside of the expected sandbox
-/// ```
-/// use vfs::FileSystem;
-/// use diskann_providers::storage::VirtualStorageProvider;
-///
-/// // Use your own path, not the target directory
-/// let storage_provider = VirtualStorageProvider::new_physical("../target");
-///
-/// {
-///     // Write test data to the filesystem inside a scope block so that the writer
-///     // is flushed and disposed before using the storage_provider. On the local filesystem
-///     // input_data.bin will be written to ../target/input_data.bin.
-///     let mut file = storage_provider.filesystem().create_file("/input_data.bin").expect("Could not create test file");
-///     file.write_all(b"This is test data").expect("Unable to write test data");
-/// }
-/// ```
-///
-/// Use the overlay filesystem to read from the local filesystem and write to the in-memory filesystem
-/// ```
-/// use vfs::FileSystem;
-/// use diskann_providers::storage::VirtualStorageProvider;
-///
-/// // Create a storage provider with an overlay filesystem
-/// // This will read data from the ../target/my_data_location path and write to memory.
-/// let storage_provider = VirtualStorageProvider::new_overlay("../target/my_data_location");
-///
-/// storage_provider.filesystem().create_dir("/test_data").expect("Could not create test directory");
-///
-/// {
-///     // Write test data to the in-memory filesystem inside a scope block so that the writer
-///     // is flushed and disposed before using the storage_provider.
-///     let mut file = storage_provider.filesystem().create_file("/test_data/input_data.bin").expect("Could not create test file");
-///     file.write_all(b"This is test data").expect("Unable to write test data");
-/// }
-///
-/// // Storage provider will read from memory & local filesystem but will only write to memory.
 /// ```
 pub struct VirtualStorageProvider<FileSystemType: FileSystem> {
     filesystem: FileSystemType,

@@ -465,7 +465,7 @@ mod generator_tests {
             inmemory_build_chunk_vector_count: 10_000,
         };
 
-        let (generator, result) = create_and_call_generator::<vfs::MemoryFS>(
+        let (generator, result) = create_and_call_generator(
             offset,
             compressed_path.clone(),
             &storage_provider,
@@ -508,7 +508,7 @@ mod generator_tests {
         };
         let (storage_provider, data_path, compressed_path) =
             generate_data_and_compressed(num_points, dim, 0, output_dim)?;
-        let (mut generator, mut result) = create_and_call_generator::<vfs::MemoryFS>(
+        let (mut generator, mut result) = create_and_call_generator(
             0,
             compressed_path.clone(),
             &storage_provider,
@@ -520,7 +520,7 @@ mod generator_tests {
             match result.as_ref().unwrap() {
                 Progress::Completed => break,
                 Progress::Processed(num_points) => {
-                    (generator, result) = create_and_call_generator::<vfs::MemoryFS>(
+                    (generator, result) = create_and_call_generator(
                         *num_points,
                         compressed_path.clone(),
                         &storage_provider,
@@ -586,7 +586,7 @@ mod generator_tests {
         let (storage_provider, data_path, compressed_path) =
             generate_data_and_compressed(num_points, dim, error_offset, output_dim)?;
 
-        let (_, result) = create_and_call_generator::<vfs::MemoryFS>(
+        let (_, result) = create_and_call_generator(
             offset,
             compressed_path,
             &storage_provider,
