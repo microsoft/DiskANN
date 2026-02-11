@@ -2165,9 +2165,8 @@ where
                     scratch.cmps += neighbors.len() as u32;
                     scratch.hops += expanded as u32;
 
-                    // Adaptive beam width: track IO waste after convergence gate
                     if search_params.adaptive_beam_width && expanded > 0 {
-                        if scratch.hops >= 5 {
+                        if scratch.hops >= search_params.abw_convergence_hops {
                             let improved = neighbors.iter().any(|n| n.distance < worst_before);
                             abw_total += 1;
                             if improved {
@@ -2260,7 +2259,7 @@ where
                     scratch.hops += expanded as u32;
 
                     if search_params.adaptive_beam_width && expanded > 0 {
-                        if scratch.hops >= 5 {
+                        if scratch.hops >= search_params.abw_convergence_hops {
                             let improved = neighbors.iter().any(|n| n.distance < worst_before);
                             abw_total += 1;
                             if improved {
