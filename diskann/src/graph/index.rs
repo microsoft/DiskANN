@@ -2145,7 +2145,7 @@ where
                     // Step 1: Expand one loaded node (polls internally).
                     // Pass empty iterator — the accessor picks by rank.
                     neighbors.clear();
-                    let expanded = accessor
+                    let expanded_ids = accessor
                         .expand_available(
                             std::iter::empty(),
                             computer,
@@ -2154,7 +2154,7 @@ where
                         )
                         .await?;
 
-                    for &id in accessor.last_expanded_ids() {
+                    for &id in &expanded_ids {
                         scratch.best.mark_visited_by_id(&id);
                         submitted.remove(&id);
                     }
@@ -2168,9 +2168,9 @@ where
                         .iter()
                         .for_each(|neighbor| scratch.best.insert(*neighbor));
                     scratch.cmps += neighbors.len() as u32;
-                    scratch.hops += expanded as u32;
+                    scratch.hops += expanded_ids.len() as u32;
 
-                    if search_params.adaptive_beam_width && expanded > 0 {
+                    if search_params.adaptive_beam_width && !expanded_ids.is_empty() {
                         if max_marker >= search_params.abw_convergence_depth {
                             let improved = neighbors.iter().any(|n| n.distance < worst_before);
                             abw_total += 1;
@@ -2203,45 +2203,36 @@ where
                     }
 
                     // Block if truly idle
-                    if expanded == 0 && has_pending {
+                    if expanded_ids.is_empty() && has_pending {
                         let inflight = accessor.inflight_count();
                         if inflight > 0 {
                             accessor.wait_for_io();
                         }
                     }
                 } else {
-                    // Non-pipelined path OR initial burst (has_pending=false)
+                    // Non-pipelined path OR initial burst (has_pending=false).
+                    // Both pipelined and non-pipelined use the same node selection
+                    // to track max_marker for ABW/RM convergence detection.
                     let submit_limit = if has_pending { 0 } else { cur_beam_width };
 
                     scratch.beam_nodes.clear();
-                    if pipelining {
-                        while scratch.beam_nodes.len() < submit_limit {
-                            if let Some((pos, closest_node)) =
-                                scratch.best.peek_best_unsubmitted_with_position(&submitted)
-                            {
-                                max_marker = max_marker.max(pos);
-                                search_record.record(closest_node, scratch.hops, scratch.cmps);
-                                submitted.insert(closest_node.id);
-                                scratch.beam_nodes.push(closest_node.id);
-                            } else {
-                                break;
-                            }
-                        }
-                    } else {
-                        while scratch.best.has_notvisited_node()
-                            && scratch.beam_nodes.len() < submit_limit
+                    while scratch.beam_nodes.len() < submit_limit {
+                        if let Some((pos, closest_node)) =
+                            scratch.best.peek_best_unsubmitted_with_position(&submitted)
                         {
-                            let closest_node = scratch.best.closest_notvisited();
+                            max_marker = max_marker.max(pos);
                             search_record.record(closest_node, scratch.hops, scratch.cmps);
                             submitted.insert(closest_node.id);
                             scratch.beam_nodes.push(closest_node.id);
+                        } else {
+                            break;
                         }
                     }
 
                     accessor.submit_expand(scratch.beam_nodes.iter().copied());
 
                     neighbors.clear();
-                    let expanded = accessor
+                    let expanded_ids = accessor
                         .expand_available(
                             scratch.beam_nodes.iter().copied(),
                             computer,
@@ -2250,7 +2241,8 @@ where
                         )
                         .await?;
 
-                    for &id in accessor.last_expanded_ids() {
+                    // Mark expanded nodes visited.
+                    for &id in &expanded_ids {
                         scratch.best.mark_visited_by_id(&id);
                         submitted.remove(&id);
                     }
@@ -2263,9 +2255,9 @@ where
                         .iter()
                         .for_each(|neighbor| scratch.best.insert(*neighbor));
                     scratch.cmps += neighbors.len() as u32;
-                    scratch.hops += expanded as u32;
+                    scratch.hops += expanded_ids.len() as u32;
 
-                    if search_params.adaptive_beam_width && expanded > 0 {
+                    if search_params.adaptive_beam_width && !expanded_ids.is_empty() {
                         if max_marker >= search_params.abw_convergence_depth {
                             let improved = neighbors.iter().any(|n| n.distance < worst_before);
                             abw_total += 1;

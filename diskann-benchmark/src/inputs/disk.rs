@@ -72,12 +72,18 @@ pub(crate) struct DiskIndexBuild {
 }
 
 /// Search algorithm to use for disk index search.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "mode")]
 pub(crate) enum SearchMode {
     /// Standard beam search (default, current behavior).
-    #[default]
-    BeamSearch,
+    BeamSearch {
+        /// Start with a smaller beam and grow adaptively. Defaults to false.
+        #[serde(default)]
+        adaptive_beam_width: bool,
+        /// Optional relaxed monotonicity parameter for early termination.
+        #[serde(default)]
+        relaxed_monotonicity_l: Option<usize>,
+    },
     /// Pipelined search through the generic search loop (queue-based ExpandBeam).
     /// Overlaps IO and compute using io_uring on Linux.
     #[serde(alias = "UnifiedPipeSearch")]
@@ -94,10 +100,37 @@ pub(crate) enum SearchMode {
     },
 }
 
+impl Default for SearchMode {
+    fn default() -> Self {
+        SearchMode::BeamSearch {
+            adaptive_beam_width: false,
+            relaxed_monotonicity_l: None,
+        }
+    }
+}
+
 impl fmt::Display for SearchMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SearchMode::BeamSearch => write!(f, "BeamSearch"),
+            SearchMode::BeamSearch { adaptive_beam_width, relaxed_monotonicity_l } => {
+                write!(f, "BeamSearch")?;
+                let has_abw = *adaptive_beam_width;
+                let has_rm = relaxed_monotonicity_l.is_some();
+                if has_abw || has_rm {
+                    write!(f, "(")?;
+                    let mut first = true;
+                    if has_abw {
+                        write!(f, "abw")?;
+                        first = false;
+                    }
+                    if let Some(rm) = relaxed_monotonicity_l {
+                        if !first { write!(f, ", ")?; }
+                        write!(f, "rm_l={}", rm)?;
+                    }
+                    write!(f, ")")?;
+                }
+                Ok(())
+            }
             SearchMode::PipeSearch { adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms } => {
                 write!(f, "PipeSearch")?;
                 let has_abw = *adaptive_beam_width;
@@ -298,7 +331,7 @@ impl CheckDeserialization for DiskSearchPhase {
             }
         }
         match &self.search_mode {
-            SearchMode::BeamSearch => {}
+            SearchMode::BeamSearch { .. } => {}
             SearchMode::PipeSearch { .. } => {}
         }
         Ok(())

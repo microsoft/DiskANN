@@ -965,6 +965,84 @@ where
         Ok(search_result)
     }
 
+    /// Perform a search with explicit [`SearchParams`] for full control over
+    /// adaptive beam width, relaxed monotonicity, etc.
+    pub fn search_with_params(
+        &self,
+        query: &[Data::VectorDataType],
+        search_params: &SearchParams,
+        vector_filter: Option<VectorFilter<Data>>,
+        is_flat_search: bool,
+    ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
+        let k_value = search_params.k_value;
+        let mut query_stats = QueryStatistics::default();
+        let mut indices = vec![0u32; k_value];
+        let mut distances = vec![0f32; k_value];
+        let mut associated_data = vec![Data::AssociatedDataType::default(); k_value];
+
+        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
+            &mut indices[..k_value],
+            &mut distances[..k_value],
+            &mut associated_data[..k_value],
+        );
+
+        let filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
+        let strategy = self.search_strategy(query, &filter);
+        let timer = Instant::now();
+        let stats = if is_flat_search {
+            self.runtime.block_on(self.index.flat_search(
+                &strategy,
+                &DefaultContext,
+                strategy.query,
+                &filter,
+                search_params,
+                &mut result_output_buffer,
+            ))?
+        } else {
+            self.runtime.block_on(self.index.search(
+                &strategy,
+                &DefaultContext,
+                strategy.query,
+                search_params,
+                &mut result_output_buffer,
+            ))?
+        };
+        query_stats.total_comparisons = stats.cmps;
+        query_stats.search_hops = stats.hops;
+        query_stats.total_execution_time_us = timer.elapsed().as_micros();
+        query_stats.io_time_us = IOTracker::time(&strategy.io_tracker.io_time_us) as u128;
+        query_stats.total_io_operations = strategy.io_tracker.io_count() as u32;
+        query_stats.total_vertices_loaded = strategy.io_tracker.io_count() as u32;
+        query_stats.query_pq_preprocess_time_us =
+            IOTracker::time(&strategy.io_tracker.preprocess_time_us) as u128;
+        query_stats.cpu_time_us = query_stats.total_execution_time_us
+            - query_stats.io_time_us
+            - query_stats.query_pq_preprocess_time_us;
+
+        let mut search_result = SearchResult {
+            results: Vec::with_capacity(k_value),
+            stats: SearchResultStats {
+                cmps: query_stats.total_comparisons,
+                result_count: stats.result_count,
+                query_statistics: query_stats,
+            },
+        };
+
+        for ((vertex_id, distance), associated_data) in indices
+            .into_iter()
+            .zip(distances.into_iter())
+            .zip(associated_data.into_iter())
+        {
+            search_result.results.push(SearchResultItem {
+                vertex_id,
+                distance,
+                data: associated_data,
+            });
+        }
+
+        Ok(search_result)
+    }
+
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
     #[allow(clippy::too_many_arguments)]

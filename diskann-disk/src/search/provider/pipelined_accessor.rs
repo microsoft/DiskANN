@@ -624,7 +624,7 @@ where
         _computer: &Self::QueryComputer,
         mut pred: P,
         mut on_neighbors: F,
-    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
+    ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send
     where
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(f32, Self::Id) + Send,
@@ -636,7 +636,7 @@ where
             self.drain_completions()?;
 
             if self.scratch.loaded_nodes.is_empty() {
-                return Ok(0);
+                return Ok(Vec::new());
             }
 
             // Try caller's priority order first
@@ -660,7 +660,7 @@ where
 
             let vid = match best_vid {
                 Some(id) => id,
-                None => return Ok(0),
+                None => return Ok(Vec::new()),
             };
             let node = self.scratch.loaded_nodes.remove(&vid).unwrap();
             self.scratch.expanded_ids.push(vid);
@@ -697,7 +697,7 @@ where
             // Return node to pool for reuse
             self.scratch.release_node(node);
 
-            Ok(1)
+            Ok(self.scratch.expanded_ids.clone())
         }
     }
 
@@ -715,10 +715,6 @@ where
         if !self.scratch.in_flight_ios.is_empty() {
             let _ = self.wait_and_drain();
         }
-    }
-
-    fn last_expanded_ids(&self) -> &[u32] {
-        &self.scratch.expanded_ids
     }
 
     fn is_pipelined(&self) -> bool {

@@ -277,24 +277,23 @@ where
     /// completed IO operations and expands only the nodes whose data has arrived,
     /// returning immediately without blocking.
     ///
-    /// Returns the number of nodes that were expanded in this call.
+    /// Returns the IDs of nodes that were actually expanded in this call.
     fn expand_available<P, F>(
         &mut self,
         ids: impl Iterator<Item = Self::Id> + Send,
         computer: &Self::QueryComputer,
         pred: P,
         on_neighbors: F,
-    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
+    ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send
     where
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(f32, Self::Id) + Send,
     {
         async move {
             let id_vec: Vec<Self::Id> = ids.collect();
-            let count = id_vec.len();
-            self.expand_beam(id_vec.into_iter(), computer, pred, on_neighbors)
+            self.expand_beam(id_vec.iter().copied(), computer, pred, on_neighbors)
                 .await?;
-            Ok(count)
+            Ok(id_vec)
         }
     }
 
@@ -331,15 +330,6 @@ where
     /// marking visited). When false, the classic visited-at-selection path.
     fn is_pipelined(&self) -> bool {
         false
-    }
-
-    /// Return the IDs of nodes expanded in the most recent `expand_available` call.
-    ///
-    /// The search loop uses this to mark speculatively submitted nodes as visited
-    /// only after they have actually been expanded. Non-pipelined providers return
-    /// an empty slice (they mark visited at selection time).
-    fn last_expanded_ids(&self) -> &[Self::Id] {
-        &[]
     }
 
     /// Expand all `ids` synchronously: load data, get neighbors, compute distances.

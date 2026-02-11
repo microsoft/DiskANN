@@ -9,7 +9,7 @@ use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, sync::Arc, time::
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
-use diskann::{utils::VectorRepr, ANNResult};
+use diskann::{graph::SearchParams, utils::VectorRepr, ANNResult};
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
     data_model::CachingStrategy,
@@ -319,7 +319,7 @@ where
     let has_any_search_failed = AtomicBool::new(false);
 
     match &search_params.search_mode {
-        SearchMode::BeamSearch => {
+        SearchMode::BeamSearch { adaptive_beam_width, relaxed_monotonicity_l } => {
             let searcher = &DiskIndexSearcher::<GraphData<T>, _>::new(
                 search_params.num_threads,
                 search_params.search_io_limit.unwrap_or(usize::MAX),
@@ -328,6 +328,9 @@ where
                 search_params.distance.into(),
                 None,
             )?;
+
+            let abw = *adaptive_beam_width;
+            let rm_l = *relaxed_monotonicity_l;
 
             logger.log_checkpoint("index_loaded");
 
@@ -358,12 +361,22 @@ where
                                     as Box<dyn Fn(&u32) -> bool + Send + Sync>)
                             };
 
+                            let mut sp = SearchParams::new(
+                                search_params.recall_at as usize,
+                                l as usize,
+                                Some(search_params.beam_width),
+                            ).unwrap();
+                            if abw {
+                                sp = sp.with_adaptive_beam_width();
+                            }
+                            if let Some(rm) = rm_l {
+                                sp = sp.with_relaxed_monotonicity(rm);
+                            }
+
                             write_query_result(
-                                searcher.search(
+                                searcher.search_with_params(
                                     q,
-                                    search_params.recall_at,
-                                    l,
-                                    Some(search_params.beam_width),
+                                    &sp,
                                     vector_filter,
                                     search_params.is_flat_search,
                                 ),
