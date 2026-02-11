@@ -38,9 +38,7 @@ pub trait VertexProviderFactory<Data: GraphDataType>: Send + Sync {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_vertex_provider_factory_trait_exists() {
-        // This test verifies that the trait is properly defined and accessible
-        // We can't easily test trait implementations without complex setup
-        assert!(true);
+    fn test_vertex_provider_factory_trait() {
+        // Trait definition is verified at compile time
     }
 }

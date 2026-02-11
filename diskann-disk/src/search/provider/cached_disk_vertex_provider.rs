@@ -159,7 +159,6 @@ where
 mod tests {
     #[test]
     fn test_struct_definition() {
-        // Test verifies the struct compiles
-        assert!(true);
+        // Struct definition is verified at compile time
     }
 }

@@ -12,9 +12,7 @@ pub use vertex_provider_factory::VertexProviderFactory;
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_module_exports() {
-        // Just verify the module compiles and traits are accessible
-        // Trait definitions don't need runtime testing
-        assert!(true);
+    fn test_module_structure() {
+        // Module structure is verified at compile time
     }
 }

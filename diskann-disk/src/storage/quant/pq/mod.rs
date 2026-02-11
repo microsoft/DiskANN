@@ -9,7 +9,6 @@ pub mod pq_generation;
 mod tests {
     #[test]
     fn test_module_structure() {
-        // Verify module is accessible
-        assert!(true);
+        // Module structure is verified at compile time
     }
 }

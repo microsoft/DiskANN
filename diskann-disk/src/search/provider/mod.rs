@@ -18,7 +18,6 @@ pub mod disk_vertex_provider_factory;
 mod tests {
     #[test]
     fn test_module_structure() {
-        // Verify modules are accessible
-        assert!(true);
+        // Module structure is verified at compile time
     }
 }
