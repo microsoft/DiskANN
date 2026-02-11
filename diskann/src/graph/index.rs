@@ -2111,9 +2111,6 @@ where
             }
 
             let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
-            // Tracks how many nodes were expanded last iteration, so the
-            // pipelined submit can match its rate (process-N-submit-N).
-            let mut last_expanded: usize = 0;
             // Tracks speculatively submitted (but not yet visited/expanded) nodes
             // so the pipelined path can decouple submission from visitation.
             let mut submitted = std::collections::HashSet::<DP::InternalId>::new();
@@ -2147,7 +2144,6 @@ where
                             |distance, id| neighbors.push(Neighbor::new(id, distance)),
                         )
                         .await?;
-                    last_expanded = expanded;
 
                     for &id in accessor.last_expanded_ids() {
                         scratch.best.mark_visited_by_id(&id);
@@ -2226,7 +2222,6 @@ where
                             |distance, id| neighbors.push(Neighbor::new(id, distance)),
                         )
                         .await?;
-                    last_expanded = expanded;
 
                     for &id in accessor.last_expanded_ids() {
                         scratch.best.mark_visited_by_id(&id);
