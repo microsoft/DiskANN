@@ -43,3 +43,40 @@ where
     fn compress(&self, vector: MatrixView<f32>, output: MutMatrixView<u8>) -> ANNResult<()>;
     fn compressed_bytes(&self) -> usize;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compression_stage_enum() {
+        // Test enum variants
+        let start = CompressionStage::Start;
+        let resume = CompressionStage::Resume;
+        
+        assert_eq!(start, CompressionStage::Start);
+        assert_eq!(resume, CompressionStage::Resume);
+        assert_ne!(start, resume);
+    }
+
+    #[test]
+    fn test_compression_stage_clone() {
+        let stage = CompressionStage::Start;
+        let cloned = stage.clone();
+        assert_eq!(stage, cloned);
+    }
+
+    #[test]
+    fn test_compression_stage_copy() {
+        let stage = CompressionStage::Resume;
+        let copied = stage;
+        assert_eq!(stage, copied);
+    }
+
+    #[test]
+    fn test_compression_stage_debug() {
+        let start = CompressionStage::Start;
+        let debug_str = format!("{:?}", start);
+        assert!(debug_str.contains("Start"));
+    }
+}

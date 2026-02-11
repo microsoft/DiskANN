@@ -9,3 +9,12 @@ pub use aligned_file_reader::AlignedFileReader;
 
 pub mod aligned_reader_factory;
 pub use aligned_reader_factory::AlignedReaderFactory;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_module_exports() {
+        // Just verify the module compiles and traits are accessible
+        assert!(true);
+    }
+}

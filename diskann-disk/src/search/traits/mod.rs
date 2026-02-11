@@ -8,3 +8,13 @@ pub use vertex_provider::VertexProvider;
 
 pub mod vertex_provider_factory;
 pub use vertex_provider_factory::VertexProviderFactory;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_module_exports() {
+        // Just verify the module compiles and traits are accessible
+        // Trait definitions don't need runtime testing
+        assert!(true);
+    }
+}

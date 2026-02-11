@@ -14,3 +14,17 @@ pub use graph_header::GraphHeader;
 
 mod cache;
 pub use cache::{Cache, CachingStrategy};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_module_exports() {
+        // Verify that key types are accessible
+        let _ = core::any::type_name::<GraphLayoutVersion>();
+        let _ = core::any::type_name::<GraphMetadata>();
+        let _ = core::any::type_name::<GraphHeader>();
+        let _ = core::any::type_name::<CachingStrategy>();
+    }
+}

@@ -20,3 +20,15 @@ pub use aligned_file_reader::VirtualAlignedReaderFactory;
 
 pub mod statistics;
 pub use statistics::{get_mean_stats, get_percentile_stats, get_sum_stats, QueryStatistics};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_module_exports() {
+        // Verify that key types are accessible
+        let _ = core::any::type_name::<AlignedFileReaderFactory>();
+        let _ = core::any::type_name::<QueryStatistics>();
+    }
+}

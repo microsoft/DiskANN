@@ -32,3 +32,16 @@ pub use storage_provider_aligned_file_reader::StorageProviderAlignedFileReader;
 
 pub mod aligned_file_reader_factory;
 pub use aligned_file_reader_factory::AlignedFileReaderFactory;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_module_exports() {
+        // Verify that key types are accessible
+        let _ = core::any::type_name::<AlignedRead<u8>>();
+        let _ = core::any::type_name::<StorageProviderAlignedFileReader>();
+        let _ = core::any::type_name::<AlignedFileReaderFactory>();
+    }
+}

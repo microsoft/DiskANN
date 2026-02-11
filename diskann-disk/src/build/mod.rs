@@ -16,3 +16,15 @@ pub mod configuration;
 pub use configuration::{
     disk_index_build_parameter, filter_parameter, DiskIndexBuildParameters, QuantizationType,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_module_exports() {
+        // Verify that key types are accessible
+        let _ = core::any::type_name::<DiskIndexBuildParameters>();
+        let _ = core::any::type_name::<QuantizationType>();
+    }
+}

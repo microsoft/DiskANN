@@ -22,3 +22,14 @@ pub use cached_writer::CachedWriter;
 pub mod quant;
 
 pub mod api;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_module_exports() {
+        // Verify that key types are accessible (type names don't need instantiation)
+        let _ = core::any::type_name::<DiskIndexWriter>();
+    }
+}
