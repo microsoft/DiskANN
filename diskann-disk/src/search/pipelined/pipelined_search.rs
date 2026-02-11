@@ -14,6 +14,7 @@ use diskann_providers::model::{compute_pq_distance, pq::quantizer_preprocess, PQ
 use diskann_vector::{distance::Metric, DistanceFunction};
 
 use super::pipelined_reader::PipelinedReader;
+use crate::search::search_trace::{OptionalTrace, SearchTrace, TraceEventKind};
 use crate::search::sector_math::{node_offset_in_sector, node_sector_index};
 
 /// A candidate in the sorted candidate pool.
@@ -158,7 +159,9 @@ pub(crate) fn pipe_search<T: VectorRepr>(
     relaxed_monotonicity_l: Option<usize>,
     metric: Metric,
     vector_filter: Option<&(dyn Fn(&u32) -> bool + Send + Sync)>,
+    trace: Option<&mut SearchTrace>,
 ) -> ANNResult<PipeSearchResult> {
+    let mut trace = OptionalTrace(trace);
     let timer = Instant::now();
     let mut io_count: u32 = 0;
     let mut comparisons: u32 = 0;
@@ -261,7 +264,9 @@ pub(crate) fn pipe_search<T: VectorRepr>(
         // Poll completions (non-blocking). Keeping this non-blocking is critical
         // for overlapping IO and compute — blocking here would serialize the pipeline.
         let io_poll_start = Instant::now();
+        trace.begin_phase();
         let completed_slots = reader.poll_completions()?;
+        trace.end_phase_io_poll();
         io_time += io_poll_start.elapsed();
         let mut n_in: usize = 0;
         let mut n_out: usize = 0;
@@ -273,6 +278,7 @@ pub(crate) fn pipe_search<T: VectorRepr>(
             while let Some(io) = on_flight_ios.pop_front() {
                 if completed_set.contains(&io.slot_id) {
                     let sector_buf = reader.get_slot_buf(io.slot_id);
+                    trace.begin_phase();
                     let node = parse_node(
                         sector_buf,
                         io.vertex_id,
@@ -280,6 +286,8 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                         node_len,
                         fp_vector_len,
                     )?;
+                    trace.end_phase_parse_node();
+                    trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
                     // Track convergence: is this node still in the top of retset?
                     if cur_list_size > 0 {
                         let last_dist = retset[cur_list_size - 1].distance;
@@ -329,6 +337,7 @@ pub(crate) fn pipe_search<T: VectorRepr>(
         // Submit more reads if room
         if on_flight_ios.len() < cur_beam_width {
             let io_submit_start = Instant::now();
+            trace.begin_phase();
             let to_send = 1;
             let mut n_sent = 0;
             let mut marker = 0;
@@ -347,12 +356,17 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                         vertex_id: vid,
                         slot_id,
                     });
+                    trace.event(TraceEventKind::Submit {
+                        node_id: vid,
+                        inflight: on_flight_ios.len(),
+                    });
                     next_slot_id = (next_slot_id + 1) % max_slots(beam_width);
                     io_count += 1;
                     n_sent += 1;
                 }
                 marker += 1;
             }
+            trace.end_phase_io_submit();
             io_time += io_submit_start.elapsed();
         }
 
@@ -371,8 +385,10 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                 if let Some(node) = id_buf_map.get(&vid) {
                     // Compute full-precision distance; only add to results if
                     // filter is absent or the node passes the filter predicate.
+                    trace.begin_phase();
                     let fp_vec: &[T] = bytemuck::cast_slice(&node.fp_vector);
                     let fp_dist = distance_comparer.evaluate_similarity(query, fp_vec);
+                    trace.end_phase_fp_distance();
                     if vector_filter.map_or(true, |f| f(&vid)) {
                         full_retset.push((vid, fp_dist));
                     }
@@ -385,9 +401,11 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                         }
                     }
 
+                    let num_new_candidates;
                     if !nbors_to_compute.is_empty() {
                         comparisons += nbors_to_compute.len() as u32;
                         // Compute PQ distances for unvisited neighbors
+                        trace.begin_phase();
                         compute_pq_distance(
                             &nbors_to_compute,
                             num_pq_chunks,
@@ -396,8 +414,11 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                             &mut pq_scratch.aligned_pq_coord_scratch,
                             &mut pq_scratch.aligned_dist_scratch,
                         )?;
+                        trace.end_phase_pq_distance();
 
+                        trace.begin_phase();
                         let mut nk = cur_list_size;
+                        let mut n_inserted: u32 = 0;
                         for (m, &nbr_id) in nbors_to_compute.iter().enumerate() {
                             let nbr_dist = pq_scratch.aligned_dist_scratch[m];
                             if cur_list_size == search_l
@@ -418,8 +439,21 @@ pub(crate) fn pipe_search<T: VectorRepr>(
                             if r < nk {
                                 nk = r;
                             }
+                            n_inserted += 1;
                         }
+                        trace.end_phase_queue_ops();
+                        num_new_candidates = n_inserted;
+                    } else {
+                        num_new_candidates = 0;
                     }
+
+                    trace.record_expand();
+                    trace.event(TraceEventKind::Expand {
+                        node_id: vid,
+                        fp_distance: fp_dist,
+                        num_neighbors: node.adjacency_list.len() as u32,
+                        num_new_candidates,
+                    });
                 }
 
                 // Find first_unvisited_eager for convergence tracking
@@ -495,6 +529,15 @@ pub(crate) fn pipe_search<T: VectorRepr>(
     }
 
     let total_us = timer.elapsed().as_micros();
+
+    trace.event(TraceEventKind::Done {
+        total_hops: hops,
+        total_ios: io_count,
+        total_comparisons: comparisons,
+    });
+    if let Some(t) = trace.0.as_mut() {
+        t.finish();
+    }
 
     Ok(PipeSearchResult {
         ids,

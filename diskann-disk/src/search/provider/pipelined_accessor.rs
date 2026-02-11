@@ -15,6 +15,7 @@ use std::future::Future;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use byteorder::{ByteOrder, LittleEndian};
 use diskann::{
@@ -34,6 +35,7 @@ use diskann_vector::DistanceFunction;
 
 use crate::data_model::Cache;
 use crate::search::pipelined::{PipelinedReader, PipelinedReaderConfig, MAX_IO_CONCURRENCY};
+use crate::search::search_trace::{OptionalTrace, SearchTrace, TraceEventKind};
 use crate::search::sector_math::{node_offset_in_sector, node_sector_index};
 use crate::search::traits::VertexProviderFactory;
 use crate::utils::QueryStatistics;
@@ -208,6 +210,9 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     cache_hits: u32,
     // Shared stats written on drop so caller can read them after search
     shared_io_stats: Arc<PipelinedIoStats>,
+
+    // Optional per-query trace for profiling and algorithmic comparison
+    trace: Option<SearchTrace>,
 }
 
 impl<'a, Data> PipelinedDiskAccessor<'a, Data>
@@ -252,6 +257,7 @@ where
             io_count: 0,
             cache_hits: 0,
             shared_io_stats,
+            trace: None,
         })
     }
 
@@ -268,6 +274,19 @@ where
             &[medoid],
         )?;
         Ok(())
+    }
+
+    /// Enable per-query tracing. Call before search.
+    pub fn enable_trace(&mut self) {
+        self.trace = Some(SearchTrace::new());
+    }
+
+    /// Take the completed trace (if any). Call after search.
+    pub fn take_trace(&mut self) -> Option<SearchTrace> {
+        if let Some(t) = self.trace.as_mut() {
+            t.finish();
+        }
+        self.trace.take()
     }
 
     /// Compute PQ distances for a set of neighbor IDs.
@@ -303,11 +322,14 @@ where
 
     /// Poll completed IOs and move data from reader buffers into loaded_nodes.
     fn drain_completions(&mut self) -> ANNResult<()> {
+        let mut trace = OptionalTrace(self.trace.as_mut());
+        trace.begin_phase();
         let completed_slots = if self.in_flight_ios.is_empty() {
             Vec::new()
         } else {
             self.scratch.reader.poll_completions()?
         };
+        trace.end_phase_io_poll();
 
         if !completed_slots.is_empty() {
             let completed_set: std::collections::HashSet<usize> =
@@ -315,6 +337,7 @@ where
             let mut remaining = VecDeque::new();
             while let Some(io) = self.in_flight_ios.pop_front() {
                 if completed_set.contains(&io.slot_id) {
+                    trace.begin_phase();
                     let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
                     let parsed = parse_node(
                         sector_buf,
@@ -323,6 +346,8 @@ where
                         self.node_len,
                         self.fp_vector_len,
                     )?;
+                    trace.end_phase_parse_node();
+                    trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
                     self.loaded_nodes.insert(io.vertex_id, LoadedNode {
                         fp_vector: parsed.fp_vector,
                         adjacency_list: parsed.adjacency_list,
@@ -454,6 +479,8 @@ where
     /// Nodes found in the node cache are placed directly into `loaded_nodes`,
     /// skipping disk IO entirely.
     fn submit_expand(&mut self, ids: impl Iterator<Item = Self::Id> + Send) {
+        let mut trace = OptionalTrace(self.trace.as_mut());
+        trace.begin_phase();
         for id in ids {
             if self.loaded_nodes.contains_key(&id) {
                 continue; // Already loaded from a previous IO
@@ -471,6 +498,7 @@ where
                 self.next_rank += 1;
                 self.loaded_nodes.insert(id, LoadedNode { fp_vector, adjacency_list, rank });
                 self.cache_hits += 1;
+                trace.event(TraceEventKind::CacheHit { node_id: id });
                 continue;
             }
 
@@ -493,10 +521,15 @@ where
                     slot_id,
                     rank,
                 });
+                trace.event(TraceEventKind::Submit {
+                    node_id: id,
+                    inflight: self.in_flight_ios.len(),
+                });
                 self.next_slot_id = (self.next_slot_id + 1) % self.max_slots;
                 self.io_count += 1;
             }
         }
+        trace.end_phase_io_submit();
     }
 
     /// Poll for completed reads and expand up to `up_to` nodes.
@@ -547,11 +580,15 @@ where
                 };
 
                 // Compute full-precision distance and cache it for post-processing
+                let fp_start = Instant::now();
                 let fp_vec: &[Data::VectorDataType] = bytemuck::cast_slice(&node.fp_vector);
                 let fp_dist = self
                     .provider
                     .distance_comparer
                     .evaluate_similarity(self.query, fp_vec);
+                if let Some(t) = self.trace.as_mut() {
+                    t.profile.fp_distance_us += fp_start.elapsed().as_micros() as u64;
+                }
                 self.distance_cache.insert(vid, fp_dist);
 
                 // Get unvisited neighbors
@@ -561,9 +598,24 @@ where
                     .copied()
                     .filter(|&nbr| (nbr as usize) < self.num_points && pred.eval_mut(&nbr))
                     .collect();
+                let num_new = neighbors.len() as u32;
 
                 if !neighbors.is_empty() {
+                    let pq_start = Instant::now();
                     self.pq_distances(&neighbors, &mut on_neighbors)?;
+                    if let Some(t) = self.trace.as_mut() {
+                        t.profile.pq_distance_us += pq_start.elapsed().as_micros() as u64;
+                    }
+                }
+
+                if let Some(t) = self.trace.as_mut() {
+                    t.record_expand();
+                    t.event(TraceEventKind::Expand {
+                        node_id: vid,
+                        fp_distance: fp_dist,
+                        num_neighbors: node.adjacency_list.len() as u32,
+                        num_new_candidates: num_new,
+                    });
                 }
 
                 expanded += 1;

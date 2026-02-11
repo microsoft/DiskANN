@@ -260,6 +260,7 @@ where
             self.relaxed_monotonicity_l,
             self.metric,
             vector_filter,
+            None, // trace
         )?;
 
         let query_statistics = QueryStatistics {
