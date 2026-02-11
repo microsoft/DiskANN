@@ -3,7 +3,7 @@ disallowed-methods = [
     # We still have `std::fs` references.
     # { path = "std::fs", reason = "Do not use std::fs directly. Instead, use the FileStorageProvider." },
     { path = "vfs::PhysicalFS::new", reason = "Do not use vfs::PhysicalFS in tests. Instead, use the VirtualStorageProvider::new_overlay()." },
-    { path = "diskann_providers::storage::VirtualStorageProvider::new_physical", reason = "Do not use VirtualStorageProvider::new_physical() in tests. Instead, use VirtualStorageProvider::new_overlay()." },
+    { path = "diskann_providers::storage::virtual_storage_provider::VirtualStorageProvider::new_physical", reason = "Do not use VirtualStorageProvider::new_physical() in tests. Instead, use VirtualStorageProvider::new_overlay()." },
     # Disallowed methods for the rayon crate to enforce execution within a specified thread pool instead of the global thread pool.
     { path = "rayon::iter::ParallelIterator::for_each", reason = "Use `for_each_in_pool` from rayon_utils.rs instead to enforce execution within a specified thread pool."},
     { path = "rayon::iter::ParallelIterator::for_each_with", reason = "Use `for_each_with_in_pool` instead to enforce execution within a specified thread pool."},
