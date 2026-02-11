@@ -234,7 +234,7 @@ pub unsafe trait NewOwned<T>: ReprOwned {
 ///
 /// ```rust
 /// use diskann_quantization::multi_vector::{Mat, Standard, Defaulted};
-/// let mat = Mat::new(Standard::<f32>::new(4, 3), Defaulted).unwrap();
+/// let mat = Mat::new(Standard::<f32>::new(4, 3).unwrap(), Defaulted).unwrap();
 /// for i in 0..4 {
 ///     assert!(mat.get_row(i).unwrap().iter().all(|&x| x == 0.0f32));
 /// }
@@ -269,18 +269,31 @@ pub struct Standard<T> {
 
 impl<T: Copy> Standard<T> {
     /// Create a new `Standard` for data of type `T`.
-    pub fn new(nrows: usize, ncols: usize) -> Self {
-        Self {
+    ///
+    /// Successful construction requires:
+    ///
+    /// * The total number of elements determined by `nrows * ncols` does not exceed
+    ///   `usize::MAX`.
+    /// * The total memory footprint defined by `ncols * nrows * size_of::<T>()` does not
+    ///   exceed `isize::MAX`.
+    pub fn new(nrows: usize, ncols: usize) -> Result<Self, Overflow> {
+        Overflow::check::<T>(nrows, ncols)?;
+        Ok(Self {
             nrows,
             ncols,
             _elem: PhantomData,
-        }
+        })
     }
 
-    /// Returns the number of total elements (`rows x cols`) in this matrix, returning `None`
-    /// if this computation overflows.
-    pub fn num_elements(&self) -> Option<usize> {
-        self.nrows.checked_mul(self.ncols())
+    /// Returns the number of total elements (`rows x cols`) in this matrix.
+    pub fn num_elements(&self) -> usize {
+        // Since we've constructed `self` - we know we cannot overflow.
+        self.nrows() * self.ncols()
+    }
+
+    /// Returns `rows`, the number of rows in this matrix.
+    fn nrows(&self) -> usize {
+        self.nrows
     }
 
     /// Returns `ncols`, the number of elements in a row of this matrix.
@@ -293,7 +306,7 @@ impl<T: Copy> Standard<T> {
     /// 1. Computation of the number of elements in `self` does not overflow.
     /// 2. Argument `slice` has the expected number of elements.
     fn check_slice(&self, slice: &[T]) -> Result<(), SliceError> {
-        let len = self.num_elements().ok_or(SliceError::Overflow)?;
+        let len = self.num_elements();
 
         if slice.len() != len {
             Err(SliceError::LengthMismatch {
@@ -329,14 +342,63 @@ impl<T: Copy> Standard<T> {
     }
 }
 
+/// Error for [`Standard::new`].
+#[derive(Debug, Clone, Copy)]
+pub struct Overflow {
+    nrows: usize,
+    ncols: usize,
+    elsize: usize,
+}
+
+impl Overflow {
+    fn check<T>(nrows: usize, ncols: usize) -> Result<(), Self> {
+        let elsize = std::mem::size_of::<T>();
+        // Guard the element count itself so that `num_elements()` can never overflow.
+        let elements = nrows.checked_mul(ncols).ok_or(Self {
+            nrows,
+            ncols,
+            elsize,
+        })?;
+
+        let bytes = elsize.saturating_mul(elements);
+        if bytes <= isize::MAX as usize {
+            Ok(())
+        } else {
+            Err(Self {
+                nrows,
+                ncols,
+                elsize,
+            })
+        }
+    }
+}
+
+impl std::fmt::Display for Overflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.elsize == 0 {
+            write!(
+                f,
+                "ZST matrix with dimensions {} x {} has more than `usize::MAX` elements",
+                self.nrows, self.ncols,
+            )
+        } else {
+            write!(
+                f,
+                "a matrix of size {} x {} with element size {} would exceed isize::MAX bytes",
+                self.nrows, self.ncols, self.elsize,
+            )
+        }
+    }
+}
+
+impl std::error::Error for Overflow {}
+
 /// Error types for [`Standard`].
 #[derive(Debug, Clone, Copy, Error)]
 #[non_exhaustive]
 pub enum SliceError {
     #[error("Length mismatch: expected {expected}, found {found}")]
     LengthMismatch { expected: usize, found: usize },
-    #[error("Computing slice length overflowed.")]
-    Overflow,
 }
 
 // SAFETY: The implementation correctly computes row offsets as `i * ncols` and
@@ -353,8 +415,7 @@ unsafe impl<T: Copy> Repr for Standard<T> {
     }
 
     fn layout(&self) -> Result<Layout, LayoutError> {
-        let elements = self.num_elements().ok_or(LayoutError::new())?;
-        Ok(Layout::array::<T>(elements)?)
+        Ok(Layout::array::<T>(self.num_elements())?)
     }
 
     unsafe fn get_row<'a>(self, ptr: NonNull<u8>, i: usize) -> Self::Row<'a> {
@@ -1227,7 +1288,7 @@ mod tests {
 
     #[test]
     fn standard_representation() {
-        let repr = Standard::<f32>::new(4, 3);
+        let repr = Standard::<f32>::new(4, 3).unwrap();
         assert_eq!(repr.nrows(), 4);
         assert_eq!(repr.ncols(), 3);
 
@@ -1239,7 +1300,7 @@ mod tests {
     #[test]
     fn standard_zero_dimensions() {
         for (nrows, ncols) in [(0, 0), (0, 5), (5, 0)] {
-            let repr = Standard::<u8>::new(nrows, ncols);
+            let repr = Standard::<u8>::new(nrows, ncols).unwrap();
             assert_eq!(repr.nrows(), nrows);
             assert_eq!(repr.ncols(), ncols);
             let layout = repr.layout().unwrap();
@@ -1249,7 +1310,7 @@ mod tests {
 
     #[test]
     fn standard_check_slice() {
-        let repr = Standard::<u32>::new(3, 4);
+        let repr = Standard::<u32>::new(3, 4).unwrap();
 
         // Correct length succeeds
         let data = vec![0u32; 12];
@@ -1276,24 +1337,60 @@ mod tests {
         ));
 
         // Overflow case
-        let overflow_repr = Standard::<u8>::new(usize::MAX, 2);
-        assert!(matches!(
-            overflow_repr.check_slice(&[]),
-            Err(SliceError::Overflow)
-        ));
+        let overflow_repr = Standard::<u8>::new(usize::MAX, 2).unwrap_err();
+        assert!(matches!(overflow_repr, Overflow { .. }));
     }
 
     #[test]
-    fn standard_layout_errors() {
-        // Error path 1: num_elements() overflows (nrows * ncols > usize::MAX)
-        let overflow_repr = Standard::<u8>::new(usize::MAX, 2);
-        assert!(overflow_repr.layout().is_err());
+    fn standard_new_rejects_element_count_overflow() {
+        // nrows * ncols overflows usize even though per-element size is small.
+        assert!(Standard::<u8>::new(usize::MAX, 2).is_err());
+        assert!(Standard::<u8>::new(2, usize::MAX).is_err());
+        assert!(Standard::<u8>::new(usize::MAX, usize::MAX).is_err());
+    }
 
-        // Error path 2: Layout::array fails (total byte size overflows)
-        // For a u64, we need elements * 8 > isize::MAX to trigger Layout::array error
-        // Using isize::MAX / 4 elements of u64 (8 bytes each) will overflow
-        let large_repr = Standard::<u64>::new(isize::MAX as usize / 4, 2);
-        assert!(large_repr.layout().is_err());
+    #[test]
+    fn standard_new_rejects_byte_count_exceeding_isize_max() {
+        // Element count fits in usize, but total bytes exceed isize::MAX.
+        let half = (isize::MAX as usize / std::mem::size_of::<u64>()) + 1;
+        assert!(Standard::<u64>::new(half, 1).is_err());
+        assert!(Standard::<u64>::new(1, half).is_err());
+    }
+
+    #[test]
+    fn standard_new_accepts_boundary_below_isize_max() {
+        // Largest allocation that still fits in isize::MAX bytes.
+        let max_elems = isize::MAX as usize / std::mem::size_of::<u64>();
+        let repr = Standard::<u64>::new(max_elems, 1).unwrap();
+        assert_eq!(repr.num_elements(), max_elems);
+    }
+
+    #[test]
+    fn standard_new_zst_rejects_element_count_overflow() {
+        // For ZSTs the byte count is always 0, but element-count overflow
+        // must still be caught so that `num_elements()` never wraps.
+        assert!(Standard::<()>::new(usize::MAX, 2).is_err());
+        assert!(Standard::<()>::new(usize::MAX / 2 + 1, 3).is_err());
+    }
+
+    #[test]
+    fn standard_new_zst_accepts_large_non_overflowing() {
+        // Large-but-valid ZST matrix: element count fits in usize.
+        let repr = Standard::<()>::new(usize::MAX, 1).unwrap();
+        assert_eq!(repr.num_elements(), usize::MAX);
+        assert_eq!(repr.layout().unwrap().size(), 0);
+    }
+
+    #[test]
+    fn standard_new_overflow_error_display() {
+        let err = Standard::<u32>::new(usize::MAX, 2).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("would exceed isize::MAX bytes"), "{msg}");
+
+        let zst_err = Standard::<()>::new(usize::MAX, 2).unwrap_err();
+        let zst_msg = zst_err.to_string();
+        assert!(zst_msg.contains("ZST matrix"), "{zst_msg}");
+        assert!(zst_msg.contains("usize::MAX"), "{zst_msg}");
     }
 
     /////////
@@ -1302,7 +1399,7 @@ mod tests {
 
     #[test]
     fn mat_new_and_basic_accessors() {
-        let mat = Mat::new(Standard::<usize>::new(3, 4), 42usize).unwrap();
+        let mat = Mat::new(Standard::<usize>::new(3, 4).unwrap(), 42usize).unwrap();
         let base: *const u8 = mat.as_ptr().as_ptr();
 
         assert_eq!(mat.num_vectors(), 3);
@@ -1324,7 +1421,7 @@ mod tests {
 
     #[test]
     fn mat_new_with_default() {
-        let mat = Mat::new(Standard::<usize>::new(2, 3), Defaulted).unwrap();
+        let mat = Mat::new(Standard::<usize>::new(2, 3).unwrap(), Defaulted).unwrap();
         let base: *const u8 = mat.as_ptr().as_ptr();
 
         assert_eq!(mat.num_vectors(), 2);
@@ -1346,7 +1443,7 @@ mod tests {
     fn test_mat() {
         for nrows in ROWS {
             for ncols in COLS {
-                let repr = Standard::<usize>::new(*nrows, *ncols);
+                let repr = Standard::<usize>::new(*nrows, *ncols).unwrap();
                 let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
 
                 // Populate the matrix using `&mut Mat`
@@ -1460,14 +1557,13 @@ mod tests {
     fn test_mat_refmut() {
         for nrows in ROWS {
             for ncols in COLS {
-                let repr = Standard::<usize>::new(*nrows, *ncols);
+                let repr = Standard::<usize>::new(*nrows, *ncols).unwrap();
                 let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
 
                 // Populate the matrix using `&mut Mat`
                 {
                     let ctx = &lazy_format!("{ctx} - by matmut");
-                    let mut b: Box<[_]> =
-                        (0..repr.num_elements().unwrap()).map(|_| 0usize).collect();
+                    let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
                     let mut matmut = MatMut::new(repr, &mut b).unwrap();
 
                     fill_mat_mut(matmut.reborrow_mut(), repr);
@@ -1486,8 +1582,7 @@ mod tests {
                 // Populate the matrix using `RowsMut`
                 {
                     let ctx = &lazy_format!("{ctx} - by rows");
-                    let mut b: Box<[_]> =
-                        (0..repr.num_elements().unwrap()).map(|_| 0usize).collect();
+                    let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
                     let mut matmut = MatMut::new(repr, &mut b).unwrap();
 
                     fill_rows_mut(matmut.rows_mut(), repr);
@@ -1517,7 +1612,7 @@ mod tests {
 
         for nrows in rows {
             for ncols in cols {
-                let m = Mat::new(Standard::new(nrows, ncols), 1usize).unwrap();
+                let m = Mat::new(Standard::new(nrows, ncols).unwrap(), 1usize).unwrap();
                 let rows_iter = m.rows();
                 let len = <_ as ExactSizeIterator>::len(&rows_iter);
                 assert_eq!(len, nrows);
@@ -1531,7 +1626,7 @@ mod tests {
 
     #[test]
     fn matref_new_slice_length_error() {
-        let repr = Standard::<u32>::new(3, 4);
+        let repr = Standard::<u32>::new(3, 4).unwrap();
 
         // Correct length succeeds
         let data = vec![0u32; 12];
@@ -1560,7 +1655,7 @@ mod tests {
 
     #[test]
     fn matmut_new_slice_length_error() {
-        let repr = Standard::<u32>::new(3, 4);
+        let repr = Standard::<u32>::new(3, 4).unwrap();
 
         // Correct length succeeds
         let mut data = vec![0u32; 12];

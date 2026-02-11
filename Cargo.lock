@@ -105,9 +105,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "bf-tree"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cce2075c711f351f0aa52c05e645cc41f1b3cc0cdba1ad12c5f67c121c1bb7d"
+checksum = "dc59924517d26b63895ed60675e01a8dc27ee1d24d2b62cd6a272e7bd0af19a0"
 dependencies = [
  "cfg-if",
  "io-uring",
