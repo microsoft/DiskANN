@@ -133,6 +133,8 @@ pub struct PipelinedScratch {
     neighbor_buf: Vec<u32>,
     /// Freelist of LoadedNode instances to avoid per-node allocation
     node_pool: Vec<LoadedNode>,
+    /// Free io_uring buffer slot IDs available for new submissions.
+    free_slots: VecDeque<usize>,
 }
 
 /// Arguments for creating or resetting a [`PipelinedScratch`].
@@ -175,10 +177,12 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
             distance_cache: HashMap::new(),
             neighbor_buf: Vec::new(),
             node_pool: Vec::new(),
+            free_slots: (0..args.max_slots).collect(),
         })
     }
 
     fn try_modify(&mut self, _args: PipelinedScratchArgs) -> Result<(), Self::Error> {
+        let max_slots = self.reader.max_slots();
         self.reader.reset();
         // Return all loaded_nodes back to the pool before clearing
         self.node_pool.extend(self.loaded_nodes.drain().map(|(_, node)| node));
@@ -186,6 +190,8 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
         self.expanded_ids.clear();
         self.distance_cache.clear();
         self.neighbor_buf.clear();
+        self.free_slots.clear();
+        self.free_slots.extend(0..max_slots);
         Ok(())
     }
 }
@@ -233,8 +239,6 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     node_cache: Arc<Cache<Data>>,
 
     // IO state (now lives in scratch for reuse, accessed via self.scratch)
-    next_slot_id: usize,
-    max_slots: usize,
     /// Monotonically increasing submission rank for priority-ordered expansion.
     next_rank: u64,
 
@@ -271,7 +275,6 @@ where
 
         let block_size = provider.graph_header.effective_block_size();
         let num_sectors_per_node = provider.graph_header.num_sectors_per_node();
-        let slots = scratch.reader.max_slots();
 
         Ok(Self {
             provider,
@@ -284,8 +287,6 @@ where
             fp_vector_len,
             num_points: provider.num_points,
             node_cache,
-            next_slot_id: 0,
-            max_slots: slots,
             next_rank: 0,
             io_count: 0,
             cache_hits: 0,
@@ -412,6 +413,8 @@ where
             let io = &scratch.in_flight_ios[i];
             if completed_slots.contains(&io.slot_id) {
                 let io = scratch.in_flight_ios.swap_remove_back(i).unwrap();
+                // Return the slot to the free-list so it can be reused.
+                scratch.free_slots.push_back(io.slot_id);
                 // Acquire node first (mutably borrows node_pool),
                 // then get sector buf (immutably borrows reader) — no conflict.
                 let mut node = scratch.node_pool.pop().unwrap_or_else(|| LoadedNode {
@@ -586,27 +589,29 @@ where
                 continue;
             }
 
-            // Don't submit if all io_uring slots are occupied — prevents overwriting
-            // buffers that still have in-flight reads.
-            if self.scratch.in_flight_ios.len() >= self.max_slots {
+            // Don't submit if no free io_uring slots are available.
+            if self.scratch.free_slots.is_empty() {
                 break;
             }
 
             let sector_idx =
                 node_sector_index(id, self.num_nodes_per_sector, self.num_sectors_per_node);
             let sector_offset = sector_idx * self.block_size as u64;
-            let slot_id = self.next_slot_id % self.max_slots;
+            let slot_id = self.scratch.free_slots.pop_front().unwrap();
             let rank = self.next_rank;
             self.next_rank += 1;
-            // Best-effort: if submission fails, the node will be retried
-            if self.scratch.reader.submit_read(sector_offset, slot_id).is_ok() {
+            // Best-effort: if submission fails, return the slot and retry later
+            // SAFETY: slot_id was just popped from the free-list, guaranteeing
+            // it is not currently in-flight.
+            if unsafe { self.scratch.reader.submit_read(sector_offset, slot_id) }.is_ok() {
                 self.scratch.in_flight_ios.push_back(InFlightIo {
                     vertex_id: id,
                     slot_id,
                     rank,
                 });
-                self.next_slot_id = (self.next_slot_id + 1) % self.max_slots;
                 self.io_count += 1;
+            } else {
+                self.scratch.free_slots.push_back(slot_id);
             }
         }
         self.io_time += io_start.elapsed();
@@ -697,7 +702,7 @@ where
             // Return node to pool for reuse
             self.scratch.release_node(node);
 
-            Ok(self.scratch.expanded_ids.clone())
+            Ok(std::mem::take(&mut self.scratch.expanded_ids))
         }
     }
 

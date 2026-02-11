@@ -97,7 +97,15 @@ impl PipelinedReader {
     /// The read will fetch `slot_size` bytes from `sector_offset` (in bytes) into
     /// the pre-allocated buffer for the given slot. The `slot_id` is stored as
     /// `user_data` in the CQE for later retrieval.
-    pub fn submit_read(&mut self, sector_offset: u64, slot_id: usize) -> ANNResult<()> {
+    /// Submit a read for the given sector offset into the specified buffer slot.
+    ///
+    /// # Safety
+    /// The caller must ensure `slot_id` is not currently in-flight (i.e., it has
+    /// been returned by a previous completion or was never submitted). Violating
+    /// this invariant allows the kernel to DMA into a buffer being read, causing
+    /// data corruption. When using a free-list for slot management (see
+    /// `PipelinedScratch::free_slots`), this invariant is structurally guaranteed.
+    pub unsafe fn submit_read(&mut self, sector_offset: u64, slot_id: usize) -> ANNResult<()> {
         assert!(slot_id < self.max_slots, "slot_id out of range");
 
         let buf_start = slot_id * self.slot_size;
@@ -169,11 +177,9 @@ impl PipelinedReader {
         &self.slot_bufs[start..start + self.slot_size]
     }
 
-    /// Reset the reader for reuse: clear in-flight count and drain remaining CQEs.
+    /// Reset the reader for reuse: drain all in-flight IOs, then clear state.
     pub fn reset(&mut self) {
-        self.in_flight = 0;
-        // Drain any remaining completions from the ring.
-        for _cqe in self.ring.completion() {}
+        self.drain_all();
     }
 
     /// Returns the number of submitted but not yet completed reads.
@@ -194,12 +200,12 @@ impl PipelinedReader {
     /// Drain all in-flight IOs, blocking until they complete.
     /// Must be called before freeing the slot buffers.
     fn drain_all(&mut self) {
-        while self.in_flight > 0 {
-            let _ = self.ring.submit_and_wait(1);
+        if self.in_flight > 0 {
+            let _ = self.ring.submit_and_wait(self.in_flight);
             for cqe in self.ring.completion() {
                 let _ = cqe;
-                self.in_flight = self.in_flight.saturating_sub(1);
             }
+            self.in_flight = 0;
         }
     }
 }

@@ -520,7 +520,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         submitted: &HashSet<I>,
     ) -> Option<(usize, Neighbor<I>)> {
         let limit = self.search_param_l.min(self.size);
-        for i in 0..limit {
+        for i in self.cursor..limit {
             let (id, visited) = self.id_visiteds[i];
             if !visited && !submitted.contains(&id) {
                 return Some((i, Neighbor::new(id, self.distances[i])));
@@ -532,7 +532,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Find the node with matching `id`, mark it visited, and advance the cursor if needed.
     /// Returns true if found and marked, false otherwise.
     pub fn mark_visited_by_id(&mut self, id: &I) -> bool {
-        for i in 0..self.size {
+        for i in self.cursor..self.size {
             if self.id_visiteds[i].0 == *id {
                 self.id_visiteds[i].1 = true;
                 // If the cursor was pointing at this node, advance past visited nodes
