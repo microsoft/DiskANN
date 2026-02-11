@@ -660,6 +660,12 @@ where
         self.shared_io_stats
             .cache_hits
             .fetch_add(self.cache_hits, Ordering::Relaxed);
+
+        // Print trace if enabled
+        if let Some(trace) = self.trace.as_mut() {
+            trace.finish();
+            trace.print_profile_summary();
+        }
     }
 }
 
@@ -681,6 +687,9 @@ pub struct PipelinedConfig<Data: GraphDataType<VectorIdType = u32>> {
     pub scratch_pool: Arc<ObjectPool<PipelinedScratch>>,
     /// Args for retrieving/creating pooled scratch instances.
     pub scratch_args: PipelinedScratchArgs,
+    /// Enable per-query SearchTrace. The trace profile is printed to stderr
+    /// after each query completes. Use for profiling, not production.
+    pub trace_enabled: bool,
 }
 
 /// Shared IO statistics written by the accessor and read by the caller after search.
@@ -782,6 +791,9 @@ where
             self.io_stats.clone(),
         )?;
         accessor.preprocess_query()?;
+        if self.config.trace_enabled {
+            accessor.enable_trace();
+        }
         Ok(accessor)
     }
 

@@ -27,6 +27,7 @@ use crate::{
 
 use super::pipelined_reader::{PipelinedReader, PipelinedReaderConfig};
 use super::pipelined_search::{pipe_search, PipeSearchResult};
+use crate::search::search_trace::SearchTrace;
 
 /// Scratch space for pipelined search operations, pooled for reuse across queries.
 struct PipelinedSearchScratch {
@@ -242,6 +243,13 @@ where
             ref mut pq_scratch,
         } = *scratch;
 
+        let trace_enabled = std::env::var("DISKANN_TRACE").map_or(false, |v| v == "1");
+        let mut trace = if trace_enabled {
+            Some(SearchTrace::new())
+        } else {
+            None
+        };
+
         let result: PipeSearchResult = pipe_search::<Data::VectorDataType>(
             reader,
             &self.pq_data,
@@ -260,8 +268,12 @@ where
             self.relaxed_monotonicity_l,
             self.metric,
             vector_filter,
-            None, // trace
+            trace.as_mut(),
         )?;
+
+        if let Some(t) = &trace {
+            t.print_profile_summary();
+        }
 
         let query_statistics = QueryStatistics {
             total_execution_time_us: result.stats.total_us,

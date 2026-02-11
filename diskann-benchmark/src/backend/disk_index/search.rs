@@ -514,6 +514,8 @@ where
                     None,
                 )?;
 
+                let trace_enabled = std::env::var("DISKANN_TRACE").map_or(false, |v| v == "1");
+
                 searcher.with_pipelined_config(PipelinedConfig {
                     beam_width: search_params.beam_width,
                     adaptive_beam_width: *adaptive_beam_width,
@@ -521,6 +523,7 @@ where
                     node_cache,
                     scratch_pool,
                     scratch_args,
+                    trace_enabled,
                 });
 
                 let searcher = &searcher;
