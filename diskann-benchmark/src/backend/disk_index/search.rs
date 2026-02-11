@@ -529,7 +529,7 @@ where
         is_flat_search: search_params.is_flat_search,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
-        search_mode: format!("{:?}", search_params.search_mode),
+        search_mode: format!("{}", search_params.search_mode),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
         search_results_per_l,
         span_metrics,
