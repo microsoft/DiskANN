@@ -333,4 +333,4 @@ target/
 *.info
 
 # ignore VS Code local history
-.history/
+.history/rand_labels_*.txt
