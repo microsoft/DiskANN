@@ -322,14 +322,9 @@ impl<T: Copy> Standard<T> {
     ///
     /// # Safety
     ///
-    /// The value [`Standard::num_elements`] must return `Some(v)` and `b` must have length `v`.
+    /// The length of `b` must be exactly [`Standard::num_elements`].
     unsafe fn box_to_mat(self, b: Box<[T]>) -> Mat<Self> {
-        debug_assert_eq!(
-            b.len(),
-            self.num_elements()
-                .expect("safety contract requires `self` to be well-formed"),
-            "safety contract violated"
-        );
+        debug_assert_eq!(b.len(), self.num_elements(), "safety contract violated");
 
         // SAFETY: Box [guarantees](https://doc.rust-lang.org/std/boxed/struct.Box.html#method.into_raw)
         // the returned pointer is non-null.
@@ -472,10 +467,9 @@ where
 {
     type Error = crate::error::Infallible;
     fn new_owned(self, value: T) -> Result<Mat<Self>, Self::Error> {
-        let b: Box<[T]> = (0..self.num_elements().unwrap()).map(|_| value).collect();
+        let b: Box<[T]> = (0..self.num_elements()).map(|_| value).collect();
 
-        // SAFETY: By construction, `b` has length `self.num_elements()`. Since we did
-        // not panic when creating `b`, we know that `num_elements()` is well formed.
+        // SAFETY: By construction, `b` has length `self.num_elements()`.
         Ok(unsafe { self.box_to_mat(b) })
     }
 }
@@ -534,8 +528,7 @@ where
     fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
         let b: Box<[T]> = v.rows().flatten().copied().collect();
 
-        // SAFETY: By construction, `b` has length `v.repr().num_elements()`. Furthermore,
-        // since `v` is a valid `MatRef`, we know that `v.repr().num_elements()` cannot overflow.
+        // SAFETY: By construction, `b` has length `v.repr().num_elements()`.
         unsafe { v.repr().box_to_mat(b) }
     }
 }
@@ -1498,7 +1491,7 @@ mod tests {
     fn test_mat_clone() {
         for nrows in ROWS {
             for ncols in COLS {
-                let repr = Standard::<usize>::new(*nrows, *ncols);
+                let repr = Standard::<usize>::new(*nrows, *ncols).unwrap();
                 let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
 
                 let mut mat = Mat::new(repr, Defaulted).unwrap();
@@ -1517,7 +1510,7 @@ mod tests {
                     check_rows(cloned.rows(), repr, ctx);
 
                     // Cloned allocation is independent.
-                    if repr.num_elements().unwrap_or(0) > 0 {
+                    if repr.num_elements() > 0 {
                         assert_ne!(mat.as_ptr(), cloned.as_ptr());
                     }
                 }
@@ -1531,7 +1524,7 @@ mod tests {
                     check_mat_ref(owned.reborrow(), repr, ctx);
                     check_rows(owned.rows(), repr, ctx);
 
-                    if repr.num_elements().unwrap_or(0) > 0 {
+                    if repr.num_elements() > 0 {
                         assert_ne!(mat.as_ptr(), owned.as_ptr());
                     }
                 }
@@ -1545,7 +1538,7 @@ mod tests {
                     check_mat_ref(owned.reborrow(), repr, ctx);
                     check_rows(owned.rows(), repr, ctx);
 
-                    if repr.num_elements().unwrap_or(0) > 0 {
+                    if repr.num_elements() > 0 {
                         assert_ne!(mat.as_ptr(), owned.as_ptr());
                     }
                 }
