@@ -55,60 +55,58 @@ struct LoadedNode {
     rank: u64,
 }
 
+impl LoadedNode {
+    /// Reset and fill from sector buffer, reusing existing Vec capacity.
+    fn parse_from(
+        &mut self,
+        sector_buf: &[u8],
+        vertex_id: u32,
+        num_nodes_per_sector: u64,
+        node_len: u64,
+        fp_vector_len: u64,
+        rank: u64,
+    ) -> ANNResult<()> {
+        let offset = node_offset_in_sector(vertex_id, num_nodes_per_sector, node_len);
+        let end = offset + node_len as usize;
+        let node_data = sector_buf.get(offset..end).ok_or_else(|| {
+            ANNError::log_index_error(format_args!(
+                "Node data out of bounds: vertex {} offset {}..{} in buffer of len {}",
+                vertex_id, offset, end, sector_buf.len()
+            ))
+        })?;
+
+        let fp_len = fp_vector_len as usize;
+        if fp_len > node_data.len() {
+            return Err(ANNError::log_index_error(format_args!(
+                "fp_vector_len {} exceeds node_data len {}",
+                fp_len, node_data.len()
+            )));
+        }
+
+        self.fp_vector.clear();
+        self.fp_vector.extend_from_slice(&node_data[..fp_len]);
+
+        let neighbor_data = &node_data[fp_len..];
+        let num_neighbors = LittleEndian::read_u32(&neighbor_data[..4]) as usize;
+        let max_neighbors = (neighbor_data.len().saturating_sub(4)) / 4;
+        let num_neighbors = num_neighbors.min(max_neighbors);
+
+        self.adjacency_list.clear();
+        for i in 0..num_neighbors {
+            let start = 4 + i * 4;
+            self.adjacency_list.push(LittleEndian::read_u32(&neighbor_data[start..start + 4]));
+        }
+
+        self.rank = rank;
+        Ok(())
+    }
+}
+
 /// Tracks an in-flight IO request.
 struct InFlightIo {
     vertex_id: u32,
     slot_id: usize,
     rank: u64,
-}
-
-/// Parsed node data from a sector buffer (without rank metadata).
-struct ParsedNode {
-    fp_vector: Vec<u8>,
-    adjacency_list: Vec<u32>,
-}
-
-/// Parse a node from raw sector buffer bytes.
-fn parse_node(
-    sector_buf: &[u8],
-    vertex_id: u32,
-    num_nodes_per_sector: u64,
-    node_len: u64,
-    fp_vector_len: u64,
-) -> ANNResult<ParsedNode> {
-    let offset = node_offset_in_sector(vertex_id, num_nodes_per_sector, node_len);
-    let end = offset + node_len as usize;
-    let node_data = sector_buf.get(offset..end).ok_or_else(|| {
-        ANNError::log_index_error(format_args!(
-            "Node data out of bounds: vertex {} offset {}..{} in buffer of len {}",
-            vertex_id, offset, end, sector_buf.len()
-        ))
-    })?;
-
-    let fp_vector_len_usize = fp_vector_len as usize;
-    if fp_vector_len_usize > node_data.len() {
-        return Err(ANNError::log_index_error(format_args!(
-            "fp_vector_len {} exceeds node_data len {}",
-            fp_vector_len_usize,
-            node_data.len()
-        )));
-    }
-
-    let fp_vector = node_data[..fp_vector_len_usize].to_vec();
-    let neighbor_data = &node_data[fp_vector_len_usize..];
-    let num_neighbors = LittleEndian::read_u32(&neighbor_data[..4]) as usize;
-    let max_neighbors = (neighbor_data.len().saturating_sub(4)) / 4;
-    let num_neighbors = num_neighbors.min(max_neighbors);
-    let mut adjacency_list = Vec::with_capacity(num_neighbors);
-    for i in 0..num_neighbors {
-        let start = 4 + i * 4;
-        adjacency_list.push(LittleEndian::read_u32(&neighbor_data[start..start + 4]));
-    }
-
-    Ok(ParsedNode {
-        fp_vector,
-        adjacency_list,
-    })
 }
 
 /// Max buffer slots to use, based on beam width.
@@ -133,6 +131,8 @@ pub struct PipelinedScratch {
     distance_cache: HashMap<u32, f32>,
     /// Reusable buffer for neighbor IDs during expand_available
     neighbor_buf: Vec<u32>,
+    /// Freelist of LoadedNode instances to avoid per-node allocation
+    node_pool: Vec<LoadedNode>,
 }
 
 /// Arguments for creating or resetting a [`PipelinedScratch`].
@@ -174,17 +174,35 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
             expanded_ids: Vec::new(),
             distance_cache: HashMap::new(),
             neighbor_buf: Vec::new(),
+            node_pool: Vec::new(),
         })
     }
 
     fn try_modify(&mut self, _args: PipelinedScratchArgs) -> Result<(), Self::Error> {
         self.reader.reset();
+        // Return all loaded_nodes back to the pool before clearing
+        self.node_pool.extend(self.loaded_nodes.drain().map(|(_, node)| node));
         self.in_flight_ios.clear();
-        self.loaded_nodes.clear();
         self.expanded_ids.clear();
         self.distance_cache.clear();
         self.neighbor_buf.clear();
         Ok(())
+    }
+}
+
+impl PipelinedScratch {
+    /// Get a LoadedNode from the pool, or create a new empty one.
+    fn acquire_node(&mut self) -> LoadedNode {
+        self.node_pool.pop().unwrap_or_else(|| LoadedNode {
+            fp_vector: Vec::new(),
+            adjacency_list: Vec::new(),
+            rank: 0,
+        })
+    }
+
+    /// Return a LoadedNode to the pool for reuse.
+    fn release_node(&mut self, node: LoadedNode) {
+        self.node_pool.push(node);
     }
 }
 
@@ -406,7 +424,8 @@ where
 
     /// Shared logic: process completed slot IDs, parse nodes, retain in-flight.
     /// Uses linear scan on completed_slots (small, bounded by max_slots) to
-    /// avoid per-poll HashSet allocation.
+    /// avoid per-poll HashSet allocation. Reuses LoadedNode instances from the
+    /// node pool to avoid per-IO Vec allocations.
     fn process_completed_ios_inner(
         scratch: &mut PipelinedScratch,
         completed_slots: &[usize],
@@ -421,21 +440,25 @@ where
             if completed_slots.contains(&io.slot_id) {
                 let io = scratch.in_flight_ios.swap_remove_back(i).unwrap();
                 trace.begin_phase();
+                // Acquire node first (mutably borrows node_pool),
+                // then get sector buf (immutably borrows reader) — no conflict.
+                let mut node = scratch.node_pool.pop().unwrap_or_else(|| LoadedNode {
+                    fp_vector: Vec::new(),
+                    adjacency_list: Vec::new(),
+                    rank: 0,
+                });
                 let sector_buf = scratch.reader.get_slot_buf(io.slot_id);
-                let parsed = parse_node(
+                node.parse_from(
                     sector_buf,
                     io.vertex_id,
                     num_nodes_per_sector,
                     node_len,
                     fp_vector_len,
+                    io.rank,
                 )?;
                 trace.end_phase_parse_node();
                 trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
-                scratch.loaded_nodes.insert(io.vertex_id, LoadedNode {
-                    fp_vector: parsed.fp_vector,
-                    adjacency_list: parsed.adjacency_list,
-                    rank: io.rank,
-                });
+                scratch.loaded_nodes.insert(io.vertex_id, node);
             } else {
                 i += 1;
             }
@@ -583,11 +606,14 @@ where
                 self.node_cache.get_vector(&id),
                 self.node_cache.get_adjacency_list(&id),
             ) {
-                let fp_vector: Vec<u8> = bytemuck::cast_slice(vec_data).to_vec();
-                let adjacency_list: Vec<u32> = adj_list.iter().copied().collect();
-                let rank = self.next_rank;
+                let mut node = self.scratch.acquire_node();
+                node.fp_vector.clear();
+                node.fp_vector.extend_from_slice(bytemuck::cast_slice(vec_data));
+                node.adjacency_list.clear();
+                node.adjacency_list.extend(adj_list.iter().copied());
+                node.rank = self.next_rank;
                 self.next_rank += 1;
-                self.scratch.loaded_nodes.insert(id, LoadedNode { fp_vector, adjacency_list, rank });
+                self.scratch.loaded_nodes.insert(id, node);
                 self.cache_hits += 1;
                 trace.event(TraceEventKind::CacheHit { node_id: id });
                 continue;
@@ -723,6 +749,9 @@ where
                     num_new_candidates: num_new,
                 });
             }
+
+            // Return node to pool for reuse
+            self.scratch.release_node(node);
 
             Ok(1)
         }
