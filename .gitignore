@@ -334,3 +334,5 @@ target/
 
 # ignore VS Code local history
 .history/
+# Benchmark data (downloaded by scripts/sift1m_benchmark.sh)
+benchmark_data/
