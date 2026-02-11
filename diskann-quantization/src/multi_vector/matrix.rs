@@ -244,6 +244,9 @@ pub struct Defaulted;
 
 /// Create a new [`Mat`] cloned from a view.
 pub trait NewCloned: ReprOwned {
+    /// Clone the contents behind `v`, returning a new owning [`Mat`].
+    ///
+    /// Implementations should ensure the returned [`Mat`] is "semantically the same" as `v`.
     fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self>;
 }
 
