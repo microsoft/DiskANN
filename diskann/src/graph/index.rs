@@ -2085,12 +2085,16 @@ where
         async move {
             let beam_width = search_params.beam_width.unwrap_or(1);
 
-            // Adaptive beam width: start smaller and grow based on convergence
+            // Adaptive beam width: start at initial_beam_width and grow based on
+            // IO waste ratio. Mirrors PipeANN: grow +1 when ≤10% of IOs are wasted
+            // (expanded node no longer in top-L). Only kicks in after 5 hops.
             let mut cur_beam_width = if search_params.adaptive_beam_width {
-                beam_width.min(4)
+                beam_width.min(search_params.initial_beam_width)
             } else {
                 beam_width
             };
+            let mut abw_useful: u32 = 0; // IOs whose expansion was still useful
+            let mut abw_total: u32 = 0; // total IOs tracked for waste ratio
 
             // Relaxed monotonicity: continue exploring after convergence
             let mut converge_size: Option<usize> = None;
@@ -2151,15 +2155,32 @@ where
                     }
 
                     // Step 2: Insert neighbors (updates queue before IO decision)
+                    let worst_before = {
+                        let sz = scratch.best.size().min(scratch.best.search_l());
+                        if sz > 0 { scratch.best.get(sz - 1).distance } else { f32::MAX }
+                    };
                     neighbors
                         .iter()
                         .for_each(|neighbor| scratch.best.insert(*neighbor));
                     scratch.cmps += neighbors.len() as u32;
                     scratch.hops += expanded as u32;
 
-                    // Adaptive beam width
+                    // Adaptive beam width: track IO waste after convergence gate
                     if search_params.adaptive_beam_width && expanded > 0 {
-                        cur_beam_width = (cur_beam_width + 1).max(4).min(beam_width);
+                        if scratch.hops >= 5 {
+                            let improved = neighbors.iter().any(|n| n.distance < worst_before);
+                            abw_total += 1;
+                            if improved {
+                                abw_useful += 1;
+                            }
+                            // Grow when ≤10% waste (matching PipeANN's kWasteThreshold)
+                            if abw_total > 0
+                                && (abw_total - abw_useful) as f64 / abw_total as f64 <= 0.1
+                            {
+                                cur_beam_width =
+                                    (cur_beam_width + 1).max(search_params.initial_beam_width).min(beam_width);
+                            }
+                        }
                     }
 
                     // Step 3: Submit one IO (with updated queue)
@@ -2228,6 +2249,10 @@ where
                         submitted.remove(&id);
                     }
 
+                    let worst_before = {
+                        let sz = scratch.best.size().min(scratch.best.search_l());
+                        if sz > 0 { scratch.best.get(sz - 1).distance } else { f32::MAX }
+                    };
                     neighbors
                         .iter()
                         .for_each(|neighbor| scratch.best.insert(*neighbor));
@@ -2235,7 +2260,19 @@ where
                     scratch.hops += expanded as u32;
 
                     if search_params.adaptive_beam_width && expanded > 0 {
-                        cur_beam_width = (cur_beam_width + 1).max(4).min(beam_width);
+                        if scratch.hops >= 5 {
+                            let improved = neighbors.iter().any(|n| n.distance < worst_before);
+                            abw_total += 1;
+                            if improved {
+                                abw_useful += 1;
+                            }
+                            if abw_total > 0
+                                && (abw_total - abw_useful) as f64 / abw_total as f64 <= 0.1
+                            {
+                                cur_beam_width =
+                                    (cur_beam_width + 1).max(search_params.initial_beam_width).min(beam_width);
+                            }
+                        }
                     }
                 }
 

@@ -43,6 +43,9 @@ pub struct SearchParams {
     pub beam_width: Option<usize>,
     /// Enable adaptive beam width based on waste ratio tracking.
     pub adaptive_beam_width: bool,
+    /// Starting beam width when adaptive_beam_width is true.
+    /// Defaults to 4 (matching PipeANN). Grows up to beam_width.
+    pub initial_beam_width: usize,
     /// Optional relaxed monotonicity parameter.
     pub relaxed_monotonicity_l: Option<usize>,
 }
@@ -85,6 +88,7 @@ impl SearchParams {
             l_value,
             beam_width,
             adaptive_beam_width: false,
+            initial_beam_width: 4,
             relaxed_monotonicity_l: None,
         })
     }
