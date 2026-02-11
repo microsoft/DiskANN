@@ -30,7 +30,6 @@ SEARCH_L="${SEARCH_L:-100}"
 SKIP_DOWNLOAD=false
 SKIP_BUILD=false
 SKIP_INDEX=false
-SQPOLL_MS=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -43,7 +42,6 @@ while [[ $# -gt 0 ]]; do
         --thread-stride) THREAD_STRIDE="$2"; shift 2 ;;
         --beam-width)    BEAM_WIDTH="$2"; shift 2 ;;
         --search-l)      SEARCH_L="$2"; shift 2 ;;
-        --sqpoll)        SQPOLL_MS="${2:-1000}"; shift 2 ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -56,7 +54,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --thread-stride N    Thread count increment (default: 4)"
             echo "  --beam-width N       Beam width / pipeline width (default: 4)"
             echo "  --search-l N         Search list size L (default: 100)"
-            echo "  --sqpoll MS          Enable SQPOLL on all PipeSearch configs (idle timeout in ms)"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -238,11 +235,9 @@ for (( t=THREAD_STRIDE; t<=MAX_THREADS; t+=THREAD_STRIDE )); do
 done
 echo "Thread counts: $THREAD_LIST"
 
-# Generate a single config with all jobs (4 per thread count for ablation)
-# Modes: BeamSearch, PipeSearch (base), PipeSearch+ABW, PipeSearch+ABW+RelaxedMono
+# Generate a single config with all jobs (2 per thread count: Beam + Pipe)
 JOBS=""
-add_job() {
-    local threads="$1" mode_json="$2"
+for T in $THREAD_LIST; do
     [ -n "$JOBS" ] && JOBS="$JOBS,"
     JOBS="$JOBS
         {
@@ -259,24 +254,34 @@ add_job() {
                     \"search_list\": [$SEARCH_L],
                     \"beam_width\": $BEAM_WIDTH,
                     \"recall_at\": 10,
-                    \"num_threads\": $threads,
+                    \"num_threads\": $T,
                     \"is_flat_search\": false,
                     \"distance\": \"squared_l2\",
-                    \"search_mode\": $mode_json
+                    \"search_mode\": {\"mode\": \"BeamSearch\"}
+                }
+            }
+        },
+        {
+            \"type\": \"disk-index\",
+            \"content\": {
+                \"source\": {
+                    \"disk-index-source\": \"Load\",
+                    \"data_type\": \"float32\",
+                    \"load_path\": \"$INDEX_PREFIX\"
+                },
+                \"search_phase\": {
+                    \"queries\": \"sift_query.fbin\",
+                    \"groundtruth\": \"sift_groundtruth.bin\",
+                    \"search_list\": [$SEARCH_L],
+                    \"beam_width\": $BEAM_WIDTH,
+                    \"recall_at\": 10,
+                    \"num_threads\": $T,
+                    \"is_flat_search\": false,
+                    \"distance\": \"squared_l2\",
+                    \"search_mode\": {\"mode\": \"PipeSearch\"}
                 }
             }
         }"
-}
-# Optional SQPOLL suffix for PipeSearch configs
-SQPOLL_JSON=""
-if [ -n "$SQPOLL_MS" ]; then
-    SQPOLL_JSON=", \"sqpoll_idle_ms\": $SQPOLL_MS"
-fi
-for T in $THREAD_LIST; do
-    add_job "$T" '{"mode": "BeamSearch"}'
-    add_job "$T" '{"mode": "PipeSearch", "adaptive_beam_width": false'"$SQPOLL_JSON"'}'
-    add_job "$T" '{"mode": "PipeSearch", "adaptive_beam_width": true'"$SQPOLL_JSON"'}'
-    add_job "$T" '{"mode": "PipeSearch", "adaptive_beam_width": true, "relaxed_monotonicity_l": '"$SEARCH_L$SQPOLL_JSON"'}'
 done
 
 SWEEP_CONFIG="$OUTPUT_DIR/sweep_config.json"
@@ -305,30 +310,12 @@ beam_width = sys.argv[4]
 with open(sys.argv[1]) as f:
     data = json.load(f)
 
-# Classify each job into one of 4 modes based on search_mode string
-# BeamSearch, PipeSearch (no abw), PipeSearch(abw), PipeSearch(abw, rm_l=N)
-MODE_KEYS = [
-    ("BeamSearch",      "BeamSearch"),
-    ("PipeSearch(base)","PipeSearch"),      # no abw, no rm
-    ("PipeSearch+ABW",  "PipeSearch(abw)"), # abw only
-    ("PipeSearch+ABW+RM","PipeSearch(abw, rm_l="),  # abw + relaxed mono
-]
-
-def classify_mode(mode_str):
-    s = str(mode_str)
-    if "BeamSearch" in s:
-        return "BeamSearch"
-    if "rm_l=" in s:
-        return "PipeSearch+ABW+RM"
-    if "abw" in s:
-        return "PipeSearch+ABW"
-    # PipeSearch with no options or empty parens
-    return "PipeSearch(base)"
-
-def empty_series():
-    return {"threads": [], "qps": [], "mean_lat": [], "p95_lat": [], "p999_lat": [], "recall": []}
-
-series = {k: empty_series() for k, _ in MODE_KEYS}
+# Parse results: each job is data[i] with structure:
+#   data[i]["results"]["search"]["search_mode"] — "BeamSearch" or "PipeSearch(...)"
+#   data[i]["results"]["search"]["num_threads"] — thread count
+#   data[i]["results"]["search"]["search_results_per_l"][0] — first (only) L result
+beam = {"threads": [], "qps": [], "mean_lat": [], "p95_lat": [], "p999_lat": [], "recall": []}
+pipe = {"threads": [], "qps": [], "mean_lat": [], "p95_lat": [], "p999_lat": [], "recall": []}
 
 for job in data:
     search = job.get("results", {}).get("search", {})
@@ -339,10 +326,10 @@ for job in data:
         continue
     r = results_per_l[0]
     threads = search.get("num_threads", 0)
-    mode = classify_mode(search.get("search_mode", ""))
-    d = series.get(mode)
-    if d is None:
-        continue
+    mode = str(search.get("search_mode", ""))
+
+    d = beam if "BeamSearch" in mode else pipe
+
     d["threads"].append(threads)
     d["qps"].append(r.get("qps", 0))
     d["mean_lat"].append(r.get("mean_latency", 0))
@@ -350,77 +337,79 @@ for job in data:
     d["p999_lat"].append(r.get("p999_latency", 0))
     d["recall"].append(r.get("recall", 0))
 
-# Sort each series by threads
-for d in series.values():
+# Sort by threads
+for d in [beam, pipe]:
     if d["threads"]:
         order = sorted(range(len(d["threads"])), key=lambda i: d["threads"][i])
         for k in d:
             d[k] = [d[k][i] for i in order]
 
 # Print table
-header_modes = list(series.keys())
-print(f"\n{'Threads':>7s}", end="")
-for m in header_modes:
-    print(f"  {m+' QPS':>18s}", end="")
-print()
-print(f"{'':>7s}", end="")
-for m in header_modes:
-    print(f"  {'recall':>8s} {'mean':>8s} {'p999':>8s}", end="")
-print()
-print("=" * (7 + len(header_modes) * 30))
+print(f"\n{'Threads':>7s}  {'BeamSearch QPS':>14s} {'PipeSearch QPS':>14s}  "
+      f"{'Beam Mean':>10s} {'Pipe Mean':>10s}  "
+      f"{'Beam p999':>10s} {'Pipe p999':>10s}  "
+      f"{'Beam Recall':>11s} {'Pipe Recall':>11s}")
+print("=" * 120)
 
-max_len = max(len(series[m]["threads"]) for m in header_modes)
-for i in range(max_len):
-    t = None
-    for m in header_modes:
-        if i < len(series[m]["threads"]):
-            t = series[m]["threads"][i]
-            break
-    print(f"{t or 0:7d}", end="")
-    for m in header_modes:
-        d = series[m]
-        if i < len(d["threads"]):
-            print(f"  {d['qps'][i]:8.0f}qps {d['recall'][i]:6.1f}% {d['mean_lat'][i]/1000:5.1f}ms {d['p999_lat'][i]/1000:5.1f}ms", end="")
-        else:
-            print(f"  {'N/A':>30s}", end="")
-    print()
+for i in range(len(beam["threads"])):
+    bt, bq, bm, bp9 = beam["threads"][i], beam["qps"][i], beam["mean_lat"][i], beam["p999_lat"][i]
+    br = beam["recall"][i]
+    if i < len(pipe["threads"]):
+        pt, pq, pm, pp9 = pipe["threads"][i], pipe["qps"][i], pipe["mean_lat"][i], pipe["p999_lat"][i]
+        pr = pipe["recall"][i]
+    else:
+        pt, pq, pm, pp9, pr = bt, 0, 0, 0, 0
+    print(f"{bt:7d}  {bq:14.1f} {pq:14.1f}  {bm:9.0f}us {pm:9.0f}us  "
+          f"{bp9:9d}us {pp9:9d}us  {br:10.2f}% {pr:10.2f}%")
 
-# Chart styles per mode
-STYLES = {
-    "BeamSearch":         {"color": "#2196F3", "marker": "o", "ls": "-"},
-    "PipeSearch(base)":   {"color": "#FF9800", "marker": "D", "ls": "--"},
-    "PipeSearch+ABW":     {"color": "#FF5722", "marker": "s", "ls": "-"},
-    "PipeSearch+ABW+RM":  {"color": "#4CAF50", "marker": "^", "ls": "-"},
-}
-
+# Generate charts
 try:
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle(f'SIFT1M Ablation (L={search_l}, BW={beam_width})', fontsize=14)
+    fig.suptitle(f'SIFT1M BeamSearch vs PipeSearch (L={search_l}, BW={beam_width})', fontsize=14)
 
-    metrics = [
-        (axes[0][0], "qps",      "QPS",                1,    False),
-        (axes[0][1], "mean_lat", "Mean Latency (ms)",   1000, True),
-        (axes[1][0], "p95_lat",  "p95 Latency (ms)",    1000, True),
-        (axes[1][1], "p999_lat", "p99.9 Latency (ms)",  1000, True),
-    ]
+    # QPS vs Threads
+    ax = axes[0][0]
+    ax.plot(beam["threads"], beam["qps"], 'o-', color='#2196F3', label='BeamSearch', linewidth=2, markersize=5)
+    ax.plot(pipe["threads"], pipe["qps"], 's-', color='#FF5722', label='PipeSearch', linewidth=2, markersize=5)
+    ax.set_xlabel('Threads')
+    ax.set_ylabel('QPS')
+    ax.set_title('Throughput (QPS)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
 
-    for ax, key, title, divisor, is_latency in metrics:
-        for mode_name, d in series.items():
-            if not d["threads"]:
-                continue
-            st = STYLES.get(mode_name, {"color": "gray", "marker": ".", "ls": "-"})
-            vals = [v / divisor for v in d[key]] if divisor != 1 else d[key]
-            ax.plot(d["threads"], vals, marker=st["marker"], linestyle=st["ls"],
-                    color=st["color"], label=mode_name, linewidth=2, markersize=5)
-        ax.set_xlabel('Threads')
-        ax.set_ylabel(title)
-        ax.set_title(title)
-        ax.legend(fontsize=8)
-        ax.grid(True, alpha=0.3)
+    # Mean Latency vs Threads
+    ax = axes[0][1]
+    ax.plot(beam["threads"], [x/1000 for x in beam["mean_lat"]], 'o-', color='#2196F3', label='BeamSearch', linewidth=2, markersize=5)
+    ax.plot(pipe["threads"], [x/1000 for x in pipe["mean_lat"]], 's-', color='#FF5722', label='PipeSearch', linewidth=2, markersize=5)
+    ax.set_xlabel('Threads')
+    ax.set_ylabel('Mean Latency (ms)')
+    ax.set_title('Mean Latency')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # p95 Latency vs Threads
+    ax = axes[1][0]
+    ax.plot(beam["threads"], [x/1000 for x in beam["p95_lat"]], 'o-', color='#2196F3', label='BeamSearch', linewidth=2, markersize=5)
+    ax.plot(pipe["threads"], [x/1000 for x in pipe["p95_lat"]], 's-', color='#FF5722', label='PipeSearch', linewidth=2, markersize=5)
+    ax.set_xlabel('Threads')
+    ax.set_ylabel('p95 Latency (ms)')
+    ax.set_title('p95 Tail Latency')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # p99.9 Latency vs Threads
+    ax = axes[1][1]
+    ax.plot(beam["threads"], [x/1000 for x in beam["p999_lat"]], 'o-', color='#2196F3', label='BeamSearch', linewidth=2, markersize=5)
+    ax.plot(pipe["threads"], [x/1000 for x in pipe["p999_lat"]], 's-', color='#FF5722', label='PipeSearch', linewidth=2, markersize=5)
+    ax.set_xlabel('Threads')
+    ax.set_ylabel('p99.9 Latency (ms)')
+    ax.set_title('p99.9 Tail Latency')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     chart_path = os.path.join(output_dir, 'thread_sweep.png')
@@ -436,9 +425,9 @@ except ImportError:
 csv_path = os.path.join(output_dir, 'thread_sweep.csv')
 with open(csv_path, 'w') as f:
     f.write("threads,mode,qps,mean_lat_us,p95_lat_us,p999_lat_us,recall\n")
-    for mode_name, d in series.items():
+    for d, mode in [(beam, "BeamSearch"), (pipe, "PipeSearch")]:
         for i in range(len(d["threads"])):
-            f.write(f"{d['threads'][i]},{mode_name},{d['qps'][i]:.1f},"
+            f.write(f"{d['threads'][i]},{mode},{d['qps'][i]:.1f},"
                     f"{d['mean_lat'][i]:.0f},{d['p95_lat'][i]},"
                     f"{d['p999_lat'][i]},{d['recall'][i]:.3f}\n")
 print(f"CSV saved to: {csv_path}")
