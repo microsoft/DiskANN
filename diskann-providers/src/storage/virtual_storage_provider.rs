@@ -23,75 +23,65 @@ use super::{StorageReadProvider, StorageWriteProvider};
 ///
 /// Use an in-memory filesystem instead of the normal filesystem to keep all test data in-memory
 /// ```
-/// use vfs::{FileSystem, MemoryFS};
+/// use vfs::FileSystem;
 /// use diskann_providers::storage::VirtualStorageProvider;
-/// let filesystem = MemoryFS::new();
+/// let storage_provider = VirtualStorageProvider::new_memory();
 ///
 /// // Create the root directory
-/// filesystem.create_dir("/test_root").expect("Could not create test directory");
+/// storage_provider.filesystem().create_dir("/test_root").expect("Could not create test directory");
 ///
 /// {
 ///     // Write test data to the in-memory filesystem inside a scope block so that the writer
-///     // is flushed and disposed before creating the storage_provider.
-///     let mut file = filesystem.create_file("/test_root/input_data.bin").expect("Could not create test file");
+///     // is flushed and disposed before using the storage_provider.
+///     let mut file = storage_provider.filesystem().create_file("/test_root/input_data.bin").expect("Could not create test file");
 ///     file.write_all(b"This is test data").expect("Unable to write test data");
 /// }
-///
-/// let storage_provider = VirtualStorageProvider::new(filesystem);
 /// ```
 ///
 /// Use the physical filesystem with custom root instead of the normal filesystem.  This prevents
 /// the test from writing outside of the expected sandbox
 /// ```
-/// use vfs::{FileSystem, PhysicalFS};
+/// use vfs::FileSystem;
 /// use diskann_providers::storage::VirtualStorageProvider;
 ///
 /// // Use your own path, not the target directory
-/// let filesystem = PhysicalFS::new("../target");
+/// let storage_provider = VirtualStorageProvider::new_physical("../target");
 ///
 /// {
-///     // Write test data to the in-memory filesystem inside a scope block so that the writer
-///     // is flushed and disposed before creating the storage_provider.  On the local filesytem
+///     // Write test data to the filesystem inside a scope block so that the writer
+///     // is flushed and disposed before using the storage_provider. On the local filesystem
 ///     // input_data.bin will be written to ../target/input_data.bin.
-///     let mut file = filesystem.create_file("/input_data.bin").expect("Could not create test file");
+///     let mut file = storage_provider.filesystem().create_file("/input_data.bin").expect("Could not create test file");
 ///     file.write_all(b"This is test data").expect("Unable to write test data");
 /// }
-///
-/// let storage_provider = VirtualStorageProvider::new(filesystem);
 /// ```
 ///
 /// Use the overlay filesystem to read from the local filesystem and write to the in-memory filesystem
 /// ```
-/// use vfs::{FileSystem, OverlayFS, MemoryFS, PhysicalFS};
-/// use diskann_providers::storage::VirtualStorageProvider;;
+/// use vfs::FileSystem;
+/// use diskann_providers::storage::VirtualStorageProvider;
 ///
-/// // Create a PhysicalFS and specify that the root of the filesystem is the local "./test" directory
-/// // This will read data from the ./test_data local path.
-/// let base_filesystem = PhysicalFS::new("../target/my_data_location");
+/// // Create a storage provider with an overlay filesystem
+/// // This will read data from the ../target/my_data_location path and write to memory.
+/// let storage_provider = VirtualStorageProvider::new_overlay("../target/my_data_location");
 ///
-/// // Create in-memory filesystem
-/// let memory_filesystem = MemoryFS::new();
-/// memory_filesystem.create_dir("/test_data").expect("Could not create test directory");
-///
-/// // Merge the two filesystems
-/// let overlay_filesystem = OverlayFS::new(&[memory_filesystem.into(), base_filesystem.into()]);
+/// storage_provider.filesystem().create_dir("/test_data").expect("Could not create test directory");
 ///
 /// {
 ///     // Write test data to the in-memory filesystem inside a scope block so that the writer
-///     // is flushed and disposed before creating the storage_provider.
-///     let mut file = overlay_filesystem.create_file("/test_data/input_data.bin").expect("Could not create test file");
+///     // is flushed and disposed before using the storage_provider.
+///     let mut file = storage_provider.filesystem().create_file("/test_data/input_data.bin").expect("Could not create test file");
 ///     file.write_all(b"This is test data").expect("Unable to write test data");
 /// }
 ///
 /// // Storage provider will read from memory & local filesystem but will only write to memory.
-/// let storage_provider = VirtualStorageProvider::new(overlay_filesystem);
 /// ```
 pub struct VirtualStorageProvider<FileSystemType: FileSystem> {
     filesystem: FileSystemType,
 }
 
 impl<FileSystemType: FileSystem> VirtualStorageProvider<FileSystemType> {
-    pub fn new(filesystem: FileSystemType) -> VirtualStorageProvider<FileSystemType> {
+    pub(crate) fn new(filesystem: FileSystemType) -> VirtualStorageProvider<FileSystemType> {
         VirtualStorageProvider { filesystem }
     }
 
@@ -183,6 +173,17 @@ impl VirtualStorageProvider<MemoryFS> {
         let memory_filesystem = MemoryFS::new();
 
         VirtualStorageProvider::new(memory_filesystem)
+    }
+}
+
+impl VirtualStorageProvider<PhysicalFS> {
+    /// Create a storage provider that uses the physical filesystem with a custom root path.
+    /// This prevents operations from writing outside of the specified sandbox.
+    pub fn new_physical<P: AsRef<std::path::Path>>(path: P) -> Self {
+        #[allow(clippy::disallowed_methods)]
+        let physical_filesystem = PhysicalFS::new(path);
+
+        VirtualStorageProvider::new(physical_filesystem)
     }
 }
 
