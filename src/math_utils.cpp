@@ -397,10 +397,7 @@ void kmeanspp_selecting_pivots(float *data, size_t num_points, size_t dim, float
     std::uniform_real_distribution<> distribution(0, 1);
     std::uniform_int_distribution<size_t> int_dist(0, num_points - 1);
     size_t init_id = int_dist(generator);
-    size_t num_picked = 1;
 
-    picked.push_back(init_id);
-    std::memcpy(pivot_data, data + init_id * dim, dim * sizeof(float));
 
     float *dist = new float[num_points];
 
@@ -409,6 +406,22 @@ void kmeanspp_selecting_pivots(float *data, size_t num_points, size_t dim, float
     {
         dist[i] = math_utils::calc_distance(data + i * dim, data + init_id * dim, dim);
     }
+
+    for (int64_t i = 0; i < (int64_t)num_points; i++)
+    {
+        if (std::isif(dist[i])) {
+            diskann::cout << "dist is inf, falling back to random pivot";
+                          << std::endl;
+            delete[] dist;
+            selecting_pivots(data, num_points, dim, pivot_data, num_centers);
+            return;
+        }
+    }
+
+    size_t num_picked = 1;
+
+    picked.push_back(init_id);
+    std::memcpy(pivot_data, data + init_id * dim, dim * sizeof(float));
 
     double dart_val;
     size_t tmp_pivot;
