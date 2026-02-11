@@ -326,6 +326,13 @@ where
     /// Default: no-op (non-pipelined providers never need to wait).
     fn wait_for_io(&mut self) {}
 
+    /// Whether this accessor uses asynchronous IO (pipelined).
+    /// When true, the search loop uses speculative submission (peek without
+    /// marking visited). When false, the classic visited-at-selection path.
+    fn is_pipelined(&self) -> bool {
+        false
+    }
+
     /// Return the IDs of nodes expanded in the most recent `expand_available` call.
     ///
     /// The search loop uses this to mark speculatively submitted nodes as visited

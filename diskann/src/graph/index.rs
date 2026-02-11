@@ -2124,7 +2124,7 @@ where
                 && !accessor.terminate_early()
             {
                 let has_pending = accessor.has_pending();
-                let pipelining = has_pending || !submitted.is_empty();
+                let pipelining = accessor.is_pipelined();
 
                 // When pipelining, cap total in-flight IOs at cur_beam_width
                 // (like PipeSearch) to avoid over-committing the priority queue.
@@ -2156,12 +2156,15 @@ where
                         }
                     }
                 } else {
-                    // Non-pipelined: use the original visited-at-selection path.
+                    // Non-pipelined OR first iteration before pipelining starts.
+                    // Use closest_notvisited but also track in submitted set so
+                    // expand_available can find these nodes in queue_ordered.
                     while scratch.best.has_notvisited_node()
                         && scratch.beam_nodes.len() < submit_limit
                     {
                         let closest_node = scratch.best.closest_notvisited();
                         search_record.record(closest_node, scratch.hops, scratch.cmps);
+                        submitted.insert(closest_node.id);
                         scratch.beam_nodes.push(closest_node.id);
                     }
                 }
@@ -2177,13 +2180,13 @@ where
                 // Pass submitted-but-not-yet-expanded nodes in queue priority
                 // order so the accessor expands the best available loaded node,
                 // matching PipeSearch's "best unvisited in retset" strategy.
-                let queue_ordered: Vec<DP::InternalId> = if pipelining {
+                let queue_ordered: Vec<DP::InternalId> = if !submitted.is_empty() {
                     scratch.best.iter()
                         .filter(|n| submitted.contains(&n.id))
                         .map(|n| n.id)
                         .collect()
                 } else {
-                    Vec::new()
+                    scratch.beam_nodes.clone()
                 };
                 let expanded = accessor
                     .expand_available(

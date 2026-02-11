@@ -595,22 +595,17 @@ where
                 return Ok(0);
             }
 
-            // Prefer expanding a node the search loop ranks highest (first
-            // match in the caller-supplied `ids` iterator). Fall back to the
-            // loaded node with lowest submission rank for backward compat.
+            // Expand the highest-priority loaded node according to the
+            // search loop's current queue ordering (passed via `ids`).
+            // If no queue-preferred node is loaded, return 0 — stale loaded
+            // nodes whose candidates have been superseded are abandoned,
+            // matching PipeSearch's behavior of not expanding evicted nodes.
             let mut best_vid: Option<u32> = None;
             for id in ids {
                 if self.loaded_nodes.contains_key(&id) {
                     best_vid = Some(id);
                     break;
                 }
-            }
-            if best_vid.is_none() {
-                best_vid = self
-                    .loaded_nodes
-                    .iter()
-                    .min_by_key(|(_, node)| node.rank)
-                    .map(|(&id, _)| id);
             }
 
             let vid = match best_vid {
@@ -665,7 +660,7 @@ where
 
     /// Returns true when there are in-flight IO operations.
     fn has_pending(&self) -> bool {
-        !self.in_flight_ios.is_empty() || !self.loaded_nodes.is_empty()
+        !self.in_flight_ios.is_empty()
     }
 
     fn inflight_count(&self) -> usize {
@@ -681,6 +676,10 @@ where
 
     fn last_expanded_ids(&self) -> &[u32] {
         &self.expanded_ids
+    }
+
+    fn is_pipelined(&self) -> bool {
+        true
     }
 }
 
