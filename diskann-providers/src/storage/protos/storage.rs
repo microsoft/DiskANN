@@ -80,7 +80,6 @@ pub enum ProtoStorageError {
 mod tests {
     use crate::storage::VirtualStorageProvider;
     use prost::Message;
-    use vfs::MemoryFS;
 
     use super::*;
     use crate::storage::protos::ScalarQuantizer;
@@ -88,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_save_and_load_success() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let original = ScalarQuantizer {
             version: Some(Version {
                 major: 0,
@@ -112,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_load_invalid_data_returns_decode_error() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         // Insert invalid data
         {
             let mut writer = storage_provider.create_for_write("/bad.bin").unwrap();
@@ -131,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_load_io_error_when_missing_file() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         // Attempt to load a non-existent file should yield IoError
         let err = load::<_, ScalarQuantizer>(&storage_provider, "/missing.bin").unwrap_err();

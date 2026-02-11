@@ -81,8 +81,7 @@ pub struct VirtualStorageProvider<FileSystemType: FileSystem> {
 }
 
 impl<FileSystemType: FileSystem> VirtualStorageProvider<FileSystemType> {
-    #[doc(hidden)]
-    pub fn new(filesystem: FileSystemType) -> VirtualStorageProvider<FileSystemType> {
+    fn new(filesystem: FileSystemType) -> VirtualStorageProvider<FileSystemType> {
         VirtualStorageProvider { filesystem }
     }
 
@@ -192,14 +191,12 @@ impl VirtualStorageProvider<PhysicalFS> {
 mod tests {
     use std::io::{Read, Seek, SeekFrom, Write};
 
-    use vfs::MemoryFS;
-
     use super::*;
 
     #[test]
     fn test_file_reader() {
         let file_name = "/test_file_reader.txt";
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         {
             let mut file = storage_provider
@@ -224,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_file_storage_exists() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let file_name = "/test_file_storage_exists.txt";
         assert!(
@@ -259,7 +256,7 @@ mod tests {
     fn test_file_storage_get_length() {
         let file_name = "/test_file_storage_get_length.txt";
 
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         storage_provider
             .filesystem()
             .create_file(file_name)

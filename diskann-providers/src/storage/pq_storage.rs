@@ -453,8 +453,7 @@ mod pq_storage_tests {
 
     #[test]
     fn write_compressed_pivot_metadata_test() {
-        let filesystem = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_memory();
         let compress_pivot_path = "/write_compressed_pivot_metadata_test.bin";
         let result = PQStorage::new(PQ_PIVOT_PATH, compress_pivot_path, Some(DATA_FILE));
         {
@@ -551,8 +550,7 @@ mod pq_storage_tests {
 
     #[test]
     fn gen_random_slice_test() {
-        let filesystem = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_memory();
         let file_name = "/gen_random_slice_test.bin";
         //npoints=2, dim=8
         let data: [u8; 72] = [
