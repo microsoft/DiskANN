@@ -898,4 +898,46 @@ mod test_search_index_utils {
             "Empty ground truth should result in 100% recall"
         );
     }
+
+    #[test]
+    fn test_recall_bounds_error_display() {
+        let error = RecallBoundsError::KGreaterThanN { k: 10, n: 5 };
+        let message = format!("{}", error);
+        assert!(message.contains("recall value k"));
+        assert!(message.contains("must be less than or equal to n"));
+
+        let error = RecallBoundsError::ArgumentIsZero { k: 0, n: 0 };
+        let message = format!("{}", error);
+        assert_eq!(message, "recall values k and n must both be non-zero");
+
+        let error = RecallBoundsError::ArgumentIsZero { k: 0, n: 5 };
+        let message = format!("{}", error);
+        assert_eq!(message, "recall values k must be non-zero");
+
+        let error = RecallBoundsError::ArgumentIsZero { k: 5, n: 0 };
+        let message = format!("{}", error);
+        assert_eq!(message, "recall values n must be non-zero");
+    }
+
+    #[test]
+    fn test_recall_bounds_error_conversion() {
+        let error = RecallBoundsError::KGreaterThanN { k: 10, n: 5 };
+        let cmd_error: CMDToolError = error.into();
+        assert!(!cmd_error.details.is_empty());
+    }
+
+    #[test]
+    fn test_k_recall_at_n_getters() {
+        let recall = KRecallAtN::new(5, 10).unwrap();
+        assert_eq!(recall.get_k(), 5);
+        assert_eq!(recall.get_n(), 10);
+    }
+
+    #[test]
+    fn test_k_recall_at_n_equal_values() {
+        let recall = KRecallAtN::new(5, 5).unwrap();
+        assert_eq!(recall.get_k(), 5);
+        assert_eq!(recall.get_n(), 5);
+    }
 }
+

@@ -179,4 +179,67 @@ mod tests {
         assert_eq!(bitmaps.len(), 1);
         assert!(bitmaps[0].is_empty());
     }
+
+    #[test]
+    fn test_serializable_bitset_conversion() {
+        let mut bitset = BitSet::new();
+        bitset.insert(0);
+        bitset.insert(5);
+        bitset.insert(10);
+
+        let serializable = SerializableBitSet::from(&bitset);
+        let converted_back: BitSet = serializable.into();
+
+        assert!(converted_back.contains(0));
+        assert!(converted_back.contains(5));
+        assert!(converted_back.contains(10));
+        assert!(!converted_back.contains(1));
+    }
+
+    #[test]
+    fn test_serializable_bitset_empty() {
+        let bitset = BitSet::new();
+        let serializable = SerializableBitSet::from(&bitset);
+        let converted_back: BitSet = serializable.into();
+        assert!(converted_back.is_empty());
+    }
+
+    #[test]
+    fn test_process_bitmap_single_query_single_metadata() {
+        let query_strings = vec![String::from("CAT=Automotive")];
+        let metadata_strings = vec![String::from("CAT=Automotive,RATING=5")];
+
+        let bitmaps = process_bitmap_for_labels(query_strings, metadata_strings, &POOL);
+        assert_eq!(bitmaps.len(), 1);
+        assert!(bitmaps[0].contains(0));
+    }
+
+    #[test]
+    fn test_process_bitmap_no_match() {
+        let query_strings = vec![String::from("CAT=Electronics")];
+        let metadata_strings = vec![
+            String::from("CAT=Automotive,RATING=5"),
+            String::from("CAT=Fashion,RATING=4"),
+        ];
+
+        let bitmaps = process_bitmap_for_labels(query_strings, metadata_strings, &POOL);
+        assert_eq!(bitmaps.len(), 1);
+        assert!(bitmaps[0].is_empty());
+    }
+
+    #[test]
+    fn test_process_bitmap_multiple_matches() {
+        let query_strings = vec![String::from("RATING=5")];
+        let metadata_strings = vec![
+            String::from("CAT=Automotive,RATING=5"),
+            String::from("CAT=Fashion,RATING=4"),
+            String::from("CAT=Electronics,RATING=5"),
+        ];
+
+        let bitmaps = process_bitmap_for_labels(query_strings, metadata_strings, &POOL);
+        assert_eq!(bitmaps.len(), 1);
+        assert!(bitmaps[0].contains(0));
+        assert!(!bitmaps[0].contains(1));
+        assert!(bitmaps[0].contains(2));
+    }
 }
