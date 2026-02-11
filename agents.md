@@ -92,10 +92,9 @@ cargo test --doc
 
 ### Test Baseline Caching System
 
-DiskANN uses a baseline caching system for regression detection. See [`diskann/README.md`](diskann/README.md) for details on:
-- How the baseline system works
-- Key APIs in `diskann/src/test/cache.rs` and `diskann/src/test/cmp.rs`
-- How to use `VerboseEq` for better test error messages
+DiskANN uses a baseline caching system for regression detection. See [`diskann/README.md`](diskann/README.md) for a high-level overview of how the baseline system works. For implementation and API details, refer directly to:
+- [`diskann/src/test/cache.rs`](diskann/src/test/cache.rs) — core baseline caching APIs
+- [`diskann/src/test/cmp.rs`](diskann/src/test/cmp.rs) — `VerboseEq` and related helpers for better test error messages
 
 ---
 
@@ -104,11 +103,11 @@ DiskANN uses a baseline caching system for regression detection. See [`diskann/R
 ### Formatting
 
 ```bash
-# Check formatting
-cargo fmt --check
+# Check formatting (matches CI)
+cargo fmt --all --check
 
-# Apply formatting
-cargo fmt
+# Apply formatting to all crates
+cargo fmt --all
 ```
 
 See [`rustfmt.toml`](rustfmt.toml) for formatting configuration.
