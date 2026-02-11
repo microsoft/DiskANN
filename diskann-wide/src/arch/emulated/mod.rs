@@ -60,6 +60,10 @@ impl Architecture for Scalar {
     arch::maskdef!();
     arch::typedef!();
 
+    fn level() -> arch::Level {
+        arch::Level::scalar()
+    }
+
     fn run<F, R>(self, f: F) -> R
     where
         F: Target<Self, R>,
