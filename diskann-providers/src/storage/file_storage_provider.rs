@@ -56,23 +56,25 @@ impl StorageWriteProvider for FileStorageProvider {
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Seek, SeekFrom, Write};
-
-    use tempfile::TempDir;
+    use vfs::FileSystem;
 
     use super::*;
+    use crate::storage::VirtualStorageProvider;
 
     #[test]
     fn test_file_reader() {
-        // Use TempDir for automatic deleting when going out of scope
-        let tmp_dir =
-            TempDir::with_prefix("test_file_reader").expect("Failed to create temporary directory");
-        let file_path = tmp_dir.path().join("test_file_reader.txt");
-        let file_name = file_path.to_str().unwrap();
+        let file_name = "/test_file_reader.txt";
+        let storage_provider = VirtualStorageProvider::new_memory();
 
-        let mut file = File::create(file_name).unwrap();
-        file.write_all(b"Hello, world!").unwrap();
+        {
+            let mut file = storage_provider
+                .filesystem()
+                .create_file(file_name)
+                .expect("Could not create file");
+            file.write_all(b"Hello, world!").unwrap();
+        }
 
-        let mut reader = FileStorageProvider.open_reader(file_name).unwrap();
+        let mut reader = storage_provider.open_reader(file_name).unwrap();
         let mut buffer = [0; 5];
 
         reader.seek(SeekFrom::Start(0)).unwrap();
@@ -86,13 +88,8 @@ mod tests {
 
     #[test]
     fn test_file_create_write() {
-        let storage_provider = FileStorageProvider;
-
-        // Use TempDir for automatic deleting when going out of scope
-        let tmp_dir = TempDir::with_prefix("test_file_create_write")
-            .expect("Failed to create temporary directory");
-        let file_path = tmp_dir.path().join("test_file_create_write.txt");
-        let file_name = file_path.to_str().unwrap();
+        let file_name = "/test_file_create_write.txt";
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         assert!(!storage_provider.exists(file_name));
         {
@@ -113,7 +110,7 @@ mod tests {
 
         let expected = b"Hello, world! This is the second write! This is the third write!";
 
-        let mut reader = FileStorageProvider.open_reader(file_name).unwrap();
+        let mut reader = storage_provider.open_reader(file_name).unwrap();
         let mut file_data: Vec<u8> = Vec::new();
         let read_size = reader.read_to_end(&mut file_data).unwrap();
 
@@ -127,29 +124,30 @@ mod tests {
 
     #[test]
     fn test_file_storage_exists() {
-        // Use TempDir for automatic deleting when going out of scope
-        let tmp_dir = TempDir::with_prefix("test_file_storage_exists")
-            .expect("Failed to create temporary directory");
-        let file_path = tmp_dir.path().join("test_file_storage_exists.txt");
-        let file_name = file_path.to_str().unwrap();
+        let file_name = "/test_file_storage_exists.txt";
+        let storage_provider = VirtualStorageProvider::new_memory();
 
-        assert!(!FileStorageProvider.exists(file_name));
-        File::create(file_name).unwrap();
-        assert!(FileStorageProvider.exists(file_name));
+        assert!(!storage_provider.exists(file_name));
+        storage_provider
+            .filesystem()
+            .create_file(file_name)
+            .unwrap();
+        assert!(storage_provider.exists(file_name));
     }
 
     #[test]
     fn test_file_storage_get_length() {
-        // Use TempDir for automatic deleting when going out of scope
-        let tmp_dir = TempDir::with_prefix("test_file_storage_get_length")
-            .expect("Failed to create temporary directory");
-        let file_path = tmp_dir.path().join("test_file_storage_get_length.txt");
-        let file_name = file_path.to_str().unwrap();
+        let file_name = "/test_file_storage_get_length.txt";
+        let storage_provider = VirtualStorageProvider::new_memory();
 
-        let mut file = File::create(file_name).unwrap();
-        file.write_all(b"Hello, world!").unwrap();
+        {
+            let mut file = storage_provider
+                .filesystem()
+                .create_file(file_name)
+                .unwrap();
+            file.write_all(b"Hello, world!").unwrap();
+        }
 
-        assert_eq!(FileStorageProvider.get_length(file_name).unwrap(), 13);
-        fs::remove_file(file_name).unwrap();
+        assert_eq!(storage_provider.get_length(file_name).unwrap(), 13);
     }
 }

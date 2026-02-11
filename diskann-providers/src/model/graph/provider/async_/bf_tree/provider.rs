@@ -2176,7 +2176,6 @@ where
 mod tests {
     use super::*;
     use crate::model::graph::provider::async_::common::TableBasedDeletes;
-    use crate::storage::file_storage_provider::FileStorageProvider;
 
     #[tokio::test]
     async fn test_data_provider_and_delete_interface() {
@@ -2366,6 +2365,7 @@ mod tests {
     ///////////////////////////////////////////////
 
     use tempfile::tempdir;
+    use crate::storage::VirtualStorageProvider;
 
     /// Test saving and loading of BfTreeProvider without quantization, including deleted vertices
     #[tokio::test]
@@ -2453,7 +2453,7 @@ mod tests {
         assert_eq!(vector_config.get_leaf_page_size(), 8192);
         assert_eq!(vector_config.get_cb_max_record_size(), 1024);
 
-        let storage = FileStorageProvider;
+        let storage = VirtualStorageProvider::new_physical(temp_path);
 
         provider.save_with(&storage, &prefix).await.unwrap();
 
@@ -2621,7 +2621,7 @@ mod tests {
             );
         }
 
-        let storage = FileStorageProvider;
+        let storage = VirtualStorageProvider::new_physical(temp_path);
 
         provider.save_with(&storage, &prefix).await.unwrap();
 
