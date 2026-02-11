@@ -916,7 +916,6 @@ mod start_point_tests {
 
     use diskann_providers::storage::VirtualStorageProvider;
     use diskann_providers::utils::write_metadata;
-    use vfs::MemoryFS;
 
     use super::*;
 
