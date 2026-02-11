@@ -6,20 +6,11 @@
 use std::io::Write;
 
 use diskann_providers::storage::StorageWriteProvider;
-use diskann_providers::{storage::FileStorageProvider, utils::write_metadata};
+use diskann_providers::utils::write_metadata;
 
 use super::CMDResult;
 
-pub fn gen_associated_data_from_range(
-    storage_provider: &FileStorageProvider,
-    associated_data_path: &str,
-    start: u32,
-    end: u32,
-) -> CMDResult<()> {
-    gen_associated_data_from_range_generic(storage_provider, associated_data_path, start, end)
-}
-
-fn gen_associated_data_from_range_generic<S: StorageWriteProvider>(
+pub fn gen_associated_data_from_range<S: StorageWriteProvider>(
     storage_provider: &S,
     associated_data_path: &str,
     start: u32,
@@ -54,7 +45,7 @@ mod tests {
         let path = "/test_gen_associated_data_from_range.bin";
 
         // Generate data from range 0 to 9
-        gen_associated_data_from_range_generic(&storage_provider, path, 0, 9).unwrap();
+        gen_associated_data_from_range(&storage_provider, path, 0, 9).unwrap();
 
         // Read back and verify
         let mut file = storage_provider.open_reader(path).unwrap();
@@ -79,7 +70,7 @@ mod tests {
         let path = "/test_gen_associated_data_single.bin";
 
         // Generate data for a single value
-        gen_associated_data_from_range_generic(&storage_provider, path, 42, 42).unwrap();
+        gen_associated_data_from_range(&storage_provider, path, 42, 42).unwrap();
 
         let mut file = storage_provider.open_reader(path).unwrap();
 
@@ -99,7 +90,7 @@ mod tests {
         let path = "/test_gen_associated_data_large.bin";
 
         // Generate data for range 100 to 199
-        gen_associated_data_from_range_generic(&storage_provider, path, 100, 199).unwrap();
+        gen_associated_data_from_range(&storage_provider, path, 100, 199).unwrap();
 
         let mut file = storage_provider.open_reader(path).unwrap();
 
