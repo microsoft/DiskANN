@@ -46,9 +46,11 @@ pub struct SearchParams {
     /// Starting beam width when adaptive_beam_width is true.
     /// Defaults to 4 (matching PipeANN). Grows up to beam_width.
     pub initial_beam_width: usize,
-    /// Number of hops before adaptive beam width starts tracking waste.
-    /// Defaults to 5 (matching PipeANN's max_marker convergence gate).
-    pub abw_convergence_hops: u32,
+    /// Queue depth threshold before adaptive beam width and relaxed monotonicity
+    /// activate. Defaults to 5 (matching PipeANN's max_marker convergence gate).
+    /// When the best unsubmitted candidate is at position ≥ this value in the
+    /// sorted queue, the search is considered past initial warmup.
+    pub abw_convergence_depth: usize,
     /// Optional relaxed monotonicity parameter.
     pub relaxed_monotonicity_l: Option<usize>,
 }
@@ -92,7 +94,7 @@ impl SearchParams {
             beam_width,
             adaptive_beam_width: false,
             initial_beam_width: 4,
-            abw_convergence_hops: 5,
+            abw_convergence_depth: 5,
             relaxed_monotonicity_l: None,
         })
     }

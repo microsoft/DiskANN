@@ -67,6 +67,15 @@ pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: std::fmt::Debug + Send 
         None
     }
 
+    /// Like `peek_best_unsubmitted`, but also returns the queue position (0-indexed).
+    /// The position indicates how deep into the sorted queue we had to search.
+    fn peek_best_unsubmitted_with_position(
+        &self,
+        submitted: &HashSet<I>,
+    ) -> Option<(usize, Neighbor<I>)> {
+        self.peek_best_unsubmitted(submitted).map(|n| (0, n))
+    }
+
     /// Find the node with matching `id`, mark it visited, and advance the cursor if needed.
     /// Returns true if found and marked, false otherwise.
     fn mark_visited_by_id(&mut self, _id: &I) -> bool {
@@ -502,11 +511,19 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Return the first node that is not visited and not in `submitted`,
     /// scanning positions 0..min(size, search_param_l). Does not modify any state.
     pub fn peek_best_unsubmitted(&self, submitted: &HashSet<I>) -> Option<Neighbor<I>> {
+        self.peek_best_unsubmitted_with_position(submitted)
+            .map(|(_, n)| n)
+    }
+
+    pub fn peek_best_unsubmitted_with_position(
+        &self,
+        submitted: &HashSet<I>,
+    ) -> Option<(usize, Neighbor<I>)> {
         let limit = self.search_param_l.min(self.size);
         for i in 0..limit {
             let (id, visited) = self.id_visiteds[i];
             if !visited && !submitted.contains(&id) {
-                return Some(Neighbor::new(id, self.distances[i]));
+                return Some((i, Neighbor::new(id, self.distances[i])));
             }
         }
         None
@@ -577,6 +594,13 @@ impl<I: NeighborPriorityQueueIdType> NeighborQueue<I> for NeighborPriorityQueue<
 
     fn peek_best_unsubmitted(&self, submitted: &HashSet<I>) -> Option<Neighbor<I>> {
         self.peek_best_unsubmitted(submitted)
+    }
+
+    fn peek_best_unsubmitted_with_position(
+        &self,
+        submitted: &HashSet<I>,
+    ) -> Option<(usize, Neighbor<I>)> {
+        self.peek_best_unsubmitted_with_position(submitted)
     }
 
     fn mark_visited_by_id(&mut self, id: &I) -> bool {

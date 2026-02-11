@@ -2095,6 +2095,11 @@ where
             };
             let mut abw_useful: u32 = 0; // IOs whose expansion was still useful
             let mut abw_total: u32 = 0; // total IOs tracked for waste ratio
+            // Tracks the deepest position in the sorted queue where we found an
+            // unsubmitted candidate. Mirrors PipeANN's max_marker — when this
+            // reaches the convergence gate, the search has explored past initial
+            // warmup and convergence-dependent features (ABW, RM) activate.
+            let mut max_marker: usize = 0;
 
             // Relaxed monotonicity: continue exploring after convergence
             let mut converge_size: Option<usize> = None;
@@ -2166,7 +2171,7 @@ where
                     scratch.hops += expanded as u32;
 
                     if search_params.adaptive_beam_width && expanded > 0 {
-                        if scratch.hops >= search_params.abw_convergence_hops {
+                        if max_marker >= search_params.abw_convergence_depth {
                             let improved = neighbors.iter().any(|n| n.distance < worst_before);
                             abw_total += 1;
                             if improved {
@@ -2186,9 +2191,10 @@ where
                     let inflight = accessor.inflight_count();
                     if inflight < cur_beam_width {
                         scratch.beam_nodes.clear();
-                        if let Some(closest_node) =
-                            scratch.best.peek_best_unsubmitted(&submitted)
+                        if let Some((pos, closest_node)) =
+                            scratch.best.peek_best_unsubmitted_with_position(&submitted)
                         {
+                            max_marker = max_marker.max(pos);
                             search_record.record(closest_node, scratch.hops, scratch.cmps);
                             submitted.insert(closest_node.id);
                             scratch.beam_nodes.push(closest_node.id);
@@ -2210,9 +2216,10 @@ where
                     scratch.beam_nodes.clear();
                     if pipelining {
                         while scratch.beam_nodes.len() < submit_limit {
-                            if let Some(closest_node) =
-                                scratch.best.peek_best_unsubmitted(&submitted)
+                            if let Some((pos, closest_node)) =
+                                scratch.best.peek_best_unsubmitted_with_position(&submitted)
                             {
+                                max_marker = max_marker.max(pos);
                                 search_record.record(closest_node, scratch.hops, scratch.cmps);
                                 submitted.insert(closest_node.id);
                                 scratch.beam_nodes.push(closest_node.id);
@@ -2259,7 +2266,7 @@ where
                     scratch.hops += expanded as u32;
 
                     if search_params.adaptive_beam_width && expanded > 0 {
-                        if scratch.hops >= search_params.abw_convergence_hops {
+                        if max_marker >= search_params.abw_convergence_depth {
                             let improved = neighbors.iter().any(|n| n.distance < worst_before);
                             abw_total += 1;
                             if improved {
@@ -2275,14 +2282,21 @@ where
                     }
                 }
 
-                // Relaxed monotonicity: detect convergence and extend search
+                // Relaxed monotonicity: detect convergence and extend search.
+                // Convergence is detected when max_marker reaches the convergence
+                // depth — meaning the best unsubmitted candidate is deep enough in
+                // the sorted queue that the top candidates have been explored.
+                // After convergence, the search continues for rm_l additional node
+                // expansions to improve recall beyond the greedy optimum.
                 if let Some(rm_l) = search_params.relaxed_monotonicity_l {
                     if rm_l > 0 {
-                        if !scratch.best.has_notvisited_node() && converge_size.is_none() {
-                            converge_size = Some(scratch.cmps as usize);
+                        if max_marker >= search_params.abw_convergence_depth
+                            && converge_size.is_none()
+                        {
+                            converge_size = Some(scratch.hops as usize);
                         }
                         if let Some(cs) = converge_size {
-                            if (scratch.cmps as usize) >= cs + rm_l {
+                            if (scratch.hops as usize) >= cs + rm_l {
                                 break;
                             }
                         }
