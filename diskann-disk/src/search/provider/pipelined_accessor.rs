@@ -197,9 +197,6 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     // IO state
     in_flight_ios: VecDeque<InFlightIo>,
     loaded_nodes: HashMap<u32, LoadedNode>,
-    /// Buffered CQE slot IDs not yet matched to in-flight IOs.
-    /// Allows processing one completion at a time for strict pipelining.
-    pending_cqe_slots: Vec<usize>,
     next_slot_id: usize,
     max_slots: usize,
     /// Monotonically increasing submission rank for priority-ordered expansion.
@@ -213,6 +210,10 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     // IO statistics
     io_count: u32,
     cache_hits: u32,
+    /// Accumulated IO time (submission + polling + waiting)
+    io_time: std::time::Duration,
+    /// Accumulated CPU time (fp distance + PQ distance + node parsing)
+    cpu_time: std::time::Duration,
     // Shared stats written on drop so caller can read them after search
     shared_io_stats: Arc<PipelinedIoStats>,
 
@@ -255,7 +256,6 @@ where
             node_cache,
             in_flight_ios: VecDeque::new(),
             loaded_nodes: HashMap::new(),
-            pending_cqe_slots: Vec::new(),
             next_slot_id: 0,
             max_slots: slots,
             next_rank: 0,
@@ -263,6 +263,8 @@ where
             distance_cache: HashMap::new(),
             io_count: 0,
             cache_hits: 0,
+            io_time: std::time::Duration::ZERO,
+            cpu_time: std::time::Duration::ZERO,
             shared_io_stats,
             trace: None,
         })
@@ -329,96 +331,90 @@ where
 
     /// Poll completed IOs and move data from reader buffers into loaded_nodes.
     fn drain_completions(&mut self) -> ANNResult<()> {
-        let mut trace = OptionalTrace(self.trace.as_mut());
-
-        // Poll new CQEs and buffer them
-        trace.begin_phase();
-        if !self.in_flight_ios.is_empty() {
-            let new_slots = self.scratch.reader.poll_completions()?;
-            self.pending_cqe_slots.extend(new_slots);
-        }
-        trace.end_phase_io_poll();
-
-        if self.pending_cqe_slots.is_empty() {
+        if self.in_flight_ios.is_empty() {
             return Ok(());
         }
 
-        // Process at most ONE completion in submission (FIFO) order,
-        // matching PipeANN's `while(front().finished())` which processes
-        // in-flight IOs strictly front-to-back.
-        let completed_set: std::collections::HashSet<usize> =
-            self.pending_cqe_slots.iter().copied().collect();
+        let mut trace = OptionalTrace(self.trace.as_mut());
 
-        // Scan in_flight_ios from front: process the first one whose CQE arrived
-        let mut found_idx = None;
-        for (i, io) in self.in_flight_ios.iter().enumerate() {
+        let io_start = Instant::now();
+        trace.begin_phase();
+        let completed_slots = self.scratch.reader.poll_completions()?;
+        trace.end_phase_io_poll();
+        self.io_time += io_start.elapsed();
+
+        if completed_slots.is_empty() {
+            return Ok(());
+        }
+
+        let completed_set: std::collections::HashSet<usize> =
+            completed_slots.into_iter().collect();
+
+        let mut remaining = VecDeque::new();
+        while let Some(io) = self.in_flight_ios.pop_front() {
             if completed_set.contains(&io.slot_id) {
-                found_idx = Some(i);
-                break;
+                trace.begin_phase();
+                let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
+                let parsed = parse_node(
+                    sector_buf,
+                    io.vertex_id,
+                    self.num_nodes_per_sector,
+                    self.node_len,
+                    self.fp_vector_len,
+                )?;
+                trace.end_phase_parse_node();
+                trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
+                self.loaded_nodes.insert(io.vertex_id, LoadedNode {
+                    fp_vector: parsed.fp_vector,
+                    adjacency_list: parsed.adjacency_list,
+                    rank: io.rank,
+                });
+            } else {
+                remaining.push_back(io);
             }
         }
-
-        if let Some(idx) = found_idx {
-            let io = self.in_flight_ios.remove(idx).unwrap();
-            self.pending_cqe_slots.retain(|&s| s != io.slot_id);
-
-            trace.begin_phase();
-            let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
-            let parsed = parse_node(
-                sector_buf,
-                io.vertex_id,
-                self.num_nodes_per_sector,
-                self.node_len,
-                self.fp_vector_len,
-            )?;
-            trace.end_phase_parse_node();
-            trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
-            self.loaded_nodes.insert(io.vertex_id, LoadedNode {
-                fp_vector: parsed.fp_vector,
-                adjacency_list: parsed.adjacency_list,
-                rank: io.rank,
-            });
-        }
+        self.in_flight_ios = remaining;
         Ok(())
     }
     /// Block until at least one IO completes, then eagerly drain all available.
-    /// Reuses the same completion → loaded_nodes logic as drain_completions.
     fn wait_and_drain(&mut self) -> ANNResult<()> {
         let mut trace = OptionalTrace(self.trace.as_mut());
+        let io_start = Instant::now();
         trace.begin_phase();
         let completed_slots = self.scratch.reader.wait_completions()?;
-        self.pending_cqe_slots.extend(completed_slots);
         trace.end_phase_io_poll();
+        self.io_time += io_start.elapsed();
 
-        // When blocking, drain ALL pending completions
-        let completed_set: std::collections::HashSet<usize> =
-            self.pending_cqe_slots.drain(..).collect();
-        if !completed_set.is_empty() {
-            let mut remaining = VecDeque::new();
-            while let Some(io) = self.in_flight_ios.pop_front() {
-                if completed_set.contains(&io.slot_id) {
-                    trace.begin_phase();
-                    let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
-                    let parsed = parse_node(
-                        sector_buf,
-                        io.vertex_id,
-                        self.num_nodes_per_sector,
-                        self.node_len,
-                        self.fp_vector_len,
-                    )?;
-                    trace.end_phase_parse_node();
-                    trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
-                    self.loaded_nodes.insert(io.vertex_id, LoadedNode {
-                        fp_vector: parsed.fp_vector,
-                        adjacency_list: parsed.adjacency_list,
-                        rank: io.rank,
-                    });
-                } else {
-                    remaining.push_back(io);
-                }
-            }
-            self.in_flight_ios = remaining;
+        if completed_slots.is_empty() {
+            return Ok(());
         }
+
+        let completed_set: std::collections::HashSet<usize> =
+            completed_slots.into_iter().collect();
+        let mut remaining = VecDeque::new();
+        while let Some(io) = self.in_flight_ios.pop_front() {
+            if completed_set.contains(&io.slot_id) {
+                trace.begin_phase();
+                let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
+                let parsed = parse_node(
+                    sector_buf,
+                    io.vertex_id,
+                    self.num_nodes_per_sector,
+                    self.node_len,
+                    self.fp_vector_len,
+                )?;
+                trace.end_phase_parse_node();
+                trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
+                self.loaded_nodes.insert(io.vertex_id, LoadedNode {
+                    fp_vector: parsed.fp_vector,
+                    adjacency_list: parsed.adjacency_list,
+                    rank: io.rank,
+                });
+            } else {
+                remaining.push_back(io);
+            }
+        }
+        self.in_flight_ios = remaining;
         Ok(())
     }
 }
@@ -540,6 +536,7 @@ where
     /// skipping disk IO entirely.
     fn submit_expand(&mut self, ids: impl Iterator<Item = Self::Id> + Send) {
         let mut trace = OptionalTrace(self.trace.as_mut());
+        let io_start = Instant::now();
         trace.begin_phase();
         for id in ids {
             if self.loaded_nodes.contains_key(&id) {
@@ -590,9 +587,15 @@ where
             }
         }
         trace.end_phase_io_submit();
+        self.io_time += io_start.elapsed();
     }
 
-    /// Poll for completed reads and expand all loaded nodes.
+    /// Poll for completed reads and expand the best loaded node.
+    ///
+    /// Uses two selection strategies:
+    /// 1. If `ids` provides candidates, pick the first loaded match (queue order)
+    /// 2. Otherwise, pick the loaded node with the lowest submission rank
+    ///    (earliest submitted = best PQ distance at submission time)
     fn expand_available<P, F>(
         &mut self,
         ids: impl Iterator<Item = Self::Id> + Send,
@@ -614,16 +617,22 @@ where
                 return Ok(0);
             }
 
-            // Expand the highest-priority loaded node, scanning `ids` in the
-            // caller's priority order (queue-ordered by PQ distance, then
-            // evicted-but-submitted nodes as fallback).  This matches PipeANN's
-            // retset scan: best PQ-distance loaded node first.
+            // Try caller's priority order first
             let mut best_vid: Option<u32> = None;
             for id in ids {
                 if self.loaded_nodes.contains_key(&id) {
                     best_vid = Some(id);
                     break;
                 }
+            }
+
+            // Fallback: pick loaded node with lowest rank (best PQ at submission)
+            if best_vid.is_none() {
+                best_vid = self
+                    .loaded_nodes
+                    .iter()
+                    .min_by_key(|(_, node)| node.rank)
+                    .map(|(&id, _)| id);
             }
 
             let vid = match best_vid {
@@ -634,14 +643,14 @@ where
             self.expanded_ids.push(vid);
 
             // Compute full-precision distance and cache it for post-processing
-            let fp_start = Instant::now();
+            let cpu_start = Instant::now();
             let fp_vec: &[Data::VectorDataType] = bytemuck::cast_slice(&node.fp_vector);
             let fp_dist = self
                 .provider
                 .distance_comparer
                 .evaluate_similarity(self.query, fp_vec);
             if let Some(t) = self.trace.as_mut() {
-                t.profile.fp_distance_us += fp_start.elapsed().as_micros() as u64;
+                t.profile.fp_distance_us += cpu_start.elapsed().as_micros() as u64;
             }
             self.distance_cache.insert(vid, fp_dist);
 
@@ -661,6 +670,7 @@ where
                     t.profile.pq_distance_us += pq_start.elapsed().as_micros() as u64;
                 }
             }
+            self.cpu_time += cpu_start.elapsed();
 
             if let Some(t) = self.trace.as_mut() {
                 t.record_expand();
@@ -678,7 +688,7 @@ where
 
     /// Returns true when there are in-flight IO operations.
     fn has_pending(&self) -> bool {
-        !self.in_flight_ios.is_empty() || !self.pending_cqe_slots.is_empty()
+        !self.in_flight_ios.is_empty()
     }
 
     fn inflight_count(&self) -> usize {
@@ -726,6 +736,12 @@ where
         self.shared_io_stats
             .cache_hits
             .fetch_add(self.cache_hits, Ordering::Relaxed);
+        self.shared_io_stats
+            .io_us
+            .fetch_add(self.io_time.as_micros() as u64, Ordering::Relaxed);
+        self.shared_io_stats
+            .cpu_us
+            .fetch_add(self.cpu_time.as_micros() as u64, Ordering::Relaxed);
 
         // Print trace if enabled
         if let Some(trace) = self.trace.as_mut() {
@@ -768,6 +784,8 @@ pub struct PipelinedConfig<Data: GraphDataType<VectorIdType = u32>> {
 pub struct PipelinedIoStats {
     pub io_count: AtomicU32,
     pub cache_hits: AtomicU32,
+    pub io_us: std::sync::atomic::AtomicU64,
+    pub cpu_us: std::sync::atomic::AtomicU64,
 }
 
 impl Default for PipelinedIoStats {
@@ -775,6 +793,8 @@ impl Default for PipelinedIoStats {
         Self {
             io_count: AtomicU32::new(0),
             cache_hits: AtomicU32::new(0),
+            io_us: std::sync::atomic::AtomicU64::new(0),
+            cpu_us: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -959,6 +979,8 @@ where
         query_stats.total_io_operations = io_stats.io_count.load(Ordering::Relaxed);
         query_stats.total_vertices_loaded =
             io_stats.io_count.load(Ordering::Relaxed) + io_stats.cache_hits.load(Ordering::Relaxed);
+        query_stats.io_time_us = io_stats.io_us.load(Ordering::Relaxed) as u128;
+        query_stats.cpu_time_us = io_stats.cpu_us.load(Ordering::Relaxed) as u128;
 
         let mut search_result = SearchResult {
             results: Vec::with_capacity(return_list_size as usize),

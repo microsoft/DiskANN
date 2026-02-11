@@ -2136,19 +2136,12 @@ where
                 //   2. expand all (synchronous)
 
                 if pipelining && has_pending {
-                    // Step 1: Expand one loaded node (polls internally)
+                    // Step 1: Expand one loaded node (polls internally).
+                    // Pass empty iterator — the accessor picks by rank.
                     neighbors.clear();
-                    let queue_ordered: Vec<DP::InternalId> = if !submitted.is_empty() {
-                        scratch.best.iter()
-                            .filter(|n| submitted.contains(&n.id))
-                            .map(|n| n.id)
-                            .collect()
-                    } else {
-                        Vec::new()
-                    };
                     let expanded = accessor
                         .expand_available(
-                            queue_ordered.iter().copied(),
+                            std::iter::empty(),
                             computer,
                             glue::NotInMut::new(&mut scratch.visited),
                             |distance, id| neighbors.push(Neighbor::new(id, distance)),
@@ -2225,17 +2218,9 @@ where
                     accessor.submit_expand(scratch.beam_nodes.iter().copied());
 
                     neighbors.clear();
-                    let queue_ordered: Vec<DP::InternalId> = if !submitted.is_empty() {
-                        scratch.best.iter()
-                            .filter(|n| submitted.contains(&n.id))
-                            .map(|n| n.id)
-                            .collect()
-                    } else {
-                        scratch.beam_nodes.clone()
-                    };
                     let expanded = accessor
                         .expand_available(
-                            queue_ordered.iter().copied(),
+                            scratch.beam_nodes.iter().copied(),
                             computer,
                             glue::NotInMut::new(&mut scratch.visited),
                             |distance, id| neighbors.push(Neighbor::new(id, distance)),
