@@ -275,7 +275,6 @@ save_bin!(save_bin_u32, u32, write_u32);
 mod storage_util_test {
     use crate::storage::{StorageReadProvider, StorageWriteProvider, VirtualStorageProvider};
     use tempfile::tempfile;
-    use vfs::MemoryFS;
 
     use super::*;
     pub const DIM_8: usize = 8;
@@ -284,8 +283,7 @@ mod storage_util_test {
     fn read_metadata_test() {
         let file_name = "/test_read_metadata_test.bin";
         let data = [200, 0, 0, 0, 128, 0, 0, 0]; // 200 and 128 in little endian bytes (u32)
-        let vfs = MemoryFS::default();
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_memory();
         {
             let mut file = storage_provider
                 .create_for_write(file_name)
@@ -313,8 +311,7 @@ mod storage_util_test {
         let file_name = "/test_read_metadata_i32_compat.bin";
         let npts = 200i32;
         let dims = 128i32;
-        let vfs = MemoryFS::default();
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_memory();
         {
             let mut file = storage_provider
                 .create_for_write(file_name)
@@ -341,8 +338,7 @@ mod storage_util_test {
         let file_name = "/load_vector_ids_test";
         let ids = vec![0u32, 1u32, 2u32];
         let num_ids = ids.len();
-        let vfs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_memory();
         {
             let mut writer = storage_provider.create_for_write(file_name).unwrap();
             writer.write_u32::<LittleEndian>(num_ids as u32).unwrap();
@@ -365,8 +361,7 @@ mod storage_util_test {
         let data = vec![0u64, 1u64, 2u64];
         let num_pts = data.len();
         let dims = 1;
-        let vfs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_memory();
         let bytes_written = save_bin_u64(
             &mut storage_provider.create_for_write(file_name).unwrap(),
             &data,
@@ -392,8 +387,7 @@ mod storage_util_test {
         let data = vec![0u64, 1u64, 2u64];
         let num_pts = data.len();
         let dims = 1;
-        let vfs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_memory();
         let bytes_written = save_bin_u64(
             &mut storage_provider.create_for_write(file_name).unwrap(),
             &data,
@@ -428,8 +422,7 @@ mod storage_util_test {
         let num_points = 2;
         let dim = DIM_8;
         let data_file = "/save_data_in_base_dimensions_test.data";
-        let vfs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(vfs);
+        let storage_provider = VirtualStorageProvider::new_memory();
         match save_data_in_base_dimensions(
             &mut storage_provider.create_for_write(data_file).unwrap(),
             &data,

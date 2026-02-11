@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn test_build_disk_index_with_num_of_pq_chunks() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let parameters = BuildDiskIndexParameters {
             metric: Metric::L2,
             data_path: "test_data_path",
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_build_disk_index_with_zero_num_of_pq_chunks() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let parameters = BuildDiskIndexParameters {
             metric: Metric::L2,
             data_path: "test_data_path",

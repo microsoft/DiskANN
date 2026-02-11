@@ -194,7 +194,7 @@ mod pq_generation_tests {
     use diskann_utils::views::{MatrixView, MutMatrixView};
     use diskann_vector::distance::Metric;
     use rstest::rstest;
-    use vfs::{FileSystem, MemoryFS, OverlayFS};
+    use vfs::FileSystem;
 
     use super::{CompressionStage, PQGeneration, PQGenerationContext};
     use crate::storage::quant::compressor::QuantCompressor;
@@ -210,9 +210,9 @@ mod pq_generation_tests {
         100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32, 100.0f32,
     ];
     #[allow(clippy::too_many_arguments)]
-    fn create_new_compressor<'a, R: AsThreadPool>(
+    fn create_new_compressor<'a, R: AsThreadPool, F: vfs::FileSystem>(
         stage: CompressionStage,
-        provider: &'a VirtualStorageProvider<OverlayFS>,
+        provider: &'a VirtualStorageProvider<F>,
         dim: usize,
         num_chunks: usize,
         max_kmeans_reps: usize,
@@ -222,7 +222,7 @@ mod pq_generation_tests {
         pivots_path: String,
         compressed_path: String,
         data_path: Option<&str>,
-    ) -> Result<PQGeneration<'a, f32, VirtualStorageProvider<OverlayFS>, R>, ANNError> {
+    ) -> Result<PQGeneration<'a, f32, VirtualStorageProvider<F>, R>, ANNError> {
         let pq_storage = PQStorage::new(&pivots_path, &compressed_path, data_path);
         let context = PQGenerationContext::<'_, _, _> {
             pq_storage,
@@ -241,10 +241,11 @@ mod pq_generation_tests {
 
     #[rstest]
     fn test_create_and_load_pivots_file() {
-        let fs = OverlayFS::new(&[MemoryFS::default().into()]);
-        fs.create_dir("/pq_generation_tests")
+        let storage_provider = VirtualStorageProvider::new_memory();
+        storage_provider
+            .filesystem()
+            .create_dir("/pq_generation_tests")
             .expect("Could not create test directory");
-        let storage_provider = VirtualStorageProvider::new(fs);
 
         let pivot_file_name = "/pq_generation_tests/generate_pq_pivots_test.bin";
         let pivot_file_name_compressor = "/pq_generation_tests/compressor_pivots_test.bin";
@@ -319,13 +320,11 @@ mod pq_generation_tests {
 
     #[rstest]
     fn throw_error_for_resume_and_no_existing_file() {
-        let fs = OverlayFS::new(&[
-            MemoryFS::default().into(),
-            // PhysicalFS::new("tests/data/").into(),
-        ]);
-        fs.create_dir("/pq_generation_tests")
+        let storage_provider = VirtualStorageProvider::new_memory();
+        storage_provider
+            .filesystem()
+            .create_dir("/pq_generation_tests")
             .expect("Could not create test directory");
-        let storage_provider = VirtualStorageProvider::new(fs);
 
         let pivot_file_name = "/pq_generation_tests/generate_pq_pivots_test.bin";
         let compressed_file_name = "/pq_generation_tests/compressed_not_used.bin";
