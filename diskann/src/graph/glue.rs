@@ -277,10 +277,6 @@ where
     /// completed IO operations and expands only the nodes whose data has arrived,
     /// returning immediately without blocking.
     ///
-    /// `up_to` limits how many nodes are expanded in a single call. Pipelined
-    /// providers should respect this to keep the IO pipeline full (expand fewer →
-    /// submit sooner). Non-pipelined providers may ignore it.
-    ///
     /// Returns the number of nodes that were expanded in this call.
     fn expand_available<P, F>(
         &mut self,
@@ -288,14 +284,12 @@ where
         computer: &Self::QueryComputer,
         pred: P,
         on_neighbors: F,
-        up_to: usize,
     ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
     where
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(f32, Self::Id) + Send,
     {
         async move {
-            let _ = up_to; // default impl processes everything
             let id_vec: Vec<Self::Id> = ids.collect();
             let count = id_vec.len();
             self.expand_beam(id_vec.into_iter(), computer, pred, on_neighbors)
@@ -320,6 +314,25 @@ where
     /// Default: 0 (non-pipelined providers have no in-flight IO).
     fn inflight_count(&self) -> usize {
         0
+    }
+
+    /// Block until at least one IO completes, then eagerly drain all available.
+    ///
+    /// Called by the search loop only when it cannot make progress: nothing was
+    /// submitted (no candidates or inflight cap reached) AND nothing was expanded
+    /// (no completions available). Blocking here yields the CPU thread instead of
+    /// spin-polling, while the eager drain ensures we process bursts efficiently.
+    ///
+    /// Default: no-op (non-pipelined providers never need to wait).
+    fn wait_for_io(&mut self) {}
+
+    /// Return the IDs of nodes expanded in the most recent `expand_available` call.
+    ///
+    /// The search loop uses this to mark speculatively submitted nodes as visited
+    /// only after they have actually been expanded. Non-pipelined providers return
+    /// an empty slice (they mark visited at selection time).
+    fn last_expanded_ids(&self) -> &[Self::Id] {
+        &[]
     }
 
     /// Expand all `ids` synchronously: load data, get neighbors, compute distances.

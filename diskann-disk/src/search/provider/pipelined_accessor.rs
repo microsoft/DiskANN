@@ -201,6 +201,8 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     max_slots: usize,
     /// Monotonically increasing submission rank for priority-ordered expansion.
     next_rank: u64,
+    /// IDs expanded in the most recent `expand_available` call.
+    expanded_ids: Vec<u32>,
 
     // Distance cache for post-processing rerank
     distance_cache: HashMap<u32, f32>,
@@ -253,6 +255,7 @@ where
             next_slot_id: 0,
             max_slots: slots,
             next_rank: 0,
+            expanded_ids: Vec::new(),
             distance_cache: HashMap::new(),
             io_count: 0,
             cache_hits: 0,
@@ -329,6 +332,44 @@ where
         } else {
             self.scratch.reader.poll_completions()?
         };
+        trace.end_phase_io_poll();
+
+        if !completed_slots.is_empty() {
+            let completed_set: std::collections::HashSet<usize> =
+                completed_slots.into_iter().collect();
+            let mut remaining = VecDeque::new();
+            while let Some(io) = self.in_flight_ios.pop_front() {
+                if completed_set.contains(&io.slot_id) {
+                    trace.begin_phase();
+                    let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
+                    let parsed = parse_node(
+                        sector_buf,
+                        io.vertex_id,
+                        self.num_nodes_per_sector,
+                        self.node_len,
+                        self.fp_vector_len,
+                    )?;
+                    trace.end_phase_parse_node();
+                    trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
+                    self.loaded_nodes.insert(io.vertex_id, LoadedNode {
+                        fp_vector: parsed.fp_vector,
+                        adjacency_list: parsed.adjacency_list,
+                        rank: io.rank,
+                    });
+                } else {
+                    remaining.push_back(io);
+                }
+            }
+            self.in_flight_ios = remaining;
+        }
+        Ok(())
+    }
+    /// Block until at least one IO completes, then eagerly drain all available.
+    /// Reuses the same completion → loaded_nodes logic as drain_completions.
+    fn wait_and_drain(&mut self) -> ANNResult<()> {
+        let mut trace = OptionalTrace(self.trace.as_mut());
+        trace.begin_phase();
+        let completed_slots = self.scratch.reader.wait_completions()?;
         trace.end_phase_io_poll();
 
         if !completed_slots.is_empty() {
@@ -532,96 +573,93 @@ where
         trace.end_phase_io_submit();
     }
 
-    /// Poll for completed reads and expand up to `up_to` nodes.
-    /// Remaining loaded-but-unexpanded nodes stay buffered for the next call,
-    /// which lets the search loop submit new IOs sooner (process-few-submit-few).
+    /// Poll for completed reads and expand all loaded nodes.
     fn expand_available<P, F>(
         &mut self,
-        _ids: impl Iterator<Item = Self::Id> + Send,
+        ids: impl Iterator<Item = Self::Id> + Send,
         _computer: &Self::QueryComputer,
         mut pred: P,
         mut on_neighbors: F,
-        up_to: usize,
     ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
     where
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(f32, Self::Id) + Send,
     {
         async move {
+            self.expanded_ids.clear();
+
             // Non-blocking poll for completions
             self.drain_completions()?;
 
-            // If nothing loaded yet, return 0 so the search loop can submit
-            // more IOs before we block. This matches PipeSearch's non-blocking
-            // poll pattern and avoids stalling the pipeline.
             if self.loaded_nodes.is_empty() {
                 return Ok(0);
             }
 
-            // Expand loaded nodes in submission order (lowest rank first).
-            // Nodes submitted earlier had better PQ distance (came from
-            // closest_notvisited), so expanding them first — like PipeSearch's
-            // "best available" strategy — improves search quality.
-            let mut ranked: Vec<(u64, u32)> = self
-                .loaded_nodes
-                .iter()
-                .map(|(&id, node)| (node.rank, id))
-                .collect();
-            ranked.sort_unstable();
-            let mut expanded = 0;
-
-            for (_, vid) in ranked {
-                if expanded >= up_to {
+            // Prefer expanding a node the search loop ranks highest (first
+            // match in the caller-supplied `ids` iterator). Fall back to the
+            // loaded node with lowest submission rank for backward compat.
+            let mut best_vid: Option<u32> = None;
+            for id in ids {
+                if self.loaded_nodes.contains_key(&id) {
+                    best_vid = Some(id);
                     break;
                 }
-                let node = match self.loaded_nodes.remove(&vid) {
-                    Some(n) => n,
-                    None => continue,
-                };
-
-                // Compute full-precision distance and cache it for post-processing
-                let fp_start = Instant::now();
-                let fp_vec: &[Data::VectorDataType] = bytemuck::cast_slice(&node.fp_vector);
-                let fp_dist = self
-                    .provider
-                    .distance_comparer
-                    .evaluate_similarity(self.query, fp_vec);
-                if let Some(t) = self.trace.as_mut() {
-                    t.profile.fp_distance_us += fp_start.elapsed().as_micros() as u64;
-                }
-                self.distance_cache.insert(vid, fp_dist);
-
-                // Get unvisited neighbors
-                let neighbors: Vec<u32> = node
-                    .adjacency_list
+            }
+            if best_vid.is_none() {
+                best_vid = self
+                    .loaded_nodes
                     .iter()
-                    .copied()
-                    .filter(|&nbr| (nbr as usize) < self.num_points && pred.eval_mut(&nbr))
-                    .collect();
-                let num_new = neighbors.len() as u32;
-
-                if !neighbors.is_empty() {
-                    let pq_start = Instant::now();
-                    self.pq_distances(&neighbors, &mut on_neighbors)?;
-                    if let Some(t) = self.trace.as_mut() {
-                        t.profile.pq_distance_us += pq_start.elapsed().as_micros() as u64;
-                    }
-                }
-
-                if let Some(t) = self.trace.as_mut() {
-                    t.record_expand();
-                    t.event(TraceEventKind::Expand {
-                        node_id: vid,
-                        fp_distance: fp_dist,
-                        num_neighbors: node.adjacency_list.len() as u32,
-                        num_new_candidates: num_new,
-                    });
-                }
-
-                expanded += 1;
+                    .min_by_key(|(_, node)| node.rank)
+                    .map(|(&id, _)| id);
             }
 
-            Ok(expanded)
+            let vid = match best_vid {
+                Some(id) => id,
+                None => return Ok(0),
+            };
+            let node = self.loaded_nodes.remove(&vid).unwrap();
+            self.expanded_ids.push(vid);
+
+            // Compute full-precision distance and cache it for post-processing
+            let fp_start = Instant::now();
+            let fp_vec: &[Data::VectorDataType] = bytemuck::cast_slice(&node.fp_vector);
+            let fp_dist = self
+                .provider
+                .distance_comparer
+                .evaluate_similarity(self.query, fp_vec);
+            if let Some(t) = self.trace.as_mut() {
+                t.profile.fp_distance_us += fp_start.elapsed().as_micros() as u64;
+            }
+            self.distance_cache.insert(vid, fp_dist);
+
+            // Get unvisited neighbors
+            let neighbors: Vec<u32> = node
+                .adjacency_list
+                .iter()
+                .copied()
+                .filter(|&nbr| (nbr as usize) < self.num_points && pred.eval_mut(&nbr))
+                .collect();
+            let num_new = neighbors.len() as u32;
+
+            if !neighbors.is_empty() {
+                let pq_start = Instant::now();
+                self.pq_distances(&neighbors, &mut on_neighbors)?;
+                if let Some(t) = self.trace.as_mut() {
+                    t.profile.pq_distance_us += pq_start.elapsed().as_micros() as u64;
+                }
+            }
+
+            if let Some(t) = self.trace.as_mut() {
+                t.record_expand();
+                t.event(TraceEventKind::Expand {
+                    node_id: vid,
+                    fp_distance: fp_dist,
+                    num_neighbors: node.adjacency_list.len() as u32,
+                    num_new_candidates: num_new,
+                });
+            }
+
+            Ok(1)
         }
     }
 
@@ -632,6 +670,17 @@ where
 
     fn inflight_count(&self) -> usize {
         self.in_flight_ios.len()
+    }
+
+    fn wait_for_io(&mut self) {
+        // Only block if there are actually in-flight IOs to wait for
+        if !self.in_flight_ios.is_empty() {
+            let _ = self.wait_and_drain();
+        }
+    }
+
+    fn last_expanded_ids(&self) -> &[u32] {
+        &self.expanded_ids
     }
 }
 
