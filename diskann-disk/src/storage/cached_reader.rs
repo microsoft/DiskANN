@@ -130,8 +130,7 @@ mod cached_reader_test {
             0x20, 0x41, 0x00, 0x00, 0x30, 0x41, 0x00, 0x00, 0x40, 0x41, 0x00, 0x00, 0x50, 0x41,
             0x00, 0x00, 0x60, 0x41, 0x00, 0x00, 0x70, 0x41, 0x00, 0x11, 0x80, 0x41,
         ];
-        let filesystem = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_memory();
         {
             let mut writer = storage_provider.create_for_write(file_name).unwrap();
             writer.write_all(&data).unwrap();
@@ -191,7 +190,7 @@ mod cached_reader_test {
             0x00, 0x00, 0x60, 0x41, 0x00, 0x00, 0x70, 0x41, 0x00, 0x11, 0x80, 0x41,
         ];
         let filesystem = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_memory();
         {
             let mut writer = storage_provider.create_for_write(file_name).unwrap();
             writer.write_all(&data).unwrap();

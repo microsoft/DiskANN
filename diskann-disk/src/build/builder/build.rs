@@ -930,8 +930,7 @@ mod start_point_tests {
     #[test]
     fn test_start_point_save_and_load() {
         let file_path = "/start_point_test.bin";
-        let fs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(fs);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         // Create and save a start point
         let id = 42u32;
@@ -945,7 +944,7 @@ mod start_point_tests {
 
     #[test]
     fn test_start_point_load_nonexistent_file() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let result = StartPoint::load("/nonexistent_file.bin", &storage_provider);
         assert_eq!(
             result.err().unwrap().kind(),
@@ -956,8 +955,7 @@ mod start_point_tests {
     #[test]
     fn test_start_point_load_empty_file() {
         let file_path = "/empty_file.bin";
-        let fs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(fs);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         // Create an empty file
         {
@@ -972,8 +970,7 @@ mod start_point_tests {
     #[test]
     fn test_start_point_load_invalid_data() {
         let file_path = "/invalid_data.bin";
-        let fs = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(fs);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         // Create a file with invalid data
         {

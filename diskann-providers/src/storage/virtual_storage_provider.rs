@@ -81,7 +81,8 @@ pub struct VirtualStorageProvider<FileSystemType: FileSystem> {
 }
 
 impl<FileSystemType: FileSystem> VirtualStorageProvider<FileSystemType> {
-    pub(crate) fn new(filesystem: FileSystemType) -> VirtualStorageProvider<FileSystemType> {
+    #[doc(hidden)]
+    pub fn new(filesystem: FileSystemType) -> VirtualStorageProvider<FileSystemType> {
         VirtualStorageProvider { filesystem }
     }
 
