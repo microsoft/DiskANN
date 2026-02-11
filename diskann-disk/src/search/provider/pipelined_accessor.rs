@@ -6,7 +6,7 @@
 //! Queue-based pipelined disk accessor that integrates with the generic search loop
 //! via the `ExpandBeam` trait's `submit_expand` / `expand_available` / `has_pending` methods.
 //!
-//! Instead of duplicating the search loop (like `PipelinedSearcher`), this accessor
+//! Plugs into `DiskANNIndex::search_internal()` and overlaps IO with computation
 //! plugs into `DiskANNIndex::search_internal()` and overlaps IO with computation
 //! using io_uring under the hood.
 

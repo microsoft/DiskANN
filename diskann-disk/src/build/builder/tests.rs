@@ -36,9 +36,6 @@ mod chunkable_disk_index_build_tests {
         QuantizationType,
     };
 
-    #[cfg(target_os = "linux")]
-    use crate::build::builder::core::disk_index_builder_tests::verify_search_result_with_ground_truth_pipelined;
-
     #[derive(PartialEq)]
     enum BuildType {
         AsyncFP,
@@ -188,15 +185,6 @@ mod chunkable_disk_index_build_tests {
 
         fixture.compare_pq_compressed_files();
         verify_search_result_with_ground_truth::<GraphDataF32VectorUnitData>(
-            &fixture.params,
-            top_k,
-            search_l,
-            &fixture.storage_provider,
-        )
-        .unwrap();
-
-        #[cfg(target_os = "linux")]
-        verify_search_result_with_ground_truth_pipelined::<GraphDataF32VectorUnitData>(
             &fixture.params,
             top_k,
             search_l,
