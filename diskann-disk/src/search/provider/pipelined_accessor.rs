@@ -743,14 +743,10 @@ where
             .cpu_us
             .fetch_add(self.cpu_time.as_micros() as u64, Ordering::Relaxed);
 
-        // Print trace if enabled
+        // Print trace profile if enabled (controlled by DISKANN_TRACE=1)
         if let Some(trace) = self.trace.as_mut() {
             trace.finish();
             trace.print_profile_summary();
-            // Print events if DISKANN_TRACE_EVENTS is set
-            if std::env::var("DISKANN_TRACE_EVENTS").is_ok() {
-                trace.print_events(500);
-            }
         }
     }
 }

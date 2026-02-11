@@ -14,7 +14,7 @@
 //! Tracing is opt-in: create a `SearchTrace` and pass it to the search function.
 //! When disabled (None), all operations are zero-cost.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// A single event in the search trace.
 #[derive(Debug, Clone)]

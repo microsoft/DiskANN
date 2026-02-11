@@ -78,19 +78,10 @@ pub(crate) enum SearchMode {
     /// Standard beam search (default, current behavior).
     #[default]
     BeamSearch,
-    /// PipeANN pipelined search with IO/compute overlap.
+    /// Pipelined search through the generic search loop (queue-based ExpandBeam).
+    /// Overlaps IO and compute using io_uring on Linux.
+    #[serde(alias = "UnifiedPipeSearch")]
     PipeSearch {
-        /// Initial beam width before adaptive adjustment (default: 4).
-        #[serde(default = "default_initial_beam_width")]
-        initial_beam_width: usize,
-        /// Optional relaxed monotonicity parameter for early termination.
-        relaxed_monotonicity_l: Option<usize>,
-        /// Enable kernel-side SQ polling (ms idle timeout). None = disabled.
-        #[serde(default)]
-        sqpoll_idle_ms: Option<u32>,
-    },
-    /// Unified pipelined search through the generic search loop (queue-based ExpandBeam).
-    UnifiedPipeSearch {
         /// Start with a smaller beam and grow adaptively. Defaults to true.
         #[serde(default = "default_true")]
         adaptive_beam_width: bool,
@@ -107,22 +98,8 @@ impl fmt::Display for SearchMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SearchMode::BeamSearch => write!(f, "BeamSearch"),
-            SearchMode::PipeSearch {
-                initial_beam_width,
-                relaxed_monotonicity_l,
-                sqpoll_idle_ms,
-            } => {
-                write!(f, "PipeSearch(bw={}", initial_beam_width)?;
-                if let Some(rm) = relaxed_monotonicity_l {
-                    write!(f, ",rm={}", rm)?;
-                }
-                if let Some(sq) = sqpoll_idle_ms {
-                    write!(f, ",sqpoll={}ms", sq)?;
-                }
-                write!(f, ")")
-            }
-            SearchMode::UnifiedPipeSearch { adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms } => {
-                write!(f, "UnifiedPipeSearch")?;
+            SearchMode::PipeSearch { adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms } => {
+                write!(f, "PipeSearch")?;
                 let has_abw = *adaptive_beam_width;
                 let has_rm = relaxed_monotonicity_l.is_some();
                 let has_sq = sqpoll_idle_ms.is_some();
@@ -148,10 +125,6 @@ impl fmt::Display for SearchMode {
             }
         }
     }
-}
-
-fn default_initial_beam_width() -> usize {
-    4
 }
 
 fn default_true() -> bool {
@@ -326,12 +299,7 @@ impl CheckDeserialization for DiskSearchPhase {
         }
         match &self.search_mode {
             SearchMode::BeamSearch => {}
-            SearchMode::PipeSearch { initial_beam_width, .. } => {
-                if *initial_beam_width == 0 {
-                    anyhow::bail!("initial_beam_width must be positive");
-                }
-            }
-            SearchMode::UnifiedPipeSearch { .. } => {}
+            SearchMode::PipeSearch { .. } => {}
         }
         Ok(())
     }

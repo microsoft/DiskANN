@@ -46,9 +46,7 @@
           "distance": "squared_l2",
           "vector_filters_file": null,
           "search_mode": {
-            "mode": "PipeSearch",
-            "initial_beam_width": 4,
-            "relaxed_monotonicity_l": null
+            "mode": "PipeSearch"
           }
         }
       }
@@ -73,34 +71,7 @@
           "vector_filters_file": null,
           "search_mode": {
             "mode": "PipeSearch",
-            "initial_beam_width": 2,
             "relaxed_monotonicity_l": 50
-          }
-        }
-      }
-    },
-    {
-      "type": "disk-index",
-      "content": {
-        "source": {
-          "disk-index-source": "Load",
-          "data_type": "float32",
-          "load_path": "test_data/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search"
-        },
-        "search_phase": {
-          "queries": "disk_index_sample_query_10pts.fbin",
-          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
-          "search_list": [10, 20, 40, 80],
-          "beam_width": 4,
-          "recall_at": 10,
-          "num_threads": 1,
-          "is_flat_search": false,
-          "distance": "squared_l2",
-          "vector_filters_file": null,
-          "search_mode": {
-            "mode": "PipeSearch",
-            "initial_beam_width": 4,
-            "sqpoll_idle_ms": 1000
           }
         }
       }

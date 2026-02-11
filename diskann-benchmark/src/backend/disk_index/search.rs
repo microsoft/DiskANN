@@ -22,7 +22,7 @@ use diskann_disk::{
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
 };
 #[cfg(target_os = "linux")]
-use diskann_disk::search::pipelined::{PipelinedSearcher, PipelinedReaderConfig};
+use diskann_disk::search::pipelined::PipelinedReaderConfig;
 #[cfg(target_os = "linux")]
 use diskann_disk::search::provider::pipelined_accessor::PipelinedConfig;
 use diskann_providers::storage::StorageReadProvider;
@@ -230,16 +230,6 @@ fn run_search_loop(
 
         let total_time = start.elapsed();
 
-        // Print per-query result IDs for trace comparison
-        if std::env::var("DISKANN_TRACE_EVENTS").is_ok() {
-            for qi in 0..num_queries {
-                let start_idx = qi * recall_at as usize;
-                let count = result_counts[qi] as usize;
-                let ids: Vec<u32> = result_ids[start_idx..start_idx + count.min(recall_at as usize)].to_vec();
-                eprintln!("RESULT q={} L={} ids={:?}", qi, l, ids);
-            }
-        }
-
         if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
             anyhow::bail!("One or more searches failed. See logs for details.");
         }
@@ -390,88 +380,9 @@ where
                 },
             )?;
         }
-        // PipeANN pipelined search — for read-only search on completed (static) indices only.
-        // Searcher is created once; internal ObjectPool handles per-thread scratch allocation.
-        // Build's internal search always uses BeamSearch above.
-        SearchMode::PipeSearch {
-            initial_beam_width,
-            relaxed_monotonicity_l,
-            sqpoll_idle_ms,
-        } => {
-            #[cfg(target_os = "linux")]
-            {
-                let graph_header = vertex_provider_factory.get_header()?;
-                let pq_data = index_reader.get_pq_data();
-                let metric = search_params.distance.into();
-                let initial_beam_width = *initial_beam_width;
-                let relaxed_monotonicity_l = *relaxed_monotonicity_l;
-
-                let reader_config = PipelinedReaderConfig {
-                    sqpoll_idle_ms: *sqpoll_idle_ms,
-                };
-
-                // Create searcher once — pool handles per-thread scratch allocation
-                let pipe_searcher = Arc::new(PipelinedSearcher::<GraphData<T>>::new(
-                    graph_header.clone(),
-                    pq_data.clone(),
-                    metric,
-                    initial_beam_width,
-                    relaxed_monotonicity_l,
-                    disk_index_path.clone(),
-                    reader_config,
-                )?);
-
-                logger.log_checkpoint("index_loaded");
-
-                search_results_per_l = run_search_loop(
-                    &search_params.search_list,
-                    search_params.recall_at,
-                    search_params.beam_width,
-                    num_queries,
-                    "pipesearch",
-                    &has_any_search_failed,
-                    &gt_context,
-                    |l, statistics_vec, result_counts, result_ids, result_dists| {
-                        let pipe_searcher = pipe_searcher.clone();
-
-                        let zipped = queries
-                            .par_row_iter()
-                            .zip(result_ids.par_chunks_mut(search_params.recall_at as usize))
-                            .zip(result_dists.par_chunks_mut(search_params.recall_at as usize))
-                            .zip(statistics_vec.par_iter_mut())
-                            .zip(result_counts.par_iter_mut());
-
-                        zipped.for_each_in_pool(
-                            &pool,
-                            |((((q, id_chunk), dist_chunk), stats), rc)| {
-                                write_query_result(
-                                    pipe_searcher.search(
-                                        q,
-                                        search_params.recall_at,
-                                        l,
-                                        search_params.beam_width,
-                                        None,
-                                    ),
-                                    search_params.recall_at as usize,
-                                    stats,
-                                    rc,
-                                    id_chunk,
-                                    dist_chunk,
-                                    &has_any_search_failed,
-                                    "PipeSearch",
-                                );
-                            },
-                        );
-                    },
-                )?;
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let _ = (initial_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms);
-                anyhow::bail!("PipeSearch is only supported on Linux");
-            }
-        }
-        SearchMode::UnifiedPipeSearch { adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms } => {
+        // Pipelined search — for read-only search on completed (static) indices only.
+        // Uses io_uring for IO/compute overlap through the generic search loop.
+        SearchMode::PipeSearch { adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms } => {
             #[cfg(target_os = "linux")]
             {
                 use diskann_disk::data_model::Cache;
@@ -545,7 +456,7 @@ where
                     search_params.recall_at,
                     search_params.beam_width,
                     num_queries,
-                    "unified_pipesearch",
+                    "pipesearch",
                     &has_any_search_failed,
                     &gt_context,
                     |l, statistics_vec, result_counts, result_ids, result_dists| {
@@ -573,7 +484,7 @@ where
                                     id_chunk,
                                     dist_chunk,
                                     &has_any_search_failed,
-                                    "UnifiedPipeSearch",
+                                    "PipeSearch",
                                 );
                             },
                         );
@@ -583,7 +494,7 @@ where
             #[cfg(not(target_os = "linux"))]
             {
                 let _ = (adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms);
-                anyhow::bail!("UnifiedPipeSearch is only supported on Linux");
+                anyhow::bail!("PipeSearch is only supported on Linux");
             }
         }
     }
