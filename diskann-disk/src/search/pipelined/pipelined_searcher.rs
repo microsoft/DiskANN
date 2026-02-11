@@ -273,6 +273,9 @@ where
 
         if let Some(t) = &trace {
             t.print_profile_summary();
+            if std::env::var("DISKANN_TRACE_EVENTS").is_ok() {
+                t.print_events(500);
+            }
         }
 
         let query_statistics = QueryStatistics {

@@ -197,6 +197,9 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     // IO state
     in_flight_ios: VecDeque<InFlightIo>,
     loaded_nodes: HashMap<u32, LoadedNode>,
+    /// Buffered CQE slot IDs not yet matched to in-flight IOs.
+    /// Allows processing one completion at a time for strict pipelining.
+    pending_cqe_slots: Vec<usize>,
     next_slot_id: usize,
     max_slots: usize,
     /// Monotonically increasing submission rank for priority-ordered expansion.
@@ -252,6 +255,7 @@ where
             node_cache,
             in_flight_ios: VecDeque::new(),
             loaded_nodes: HashMap::new(),
+            pending_cqe_slots: Vec::new(),
             next_slot_id: 0,
             max_slots: slots,
             next_rank: 0,
@@ -326,41 +330,54 @@ where
     /// Poll completed IOs and move data from reader buffers into loaded_nodes.
     fn drain_completions(&mut self) -> ANNResult<()> {
         let mut trace = OptionalTrace(self.trace.as_mut());
+
+        // Poll new CQEs and buffer them
         trace.begin_phase();
-        let completed_slots = if self.in_flight_ios.is_empty() {
-            Vec::new()
-        } else {
-            self.scratch.reader.poll_completions()?
-        };
+        if !self.in_flight_ios.is_empty() {
+            let new_slots = self.scratch.reader.poll_completions()?;
+            self.pending_cqe_slots.extend(new_slots);
+        }
         trace.end_phase_io_poll();
 
-        if !completed_slots.is_empty() {
-            let completed_set: std::collections::HashSet<usize> =
-                completed_slots.into_iter().collect();
-            let mut remaining = VecDeque::new();
-            while let Some(io) = self.in_flight_ios.pop_front() {
-                if completed_set.contains(&io.slot_id) {
-                    trace.begin_phase();
-                    let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
-                    let parsed = parse_node(
-                        sector_buf,
-                        io.vertex_id,
-                        self.num_nodes_per_sector,
-                        self.node_len,
-                        self.fp_vector_len,
-                    )?;
-                    trace.end_phase_parse_node();
-                    trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
-                    self.loaded_nodes.insert(io.vertex_id, LoadedNode {
-                        fp_vector: parsed.fp_vector,
-                        adjacency_list: parsed.adjacency_list,
-                        rank: io.rank,
-                    });
-                } else {
-                    remaining.push_back(io);
-                }
+        if self.pending_cqe_slots.is_empty() {
+            return Ok(());
+        }
+
+        // Process at most ONE completion in submission (FIFO) order,
+        // matching PipeANN's `while(front().finished())` which processes
+        // in-flight IOs strictly front-to-back.
+        let completed_set: std::collections::HashSet<usize> =
+            self.pending_cqe_slots.iter().copied().collect();
+
+        // Scan in_flight_ios from front: process the first one whose CQE arrived
+        let mut found_idx = None;
+        for (i, io) in self.in_flight_ios.iter().enumerate() {
+            if completed_set.contains(&io.slot_id) {
+                found_idx = Some(i);
+                break;
             }
-            self.in_flight_ios = remaining;
+        }
+
+        if let Some(idx) = found_idx {
+            let io = self.in_flight_ios.remove(idx).unwrap();
+            self.pending_cqe_slots.retain(|&s| s != io.slot_id);
+
+            trace.begin_phase();
+            let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
+            let parsed = parse_node(
+                sector_buf,
+                io.vertex_id,
+                self.num_nodes_per_sector,
+                self.node_len,
+                self.fp_vector_len,
+            )?;
+            trace.end_phase_parse_node();
+            trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
+            self.loaded_nodes.insert(io.vertex_id, LoadedNode {
+                fp_vector: parsed.fp_vector,
+                adjacency_list: parsed.adjacency_list,
+                rank: io.rank,
+            });
         }
         Ok(())
     }
@@ -370,11 +387,13 @@ where
         let mut trace = OptionalTrace(self.trace.as_mut());
         trace.begin_phase();
         let completed_slots = self.scratch.reader.wait_completions()?;
+        self.pending_cqe_slots.extend(completed_slots);
         trace.end_phase_io_poll();
 
-        if !completed_slots.is_empty() {
-            let completed_set: std::collections::HashSet<usize> =
-                completed_slots.into_iter().collect();
+        // When blocking, drain ALL pending completions
+        let completed_set: std::collections::HashSet<usize> =
+            self.pending_cqe_slots.drain(..).collect();
+        if !completed_set.is_empty() {
             let mut remaining = VecDeque::new();
             while let Some(io) = self.in_flight_ios.pop_front() {
                 if completed_set.contains(&io.slot_id) {
@@ -595,11 +614,10 @@ where
                 return Ok(0);
             }
 
-            // Expand the highest-priority loaded node according to the
-            // search loop's current queue ordering (passed via `ids`).
-            // If no queue-preferred node is loaded, return 0 — stale loaded
-            // nodes whose candidates have been superseded are abandoned,
-            // matching PipeSearch's behavior of not expanding evicted nodes.
+            // Expand the highest-priority loaded node, scanning `ids` in the
+            // caller's priority order (queue-ordered by PQ distance, then
+            // evicted-but-submitted nodes as fallback).  This matches PipeANN's
+            // retset scan: best PQ-distance loaded node first.
             let mut best_vid: Option<u32> = None;
             for id in ids {
                 if self.loaded_nodes.contains_key(&id) {
@@ -660,7 +678,7 @@ where
 
     /// Returns true when there are in-flight IO operations.
     fn has_pending(&self) -> bool {
-        !self.in_flight_ios.is_empty()
+        !self.in_flight_ios.is_empty() || !self.pending_cqe_slots.is_empty()
     }
 
     fn inflight_count(&self) -> usize {
@@ -713,6 +731,10 @@ where
         if let Some(trace) = self.trace.as_mut() {
             trace.finish();
             trace.print_profile_summary();
+            // Print events if DISKANN_TRACE_EVENTS is set
+            if std::env::var("DISKANN_TRACE_EVENTS").is_ok() {
+                trace.print_events(500);
+            }
         }
     }
 }
@@ -786,22 +808,22 @@ where
         accessor: &mut PipelinedDiskAccessor<'_, Data>,
         _query: &[Data::VectorDataType],
         _computer: &DiskQueryComputer,
-        candidates: I,
+        _candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send + ?Sized,
     {
-        let mut reranked: Vec<((u32, Data::AssociatedDataType), f32)> = candidates
-            .map(|n| n.id)
-            .filter(|id| (self.filter)(id))
-            .filter_map(|id| {
-                accessor
-                    .distance_cache
-                    .get(&id)
-                    .map(|&dist| ((id, Data::AssociatedDataType::default()), dist))
-            })
+        // Rerank using ALL expanded nodes' cached fp-distances, not just
+        // candidates from the priority queue. This matches PipeANN's
+        // full_retset approach: every expanded node contributes to results
+        // regardless of its PQ distance ranking.
+        let mut reranked: Vec<((u32, Data::AssociatedDataType), f32)> = accessor
+            .distance_cache
+            .iter()
+            .filter(|(id, _)| (self.filter)(id))
+            .map(|(&id, &dist)| ((id, Data::AssociatedDataType::default()), dist))
             .collect();
 
         reranked.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));

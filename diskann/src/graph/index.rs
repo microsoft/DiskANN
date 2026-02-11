@@ -2126,104 +2126,137 @@ where
                 let has_pending = accessor.has_pending();
                 let pipelining = accessor.is_pipelined();
 
-                // When pipelining, cap total in-flight IOs at cur_beam_width
-                // (like PipeSearch) to avoid over-committing the priority queue.
-                // Within that cap, submit at the rate we expand (process-N-submit-N).
-                let submit_limit = if has_pending {
-                    let inflight = accessor.inflight_count();
-                    if inflight >= cur_beam_width {
-                        0
-                    } else {
-                        last_expanded.max(1).min(cur_beam_width - inflight)
-                    }
-                } else {
-                    cur_beam_width
-                };
+                // PIPELINED ORDER (matching PipeANN's loop):
+                //   1. poll completions + expand one loaded node
+                //   2. insert neighbors into queue
+                //   3. submit one IO (with latest neighbor info)
+                //
+                // NON-PIPELINED ORDER (original beam search):
+                //   1. submit beam_width nodes
+                //   2. expand all (synchronous)
 
-                scratch.beam_nodes.clear();
-                if pipelining {
-                    // Speculative submission: peek without marking visited.
-                    // Nodes are marked visited only after actual expansion.
-                    while scratch.beam_nodes.len() < submit_limit {
+                if pipelining && has_pending {
+                    // Step 1: Expand one loaded node (polls internally)
+                    neighbors.clear();
+                    let queue_ordered: Vec<DP::InternalId> = if !submitted.is_empty() {
+                        scratch.best.iter()
+                            .filter(|n| submitted.contains(&n.id))
+                            .map(|n| n.id)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let expanded = accessor
+                        .expand_available(
+                            queue_ordered.iter().copied(),
+                            computer,
+                            glue::NotInMut::new(&mut scratch.visited),
+                            |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        )
+                        .await?;
+                    last_expanded = expanded;
+
+                    for &id in accessor.last_expanded_ids() {
+                        scratch.best.mark_visited_by_id(&id);
+                        submitted.remove(&id);
+                    }
+
+                    // Step 2: Insert neighbors (updates queue before IO decision)
+                    neighbors
+                        .iter()
+                        .for_each(|neighbor| scratch.best.insert(*neighbor));
+                    scratch.cmps += neighbors.len() as u32;
+                    scratch.hops += expanded as u32;
+
+                    // Adaptive beam width
+                    if search_params.adaptive_beam_width && expanded > 0 {
+                        cur_beam_width = (cur_beam_width + 1).max(4).min(beam_width);
+                    }
+
+                    // Step 3: Submit one IO (with updated queue)
+                    let inflight = accessor.inflight_count();
+                    if inflight < cur_beam_width {
+                        scratch.beam_nodes.clear();
                         if let Some(closest_node) =
                             scratch.best.peek_best_unsubmitted(&submitted)
                         {
                             search_record.record(closest_node, scratch.hops, scratch.cmps);
                             submitted.insert(closest_node.id);
                             scratch.beam_nodes.push(closest_node.id);
-                        } else {
-                            break;
+                        }
+                        accessor.submit_expand(scratch.beam_nodes.iter().copied());
+                    }
+
+                    // Block if truly idle
+                    if expanded == 0 && has_pending {
+                        let inflight = accessor.inflight_count();
+                        if inflight > 0 {
+                            accessor.wait_for_io();
                         }
                     }
                 } else {
-                    // Non-pipelined OR first iteration before pipelining starts.
-                    // Use closest_notvisited but also track in submitted set so
-                    // expand_available can find these nodes in queue_ordered.
-                    while scratch.best.has_notvisited_node()
-                        && scratch.beam_nodes.len() < submit_limit
-                    {
-                        let closest_node = scratch.best.closest_notvisited();
-                        search_record.record(closest_node, scratch.hops, scratch.cmps);
-                        submitted.insert(closest_node.id);
-                        scratch.beam_nodes.push(closest_node.id);
+                    // Non-pipelined path OR initial burst (has_pending=false)
+                    let submit_limit = if has_pending { 0 } else { cur_beam_width };
+
+                    scratch.beam_nodes.clear();
+                    if pipelining {
+                        while scratch.beam_nodes.len() < submit_limit {
+                            if let Some(closest_node) =
+                                scratch.best.peek_best_unsubmitted(&submitted)
+                            {
+                                search_record.record(closest_node, scratch.hops, scratch.cmps);
+                                submitted.insert(closest_node.id);
+                                scratch.beam_nodes.push(closest_node.id);
+                            } else {
+                                break;
+                            }
+                        }
+                    } else {
+                        while scratch.best.has_notvisited_node()
+                            && scratch.beam_nodes.len() < submit_limit
+                        {
+                            let closest_node = scratch.best.closest_notvisited();
+                            search_record.record(closest_node, scratch.hops, scratch.cmps);
+                            submitted.insert(closest_node.id);
+                            scratch.beam_nodes.push(closest_node.id);
+                        }
                     }
-                }
 
-                // Submit to expansion queue (no-op for non-pipelined)
-                accessor.submit_expand(scratch.beam_nodes.iter().copied());
+                    accessor.submit_expand(scratch.beam_nodes.iter().copied());
 
-                // Expand all available loaded nodes. The pipeline depth is
-                // controlled by the inflight cap on submissions, not by
-                // limiting expansions. For non-pipelined, this expands the
-                // full beam as before.
-                neighbors.clear();
-                // Pass submitted-but-not-yet-expanded nodes in queue priority
-                // order so the accessor expands the best available loaded node,
-                // matching PipeSearch's "best unvisited in retset" strategy.
-                let queue_ordered: Vec<DP::InternalId> = if !submitted.is_empty() {
-                    scratch.best.iter()
-                        .filter(|n| submitted.contains(&n.id))
-                        .map(|n| n.id)
-                        .collect()
-                } else {
-                    scratch.beam_nodes.clone()
-                };
-                let expanded = accessor
-                    .expand_available(
-                        queue_ordered.iter().copied(),
-                        computer,
-                        glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
-                    )
-                    .await?;
-                last_expanded = expanded;
+                    neighbors.clear();
+                    let queue_ordered: Vec<DP::InternalId> = if !submitted.is_empty() {
+                        scratch.best.iter()
+                            .filter(|n| submitted.contains(&n.id))
+                            .map(|n| n.id)
+                            .collect()
+                    } else {
+                        scratch.beam_nodes.clone()
+                    };
+                    let expanded = accessor
+                        .expand_available(
+                            queue_ordered.iter().copied(),
+                            computer,
+                            glue::NotInMut::new(&mut scratch.visited),
+                            |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        )
+                        .await?;
+                    last_expanded = expanded;
 
-                // Mark expanded nodes as visited and remove from submitted set.
-                for &id in accessor.last_expanded_ids() {
-                    scratch.best.mark_visited_by_id(&id);
-                    submitted.remove(&id);
-                }
+                    for &id in accessor.last_expanded_ids() {
+                        scratch.best.mark_visited_by_id(&id);
+                        submitted.remove(&id);
+                    }
 
-                // When pipelining and nothing was submitted or expanded,
-                // block until at least one IO completes. This only fires
-                // when the loop truly has nothing to do (inflight cap reached
-                // AND no completions available), replacing ~400 spin iterations
-                // with a single kernel wait + eager drain of all ready CQEs.
-                if expanded == 0 && scratch.beam_nodes.is_empty() && has_pending {
-                    accessor.wait_for_io();
-                }
+                    neighbors
+                        .iter()
+                        .for_each(|neighbor| scratch.best.insert(*neighbor));
+                    scratch.cmps += neighbors.len() as u32;
+                    scratch.hops += expanded as u32;
 
-                neighbors
-                    .iter()
-                    .for_each(|neighbor| scratch.best.insert(*neighbor));
-
-                scratch.cmps += neighbors.len() as u32;
-                scratch.hops += expanded as u32;
-
-                // Adaptive beam width
-                if search_params.adaptive_beam_width && expanded > 0 {
-                    // All expanded nodes are useful by definition
-                    cur_beam_width = (cur_beam_width + 1).max(4).min(beam_width);
+                    if search_params.adaptive_beam_width && expanded > 0 {
+                        cur_beam_width = (cur_beam_width + 1).max(4).min(beam_width);
+                    }
                 }
 
                 // Relaxed monotonicity: detect convergence and extend search

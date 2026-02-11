@@ -230,6 +230,16 @@ fn run_search_loop(
 
         let total_time = start.elapsed();
 
+        // Print per-query result IDs for trace comparison
+        if std::env::var("DISKANN_TRACE_EVENTS").is_ok() {
+            for qi in 0..num_queries {
+                let start_idx = qi * recall_at as usize;
+                let count = result_counts[qi] as usize;
+                let ids: Vec<u32> = result_ids[start_idx..start_idx + count.min(recall_at as usize)].to_vec();
+                eprintln!("RESULT q={} L={} ids={:?}", qi, l, ids);
+            }
+        }
+
         if has_any_search_failed.load(std::sync::atomic::Ordering::Acquire) {
             anyhow::bail!("One or more searches failed. See logs for details.");
         }
