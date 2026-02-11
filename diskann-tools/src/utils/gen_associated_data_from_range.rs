@@ -38,20 +38,27 @@ mod tests {
     use super::*;
     use byteorder::{LittleEndian, ReadBytesExt};
     use diskann_providers::storage::StorageReadProvider;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Use atomic counter to generate unique file names to avoid race conditions
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn get_unique_test_path(prefix: &str) -> String {
+        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let pid = std::process::id();
+        format!("/tmp/{}_{}_{}.bin", prefix, pid, counter)
+    }
 
     #[test]
     fn test_gen_associated_data_from_range() {
         let storage_provider = FileStorageProvider;
-        let path = "/tmp/test_gen_associated_data_from_range.bin";
-
-        // Clean up if file exists
-        let _ = std::fs::remove_file(path);
+        let path = get_unique_test_path("test_gen_associated_data_from_range");
 
         // Generate data from range 0 to 9
-        gen_associated_data_from_range(&storage_provider, path, 0, 9).unwrap();
+        gen_associated_data_from_range(&storage_provider, &path, 0, 9).unwrap();
 
         // Read back and verify
-        let mut file = storage_provider.open_reader(path).unwrap();
+        let mut file = storage_provider.open_reader(&path).unwrap();
 
         // Read metadata
         let num_ints = file.read_u32::<LittleEndian>().unwrap();
@@ -67,20 +74,18 @@ mod tests {
         }
 
         // Clean up
-        std::fs::remove_file(path).unwrap();
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn test_gen_associated_data_from_range_single_value() {
         let storage_provider = FileStorageProvider;
-        let path = "/tmp/test_gen_associated_data_single.bin";
-
-        let _ = std::fs::remove_file(path);
+        let path = get_unique_test_path("test_gen_associated_data_single");
 
         // Generate data for a single value
-        gen_associated_data_from_range(&storage_provider, path, 42, 42).unwrap();
+        gen_associated_data_from_range(&storage_provider, &path, 42, 42).unwrap();
 
-        let mut file = storage_provider.open_reader(path).unwrap();
+        let mut file = storage_provider.open_reader(&path).unwrap();
 
         let num_ints = file.read_u32::<LittleEndian>().unwrap();
         let int_length = file.read_u32::<LittleEndian>().unwrap();
@@ -91,20 +96,19 @@ mod tests {
         let value = file.read_u32::<LittleEndian>().unwrap();
         assert_eq!(value, 42);
 
-        std::fs::remove_file(path).unwrap();
+        // Clean up
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn test_gen_associated_data_from_range_large() {
         let storage_provider = FileStorageProvider;
-        let path = "/tmp/test_gen_associated_data_large.bin";
-
-        let _ = std::fs::remove_file(path);
+        let path = get_unique_test_path("test_gen_associated_data_large");
 
         // Generate data for range 100 to 199
-        gen_associated_data_from_range(&storage_provider, path, 100, 199).unwrap();
+        gen_associated_data_from_range(&storage_provider, &path, 100, 199).unwrap();
 
-        let mut file = storage_provider.open_reader(path).unwrap();
+        let mut file = storage_provider.open_reader(&path).unwrap();
 
         let num_ints = file.read_u32::<LittleEndian>().unwrap();
         let int_length = file.read_u32::<LittleEndian>().unwrap();
@@ -117,6 +121,7 @@ mod tests {
             assert_eq!(actual, expected);
         }
 
-        std::fs::remove_file(path).unwrap();
+        // Clean up
+        let _ = std::fs::remove_file(&path);
     }
 }
