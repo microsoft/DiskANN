@@ -940,4 +940,3 @@ mod test_search_index_utils {
         assert_eq!(recall.get_n(), 5);
     }
 }
-

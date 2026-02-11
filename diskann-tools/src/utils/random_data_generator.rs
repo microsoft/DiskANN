@@ -289,7 +289,7 @@ mod tests {
     fn test_invalid_radius_for_int8() {
         let random_data_path = "/invalid_int8.bin";
         let storage_provider = VirtualStorageProvider::new_overlay(".");
-        
+
         // Note: There's a bug in the validation logic at lines 33-36 where the condition is:
         // `radius > 127.0 && radius <= 0.0` which can never be true.
         // It should likely be `radius > 127.0 || radius <= 0.0`
@@ -311,7 +311,7 @@ mod tests {
     fn test_invalid_radius_for_uint8() {
         let random_data_path = "/invalid_uint8.bin";
         let storage_provider = VirtualStorageProvider::new_overlay(".");
-        
+
         // Note: Same validation bug as above
         // TODO: Fix validation logic and update this test
         let result = write_random_data(
@@ -330,7 +330,7 @@ mod tests {
     fn test_small_dataset() {
         let random_data_path = "/small_data.bin";
         let storage_provider = VirtualStorageProvider::new_overlay(".");
-        
+
         // Test with very small dataset
         let result = write_random_data(
             &storage_provider,
@@ -349,7 +349,7 @@ mod tests {
     fn test_large_block_size() {
         let random_data_path = "/large_blocks.bin";
         let storage_provider = VirtualStorageProvider::new_overlay(".");
-        
+
         // Test with more than one block
         let result = write_random_data(
             &storage_provider,

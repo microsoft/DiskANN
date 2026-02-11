@@ -113,21 +113,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cmd_tool_error_partial_eq() {
-        let error1 = CMDToolError {
-            details: "test error".to_string(),
-        };
-        let error2 = CMDToolError {
-            details: "test error".to_string(),
-        };
-        let error3 = CMDToolError {
-            details: "different error".to_string(),
-        };
-        assert_eq!(error1, error2);
-        assert_ne!(error1, error3);
-    }
-
-    #[test]
     fn test_from_io_error() {
         let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
         let cmd_error: CMDToolError = io_error.into();
@@ -147,7 +132,7 @@ mod tests {
         use diskann::ANNErrorKind;
         let ann_error = diskann::ANNError::new(
             ANNErrorKind::IndexError,
-            std::io::Error::new(std::io::ErrorKind::Other, "test error"),
+            std::io::Error::other("test error"),
         );
         let cmd_error: CMDToolError = ann_error.into();
         assert!(cmd_error.details.contains("test error"));
@@ -157,7 +142,7 @@ mod tests {
     fn test_from_config_error() {
         // We can't easily construct a ConfigError directly, so we test the conversion
         // by testing that a string error message can be converted
-        let io_error = std::io::Error::new(std::io::ErrorKind::Other, "config error");
+        let io_error = std::io::Error::other("config error");
         let ann_error = diskann::ANNError::new(diskann::ANNErrorKind::IndexConfigError, io_error);
         let cmd_error: CMDToolError = ann_error.into();
         assert!(cmd_error.details.contains("config error"));

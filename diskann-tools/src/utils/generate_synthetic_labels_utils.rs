@@ -171,16 +171,16 @@ mod test {
     fn test_generate_labels_small_dataset() {
         let label_file = "/tmp/test_labels_small.txt";
         let result = generate_labels(label_file, "zipf", 10, 5);
-        
+
         assert!(result.is_ok());
         assert!(fs::metadata(label_file).is_ok());
-        
+
         // Verify we have 10 lines
         let file = fs::File::open(label_file).unwrap();
         let reader = std::io::BufReader::new(file);
         let lines: Vec<_> = reader.lines().collect();
         assert_eq!(lines.len(), 10);
-        
+
         fs::remove_file(label_file).ok();
     }
 
@@ -188,10 +188,10 @@ mod test {
     fn test_generate_labels_random_distribution() {
         let label_file = "/tmp/test_labels_random.txt";
         let result = generate_labels(label_file, "random", 100, 10);
-        
+
         assert!(result.is_ok());
         assert!(fs::metadata(label_file).is_ok());
-        
+
         fs::remove_file(label_file).ok();
     }
 
@@ -199,16 +199,16 @@ mod test {
     fn test_generate_labels_one_per_point() {
         let label_file = "/tmp/test_labels_one_per_point.txt";
         let result = generate_labels(label_file, "one_per_point", 50, 20);
-        
+
         assert!(result.is_ok());
         assert!(fs::metadata(label_file).is_ok());
-        
+
         // Verify we have 50 lines
         let file = fs::File::open(label_file).unwrap();
         let reader = std::io::BufReader::new(file);
         let lines: Vec<_> = reader.lines().collect();
         assert_eq!(lines.len(), 50);
-        
+
         fs::remove_file(label_file).ok();
     }
 
@@ -216,10 +216,10 @@ mod test {
     fn test_generate_labels_single_point() {
         let label_file = "/tmp/test_labels_single.txt";
         let result = generate_labels(label_file, "zipf", 1, 5);
-        
+
         assert!(result.is_ok());
         assert!(fs::metadata(label_file).is_ok());
-        
+
         fs::remove_file(label_file).ok();
     }
 }
