@@ -47,12 +47,23 @@ use super::disk_provider::{
 struct LoadedNode {
     fp_vector: Vec<u8>,
     adjacency_list: Vec<u32>,
+    /// Submission rank (lower = higher priority / submitted earlier).
+    /// Nodes submitted first via closest_notvisited() have better PQ distance,
+    /// so expanding them first (like PipeSearch) improves search quality.
+    rank: u64,
 }
 
 /// Tracks an in-flight IO request.
 struct InFlightIo {
     vertex_id: u32,
     slot_id: usize,
+    rank: u64,
+}
+
+/// Parsed node data from a sector buffer (without rank metadata).
+struct ParsedNode {
+    fp_vector: Vec<u8>,
+    adjacency_list: Vec<u32>,
 }
 
 /// Parse a node from raw sector buffer bytes.
@@ -62,7 +73,7 @@ fn parse_node(
     num_nodes_per_sector: u64,
     node_len: u64,
     fp_vector_len: u64,
-) -> ANNResult<LoadedNode> {
+) -> ANNResult<ParsedNode> {
     let offset = node_offset_in_sector(vertex_id, num_nodes_per_sector, node_len);
     let end = offset + node_len as usize;
     let node_data = sector_buf.get(offset..end).ok_or_else(|| {
@@ -92,7 +103,7 @@ fn parse_node(
         adjacency_list.push(LittleEndian::read_u32(&neighbor_data[start..start + 4]));
     }
 
-    Ok(LoadedNode {
+    Ok(ParsedNode {
         fp_vector,
         adjacency_list,
     })
@@ -186,6 +197,8 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     loaded_nodes: HashMap<u32, LoadedNode>,
     next_slot_id: usize,
     max_slots: usize,
+    /// Monotonically increasing submission rank for priority-ordered expansion.
+    next_rank: u64,
 
     // Distance cache for post-processing rerank
     distance_cache: HashMap<u32, f32>,
@@ -234,6 +247,7 @@ where
             loaded_nodes: HashMap::new(),
             next_slot_id: 0,
             max_slots: slots,
+            next_rank: 0,
             distance_cache: HashMap::new(),
             io_count: 0,
             cache_hits: 0,
@@ -302,14 +316,18 @@ where
             while let Some(io) = self.in_flight_ios.pop_front() {
                 if completed_set.contains(&io.slot_id) {
                     let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
-                    let node = parse_node(
+                    let parsed = parse_node(
                         sector_buf,
                         io.vertex_id,
                         self.num_nodes_per_sector,
                         self.node_len,
                         self.fp_vector_len,
                     )?;
-                    self.loaded_nodes.insert(io.vertex_id, node);
+                    self.loaded_nodes.insert(io.vertex_id, LoadedNode {
+                        fp_vector: parsed.fp_vector,
+                        adjacency_list: parsed.adjacency_list,
+                        rank: io.rank,
+                    });
                 } else {
                     remaining.push_back(io);
                 }
@@ -449,7 +467,9 @@ where
             ) {
                 let fp_vector: Vec<u8> = bytemuck::cast_slice(vec_data).to_vec();
                 let adjacency_list: Vec<u32> = adj_list.iter().copied().collect();
-                self.loaded_nodes.insert(id, LoadedNode { fp_vector, adjacency_list });
+                let rank = self.next_rank;
+                self.next_rank += 1;
+                self.loaded_nodes.insert(id, LoadedNode { fp_vector, adjacency_list, rank });
                 self.cache_hits += 1;
                 continue;
             }
@@ -464,11 +484,14 @@ where
                 node_sector_index(id, self.num_nodes_per_sector, self.num_sectors_per_node);
             let sector_offset = sector_idx * self.block_size as u64;
             let slot_id = self.next_slot_id % self.max_slots;
+            let rank = self.next_rank;
+            self.next_rank += 1;
             // Best-effort: if submission fails, the node will be retried
             if self.scratch.reader.submit_read(sector_offset, slot_id).is_ok() {
                 self.in_flight_ios.push_back(InFlightIo {
                     vertex_id: id,
                     slot_id,
+                    rank,
                 });
                 self.next_slot_id = (self.next_slot_id + 1) % self.max_slots;
                 self.io_count += 1;
@@ -492,41 +515,32 @@ where
         F: FnMut(f32, Self::Id) + Send,
     {
         async move {
-            // Poll completions
+            // Non-blocking poll for completions
             self.drain_completions()?;
 
-            // If nothing is loaded yet and we have in-flight IO, wait for at least one
-            if self.loaded_nodes.is_empty() && !self.in_flight_ios.is_empty() {
-                let completed = self.scratch.reader.wait_completions()?;
-                if !completed.is_empty() {
-                    let completed_set: std::collections::HashSet<usize> =
-                        completed.into_iter().collect();
-                    let mut remaining = VecDeque::new();
-                    while let Some(io) = self.in_flight_ios.pop_front() {
-                        if completed_set.contains(&io.slot_id) {
-                            let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
-                            let node = parse_node(
-                                sector_buf,
-                                io.vertex_id,
-                                self.num_nodes_per_sector,
-                                self.node_len,
-                                self.fp_vector_len,
-                            )?;
-                            self.loaded_nodes.insert(io.vertex_id, node);
-                        } else {
-                            remaining.push_back(io);
-                        }
-                    }
-                    self.in_flight_ios = remaining;
-                }
+            // If nothing loaded yet, return 0 so the search loop can submit
+            // more IOs before we block. This matches PipeSearch's non-blocking
+            // poll pattern and avoids stalling the pipeline.
+            if self.loaded_nodes.is_empty() {
+                return Ok(0);
             }
 
-            // Expand up to `up_to` loaded nodes. Unexpanded nodes remain buffered
-            // in loaded_nodes for the next call.
-            let loaded_ids: Vec<u32> = self.loaded_nodes.keys().copied().take(up_to).collect();
+            // Expand loaded nodes in submission order (lowest rank first).
+            // Nodes submitted earlier had better PQ distance (came from
+            // closest_notvisited), so expanding them first — like PipeSearch's
+            // "best available" strategy — improves search quality.
+            let mut ranked: Vec<(u64, u32)> = self
+                .loaded_nodes
+                .iter()
+                .map(|(&id, node)| (node.rank, id))
+                .collect();
+            ranked.sort_unstable();
             let mut expanded = 0;
 
-            for vid in loaded_ids {
+            for (_, vid) in ranked {
+                if expanded >= up_to {
+                    break;
+                }
                 let node = match self.loaded_nodes.remove(&vid) {
                     Some(n) => n,
                     None => continue,
@@ -562,6 +576,10 @@ where
     /// Returns true when there are in-flight IO operations.
     fn has_pending(&self) -> bool {
         !self.in_flight_ios.is_empty() || !self.loaded_nodes.is_empty()
+    }
+
+    fn inflight_count(&self) -> usize {
+        self.in_flight_ios.len()
     }
 }
 

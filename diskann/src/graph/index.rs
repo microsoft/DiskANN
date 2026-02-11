@@ -2120,13 +2120,16 @@ where
             {
                 let has_pending = accessor.has_pending();
 
-                // When pipelining, match the number of new submits to the number
-                // we just expanded (process-N-submit-N), keeping the pipeline
-                // steadily full without over-committing speculative reads.
-                // On the first iteration (nothing expanded yet), prime the pipe
-                // with cur_beam_width IOs. For non-pipelined, submit everything.
+                // When pipelining, cap total in-flight IOs at cur_beam_width
+                // (like PipeSearch) to avoid over-committing the priority queue.
+                // Within that cap, submit at the rate we expand (process-N-submit-N).
                 let submit_limit = if has_pending {
-                    last_expanded.max(1)
+                    let inflight = accessor.inflight_count();
+                    if inflight >= cur_beam_width {
+                        0
+                    } else {
+                        last_expanded.max(1).min(cur_beam_width - inflight)
+                    }
                 } else {
                     cur_beam_width
                 };
@@ -2158,6 +2161,13 @@ where
                     )
                     .await?;
                 last_expanded = expanded;
+
+                // When pipelining and nothing was submitted or expanded,
+                // hint the CPU we're spin-waiting for IO to avoid burning
+                // cycles and hurting tail latency on shared cores.
+                if expanded == 0 && scratch.beam_nodes.is_empty() && has_pending {
+                    std::hint::spin_loop();
+                }
 
                 neighbors
                     .iter()
