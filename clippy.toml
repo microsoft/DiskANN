@@ -1,8 +1,8 @@
 disallowed-methods = [
     { path = "rand::thread_rng", reason = "Do not use rand::* directly. Instead, use functions from random.rs" },
-    { path = "std::fs", reason = "Do not use std::fs directly. Instead, use the FileStorageProvider or VirtualStorageProvider in tests." },
+    { path = "std::fs", reason = "Do not use std::fs directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests.", allow-invalid = true },
     { path = "vfs::PhysicalFS::new", reason = "Do not use vfs::PhysicalFS in tests. Instead, use the VirtualStorageProvider::new_overlay()." },
-    { path = "diskann_providers::storage::virtual_storage_provider::VirtualStorageProvider::new_physical", reason = "Do not use VirtualStorageProvider::new_physical() in tests. Instead, use VirtualStorageProvider::new_overlay()." },
+    { path = "diskann_providers::storage::virtual_storage_provider::VirtualStorageProvider::new_physical", reason = "In most tests, use VirtualStorageProvider::new_memory() or new_overlay(). Only use new_physical() for integration tests that require actual filesystem operations (e.g., testing BfTree with its disk backend).", allow-invalid = true },
     # Disallowed methods for the rayon crate to enforce execution within a specified thread pool instead of the global thread pool.
     { path = "rayon::iter::ParallelIterator::for_each", reason = "Use `for_each_in_pool` from rayon_utils.rs instead to enforce execution within a specified thread pool."},
     { path = "rayon::iter::ParallelIterator::for_each_with", reason = "Use `for_each_with_in_pool` instead to enforce execution within a specified thread pool."},
