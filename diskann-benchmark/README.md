@@ -495,7 +495,9 @@ Refer to implementations within the benchmarking framework for what some of this
 
 The `autotuner` tool builds on top of the benchmark framework to automatically sweep over parameter combinations and identify the best configuration based on optimization criteria (QPS, latency, or recall).
 
-See [diskann-tools/AUTOTUNER.md](../diskann-tools/AUTOTUNER.md) for detailed documentation on using the autotuner.
+The autotuner uses a **path-based configuration system** that doesn't hardcode JSON structure, making it robust to changes in the benchmark framework. You specify which parameters to sweep by providing JSON paths.
+
+See [diskann-tools/AUTOTUNER.md](../diskann-tools/AUTOTUNER.md) for detailed documentation.
 
 ### Quick Start
 
@@ -512,11 +514,15 @@ cargo run --release --package diskann-tools --bin autotuner -- sweep \
   --target-recall 0.95
 ```
 
-The autotuner sweeps over:
-- **max_degree (R)**: Graph degree parameter
-- **l_build**: Search queue length during index construction
-- **search_l**: Search queue length during queries
-- **num_pq_chunks**: Product quantization chunks (for quantized indexes)
+The sweep configuration uses JSON paths to specify parameters:
+```json
+{
+  "parameters": [
+    {"path": "jobs.0.content.source.max_degree", "values": [16, 32, 64]},
+    {"path": "jobs.0.content.source.l_build", "values": [50, 75, 100]}
+  ]
+}
+```
 
-Results are saved to the output directory with a summary highlighting the best configuration.
+This design makes the autotuner adaptable to any benchmark configuration format without requiring code changes when the benchmark framework evolves.
 
