@@ -26,7 +26,6 @@ This guide helps coding agents understand how to work efficiently with the DiskA
 - **Legacy Code**: Older C++ code is on the `cpp_main` branch (not maintained)
 
 ### Key Resources
-- **Papers**: See links in [`README.md`](README.md)
 - **Contributing**: See [`CONTRIBUTING.md`](CONTRIBUTING.md) (requires CLA)
 - **Code of Conduct**: See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
 
@@ -102,6 +101,8 @@ DiskANN uses a baseline caching system for regression detection. See [`diskann/R
 
 ### Formatting
 
+**Note**: `rustfmt` is not installed by default. Run `rustup component add rustfmt` if needed.
+
 ```bash
 # Check formatting (matches CI)
 cargo fmt --all --check
@@ -113,6 +114,8 @@ cargo fmt --all
 See [`rustfmt.toml`](rustfmt.toml) for formatting configuration.
 
 ### Clippy (Linting)
+
+**Note**: `clippy` is not installed by default. Run `rustup component add clippy` if needed.
 
 ```bash
 # Basic clippy check
