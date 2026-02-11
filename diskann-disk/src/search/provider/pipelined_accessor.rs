@@ -214,6 +214,8 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     io_time: std::time::Duration,
     /// Accumulated CPU time (fp distance + PQ distance + node parsing)
     cpu_time: std::time::Duration,
+    /// PQ preprocess time (distance table construction)
+    preprocess_time: std::time::Duration,
     // Shared stats written on drop so caller can read them after search
     shared_io_stats: Arc<PipelinedIoStats>,
 
@@ -265,6 +267,7 @@ where
             cache_hits: 0,
             io_time: std::time::Duration::ZERO,
             cpu_time: std::time::Duration::ZERO,
+            preprocess_time: std::time::Duration::ZERO,
             shared_io_stats,
             trace: None,
         })
@@ -272,6 +275,7 @@ where
 
     /// Preprocess PQ distance tables for this query. Must be called before search.
     pub fn preprocess_query(&mut self) -> ANNResult<()> {
+        let timer = std::time::Instant::now();
         let metadata = self.provider.graph_header.metadata();
         let dims = metadata.dims;
         let medoid = metadata.medoid as u32;
@@ -282,6 +286,7 @@ where
             self.provider.metric,
             &[medoid],
         )?;
+        self.preprocess_time = timer.elapsed();
         Ok(())
     }
 
@@ -742,6 +747,9 @@ where
         self.shared_io_stats
             .cpu_us
             .fetch_add(self.cpu_time.as_micros() as u64, Ordering::Relaxed);
+        self.shared_io_stats
+            .preprocess_us
+            .fetch_add(self.preprocess_time.as_micros() as u64, Ordering::Relaxed);
 
         // Print trace profile if enabled (controlled by DISKANN_TRACE=1)
         if let Some(trace) = self.trace.as_mut() {
@@ -782,6 +790,7 @@ pub struct PipelinedIoStats {
     pub cache_hits: AtomicU32,
     pub io_us: std::sync::atomic::AtomicU64,
     pub cpu_us: std::sync::atomic::AtomicU64,
+    pub preprocess_us: std::sync::atomic::AtomicU64,
 }
 
 impl Default for PipelinedIoStats {
@@ -791,6 +800,7 @@ impl Default for PipelinedIoStats {
             cache_hits: AtomicU32::new(0),
             io_us: std::sync::atomic::AtomicU64::new(0),
             cpu_us: std::sync::atomic::AtomicU64::new(0),
+            preprocess_us: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -977,6 +987,8 @@ where
             io_stats.io_count.load(Ordering::Relaxed) + io_stats.cache_hits.load(Ordering::Relaxed);
         query_stats.io_time_us = io_stats.io_us.load(Ordering::Relaxed) as u128;
         query_stats.cpu_time_us = io_stats.cpu_us.load(Ordering::Relaxed) as u128;
+        query_stats.query_pq_preprocess_time_us =
+            io_stats.preprocess_us.load(Ordering::Relaxed) as u128;
 
         let mut search_result = SearchResult {
             results: Vec::with_capacity(return_list_size as usize),
