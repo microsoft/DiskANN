@@ -35,7 +35,7 @@ use diskann_vector::DistanceFunction;
 
 use crate::data_model::Cache;
 use crate::search::pipelined::{PipelinedReader, PipelinedReaderConfig, MAX_IO_CONCURRENCY};
-use crate::search::search_trace::{OptionalTrace, SearchTrace, TraceEventKind};
+
 use crate::search::sector_math::{node_offset_in_sector, node_sector_index};
 use crate::search::traits::VertexProviderFactory;
 use crate::utils::QueryStatistics;
@@ -249,9 +249,6 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     preprocess_time: std::time::Duration,
     // Shared stats written on drop so caller can read them after search
     shared_io_stats: Arc<PipelinedIoStats>,
-
-    // Optional per-query trace for profiling and algorithmic comparison
-    trace: Option<SearchTrace>,
 }
 
 impl<'a, Data> PipelinedDiskAccessor<'a, Data>
@@ -296,7 +293,6 @@ where
             cpu_time: std::time::Duration::ZERO,
             preprocess_time: std::time::Duration::ZERO,
             shared_io_stats,
-            trace: None,
         })
     }
 
@@ -315,19 +311,6 @@ where
         )?;
         self.preprocess_time = timer.elapsed();
         Ok(())
-    }
-
-    /// Enable per-query tracing. Call before search.
-    pub fn enable_trace(&mut self) {
-        self.trace = Some(SearchTrace::new());
-    }
-
-    /// Take the completed trace (if any). Call after search.
-    pub fn take_trace(&mut self) -> Option<SearchTrace> {
-        if let Some(t) = self.trace.as_mut() {
-            t.finish();
-        }
-        self.trace.take()
     }
 
     /// Compute PQ distances for a set of neighbor IDs.
@@ -378,12 +361,8 @@ where
             return Ok(());
         }
 
-        let mut trace = OptionalTrace(self.trace.as_mut());
-
         let io_start = Instant::now();
-        trace.begin_phase();
         let completed_slots = self.scratch.reader.poll_completions()?;
-        trace.end_phase_io_poll();
         self.io_time += io_start.elapsed();
 
         if completed_slots.is_empty() {
@@ -393,7 +372,6 @@ where
         Self::process_completed_ios_inner(
             &mut self.scratch,
             &completed_slots,
-            &mut trace,
             self.num_nodes_per_sector,
             self.node_len,
             self.fp_vector_len,
@@ -401,11 +379,8 @@ where
     }
     /// Block until at least one IO completes, then eagerly drain all available.
     fn wait_and_drain(&mut self) -> ANNResult<()> {
-        let mut trace = OptionalTrace(self.trace.as_mut());
         let io_start = Instant::now();
-        trace.begin_phase();
         let completed_slots = self.scratch.reader.wait_completions()?;
-        trace.end_phase_io_poll();
         self.io_time += io_start.elapsed();
 
         if completed_slots.is_empty() {
@@ -415,7 +390,6 @@ where
         Self::process_completed_ios_inner(
             &mut self.scratch,
             &completed_slots,
-            &mut trace,
             self.num_nodes_per_sector,
             self.node_len,
             self.fp_vector_len,
@@ -429,7 +403,6 @@ where
     fn process_completed_ios_inner(
         scratch: &mut PipelinedScratch,
         completed_slots: &[usize],
-        trace: &mut OptionalTrace<'_>,
         num_nodes_per_sector: u64,
         node_len: u64,
         fp_vector_len: u64,
@@ -439,7 +412,6 @@ where
             let io = &scratch.in_flight_ios[i];
             if completed_slots.contains(&io.slot_id) {
                 let io = scratch.in_flight_ios.swap_remove_back(i).unwrap();
-                trace.begin_phase();
                 // Acquire node first (mutably borrows node_pool),
                 // then get sector buf (immutably borrows reader) — no conflict.
                 let mut node = scratch.node_pool.pop().unwrap_or_else(|| LoadedNode {
@@ -456,8 +428,6 @@ where
                     fp_vector_len,
                     io.rank,
                 )?;
-                trace.end_phase_parse_node();
-                trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
                 scratch.loaded_nodes.insert(io.vertex_id, node);
             } else {
                 i += 1;
@@ -592,9 +562,7 @@ where
     /// Nodes found in the node cache are placed directly into `loaded_nodes`,
     /// skipping disk IO entirely.
     fn submit_expand(&mut self, ids: impl Iterator<Item = Self::Id> + Send) {
-        let mut trace = OptionalTrace(self.trace.as_mut());
         let io_start = Instant::now();
-        trace.begin_phase();
         for id in ids {
             if self.scratch.loaded_nodes.contains_key(&id) {
                 continue; // Already loaded from a previous IO
@@ -615,7 +583,6 @@ where
                 self.next_rank += 1;
                 self.scratch.loaded_nodes.insert(id, node);
                 self.cache_hits += 1;
-                trace.event(TraceEventKind::CacheHit { node_id: id });
                 continue;
             }
 
@@ -638,15 +605,10 @@ where
                     slot_id,
                     rank,
                 });
-                trace.event(TraceEventKind::Submit {
-                    node_id: id,
-                    inflight: self.scratch.in_flight_ios.len(),
-                });
                 self.next_slot_id = (self.next_slot_id + 1) % self.max_slots;
                 self.io_count += 1;
             }
         }
-        trace.end_phase_io_submit();
         self.io_time += io_start.elapsed();
     }
 
@@ -710,9 +672,6 @@ where
                 .provider
                 .distance_comparer
                 .evaluate_similarity(self.query, fp_vec);
-            if let Some(t) = self.trace.as_mut() {
-                t.profile.fp_distance_us += cpu_start.elapsed().as_micros() as u64;
-            }
             self.scratch.distance_cache.insert(vid, fp_dist);
 
             // Get unvisited neighbors into reusable buffer
@@ -723,10 +682,8 @@ where
                     .copied()
                     .filter(|&nbr| (nbr as usize) < self.num_points && pred.eval_mut(&nbr)),
             );
-            let num_new = self.scratch.neighbor_buf.len() as u32;
 
             if !self.scratch.neighbor_buf.is_empty() {
-                let pq_start = Instant::now();
                 let PipelinedScratch { ref mut pq_scratch, ref neighbor_buf, .. } = *self.scratch;
                 Self::pq_distances_inner(
                     pq_scratch,
@@ -734,21 +691,8 @@ where
                     neighbor_buf,
                     &mut on_neighbors,
                 )?;
-                if let Some(t) = self.trace.as_mut() {
-                    t.profile.pq_distance_us += pq_start.elapsed().as_micros() as u64;
-                }
             }
             self.cpu_time += cpu_start.elapsed();
-
-            if let Some(t) = self.trace.as_mut() {
-                t.record_expand();
-                t.event(TraceEventKind::Expand {
-                    node_id: vid,
-                    fp_distance: fp_dist,
-                    num_neighbors: node.adjacency_list.len() as u32,
-                    num_new_candidates: num_new,
-                });
-            }
 
             // Return node to pool for reuse
             self.scratch.release_node(node);
@@ -816,12 +760,6 @@ where
         self.shared_io_stats
             .preprocess_us
             .fetch_add(self.preprocess_time.as_micros() as u64, Ordering::Relaxed);
-
-        // Print trace profile if enabled (controlled by DISKANN_TRACE=1)
-        if let Some(trace) = self.trace.as_mut() {
-            trace.finish();
-            trace.print_profile_summary();
-        }
     }
 }
 
@@ -843,9 +781,6 @@ pub struct PipelinedConfig<Data: GraphDataType<VectorIdType = u32>> {
     pub scratch_pool: Arc<ObjectPool<PipelinedScratch>>,
     /// Args for retrieving/creating pooled scratch instances.
     pub scratch_args: PipelinedScratchArgs,
-    /// Enable per-query SearchTrace. The trace profile is printed to stderr
-    /// after each query completes. Use for profiling, not production.
-    pub trace_enabled: bool,
 }
 
 /// Shared IO statistics written by the accessor and read by the caller after search.
@@ -954,9 +889,6 @@ where
             self.io_stats.clone(),
         )?;
         accessor.preprocess_query()?;
-        if self.config.trace_enabled {
-            accessor.enable_trace();
-        }
         Ok(accessor)
     }
 
