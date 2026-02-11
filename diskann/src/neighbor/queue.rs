@@ -19,7 +19,15 @@ pub trait NeighborPriorityQueueIdType:
 /// Any type that implements all the individual requirements for
 /// `NeighborPriorityQueueIdType` implements the full trait.
 impl<T> NeighborPriorityQueueIdType for T where
-    T: Default + Eq + Clone + Copy + std::fmt::Debug + std::fmt::Display + std::hash::Hash + Send + Sync
+    T: Default
+        + Eq
+        + Clone
+        + Copy
+        + std::fmt::Debug
+        + std::fmt::Display
+        + std::hash::Hash
+        + Send
+        + Sync
 {
 }
 

@@ -11,6 +11,10 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 
 use diskann::{graph::SearchParams, utils::VectorRepr, ANNResult};
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
+#[cfg(target_os = "linux")]
+use diskann_disk::search::pipelined::PipelinedReaderConfig;
+#[cfg(target_os = "linux")]
+use diskann_disk::search::provider::pipelined_accessor::PipelinedConfig;
 use diskann_disk::{
     data_model::CachingStrategy,
     search::provider::{
@@ -21,10 +25,6 @@ use diskann_disk::{
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
 };
-#[cfg(target_os = "linux")]
-use diskann_disk::search::pipelined::PipelinedReaderConfig;
-#[cfg(target_os = "linux")]
-use diskann_disk::search::provider::pipelined_accessor::PipelinedConfig;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     storage::{
@@ -177,7 +177,12 @@ fn write_query_result(
             *stats = search_result.stats.query_statistics;
             *rc = search_result.results.len() as u32;
             let actual_results = search_result.results.len().min(recall_at);
-            for (i, result_item) in search_result.results.iter().take(actual_results).enumerate() {
+            for (i, result_item) in search_result
+                .results
+                .iter()
+                .take(actual_results)
+                .enumerate()
+            {
                 id_chunk[i] = result_item.vertex_id;
                 dist_chunk[i] = result_item.distance;
             }
@@ -319,7 +324,10 @@ where
     let has_any_search_failed = AtomicBool::new(false);
 
     match &search_params.search_mode {
-        SearchMode::BeamSearch { adaptive_beam_width, relaxed_monotonicity_l } => {
+        SearchMode::BeamSearch {
+            adaptive_beam_width,
+            relaxed_monotonicity_l,
+        } => {
             let searcher = &DiskIndexSearcher::<GraphData<T>, _>::new(
                 search_params.num_threads,
                 search_params.search_io_limit.unwrap_or(usize::MAX),
@@ -365,7 +373,8 @@ where
                                 search_params.recall_at as usize,
                                 l as usize,
                                 Some(search_params.beam_width),
-                            ).unwrap();
+                            )
+                            .unwrap();
                             if abw {
                                 sp = sp.with_adaptive_beam_width();
                             }
@@ -395,14 +404,18 @@ where
         }
         // Pipelined search — for read-only search on completed (static) indices only.
         // Uses io_uring for IO/compute overlap through the generic search loop.
-        SearchMode::PipeSearch { adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms } => {
+        SearchMode::PipeSearch {
+            adaptive_beam_width,
+            relaxed_monotonicity_l,
+            sqpoll_idle_ms,
+        } => {
             #[cfg(target_os = "linux")]
             {
+                use diskann::utils::object_pool::ObjectPool;
                 use diskann_disk::data_model::Cache;
                 use diskann_disk::search::provider::pipelined_accessor::{
                     PipelinedScratch, PipelinedScratchArgs,
                 };
-                use diskann::utils::object_pool::ObjectPool;
 
                 let reader_config = PipelinedReaderConfig {
                     sqpoll_idle_ms: *sqpoll_idle_ms,
@@ -435,9 +448,11 @@ where
                     num_pq_centers: pq_data.get_num_centers(),
                     reader_config,
                 };
-                let scratch_pool = Arc::new(
-                    ObjectPool::<PipelinedScratch>::try_new(scratch_args.clone(), 0, None)?
-                );
+                let scratch_pool = Arc::new(ObjectPool::<PipelinedScratch>::try_new(
+                    scratch_args.clone(),
+                    0,
+                    None,
+                )?);
 
                 let mut searcher = DiskIndexSearcher::<GraphData<T>, _>::new(
                     search_params.num_threads,

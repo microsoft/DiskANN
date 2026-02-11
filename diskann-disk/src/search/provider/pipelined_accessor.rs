@@ -20,11 +20,15 @@ use std::time::Instant;
 use byteorder::{ByteOrder, LittleEndian};
 use diskann::{
     graph::{
-        glue::{ExpandBeam, HybridPredicate, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{
+            ExpandBeam, HybridPredicate, IdIterator, SearchExt, SearchPostProcess, SearchStrategy,
+        },
         search_output_buffer, AdjacencyList, SearchOutputBuffer, SearchParams,
     },
     neighbor::Neighbor,
-    provider::{Accessor, BuildQueryComputer, DefaultContext, DelegateNeighbor, HasId, NeighborAccessor},
+    provider::{
+        Accessor, BuildQueryComputer, DefaultContext, DelegateNeighbor, HasId, NeighborAccessor,
+    },
     utils::object_pool::{ObjectPool, PoolOption, TryAsPooled},
     ANNError, ANNResult,
 };
@@ -34,7 +38,7 @@ use diskann_providers::model::{
 use diskann_vector::DistanceFunction;
 
 use crate::data_model::Cache;
-use crate::search::pipelined::{PipelinedReader, PipelinedReaderConfig, MAX_IO_CONCURRENCY};
+use crate::search::pipelined::{PipelinedReader, PipelinedReaderConfig};
 
 use crate::search::sector_math::{node_offset_in_sector, node_sector_index};
 use crate::search::traits::VertexProviderFactory;
@@ -71,7 +75,10 @@ impl LoadedNode {
         let node_data = sector_buf.get(offset..end).ok_or_else(|| {
             ANNError::log_index_error(format_args!(
                 "Node data out of bounds: vertex {} offset {}..{} in buffer of len {}",
-                vertex_id, offset, end, sector_buf.len()
+                vertex_id,
+                offset,
+                end,
+                sector_buf.len()
             ))
         })?;
 
@@ -79,7 +86,8 @@ impl LoadedNode {
         if fp_len > node_data.len() {
             return Err(ANNError::log_index_error(format_args!(
                 "fp_vector_len {} exceeds node_data len {}",
-                fp_len, node_data.len()
+                fp_len,
+                node_data.len()
             )));
         }
 
@@ -94,7 +102,8 @@ impl LoadedNode {
         self.adjacency_list.clear();
         for i in 0..num_neighbors {
             let start = 4 + i * 4;
-            self.adjacency_list.push(LittleEndian::read_u32(&neighbor_data[start..start + 4]));
+            self.adjacency_list
+                .push(LittleEndian::read_u32(&neighbor_data[start..start + 4]));
         }
 
         self.rank = rank;
@@ -107,12 +116,6 @@ struct InFlightIo {
     vertex_id: u32,
     slot_id: usize,
     rank: u64,
-}
-
-/// Max buffer slots to use, based on beam width.
-#[inline]
-fn max_slots(beam_width: usize) -> usize {
-    (beam_width * 2).clamp(16, MAX_IO_CONCURRENCY)
 }
 
 // ---------------------------------------------------------------------------
@@ -185,7 +188,8 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
         let max_slots = self.reader.max_slots();
         self.reader.reset();
         // Return all loaded_nodes back to the pool before clearing
-        self.node_pool.extend(self.loaded_nodes.drain().map(|(_, node)| node));
+        self.node_pool
+            .extend(self.loaded_nodes.drain().map(|(_, node)| node));
         self.in_flight_ios.clear();
         self.expanded_ids.clear();
         self.distance_cache.clear();
@@ -312,15 +316,6 @@ where
         )?;
         self.preprocess_time = timer.elapsed();
         Ok(())
-    }
-
-    /// Compute PQ distances for a set of neighbor IDs.
-    /// `ids` must not alias any mutable scratch fields used by PQ computation.
-    fn pq_distances<F>(&mut self, ids: &[u32], mut f: F) -> ANNResult<()>
-    where
-        F: FnMut(f32, u32),
-    {
-        Self::pq_distances_inner(&mut self.scratch.pq_scratch, self.provider, ids, &mut f)
     }
 
     fn pq_distances_inner<F>(
@@ -492,13 +487,13 @@ impl<Data> NeighborAccessor for PipelinedNeighborDelegate<'_, '_, Data>
 where
     Data: GraphDataType<VectorIdType = u32>,
 {
-    fn get_neighbors(
+    async fn get_neighbors(
         self,
         _id: Self::Id,
         _neighbors: &mut AdjacencyList<Self::Id>,
-    ) -> impl Future<Output = ANNResult<Self>> + Send {
+    ) -> ANNResult<Self> {
         // Neighbor expansion is handled by expand_available, not get_neighbors
-        async { Ok(self) }
+        Ok(self)
     }
 }
 
@@ -547,13 +542,12 @@ where
         self.scratch.neighbor_buf.clear();
         self.scratch.neighbor_buf.extend(vec_id_itr);
         let mut f = f;
-        let PipelinedScratch { ref mut pq_scratch, ref neighbor_buf, .. } = *self.scratch;
-        Self::pq_distances_inner(
-            pq_scratch,
-            self.provider,
-            neighbor_buf,
-            &mut f,
-        )
+        let PipelinedScratch {
+            ref mut pq_scratch,
+            ref neighbor_buf,
+            ..
+        } = *self.scratch;
+        Self::pq_distances_inner(pq_scratch, self.provider, neighbor_buf, &mut f)
     }
 }
 
@@ -579,7 +573,8 @@ where
             ) {
                 let mut node = self.scratch.acquire_node();
                 node.fp_vector.clear();
-                node.fp_vector.extend_from_slice(bytemuck::cast_slice(vec_data));
+                node.fp_vector
+                    .extend_from_slice(bytemuck::cast_slice(vec_data));
                 node.adjacency_list.clear();
                 node.adjacency_list.extend(adj_list.iter().copied());
                 node.rank = self.next_rank;
@@ -623,87 +618,84 @@ where
     /// 1. If `ids` provides candidates, pick the first loaded match (queue order)
     /// 2. Otherwise, pick the loaded node with the lowest submission rank
     ///    (earliest submitted = best PQ distance at submission time)
-    fn expand_available<P, F>(
+    async fn expand_available<P, F>(
         &mut self,
         ids: impl Iterator<Item = Self::Id> + Send,
         _computer: &Self::QueryComputer,
         mut pred: P,
         mut on_neighbors: F,
-    ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send
+    ) -> ANNResult<Vec<Self::Id>>
     where
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(f32, Self::Id) + Send,
     {
-        async move {
-            self.scratch.expanded_ids.clear();
+        self.scratch.expanded_ids.clear();
 
-            // Non-blocking poll for completions
-            self.drain_completions()?;
+        // Non-blocking poll for completions
+        self.drain_completions()?;
 
-            if self.scratch.loaded_nodes.is_empty() {
-                return Ok(Vec::new());
-            }
-
-            // Try caller's priority order first
-            let mut best_vid: Option<u32> = None;
-            for id in ids {
-                if self.scratch.loaded_nodes.contains_key(&id) {
-                    best_vid = Some(id);
-                    break;
-                }
-            }
-
-            // Fallback: pick loaded node with lowest rank (best PQ at submission)
-            if best_vid.is_none() {
-                best_vid = self
-                    .scratch
-                    .loaded_nodes
-                    .iter()
-                    .min_by_key(|(_, node)| node.rank)
-                    .map(|(&id, _)| id);
-            }
-
-            let vid = match best_vid {
-                Some(id) => id,
-                None => return Ok(Vec::new()),
-            };
-            let node = self.scratch.loaded_nodes.remove(&vid).unwrap();
-            self.scratch.expanded_ids.push(vid);
-
-            // Compute full-precision distance and cache it for post-processing
-            let cpu_start = Instant::now();
-            let fp_vec: &[Data::VectorDataType] = bytemuck::cast_slice(&node.fp_vector);
-            let fp_dist = self
-                .provider
-                .distance_comparer
-                .evaluate_similarity(self.query, fp_vec);
-            self.scratch.distance_cache.insert(vid, fp_dist);
-
-            // Get unvisited neighbors into reusable buffer
-            self.scratch.neighbor_buf.clear();
-            self.scratch.neighbor_buf.extend(
-                node.adjacency_list
-                    .iter()
-                    .copied()
-                    .filter(|&nbr| (nbr as usize) < self.num_points && pred.eval_mut(&nbr)),
-            );
-
-            if !self.scratch.neighbor_buf.is_empty() {
-                let PipelinedScratch { ref mut pq_scratch, ref neighbor_buf, .. } = *self.scratch;
-                Self::pq_distances_inner(
-                    pq_scratch,
-                    self.provider,
-                    neighbor_buf,
-                    &mut on_neighbors,
-                )?;
-            }
-            self.cpu_time += cpu_start.elapsed();
-
-            // Return node to pool for reuse
-            self.scratch.release_node(node);
-
-            Ok(std::mem::take(&mut self.scratch.expanded_ids))
+        if self.scratch.loaded_nodes.is_empty() {
+            return Ok(Vec::new());
         }
+
+        // Try caller's priority order first
+        let mut best_vid: Option<u32> = None;
+        for id in ids {
+            if self.scratch.loaded_nodes.contains_key(&id) {
+                best_vid = Some(id);
+                break;
+            }
+        }
+
+        // Fallback: pick loaded node with lowest rank (best PQ at submission)
+        if best_vid.is_none() {
+            best_vid = self
+                .scratch
+                .loaded_nodes
+                .iter()
+                .min_by_key(|(_, node)| node.rank)
+                .map(|(&id, _)| id);
+        }
+
+        let vid = match best_vid {
+            Some(id) => id,
+            None => return Ok(Vec::new()),
+        };
+        let node = self.scratch.loaded_nodes.remove(&vid).unwrap();
+        self.scratch.expanded_ids.push(vid);
+
+        // Compute full-precision distance and cache it for post-processing
+        let cpu_start = Instant::now();
+        let fp_vec: &[Data::VectorDataType] = bytemuck::cast_slice(&node.fp_vector);
+        let fp_dist = self
+            .provider
+            .distance_comparer
+            .evaluate_similarity(self.query, fp_vec);
+        self.scratch.distance_cache.insert(vid, fp_dist);
+
+        // Get unvisited neighbors into reusable buffer
+        self.scratch.neighbor_buf.clear();
+        self.scratch.neighbor_buf.extend(
+            node.adjacency_list
+                .iter()
+                .copied()
+                .filter(|&nbr| (nbr as usize) < self.num_points && pred.eval_mut(&nbr)),
+        );
+
+        if !self.scratch.neighbor_buf.is_empty() {
+            let PipelinedScratch {
+                ref mut pq_scratch,
+                ref neighbor_buf,
+                ..
+            } = *self.scratch;
+            Self::pq_distances_inner(pq_scratch, self.provider, neighbor_buf, &mut on_neighbors)?;
+        }
+        self.cpu_time += cpu_start.elapsed();
+
+        // Return node to pool for reuse
+        self.scratch.release_node(node);
+
+        Ok(std::mem::take(&mut self.scratch.expanded_ids))
     }
 
     /// Returns true when there are in-flight IO operations.
@@ -821,11 +813,12 @@ pub struct PipelinedPostProcessor<'a> {
     filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
 }
 
-impl<Data> SearchPostProcess<
-    PipelinedDiskAccessor<'_, Data>,
-    [Data::VectorDataType],
-    (u32, Data::AssociatedDataType),
-> for PipelinedPostProcessor<'_>
+impl<Data>
+    SearchPostProcess<
+        PipelinedDiskAccessor<'_, Data>,
+        [Data::VectorDataType],
+        (u32, Data::AssociatedDataType),
+    > for PipelinedPostProcessor<'_>
 where
     Data: GraphDataType<VectorIdType = u32>,
 {
@@ -860,11 +853,9 @@ where
     }
 }
 
-impl<'this, Data> SearchStrategy<
-    DiskProvider<Data>,
-    [Data::VectorDataType],
-    (u32, Data::AssociatedDataType),
-> for PipelinedSearchStrategy<'this, Data>
+impl<'this, Data>
+    SearchStrategy<DiskProvider<Data>, [Data::VectorDataType], (u32, Data::AssociatedDataType)>
+    for PipelinedSearchStrategy<'this, Data>
 where
     Data: GraphDataType<VectorIdType = u32>,
 {
@@ -878,10 +869,8 @@ where
         provider: &'a DiskProvider<Data>,
         _context: &DefaultContext,
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        let scratch = PoolOption::try_pooled(
-            &self.config.scratch_pool,
-            self.config.scratch_args.clone(),
-        )?;
+        let scratch =
+            PoolOption::try_pooled(&self.config.scratch_pool, self.config.scratch_args.clone())?;
         let mut accessor = PipelinedDiskAccessor::new(
             provider,
             self.query,

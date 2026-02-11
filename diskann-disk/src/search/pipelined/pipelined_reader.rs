@@ -111,14 +111,11 @@ impl PipelinedReader {
         let buf_start = slot_id * self.slot_size;
         let buf_ptr = self.slot_bufs[buf_start..buf_start + self.slot_size].as_mut_ptr();
 
-        let read_op = io_uring::opcode::Read::new(
-            io_uring::types::Fixed(0),
-            buf_ptr,
-            self.slot_size as u32,
-        )
-        .offset(sector_offset)
-        .build()
-        .user_data(slot_id as u64);
+        let read_op =
+            io_uring::opcode::Read::new(io_uring::types::Fixed(0), buf_ptr, self.slot_size as u32)
+                .offset(sector_offset)
+                .build()
+                .user_data(slot_id as u64);
 
         // SAFETY: The buffer at slot_id is pre-allocated and will remain valid
         // for the duration of the IO operation. Each slot is used exclusively

@@ -21,8 +21,7 @@ mod chunkable_disk_index_build_tests {
     use crate::{
         build::{
             builder::core::disk_index_builder_tests::{
-                new_vfs, verify_search_result_with_ground_truth,
-                CheckpointParams,
+                new_vfs, verify_search_result_with_ground_truth, CheckpointParams,
                 IndexBuildFixture, TestParams,
             },
             chunking::{

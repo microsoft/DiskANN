@@ -398,8 +398,7 @@ where
                 let mut search_record =
                     VisitedSearchRecord::new(self.estimate_visited_set_capacity(Some(search_l)));
 
-                let default_params = SearchParams::new(1, scratch.best.search_l(), None)
-                    .expect("valid default search params");
+                let default_params = SearchParams::new(1, scratch.best.search_l(), None)?;
                 self.search_internal(
                     &default_params,
                     &start_ids,
@@ -524,8 +523,7 @@ where
                     self.estimate_visited_set_capacity(Some(scratch.best.search_l())),
                 );
 
-                let default_params = SearchParams::new(1, scratch.best.search_l(), None)
-                    .expect("valid default search params");
+                let default_params = SearchParams::new(1, scratch.best.search_l(), None)?;
                 self.search_internal(
                     &default_params,
                     &start_ids,
@@ -1334,8 +1332,7 @@ where
 
             let mut scratch = self.search_scratch(l_value, start_ids.len());
 
-            let default_params = SearchParams::new(1, scratch.best.search_l(), None)
-                .expect("valid default search params");
+            let default_params = SearchParams::new(1, scratch.best.search_l(), None)?;
             self.search_internal(
                 &default_params,
                 &start_ids,
@@ -2162,7 +2159,11 @@ where
                     // Step 2: Insert neighbors (updates queue before IO decision)
                     let worst_before = {
                         let sz = scratch.best.size().min(scratch.best.search_l());
-                        if sz > 0 { scratch.best.get(sz - 1).distance } else { f32::MAX }
+                        if sz > 0 {
+                            scratch.best.get(sz - 1).distance
+                        } else {
+                            f32::MAX
+                        }
                     };
                     neighbors
                         .iter()
@@ -2170,20 +2171,22 @@ where
                     scratch.cmps += neighbors.len() as u32;
                     scratch.hops += expanded_ids.len() as u32;
 
-                    if search_params.adaptive_beam_width && !expanded_ids.is_empty() {
-                        if max_marker >= search_params.abw_convergence_depth {
-                            let improved = neighbors.iter().any(|n| n.distance < worst_before);
-                            abw_total += 1;
-                            if improved {
-                                abw_useful += 1;
-                            }
-                            // Grow when ≤10% waste (matching PipeANN's kWasteThreshold)
-                            if abw_total > 0
-                                && (abw_total - abw_useful) as f64 / abw_total as f64 <= 0.1
-                            {
-                                cur_beam_width =
-                                    (cur_beam_width + 1).max(search_params.initial_beam_width).min(beam_width);
-                            }
+                    if search_params.adaptive_beam_width
+                        && !expanded_ids.is_empty()
+                        && max_marker >= search_params.abw_convergence_depth
+                    {
+                        let improved = neighbors.iter().any(|n| n.distance < worst_before);
+                        abw_total += 1;
+                        if improved {
+                            abw_useful += 1;
+                        }
+                        // Grow when ≤10% waste (matching PipeANN's kWasteThreshold)
+                        if abw_total > 0
+                            && (abw_total - abw_useful) as f64 / abw_total as f64 <= 0.1
+                        {
+                            cur_beam_width = (cur_beam_width + 1)
+                                .max(search_params.initial_beam_width)
+                                .min(beam_width);
                         }
                     }
 
@@ -2249,7 +2252,11 @@ where
 
                     let worst_before = {
                         let sz = scratch.best.size().min(scratch.best.search_l());
-                        if sz > 0 { scratch.best.get(sz - 1).distance } else { f32::MAX }
+                        if sz > 0 {
+                            scratch.best.get(sz - 1).distance
+                        } else {
+                            f32::MAX
+                        }
                     };
                     neighbors
                         .iter()
@@ -2257,19 +2264,21 @@ where
                     scratch.cmps += neighbors.len() as u32;
                     scratch.hops += expanded_ids.len() as u32;
 
-                    if search_params.adaptive_beam_width && !expanded_ids.is_empty() {
-                        if max_marker >= search_params.abw_convergence_depth {
-                            let improved = neighbors.iter().any(|n| n.distance < worst_before);
-                            abw_total += 1;
-                            if improved {
-                                abw_useful += 1;
-                            }
-                            if abw_total > 0
-                                && (abw_total - abw_useful) as f64 / abw_total as f64 <= 0.1
-                            {
-                                cur_beam_width =
-                                    (cur_beam_width + 1).max(search_params.initial_beam_width).min(beam_width);
-                            }
+                    if search_params.adaptive_beam_width
+                        && !expanded_ids.is_empty()
+                        && max_marker >= search_params.abw_convergence_depth
+                    {
+                        let improved = neighbors.iter().any(|n| n.distance < worst_before);
+                        abw_total += 1;
+                        if improved {
+                            abw_useful += 1;
+                        }
+                        if abw_total > 0
+                            && (abw_total - abw_useful) as f64 / abw_total as f64 <= 0.1
+                        {
+                            cur_beam_width = (cur_beam_width + 1)
+                                .max(search_params.initial_beam_width)
+                                .min(beam_width);
                         }
                     }
                 }
@@ -2280,18 +2289,13 @@ where
                 // the sorted queue that the top candidates have been explored.
                 // After convergence, the search continues for rm_l additional node
                 // expansions to improve recall beyond the greedy optimum.
-                if let Some(rm_l) = search_params.relaxed_monotonicity_l {
-                    if rm_l > 0 {
-                        if max_marker >= search_params.abw_convergence_depth
-                            && converge_size.is_none()
-                        {
-                            converge_size = Some(scratch.hops as usize);
-                        }
-                        if let Some(cs) = converge_size {
-                            if (scratch.hops as usize) >= cs + rm_l {
-                                break;
-                            }
-                        }
+                if let Some(rm_l) = search_params.relaxed_monotonicity_l.filter(|&l| l > 0) {
+                    if max_marker >= search_params.abw_convergence_depth && converge_size.is_none()
+                    {
+                        converge_size = Some(scratch.hops as usize);
+                    }
+                    if converge_size.is_some_and(|cs| (scratch.hops as usize) >= cs + rm_l) {
+                        break;
                     }
                 }
             }
@@ -2783,8 +2787,8 @@ where
 
             let mut scratch = self.search_scratch(search_params.starting_l_value, start_ids.len());
 
-            let range_default_params = SearchParams::new(1, scratch.best.search_l(), search_params.beam_width)
-                .expect("valid default search params");
+            let range_default_params =
+                SearchParams::new(1, scratch.best.search_l(), search_params.beam_width)?;
             let initial_stats = self
                 .search_internal(
                     &range_default_params,
@@ -3134,8 +3138,8 @@ where
                     .into_ann_result()?;
 
                 let start_ids = accessor.starting_points().await?;
-                let default_params = SearchParams::new(1, search_state.scratch.best.search_l(), None)
-                    .expect("valid default search params");
+                let default_params =
+                    SearchParams::new(1, search_state.scratch.best.search_l(), None)?;
                 self.search_internal(
                     &default_params,
                     &start_ids,

@@ -112,7 +112,10 @@ impl Default for SearchMode {
 impl fmt::Display for SearchMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SearchMode::BeamSearch { adaptive_beam_width, relaxed_monotonicity_l } => {
+            SearchMode::BeamSearch {
+                adaptive_beam_width,
+                relaxed_monotonicity_l,
+            } => {
                 write!(f, "BeamSearch")?;
                 let has_abw = *adaptive_beam_width;
                 let has_rm = relaxed_monotonicity_l.is_some();
@@ -124,14 +127,20 @@ impl fmt::Display for SearchMode {
                         first = false;
                     }
                     if let Some(rm) = relaxed_monotonicity_l {
-                        if !first { write!(f, ", ")?; }
+                        if !first {
+                            write!(f, ", ")?;
+                        }
                         write!(f, "rm_l={}", rm)?;
                     }
                     write!(f, ")")?;
                 }
                 Ok(())
             }
-            SearchMode::PipeSearch { adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms } => {
+            SearchMode::PipeSearch {
+                adaptive_beam_width,
+                relaxed_monotonicity_l,
+                sqpoll_idle_ms,
+            } => {
                 write!(f, "PipeSearch")?;
                 let has_abw = *adaptive_beam_width;
                 let has_rm = relaxed_monotonicity_l.is_some();
@@ -144,12 +153,16 @@ impl fmt::Display for SearchMode {
                         first = false;
                     }
                     if let Some(rm) = relaxed_monotonicity_l {
-                        if !first { write!(f, ", ")?; }
+                        if !first {
+                            write!(f, ", ")?;
+                        }
                         write!(f, "rm_l={}", rm)?;
                         first = false;
                     }
                     if let Some(sq) = sqpoll_idle_ms {
-                        if !first { write!(f, ", ")?; }
+                        if !first {
+                            write!(f, ", ")?;
+                        }
                         write!(f, "sqpoll={}ms", sq)?;
                     }
                     write!(f, ")")?;
