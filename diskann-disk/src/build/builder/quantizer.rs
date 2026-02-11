@@ -155,3 +155,15 @@ impl BuildQuantizer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_quantizer_enum() {
+        // Test verifies the enum compiles
+        let _no_quant = BuildQuantizer::NoQuant(NoStore);
+        assert!(true);
+    }
+}

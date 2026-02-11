@@ -222,3 +222,13 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
         cache.insert(node, vector, adjacency_list.clone(), *associated_data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_constants() {
+        // Test verifies constants are defined
+        assert!(super::DEFAULT_DISK_SECTOR_LEN > 0);
+        assert!(super::BEAM_WIDTH_FOR_BFS > 0);
+    }
+}
