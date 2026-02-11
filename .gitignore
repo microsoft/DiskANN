@@ -376,5 +376,3 @@ venv*/**
 
 gperftools
 
-# Rust
-rust/target
