@@ -126,6 +126,13 @@ fn max_slots(beam_width: usize) -> usize {
 pub struct PipelinedScratch {
     pub reader: PipelinedReader,
     pub pq_scratch: PQScratch,
+    // Per-query scratch collections, cleared between queries but retain capacity
+    in_flight_ios: VecDeque<InFlightIo>,
+    loaded_nodes: HashMap<u32, LoadedNode>,
+    expanded_ids: Vec<u32>,
+    distance_cache: HashMap<u32, f32>,
+    /// Reusable buffer for neighbor IDs during expand_available
+    neighbor_buf: Vec<u32>,
 }
 
 /// Arguments for creating or resetting a [`PipelinedScratch`].
@@ -159,11 +166,24 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
             args.num_pq_chunks,
             args.num_pq_centers,
         )?;
-        Ok(Self { reader, pq_scratch })
+        Ok(Self {
+            reader,
+            pq_scratch,
+            in_flight_ios: VecDeque::new(),
+            loaded_nodes: HashMap::new(),
+            expanded_ids: Vec::new(),
+            distance_cache: HashMap::new(),
+            neighbor_buf: Vec::new(),
+        })
     }
 
     fn try_modify(&mut self, _args: PipelinedScratchArgs) -> Result<(), Self::Error> {
         self.reader.reset();
+        self.in_flight_ios.clear();
+        self.loaded_nodes.clear();
+        self.expanded_ids.clear();
+        self.distance_cache.clear();
+        self.neighbor_buf.clear();
         Ok(())
     }
 }
@@ -194,18 +214,11 @@ pub struct PipelinedDiskAccessor<'a, Data: GraphDataType<VectorIdType = u32>> {
     // Node cache (shared, read-only) for avoiding disk IO on hot nodes
     node_cache: Arc<Cache<Data>>,
 
-    // IO state
-    in_flight_ios: VecDeque<InFlightIo>,
-    loaded_nodes: HashMap<u32, LoadedNode>,
+    // IO state (now lives in scratch for reuse, accessed via self.scratch)
     next_slot_id: usize,
     max_slots: usize,
     /// Monotonically increasing submission rank for priority-ordered expansion.
     next_rank: u64,
-    /// IDs expanded in the most recent `expand_available` call.
-    expanded_ids: Vec<u32>,
-
-    // Distance cache for post-processing rerank
-    distance_cache: HashMap<u32, f32>,
 
     // IO statistics
     io_count: u32,
@@ -256,13 +269,9 @@ where
             fp_vector_len,
             num_points: provider.num_points,
             node_cache,
-            in_flight_ios: VecDeque::new(),
-            loaded_nodes: HashMap::new(),
             next_slot_id: 0,
             max_slots: slots,
             next_rank: 0,
-            expanded_ids: Vec::new(),
-            distance_cache: HashMap::new(),
             io_count: 0,
             cache_hits: 0,
             io_time: std::time::Duration::ZERO,
@@ -304,20 +313,31 @@ where
     }
 
     /// Compute PQ distances for a set of neighbor IDs.
+    /// `ids` must not alias any mutable scratch fields used by PQ computation.
     fn pq_distances<F>(&mut self, ids: &[u32], mut f: F) -> ANNResult<()>
     where
         F: FnMut(f32, u32),
     {
-        let pq = &mut self.scratch.pq_scratch;
+        Self::pq_distances_inner(&mut self.scratch.pq_scratch, self.provider, ids, &mut f)
+    }
+
+    fn pq_distances_inner<F>(
+        pq: &mut PQScratch,
+        provider: &DiskProvider<Data>,
+        ids: &[u32],
+        f: &mut F,
+    ) -> ANNResult<()>
+    where
+        F: FnMut(f32, u32),
+    {
         compute_pq_distance(
             ids,
-            self.provider.pq_data.get_num_chunks(),
+            provider.pq_data.get_num_chunks(),
             &pq.aligned_pqtable_dist_scratch,
-            self.provider.pq_data.pq_compressed_data().get_data(),
+            provider.pq_data.pq_compressed_data().get_data(),
             &mut pq.aligned_pq_coord_scratch,
             &mut pq.aligned_dist_scratch,
         )?;
-        let pq = &self.scratch.pq_scratch;
         for (i, id) in ids.iter().enumerate() {
             f(pq.aligned_dist_scratch[i], *id);
         }
@@ -336,7 +356,7 @@ where
 
     /// Poll completed IOs and move data from reader buffers into loaded_nodes.
     fn drain_completions(&mut self) -> ANNResult<()> {
-        if self.in_flight_ios.is_empty() {
+        if self.scratch.in_flight_ios.is_empty() {
             return Ok(());
         }
 
@@ -352,34 +372,14 @@ where
             return Ok(());
         }
 
-        let completed_set: std::collections::HashSet<usize> =
-            completed_slots.into_iter().collect();
-
-        let mut remaining = VecDeque::new();
-        while let Some(io) = self.in_flight_ios.pop_front() {
-            if completed_set.contains(&io.slot_id) {
-                trace.begin_phase();
-                let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
-                let parsed = parse_node(
-                    sector_buf,
-                    io.vertex_id,
-                    self.num_nodes_per_sector,
-                    self.node_len,
-                    self.fp_vector_len,
-                )?;
-                trace.end_phase_parse_node();
-                trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
-                self.loaded_nodes.insert(io.vertex_id, LoadedNode {
-                    fp_vector: parsed.fp_vector,
-                    adjacency_list: parsed.adjacency_list,
-                    rank: io.rank,
-                });
-            } else {
-                remaining.push_back(io);
-            }
-        }
-        self.in_flight_ios = remaining;
-        Ok(())
+        Self::process_completed_ios_inner(
+            &mut self.scratch,
+            &completed_slots,
+            &mut trace,
+            self.num_nodes_per_sector,
+            self.node_len,
+            self.fp_vector_len,
+        )
     }
     /// Block until at least one IO completes, then eagerly drain all available.
     fn wait_and_drain(&mut self) -> ANNResult<()> {
@@ -394,32 +394,52 @@ where
             return Ok(());
         }
 
-        let completed_set: std::collections::HashSet<usize> =
-            completed_slots.into_iter().collect();
-        let mut remaining = VecDeque::new();
-        while let Some(io) = self.in_flight_ios.pop_front() {
-            if completed_set.contains(&io.slot_id) {
+        Self::process_completed_ios_inner(
+            &mut self.scratch,
+            &completed_slots,
+            &mut trace,
+            self.num_nodes_per_sector,
+            self.node_len,
+            self.fp_vector_len,
+        )
+    }
+
+    /// Shared logic: process completed slot IDs, parse nodes, retain in-flight.
+    /// Uses linear scan on completed_slots (small, bounded by max_slots) to
+    /// avoid per-poll HashSet allocation.
+    fn process_completed_ios_inner(
+        scratch: &mut PipelinedScratch,
+        completed_slots: &[usize],
+        trace: &mut OptionalTrace<'_>,
+        num_nodes_per_sector: u64,
+        node_len: u64,
+        fp_vector_len: u64,
+    ) -> ANNResult<()> {
+        let mut i = 0;
+        while i < scratch.in_flight_ios.len() {
+            let io = &scratch.in_flight_ios[i];
+            if completed_slots.contains(&io.slot_id) {
+                let io = scratch.in_flight_ios.swap_remove_back(i).unwrap();
                 trace.begin_phase();
-                let sector_buf = self.scratch.reader.get_slot_buf(io.slot_id);
+                let sector_buf = scratch.reader.get_slot_buf(io.slot_id);
                 let parsed = parse_node(
                     sector_buf,
                     io.vertex_id,
-                    self.num_nodes_per_sector,
-                    self.node_len,
-                    self.fp_vector_len,
+                    num_nodes_per_sector,
+                    node_len,
+                    fp_vector_len,
                 )?;
                 trace.end_phase_parse_node();
                 trace.event(TraceEventKind::Complete { node_id: io.vertex_id });
-                self.loaded_nodes.insert(io.vertex_id, LoadedNode {
+                scratch.loaded_nodes.insert(io.vertex_id, LoadedNode {
                     fp_vector: parsed.fp_vector,
                     adjacency_list: parsed.adjacency_list,
                     rank: io.rank,
                 });
             } else {
-                remaining.push_back(io);
+                i += 1;
             }
         }
-        self.in_flight_ios = remaining;
         Ok(())
     }
 }
@@ -528,7 +548,16 @@ where
         F: Send + FnMut(f32, Self::Id),
         Itr: Iterator<Item = Self::Id>,
     {
-        self.pq_distances(&vec_id_itr.collect::<Box<[_]>>(), f)
+        self.scratch.neighbor_buf.clear();
+        self.scratch.neighbor_buf.extend(vec_id_itr);
+        let mut f = f;
+        let PipelinedScratch { ref mut pq_scratch, ref neighbor_buf, .. } = *self.scratch;
+        Self::pq_distances_inner(
+            pq_scratch,
+            self.provider,
+            neighbor_buf,
+            &mut f,
+        )
     }
 }
 
@@ -544,7 +573,7 @@ where
         let io_start = Instant::now();
         trace.begin_phase();
         for id in ids {
-            if self.loaded_nodes.contains_key(&id) {
+            if self.scratch.loaded_nodes.contains_key(&id) {
                 continue; // Already loaded from a previous IO
             }
 
@@ -558,7 +587,7 @@ where
                 let adjacency_list: Vec<u32> = adj_list.iter().copied().collect();
                 let rank = self.next_rank;
                 self.next_rank += 1;
-                self.loaded_nodes.insert(id, LoadedNode { fp_vector, adjacency_list, rank });
+                self.scratch.loaded_nodes.insert(id, LoadedNode { fp_vector, adjacency_list, rank });
                 self.cache_hits += 1;
                 trace.event(TraceEventKind::CacheHit { node_id: id });
                 continue;
@@ -566,7 +595,7 @@ where
 
             // Don't submit if all io_uring slots are occupied — prevents overwriting
             // buffers that still have in-flight reads.
-            if self.in_flight_ios.len() >= self.max_slots {
+            if self.scratch.in_flight_ios.len() >= self.max_slots {
                 break;
             }
 
@@ -578,14 +607,14 @@ where
             self.next_rank += 1;
             // Best-effort: if submission fails, the node will be retried
             if self.scratch.reader.submit_read(sector_offset, slot_id).is_ok() {
-                self.in_flight_ios.push_back(InFlightIo {
+                self.scratch.in_flight_ios.push_back(InFlightIo {
                     vertex_id: id,
                     slot_id,
                     rank,
                 });
                 trace.event(TraceEventKind::Submit {
                     node_id: id,
-                    inflight: self.in_flight_ios.len(),
+                    inflight: self.scratch.in_flight_ios.len(),
                 });
                 self.next_slot_id = (self.next_slot_id + 1) % self.max_slots;
                 self.io_count += 1;
@@ -613,19 +642,19 @@ where
         F: FnMut(f32, Self::Id) + Send,
     {
         async move {
-            self.expanded_ids.clear();
+            self.scratch.expanded_ids.clear();
 
             // Non-blocking poll for completions
             self.drain_completions()?;
 
-            if self.loaded_nodes.is_empty() {
+            if self.scratch.loaded_nodes.is_empty() {
                 return Ok(0);
             }
 
             // Try caller's priority order first
             let mut best_vid: Option<u32> = None;
             for id in ids {
-                if self.loaded_nodes.contains_key(&id) {
+                if self.scratch.loaded_nodes.contains_key(&id) {
                     best_vid = Some(id);
                     break;
                 }
@@ -634,6 +663,7 @@ where
             // Fallback: pick loaded node with lowest rank (best PQ at submission)
             if best_vid.is_none() {
                 best_vid = self
+                    .scratch
                     .loaded_nodes
                     .iter()
                     .min_by_key(|(_, node)| node.rank)
@@ -644,8 +674,8 @@ where
                 Some(id) => id,
                 None => return Ok(0),
             };
-            let node = self.loaded_nodes.remove(&vid).unwrap();
-            self.expanded_ids.push(vid);
+            let node = self.scratch.loaded_nodes.remove(&vid).unwrap();
+            self.scratch.expanded_ids.push(vid);
 
             // Compute full-precision distance and cache it for post-processing
             let cpu_start = Instant::now();
@@ -657,20 +687,27 @@ where
             if let Some(t) = self.trace.as_mut() {
                 t.profile.fp_distance_us += cpu_start.elapsed().as_micros() as u64;
             }
-            self.distance_cache.insert(vid, fp_dist);
+            self.scratch.distance_cache.insert(vid, fp_dist);
 
-            // Get unvisited neighbors
-            let neighbors: Vec<u32> = node
-                .adjacency_list
-                .iter()
-                .copied()
-                .filter(|&nbr| (nbr as usize) < self.num_points && pred.eval_mut(&nbr))
-                .collect();
-            let num_new = neighbors.len() as u32;
+            // Get unvisited neighbors into reusable buffer
+            self.scratch.neighbor_buf.clear();
+            self.scratch.neighbor_buf.extend(
+                node.adjacency_list
+                    .iter()
+                    .copied()
+                    .filter(|&nbr| (nbr as usize) < self.num_points && pred.eval_mut(&nbr)),
+            );
+            let num_new = self.scratch.neighbor_buf.len() as u32;
 
-            if !neighbors.is_empty() {
+            if !self.scratch.neighbor_buf.is_empty() {
                 let pq_start = Instant::now();
-                self.pq_distances(&neighbors, &mut on_neighbors)?;
+                let PipelinedScratch { ref mut pq_scratch, ref neighbor_buf, .. } = *self.scratch;
+                Self::pq_distances_inner(
+                    pq_scratch,
+                    self.provider,
+                    neighbor_buf,
+                    &mut on_neighbors,
+                )?;
                 if let Some(t) = self.trace.as_mut() {
                     t.profile.pq_distance_us += pq_start.elapsed().as_micros() as u64;
                 }
@@ -693,22 +730,22 @@ where
 
     /// Returns true when there are in-flight IO operations.
     fn has_pending(&self) -> bool {
-        !self.in_flight_ios.is_empty()
+        !self.scratch.in_flight_ios.is_empty()
     }
 
     fn inflight_count(&self) -> usize {
-        self.in_flight_ios.len()
+        self.scratch.in_flight_ios.len()
     }
 
     fn wait_for_io(&mut self) {
         // Only block if there are actually in-flight IOs to wait for
-        if !self.in_flight_ios.is_empty() {
+        if !self.scratch.in_flight_ios.is_empty() {
             let _ = self.wait_and_drain();
         }
     }
 
     fn last_expanded_ids(&self) -> &[u32] {
-        &self.expanded_ids
+        &self.scratch.expanded_ids
     }
 
     fn is_pipelined(&self) -> bool {
@@ -846,6 +883,7 @@ where
         // full_retset approach: every expanded node contributes to results
         // regardless of its PQ distance ranking.
         let mut reranked: Vec<((u32, Data::AssociatedDataType), f32)> = accessor
+            .scratch
             .distance_cache
             .iter()
             .filter(|(id, _)| (self.filter)(id))
