@@ -49,6 +49,7 @@ target_link_libraries(
         ${PROJECT_NAME}
         ${DISKANN_TOOLS_TCMALLOC_LINK_OPTIONS}
         ${DISKANN_ASYNC_LIB}
+        ${DISKANN_ASYNC_LIB_URING}
 )
 
 pybind11_extension(_diskannpy)
