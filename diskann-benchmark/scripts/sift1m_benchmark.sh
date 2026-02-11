@@ -4,14 +4,17 @@
 # Downloads SIFT1M dataset, builds a disk index, and runs an ablation
 # benchmark comparing BeamSearch vs PipeSearch (io_uring pipelining).
 #
+# By default, sweeps thread counts from 1 to max_threads in strides of 4
+# and produces charts (QPS, mean latency, tail latency vs threads).
+#
 # Prerequisites:
 #   - Linux (PipeSearch requires io_uring)
 #   - Rust toolchain (cargo)
-#   - curl, tar, python3 with numpy
+#   - curl, tar, python3 with numpy and matplotlib
 #   - ~2GB free disk space for data + index
 #
 # Usage:
-#   ./diskann-benchmark/scripts/sift1m_benchmark.sh [--data-dir DIR] [--skip-download] [--skip-build]
+#   ./diskann-benchmark/scripts/sift1m_benchmark.sh [OPTIONS]
 
 set -euo pipefail
 
@@ -20,8 +23,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Defaults
 DATA_DIR="${DATA_DIR:-$REPO_ROOT/benchmark_data/sift1m}"
-NUM_THREADS="${NUM_THREADS:-4}"
+MAX_THREADS="${MAX_THREADS:-48}"
+THREAD_STRIDE="${THREAD_STRIDE:-4}"
 BEAM_WIDTH="${BEAM_WIDTH:-4}"
+SEARCH_L="${SEARCH_L:-100}"
 SKIP_DOWNLOAD=false
 SKIP_BUILD=false
 SKIP_INDEX=false
@@ -29,22 +34,26 @@ SKIP_INDEX=false
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --data-dir)   DATA_DIR="$2"; shift 2 ;;
+        --data-dir)      DATA_DIR="$2"; shift 2 ;;
         --skip-download) SKIP_DOWNLOAD=true; shift ;;
-        --skip-build) SKIP_BUILD=true; shift ;;
-        --skip-index) SKIP_INDEX=true; shift ;;
-        --threads)    NUM_THREADS="$2"; shift 2 ;;
-        --beam-width) BEAM_WIDTH="$2"; shift 2 ;;
+        --skip-build)    SKIP_BUILD=true; shift ;;
+        --skip-index)    SKIP_INDEX=true; shift ;;
+        --max-threads)   MAX_THREADS="$2"; shift 2 ;;
+        --thread-stride) THREAD_STRIDE="$2"; shift 2 ;;
+        --beam-width)    BEAM_WIDTH="$2"; shift 2 ;;
+        --search-l)      SEARCH_L="$2"; shift 2 ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --data-dir DIR     Data directory (default: \$REPO_ROOT/benchmark_data/sift1m)"
-            echo "  --skip-download    Skip downloading SIFT1M (use existing data)"
-            echo "  --skip-build       Skip building the benchmark binary"
-            echo "  --skip-index       Skip building the disk index (use existing index)"
-            echo "  --threads N        Number of search threads (default: 4)"
-            echo "  --beam-width N     Beam width / pipeline width (default: 4)"
+            echo "  --data-dir DIR       Data directory (default: \$REPO_ROOT/benchmark_data/sift1m)"
+            echo "  --skip-download      Skip downloading SIFT1M (use existing data)"
+            echo "  --skip-build         Skip building the benchmark binary"
+            echo "  --skip-index         Skip building the disk index (use existing index)"
+            echo "  --max-threads N      Maximum thread count for sweep (default: 48)"
+            echo "  --thread-stride N    Thread count increment (default: 4)"
+            echo "  --beam-width N       Beam width / pipeline width (default: 4)"
+            echo "  --search-l N         Search list size L (default: 100)"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -54,12 +63,12 @@ done
 BIN_DIR="$DATA_DIR/bin"
 INDEX_DIR="$DATA_DIR/index"
 INDEX_PREFIX="$INDEX_DIR/sift1m_R64_L100"
-CONFIG_FILE="$DATA_DIR/benchmark_config.json"
-OUTPUT_FILE="$DATA_DIR/benchmark_results.json"
+OUTPUT_DIR="$DATA_DIR/results"
 
 echo "=== SIFT1M Pipelined Search Benchmark ==="
 echo "Data directory: $DATA_DIR"
-echo "Threads: $NUM_THREADS, Beam width: $BEAM_WIDTH"
+echo "Thread sweep: 1, 4..${MAX_THREADS} (stride ${THREAD_STRIDE})"
+echo "Beam width: $BEAM_WIDTH, Search L: $SEARCH_L"
 echo ""
 
 # -------------------------------------------------------------------
@@ -92,50 +101,41 @@ src_dir = Path(sys.argv[1])
 dst_dir = Path(sys.argv[2])
 
 def read_fvecs(path):
-    """Read .fvecs format: [dim(int32), vec(float32*dim)] per row."""
     data = np.fromfile(path, dtype=np.float32)
     dim = int(data[0].view(np.int32))
     return data.reshape(-1, dim + 1)[:, 1:]
 
 def read_ivecs(path):
-    """Read .ivecs format: [dim(int32), vec(int32*dim)] per row."""
     data = np.fromfile(path, dtype=np.int32)
     dim = data[0]
     return data.reshape(-1, dim + 1)[:, 1:]
 
 def write_fbin(path, data):
-    """Write DiskANN .fbin format: [npts(u32), dim(u32), data(float32*npts*dim)]."""
     npts, dim = data.shape
     with open(path, 'wb') as f:
         f.write(struct.pack('II', npts, dim))
         data.astype(np.float32).tofile(f)
 
 def write_ibin(path, data):
-    """Write DiskANN groundtruth .bin: [npts(u32), dim(u32), data(uint32*npts*dim)]."""
     npts, dim = data.shape
     with open(path, 'wb') as f:
         f.write(struct.pack('II', npts, dim))
         data.astype(np.uint32).tofile(f)
 
-# Convert base vectors
 base = read_fvecs(src_dir / "sift_base.fvecs")
 print(f"  Base: {base.shape[0]} points, {base.shape[1]} dims")
 write_fbin(dst_dir / "sift_base.fbin", base)
 
-# Convert query vectors
 query = read_fvecs(src_dir / "sift_query.fvecs")
 print(f"  Query: {query.shape[0]} points, {query.shape[1]} dims")
 write_fbin(dst_dir / "sift_query.fbin", query)
 
-# Convert ground truth (take top-100)
 gt = read_ivecs(src_dir / "sift_groundtruth.ivecs")
 print(f"  Groundtruth: {gt.shape[0]} queries, top-{gt.shape[1]}")
 write_ibin(dst_dir / "sift_groundtruth.bin", gt)
-
 print("  Conversion complete!")
 PYEOF
 
-        # Clean up extracted files
         rm -rf "$EXTRACT_DIR" "$SIFT_TAR"
     else
         echo "SIFT1M data already exists at $BIN_DIR, skipping download."
@@ -168,6 +168,8 @@ if [ "$SKIP_INDEX" = false ] && [ ! -f "${INDEX_PREFIX}_disk.index" ]; then
     echo "--- Step 3: Building disk index (R=64, L=100, PQ_16) ---"
     mkdir -p "$INDEX_DIR"
 
+    # Build job requires a search_phase; we include a minimal one that also
+    # validates the index works after building.
     cat > "$DATA_DIR/build_config.json" << BUILDEOF
 {
     "search_directories": ["$BIN_DIR"],
@@ -183,11 +185,21 @@ if [ "$SKIP_INDEX" = false ] && [ ! -f "${INDEX_PREFIX}_disk.index" ]; then
                     "dim": 128,
                     "max_degree": 64,
                     "l_build": 100,
-                    "num_threads": $NUM_THREADS,
+                    "num_threads": 4,
                     "build_ram_limit_gb": 4.0,
                     "num_pq_chunks": 16,
                     "quantization_type": "FP",
                     "save_path": "$INDEX_PREFIX"
+                },
+                "search_phase": {
+                    "queries": "sift_query.fbin",
+                    "groundtruth": "sift_groundtruth.bin",
+                    "search_list": [50],
+                    "beam_width": 4,
+                    "recall_at": 10,
+                    "num_threads": 1,
+                    "is_flat_search": false,
+                    "distance": "squared_l2"
                 }
             }
         }
@@ -211,64 +223,221 @@ if [ ! -f "${INDEX_PREFIX}_disk.index" ]; then
 fi
 
 # -------------------------------------------------------------------
-# Step 4: Run ablation benchmark (BeamSearch vs PipeSearch)
+# Step 4: Thread sweep benchmark
 # -------------------------------------------------------------------
-echo "--- Step 4: Running ablation benchmark ---"
-cat > "$CONFIG_FILE" << CFGEOF
-{
-    "search_directories": ["$BIN_DIR"],
-    "jobs": [
+echo "--- Step 4: Running thread sweep benchmark ---"
+mkdir -p "$OUTPUT_DIR"
+
+# Build thread list: 1, then 4, 8, ..., MAX_THREADS
+THREAD_LIST="1"
+for (( t=THREAD_STRIDE; t<=MAX_THREADS; t+=THREAD_STRIDE )); do
+    THREAD_LIST="$THREAD_LIST $t"
+done
+echo "Thread counts: $THREAD_LIST"
+
+# Generate a single config with all jobs (2 per thread count: Beam + Pipe)
+JOBS=""
+for T in $THREAD_LIST; do
+    [ -n "$JOBS" ] && JOBS="$JOBS,"
+    JOBS="$JOBS
         {
-            "type": "disk-index",
-            "content": {
-                "source": {
-                    "disk-index-source": "Load",
-                    "data_type": "float32",
-                    "load_path": "$INDEX_PREFIX"
+            \"type\": \"disk-index\",
+            \"content\": {
+                \"source\": {
+                    \"disk-index-source\": \"Load\",
+                    \"data_type\": \"float32\",
+                    \"load_path\": \"$INDEX_PREFIX\"
                 },
-                "search_phase": {
-                    "queries": "sift_query.fbin",
-                    "groundtruth": "sift_groundtruth.bin",
-                    "search_list": [10, 20, 50, 100],
-                    "beam_width": $BEAM_WIDTH,
-                    "recall_at": 10,
-                    "num_threads": $NUM_THREADS,
-                    "is_flat_search": false,
-                    "distance": "squared_l2",
-                    "search_mode": {"mode": "BeamSearch"}
+                \"search_phase\": {
+                    \"queries\": \"sift_query.fbin\",
+                    \"groundtruth\": \"sift_groundtruth.bin\",
+                    \"search_list\": [$SEARCH_L],
+                    \"beam_width\": $BEAM_WIDTH,
+                    \"recall_at\": 10,
+                    \"num_threads\": $T,
+                    \"is_flat_search\": false,
+                    \"distance\": \"squared_l2\",
+                    \"search_mode\": {\"mode\": \"BeamSearch\"}
                 }
             }
         },
         {
-            "type": "disk-index",
-            "content": {
-                "source": {
-                    "disk-index-source": "Load",
-                    "data_type": "float32",
-                    "load_path": "$INDEX_PREFIX"
+            \"type\": \"disk-index\",
+            \"content\": {
+                \"source\": {
+                    \"disk-index-source\": \"Load\",
+                    \"data_type\": \"float32\",
+                    \"load_path\": \"$INDEX_PREFIX\"
                 },
-                "search_phase": {
-                    "queries": "sift_query.fbin",
-                    "groundtruth": "sift_groundtruth.bin",
-                    "search_list": [10, 20, 50, 100],
-                    "beam_width": $BEAM_WIDTH,
-                    "recall_at": 10,
-                    "num_threads": $NUM_THREADS,
-                    "is_flat_search": false,
-                    "distance": "squared_l2",
-                    "search_mode": {"mode": "PipeSearch"}
+                \"search_phase\": {
+                    \"queries\": \"sift_query.fbin\",
+                    \"groundtruth\": \"sift_groundtruth.bin\",
+                    \"search_list\": [$SEARCH_L],
+                    \"beam_width\": $BEAM_WIDTH,
+                    \"recall_at\": 10,
+                    \"num_threads\": $T,
+                    \"is_flat_search\": false,
+                    \"distance\": \"squared_l2\",
+                    \"search_mode\": {\"mode\": \"PipeSearch\"}
                 }
             }
-        }
+        }"
+done
+
+SWEEP_CONFIG="$OUTPUT_DIR/sweep_config.json"
+SWEEP_OUTPUT="$OUTPUT_DIR/sweep_results.json"
+
+cat > "$SWEEP_CONFIG" << SWEEPEOF
+{
+    "search_directories": ["$BIN_DIR"],
+    "jobs": [$JOBS
     ]
 }
-CFGEOF
+SWEEPEOF
 
-"$BENCHMARK_BIN" run --input-file "$CONFIG_FILE" --output-file "$OUTPUT_FILE"
+"$BENCHMARK_BIN" run --input-file "$SWEEP_CONFIG" --output-file "$SWEEP_OUTPUT"
+
+echo ""
+echo "--- Step 5: Generating charts ---"
+
+python3 - "$SWEEP_OUTPUT" "$OUTPUT_DIR" "$SEARCH_L" "$BEAM_WIDTH" << 'CHARTEOF'
+import json, sys, os
+
+output_dir = sys.argv[2]
+search_l = sys.argv[3]
+beam_width = sys.argv[4]
+
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+
+# Parse results: each job is data[i] with structure:
+#   data[i]["results"]["search"]["search_mode"] — "BeamSearch" or "PipeSearch(...)"
+#   data[i]["results"]["search"]["num_threads"] — thread count
+#   data[i]["results"]["search"]["search_results_per_l"][0] — first (only) L result
+beam = {"threads": [], "qps": [], "mean_lat": [], "p95_lat": [], "p999_lat": [], "recall": []}
+pipe = {"threads": [], "qps": [], "mean_lat": [], "p95_lat": [], "p999_lat": [], "recall": []}
+
+for job in data:
+    search = job.get("results", {}).get("search", {})
+    if not search:
+        continue
+    results_per_l = search.get("search_results_per_l", [])
+    if not results_per_l:
+        continue
+    r = results_per_l[0]
+    threads = search.get("num_threads", 0)
+    mode = str(search.get("search_mode", ""))
+
+    d = beam if "BeamSearch" in mode else pipe
+
+    d["threads"].append(threads)
+    d["qps"].append(r.get("qps", 0))
+    d["mean_lat"].append(r.get("mean_latency", 0))
+    d["p95_lat"].append(r.get("p95_latency", 0))
+    d["p999_lat"].append(r.get("p999_latency", 0))
+    d["recall"].append(r.get("recall", 0))
+
+# Sort by threads
+for d in [beam, pipe]:
+    if d["threads"]:
+        order = sorted(range(len(d["threads"])), key=lambda i: d["threads"][i])
+        for k in d:
+            d[k] = [d[k][i] for i in order]
+
+# Print table
+print(f"\n{'Threads':>7s}  {'BeamSearch QPS':>14s} {'PipeSearch QPS':>14s}  "
+      f"{'Beam Mean':>10s} {'Pipe Mean':>10s}  "
+      f"{'Beam p999':>10s} {'Pipe p999':>10s}  "
+      f"{'Beam Recall':>11s} {'Pipe Recall':>11s}")
+print("=" * 120)
+
+for i in range(len(beam["threads"])):
+    bt, bq, bm, bp9 = beam["threads"][i], beam["qps"][i], beam["mean_lat"][i], beam["p999_lat"][i]
+    br = beam["recall"][i]
+    if i < len(pipe["threads"]):
+        pt, pq, pm, pp9 = pipe["threads"][i], pipe["qps"][i], pipe["mean_lat"][i], pipe["p999_lat"][i]
+        pr = pipe["recall"][i]
+    else:
+        pt, pq, pm, pp9, pr = bt, 0, 0, 0, 0
+    print(f"{bt:7d}  {bq:14.1f} {pq:14.1f}  {bm:9.0f}us {pm:9.0f}us  "
+          f"{bp9:9d}us {pp9:9d}us  {br:10.2f}% {pr:10.2f}%")
+
+# Generate charts
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f'SIFT1M BeamSearch vs PipeSearch (L={search_l}, BW={beam_width})', fontsize=14)
+
+    # QPS vs Threads
+    ax = axes[0][0]
+    ax.plot(beam["threads"], beam["qps"], 'o-', color='#2196F3', label='BeamSearch', linewidth=2, markersize=5)
+    ax.plot(pipe["threads"], pipe["qps"], 's-', color='#FF5722', label='PipeSearch', linewidth=2, markersize=5)
+    ax.set_xlabel('Threads')
+    ax.set_ylabel('QPS')
+    ax.set_title('Throughput (QPS)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # Mean Latency vs Threads
+    ax = axes[0][1]
+    ax.plot(beam["threads"], [x/1000 for x in beam["mean_lat"]], 'o-', color='#2196F3', label='BeamSearch', linewidth=2, markersize=5)
+    ax.plot(pipe["threads"], [x/1000 for x in pipe["mean_lat"]], 's-', color='#FF5722', label='PipeSearch', linewidth=2, markersize=5)
+    ax.set_xlabel('Threads')
+    ax.set_ylabel('Mean Latency (ms)')
+    ax.set_title('Mean Latency')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # p95 Latency vs Threads
+    ax = axes[1][0]
+    ax.plot(beam["threads"], [x/1000 for x in beam["p95_lat"]], 'o-', color='#2196F3', label='BeamSearch', linewidth=2, markersize=5)
+    ax.plot(pipe["threads"], [x/1000 for x in pipe["p95_lat"]], 's-', color='#FF5722', label='PipeSearch', linewidth=2, markersize=5)
+    ax.set_xlabel('Threads')
+    ax.set_ylabel('p95 Latency (ms)')
+    ax.set_title('p95 Tail Latency')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # p99.9 Latency vs Threads
+    ax = axes[1][1]
+    ax.plot(beam["threads"], [x/1000 for x in beam["p999_lat"]], 'o-', color='#2196F3', label='BeamSearch', linewidth=2, markersize=5)
+    ax.plot(pipe["threads"], [x/1000 for x in pipe["p999_lat"]], 's-', color='#FF5722', label='PipeSearch', linewidth=2, markersize=5)
+    ax.set_xlabel('Threads')
+    ax.set_ylabel('p99.9 Latency (ms)')
+    ax.set_title('p99.9 Tail Latency')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    chart_path = os.path.join(output_dir, 'thread_sweep.png')
+    plt.savefig(chart_path, dpi=150)
+    print(f"\nChart saved to: {chart_path}")
+    plt.close()
+
+except ImportError:
+    print("\nmatplotlib not available — skipping chart generation.")
+    print("Install with: pip install matplotlib")
+
+# Save CSV for external plotting
+csv_path = os.path.join(output_dir, 'thread_sweep.csv')
+with open(csv_path, 'w') as f:
+    f.write("threads,mode,qps,mean_lat_us,p95_lat_us,p999_lat_us,recall\n")
+    for d, mode in [(beam, "BeamSearch"), (pipe, "PipeSearch")]:
+        for i in range(len(d["threads"])):
+            f.write(f"{d['threads'][i]},{mode},{d['qps'][i]:.1f},"
+                    f"{d['mean_lat'][i]:.0f},{d['p95_lat'][i]},"
+                    f"{d['p999_lat'][i]},{d['recall'][i]:.3f}\n")
+print(f"CSV saved to: {csv_path}")
+CHARTEOF
 
 echo ""
 echo "=== Benchmark Complete ==="
-echo "Results saved to: $OUTPUT_FILE"
+echo "Results: $SWEEP_OUTPUT"
+echo "Charts:  $OUTPUT_DIR/thread_sweep.png"
+echo "CSV:     $OUTPUT_DIR/thread_sweep.csv"
 echo ""
 echo "To re-run with different parameters:"
-echo "  $0 --skip-download --skip-index --threads N --beam-width N"
+echo "  $0 --skip-download --skip-index --max-threads N --search-l N"
