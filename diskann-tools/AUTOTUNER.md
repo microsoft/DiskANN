@@ -172,6 +172,8 @@ The autotuner generates the following files in the output directory:
 
 ### Example Summary
 
+The `sweep_summary.json` file contains all sweep results. Here's an example (truncated for brevity):
+
 ```json
 {
   "criterion": "qps",
@@ -189,9 +191,14 @@ The autotuner generates the following files in the output directory:
       "qps": [12345.6, 11234.5, ...],
       "recall": [0.98, 0.96, ...]
     }
-  }
+  },
+  "all_results": [
+    // Array of all sweep results, same format as best_config
+  ]
 }
 ```
+
+**Note**: The `config_id` is a sequential number (e.g., "0005") representing the configuration index in the sweep. To see which parameter values correspond to which ID, check the `parameters` field.
 
 ## Examples
 
