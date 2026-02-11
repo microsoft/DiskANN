@@ -93,3 +93,47 @@ where
         Box::new(self.clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::NaiveCheckpointRecordManager;
+
+    #[test]
+    fn test_checkpoint_manager_trait_exists() {
+        // Verify trait is properly defined
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<NaiveCheckpointRecordManager>();
+    }
+
+    #[test]
+    fn test_checkpoint_manager_ext_execute_stage_with_resumption() {
+        let mut manager = NaiveCheckpointRecordManager::default();
+        let mut executed = false;
+        
+        let result = manager.execute_stage(
+            WorkStage::Start,
+            WorkStage::End,
+            || {
+                executed = true;
+                Ok(42)
+            },
+            || Ok(0)
+        );
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 42);
+        assert!(executed);
+    }
+
+    #[test]
+    fn test_checkpoint_manager_clone_box() {
+        let manager = NaiveCheckpointRecordManager::default();
+        let boxed = manager.clone_box();
+        
+        // The boxed version should work the same
+        let result = boxed.get_resumption_point(WorkStage::Start);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(0));
+    }
+}

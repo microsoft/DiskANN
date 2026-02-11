@@ -65,3 +65,28 @@ impl AlignedFileReaderFactory {
         Self { file_path }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aligned_file_reader_factory_new() {
+        let path = "/tmp/test.bin".to_string();
+        let factory = AlignedFileReaderFactory::new(path.clone());
+        assert_eq!(factory.file_path, path);
+    }
+
+    #[test]
+    fn test_aligned_file_reader_factory_implements_trait() {
+        // Verify that AlignedFileReaderFactory implements AlignedReaderFactory
+        fn check_impl<T: AlignedReaderFactory>() {}
+        check_impl::<AlignedFileReaderFactory>();
+    }
+
+    #[test]
+    fn test_aligned_file_reader_factory_field_access() {
+        let factory = AlignedFileReaderFactory::new("/path/to/file".to_string());
+        assert_eq!(factory.file_path, "/path/to/file");
+    }
+}
