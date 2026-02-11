@@ -283,7 +283,7 @@ mod generator_tests {
         create_thread_pool_for_test, read_metadata, save_bin_f32, save_bytes,
     };
     use rstest::rstest;
-    use vfs::{FileSystem, MemoryFS, OverlayFS};
+    use vfs::{FileSystem, MemoryFS};
 
     use super::*;
     use crate::build::chunking::continuation::{
@@ -373,11 +373,12 @@ mod generator_tests {
         dim: usize,
         offset: usize,
         output_dim: u32,
-    ) -> ANNResult<(VirtualStorageProvider<OverlayFS>, String, String)> {
-        let fs = OverlayFS::new(&[MemoryFS::default().into()]);
-        fs.create_dir("/test_data")
+    ) -> ANNResult<(VirtualStorageProvider<MemoryFS>, String, String)> {
+        let storage_provider = VirtualStorageProvider::new_memory();
+        storage_provider
+            .filesystem()
+            .create_dir("/test_data")
             .expect("Could not create test directory");
-        let storage_provider = VirtualStorageProvider::new(fs);
 
         let data_path = "/test_data/test_data.bin".to_string();
         let compressed_path = "/test_data/test_compressed.bin".to_string();
@@ -411,10 +412,10 @@ mod generator_tests {
         Ok((storage_provider, data_path, compressed_path))
     }
 
-    fn create_and_call_generator(
+    fn create_and_call_generator<F: vfs::FileSystem>(
         offset: usize,
         compressed_path: String,
-        storage_provider: &VirtualStorageProvider<OverlayFS>,
+        storage_provider: &VirtualStorageProvider<F>,
         data_path: String,
         output_dim: u32,
         chunking_config: &ChunkingConfig,
@@ -464,7 +465,7 @@ mod generator_tests {
             inmemory_build_chunk_vector_count: 10_000,
         };
 
-        let (generator, result) = create_and_call_generator(
+        let (generator, result) = create_and_call_generator::<vfs::MemoryFS>(
             offset,
             compressed_path.clone(),
             &storage_provider,
@@ -507,7 +508,7 @@ mod generator_tests {
         };
         let (storage_provider, data_path, compressed_path) =
             generate_data_and_compressed(num_points, dim, 0, output_dim)?;
-        let (mut generator, mut result) = create_and_call_generator(
+        let (mut generator, mut result) = create_and_call_generator::<vfs::MemoryFS>(
             0,
             compressed_path.clone(),
             &storage_provider,
@@ -519,7 +520,7 @@ mod generator_tests {
             match result.as_ref().unwrap() {
                 Progress::Completed => break,
                 Progress::Processed(num_points) => {
-                    (generator, result) = create_and_call_generator(
+                    (generator, result) = create_and_call_generator::<vfs::MemoryFS>(
                         *num_points,
                         compressed_path.clone(),
                         &storage_provider,
@@ -585,7 +586,7 @@ mod generator_tests {
         let (storage_provider, data_path, compressed_path) =
             generate_data_and_compressed(num_points, dim, error_offset, output_dim)?;
 
-        let (_, result) = create_and_call_generator(
+        let (_, result) = create_and_call_generator::<vfs::MemoryFS>(
             offset,
             compressed_path,
             &storage_provider,

@@ -423,7 +423,8 @@ mod tests {
     fn test_find_medoid_from_file_basic() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let vectors = create_f32_test_vectors();
-        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors).unwrap();
+        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors)
+            .unwrap();
 
         let result = find_medoid_from_file::<f32, _>("/test_vectors.bin", &storage_provider);
 
@@ -437,7 +438,12 @@ mod tests {
     fn test_find_medoid_from_file_empty_file() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let vectors: Vec<Vec<f32>> = vec![]; // Empty vector list
-        create_test_vector_file(storage_provider.filesystem(), "/empty_vectors.bin", &vectors).unwrap();
+        create_test_vector_file(
+            storage_provider.filesystem(),
+            "/empty_vectors.bin",
+            &vectors,
+        )
+        .unwrap();
 
         let result = find_medoid_from_file::<f32, _>("/empty_vectors.bin", &storage_provider);
 
@@ -454,7 +460,8 @@ mod tests {
     fn test_find_medoid_with_sampling_basic() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let vectors = create_f32_test_vectors();
-        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors).unwrap();
+        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors)
+            .unwrap();
 
         let mut rng = StdRng::seed_from_u64(12345);
         let result = find_medoid_with_sampling::<f32, _>(
@@ -474,7 +481,8 @@ mod tests {
     fn test_find_medoid_with_sampling_no_sampling() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let vectors = create_f32_test_vectors();
-        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors).unwrap();
+        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors)
+            .unwrap();
 
         let mut rng = StdRng::seed_from_u64(12345);
         let result = find_medoid_with_sampling::<f32, _>(
@@ -494,7 +502,12 @@ mod tests {
     fn test_calculate_centroid_with_sampling_empty_vectors() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let vectors: Vec<Vec<f32>> = vec![];
-        create_test_vector_file(storage_provider.filesystem(), "/empty_vectors.bin", &vectors).unwrap();
+        create_test_vector_file(
+            storage_provider.filesystem(),
+            "/empty_vectors.bin",
+            &vectors,
+        )
+        .unwrap();
 
         let mut rng = StdRng::seed_from_u64(12345);
 
@@ -513,7 +526,8 @@ mod tests {
     fn test_calculate_centroid_with_sampling_basic() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let vectors = create_f32_test_vectors();
-        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors).unwrap();
+        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors)
+            .unwrap();
 
         let mut rng = StdRng::seed_from_u64(12345);
 
@@ -535,7 +549,12 @@ mod tests {
     fn test_find_medoid_with_minmax_vectors() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let minmax_vectors = create_minmax_test_vectors().unwrap();
-        create_test_vector_file(storage_provider.filesystem(), "/minmax_vectors.bin", &minmax_vectors).unwrap();
+        create_test_vector_file(
+            storage_provider.filesystem(),
+            "/minmax_vectors.bin",
+            &minmax_vectors,
+        )
+        .unwrap();
 
         let result =
             find_medoid_from_file::<MinMaxElement<8>, _>("/minmax_vectors.bin", &storage_provider);
@@ -550,7 +569,8 @@ mod tests {
     fn test_calculate_centroid_with_sampling_zero_sampling_rate() {
         let storage_provider = VirtualStorageProvider::new_memory();
         let vectors = create_f32_test_vectors();
-        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors).unwrap();
+        create_test_vector_file(storage_provider.filesystem(), "/test_vectors.bin", &vectors)
+            .unwrap();
 
         let mut rng = StdRng::seed_from_u64(12345);
 
@@ -577,7 +597,12 @@ mod tests {
         ];
 
         let storage_provider = VirtualStorageProvider::new_memory();
-        create_test_vector_file(storage_provider.filesystem(), "/corrupted.bin", &corrupted_vectors).unwrap();
+        create_test_vector_file(
+            storage_provider.filesystem(),
+            "/corrupted.bin",
+            &corrupted_vectors,
+        )
+        .unwrap();
 
         let result =
             find_medoid_from_file::<MinMaxElement<8>, _>("/corrupted.bin", &storage_provider);
