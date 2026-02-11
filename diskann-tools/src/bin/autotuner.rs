@@ -6,8 +6,10 @@
 //! Autotuner for DiskANN benchmarks.
 //!
 //! This tool builds on top of the benchmark framework to sweep over a subset of parameters
-//! (R/max_degree, l_build, l_search/search_l, quantization bytes where applicable)
 //! and identify the best configuration based on specified optimization criteria.
+//!
+//! The autotuner uses a path-based configuration system that doesn't hardcode JSON structure,
+//! making it robust to changes in the benchmark framework.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -62,26 +64,26 @@ enum Commands {
         /// Output file for example sweep configuration
         #[arg(short, long)]
         output: PathBuf,
+
+        /// Generate example for specific benchmark type
+        #[arg(long)]
+        benchmark_type: Option<String>,
     },
+}
+
+/// Path-based parameter specification for sweeping
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct ParameterSweep {
+    /// JSON path to the parameter (e.g., "jobs.0.content.source.max_degree")
+    path: String,
+    /// Values to sweep over
+    values: Vec<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct SweepConfig {
-    /// Max degree (R) values to sweep
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_degree: Option<Vec<u32>>,
-
-    /// l_build values to sweep
-    #[serde(skip_serializing_if = "Option::is_none")]
-    l_build: Option<Vec<u32>>,
-
-    /// search_l values to sweep
-    #[serde(skip_serializing_if = "Option::is_none")]
-    search_l: Option<Vec<u32>>,
-
-    /// num_pq_chunks values to sweep (for quantized indexes)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    num_pq_chunks: Option<Vec<u32>>,
+    /// List of parameters to sweep with their paths and values
+    parameters: Vec<ParameterSweep>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -122,16 +124,76 @@ fn main() -> Result<()> {
             &benchmark_cmd,
             benchmark_args.as_deref(),
         ),
-        Commands::Example { output } => generate_example(&output),
+        Commands::Example { output, benchmark_type } => generate_example(&output, benchmark_type.as_deref()),
     }
 }
 
-fn generate_example(output: &Path) -> Result<()> {
-    let example = SweepConfig {
-        max_degree: Some(vec![16, 32, 64]),
-        l_build: Some(vec![50, 75, 100]),
-        search_l: Some(vec![10, 20, 30, 40, 50, 75, 100]),
-        num_pq_chunks: Some(vec![8, 16, 32]),
+fn generate_example(output: &Path, benchmark_type: Option<&str>) -> Result<()> {
+    let example = match benchmark_type {
+        Some("pq") | Some("product-quantization") => SweepConfig {
+            parameters: vec![
+                ParameterSweep {
+                    path: "jobs.0.content.index_operation.source.max_degree".to_string(),
+                    values: vec![16, 32, 64].into_iter().map(|v| serde_json::json!(v)).collect(),
+                },
+                ParameterSweep {
+                    path: "jobs.0.content.index_operation.source.l_build".to_string(),
+                    values: vec![50, 75, 100].into_iter().map(|v| serde_json::json!(v)).collect(),
+                },
+                ParameterSweep {
+                    path: "jobs.0.content.index_operation.search_phase.runs.0.search_l".to_string(),
+                    values: vec![
+                        serde_json::json!([10, 20, 30, 40, 50]),
+                        serde_json::json!([20, 40, 60, 80, 100]),
+                        serde_json::json!([30, 60, 90, 120, 150]),
+                    ],
+                },
+                ParameterSweep {
+                    path: "jobs.0.content.num_pq_chunks".to_string(),
+                    values: vec![8, 16, 32].into_iter().map(|v| serde_json::json!(v)).collect(),
+                },
+            ],
+        },
+        Some("disk") | Some("disk-index") => SweepConfig {
+            parameters: vec![
+                ParameterSweep {
+                    path: "jobs.0.content.source.max_degree".to_string(),
+                    values: vec![16, 32, 64].into_iter().map(|v| serde_json::json!(v)).collect(),
+                },
+                ParameterSweep {
+                    path: "jobs.0.content.source.l_build".to_string(),
+                    values: vec![50, 75, 100].into_iter().map(|v| serde_json::json!(v)).collect(),
+                },
+                ParameterSweep {
+                    path: "jobs.0.content.search_phase.search_list".to_string(),
+                    values: vec![
+                        serde_json::json!([10, 20, 40]),
+                        serde_json::json!([20, 40, 80]),
+                        serde_json::json!([30, 60, 120]),
+                    ],
+                },
+            ],
+        },
+        _ => SweepConfig {
+            parameters: vec![
+                ParameterSweep {
+                    path: "jobs.0.content.source.max_degree".to_string(),
+                    values: vec![16, 32, 64].into_iter().map(|v| serde_json::json!(v)).collect(),
+                },
+                ParameterSweep {
+                    path: "jobs.0.content.source.l_build".to_string(),
+                    values: vec![50, 75, 100].into_iter().map(|v| serde_json::json!(v)).collect(),
+                },
+                ParameterSweep {
+                    path: "jobs.0.content.search_phase.runs.0.search_l".to_string(),
+                    values: vec![
+                        serde_json::json!([10, 20, 30, 40, 50]),
+                        serde_json::json!([20, 40, 60, 80, 100]),
+                        serde_json::json!([30, 60, 90, 120, 150]),
+                    ],
+                },
+            ],
+        },
     };
 
     let file = std::fs::File::create(output)
@@ -139,11 +201,14 @@ fn generate_example(output: &Path) -> Result<()> {
     serde_json::to_writer_pretty(file, &example)?;
     
     println!("Example sweep configuration written to: {}", output.display());
-    println!("\nThis configuration will sweep over:");
-    println!("  - max_degree: {:?}", example.max_degree.unwrap());
-    println!("  - l_build: {:?}", example.l_build.unwrap());
-    println!("  - search_l: {:?}", example.search_l.unwrap());
-    println!("  - num_pq_chunks: {:?}", example.num_pq_chunks.unwrap());
+    println!("\nThis configuration will sweep over {} parameters:", example.parameters.len());
+    for param in &example.parameters {
+        println!("  - {}: {} values", param.path, param.values.len());
+    }
+    println!("\nTo use this configuration:");
+    println!("  1. Adjust the paths if your benchmark JSON structure is different");
+    println!("  2. Modify the values to sweep over");
+    println!("  3. Run: autotuner sweep --base-config <base.json> --sweep-config <this file> --output-dir <output>");
 
     Ok(())
 }
@@ -196,24 +261,24 @@ fn run_sweep(
 
         // Run benchmark
         let output_file = output_dir.join(format!("results_{}.json", config_id));
-        run_benchmark(
-            benchmark_cmd,
-            benchmark_args,
-            &config_file,
-            &output_file,
-        )?;
-
-        // Parse results
-        if let Ok(metrics) = parse_benchmark_results(&output_file) {
-            results.push(SweepResult {
-                config_id: config_id.clone(),
-                parameters: params.clone(),
-                metrics,
-                output_file: output_file.clone(),
-            });
-            println!("  ✓ Completed");
-        } else {
-            println!("  ✗ Failed to parse results");
+        match run_benchmark(benchmark_cmd, benchmark_args, &config_file, &output_file) {
+            Ok(_) => {
+                // Parse results
+                if let Ok(metrics) = parse_benchmark_results(&output_file) {
+                    results.push(SweepResult {
+                        config_id: config_id.clone(),
+                        parameters: params.clone(),
+                        metrics,
+                        output_file: output_file.clone(),
+                    });
+                    println!("  ✓ Completed");
+                } else {
+                    println!("  ✗ Failed to parse results");
+                }
+            }
+            Err(e) => {
+                println!("  ✗ Benchmark failed: {}", e);
+            }
         }
     }
 
@@ -258,128 +323,92 @@ fn generate_configurations(
 ) -> Result<Vec<(String, Value, HashMap<String, Value>)>> {
     let mut configs = Vec::new();
 
-    // Get job type to determine which parameters to sweep
-    let job_type = base_config
-        .get("jobs")
-        .and_then(|j| j.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|job| job.get("type"))
-        .and_then(|t| t.as_str())
-        .unwrap_or("unknown");
-
-    let is_pq = job_type.contains("pq");
-
-    // Get default values from base config
-    let default_max_degree = sweep_spec.max_degree.as_ref().map(|v| v[0]).unwrap_or(32);
-    let default_l_build = sweep_spec.l_build.as_ref().map(|v| v[0]).unwrap_or(50);
-    let default_search_l = sweep_spec.search_l.clone().unwrap_or_else(|| vec![20, 30, 40]);
+    // Generate all combinations of parameter values
+    let combinations = generate_parameter_combinations(&sweep_spec.parameters);
     
-    // Generate all combinations of build parameters
-    let max_degrees = sweep_spec.max_degree.as_ref().map_or(vec![default_max_degree], |v| v.clone());
-    let l_builds = sweep_spec.l_build.as_ref().map_or(vec![default_l_build], |v| v.clone());
-    let pq_chunks = if is_pq {
-        sweep_spec.num_pq_chunks.as_ref().map_or(vec![], |v| v.clone())
-    } else {
-        vec![0] // dummy value for non-PQ
-    };
+    for (idx, param_values) in combinations.iter().enumerate() {
+        let mut config = base_config.clone();
+        let mut params = HashMap::new();
 
-    let mut config_id = 0;
-    for &max_degree in &max_degrees {
-        for &l_build in &l_builds {
-            for &num_pq_chunks in &pq_chunks {
-                if !is_pq && num_pq_chunks != 0 {
-                    continue;
-                }
-
-                // Create modified config
-                let mut config = base_config.clone();
-                let mut params = HashMap::new();
-
-                // Update max_degree and l_build
-                if let Some(jobs) = config.get_mut("jobs").and_then(|j| j.as_array_mut()) {
-                    for job in jobs.iter_mut() {
-                        update_build_params(job, max_degree, l_build, is_pq, num_pq_chunks)?;
-                        
-                        // Update search_l values - try two different paths
-                        let search_phase = job.get_mut("content")
-                            .and_then(|c| c.get_mut("search_phase"));
-                        
-                        if search_phase.is_none() {
-                            if let Some(search_phase) = job.get_mut("content")
-                                .and_then(|c| c.get_mut("index_operation"))
-                                .and_then(|io| io.get_mut("search_phase"))
-                            {
-                                if let Some(runs) = search_phase.get_mut("runs").and_then(|r| r.as_array_mut()) {
-                                    for run in runs.iter_mut() {
-                                        run["search_l"] = serde_json::to_value(&default_search_l)?;
-                                    }
-                                }
-                            }
-                        } else if let Some(search_phase) = search_phase {
-                            if let Some(runs) = search_phase.get_mut("runs").and_then(|r| r.as_array_mut()) {
-                                for run in runs.iter_mut() {
-                                    run["search_l"] = serde_json::to_value(&default_search_l)?;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                params.insert("max_degree".to_string(), serde_json::json!(max_degree));
-                params.insert("l_build".to_string(), serde_json::json!(l_build));
-                params.insert("search_l".to_string(), serde_json::json!(default_search_l));
-                if is_pq {
-                    params.insert("num_pq_chunks".to_string(), serde_json::json!(num_pq_chunks));
-                }
-
-                let id = format!(
-                    "{:04}_R{}_L{}{}",
-                    config_id,
-                    max_degree,
-                    l_build,
-                    if is_pq { format!("_PQ{}", num_pq_chunks) } else { String::new() }
-                );
-                configs.push((id, config, params));
-                config_id += 1;
-            }
+        // Apply each parameter override
+        for (param_spec, value) in sweep_spec.parameters.iter().zip(param_values.iter()) {
+            set_json_path(&mut config, &param_spec.path, value.clone())?;
+            params.insert(param_spec.path.clone(), value.clone());
         }
+
+        // Generate config ID from parameter values
+        let config_id = format!("{:04}", idx);
+        configs.push((config_id, config, params));
     }
 
     Ok(configs)
 }
 
-fn update_build_params(
-    job: &mut Value,
-    max_degree: u32,
-    l_build: u32,
-    is_pq: bool,
-    num_pq_chunks: u32,
-) -> Result<()> {
-    // Try different paths based on job type
-    if let Some(source) = job.get_mut("content").and_then(|c| c.get_mut("source")) {
-        // async-index-build format
-        if source.get("index-source").is_some() {
-            source["max_degree"] = serde_json::json!(max_degree);
-            source["l_build"] = serde_json::json!(l_build);
-        }
-        // disk-index format
-        if source.get("disk-index-source").is_some() {
-            source["max_degree"] = serde_json::json!(max_degree);
-            source["l_build"] = serde_json::json!(l_build);
-            if is_pq {
-                source["num_pq_chunks"] = serde_json::json!(num_pq_chunks);
+/// Generate all combinations of parameter values using Cartesian product
+fn generate_parameter_combinations(parameters: &[ParameterSweep]) -> Vec<Vec<Value>> {
+    if parameters.is_empty() {
+        return vec![vec![]];
+    }
+
+    let mut result = vec![vec![]];
+    
+    for param in parameters {
+        let mut new_result = Vec::new();
+        for combination in &result {
+            for value in &param.values {
+                let mut new_combination = combination.clone();
+                new_combination.push(value.clone());
+                new_result.push(new_combination);
             }
         }
+        result = new_result;
     }
     
-    // async-index-build-pq format
-    if is_pq {
-        if let Some(content) = job.get_mut("content") {
-            if let Some(index_op) = content.get_mut("index_operation").and_then(|io| io.get_mut("source")) {
-                index_op["max_degree"] = serde_json::json!(max_degree);
-                index_op["l_build"] = serde_json::json!(l_build);
+    result
+}
+
+/// Set a value in JSON using a dot-separated path
+fn set_json_path(json: &mut Value, path: &str, value: Value) -> Result<()> {
+    let parts: Vec<&str> = path.split('.').collect();
+    
+    if parts.is_empty() {
+        anyhow::bail!("Empty path");
+    }
+
+    let mut current = json;
+    
+    // Navigate to the parent of the target field
+    for (i, &part) in parts.iter().enumerate() {
+        let is_last = i == parts.len() - 1;
+        
+        // Check if this is an array index
+        if let Ok(index) = part.parse::<usize>() {
+            if let Some(array) = current.as_array_mut() {
+                if index >= array.len() {
+                    anyhow::bail!("Array index {} out of bounds at path {}", index, path);
+                }
+                if is_last {
+                    array[index] = value;
+                    return Ok(());
+                } else {
+                    current = &mut array[index];
+                }
+            } else {
+                anyhow::bail!("Expected array at path element '{}' in path {}", part, path);
             }
-            content["num_pq_chunks"] = serde_json::json!(num_pq_chunks);
+        } else {
+            // Object key
+            if let Some(object) = current.as_object_mut() {
+                if is_last {
+                    object.insert(part.to_string(), value);
+                    return Ok(());
+                } else {
+                    current = object.get_mut(part)
+                        .ok_or_else(|| anyhow::anyhow!("Path '{}' not found in JSON at '{}'", path, part))?;
+                }
+            } else {
+                anyhow::bail!("Expected object at path element '{}' in path {}", part, path);
+            }
         }
     }
 
@@ -558,85 +587,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sweep_config_serialization() {
-        let config = SweepConfig {
-            max_degree: Some(vec![16, 32, 64]),
-            l_build: Some(vec![50, 100]),
-            search_l: Some(vec![10, 20, 30]),
-            num_pq_chunks: Some(vec![8, 16]),
-        };
+    fn test_set_json_path_simple() {
+        let mut json = serde_json::json!({
+            "a": {
+                "b": 42
+            }
+        });
 
-        let json = serde_json::to_string(&config).unwrap();
-        let deserialized: SweepConfig = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(config.max_degree, deserialized.max_degree);
-        assert_eq!(config.l_build, deserialized.l_build);
-        assert_eq!(config.search_l, deserialized.search_l);
-        assert_eq!(config.num_pq_chunks, deserialized.num_pq_chunks);
+        set_json_path(&mut json, "a.b", serde_json::json!(100)).unwrap();
+        assert_eq!(json["a"]["b"], 100);
     }
 
     #[test]
-    fn test_generate_configurations() {
-        let base_config = serde_json::json!({
-            "search_directories": ["test_data"],
-            "jobs": [{
-                "type": "async-index-build",
-                "content": {
-                    "source": {
-                        "index-source": "Build",
-                        "data_type": "float32",
-                        "data": "data.fbin",
-                        "distance": "squared_l2",
-                        "max_degree": 32,
-                        "l_build": 50,
-                        "alpha": 1.2,
-                        "num_threads": 1
-                    },
-                    "search_phase": {
-                        "search-type": "topk",
-                        "queries": "queries.fbin",
-                        "groundtruth": "gt.bin",
-                        "reps": 1,
-                        "num_threads": [1],
-                        "runs": [{
-                            "search_n": 10,
-                            "search_l": [20],
-                            "recall_k": 10
-                        }]
-                    }
-                }
-            }]
+    fn test_set_json_path_array() {
+        let mut json = serde_json::json!({
+            "jobs": [
+                {"content": {"source": {"max_degree": 32}}}
+            ]
         });
 
-        let sweep_config = SweepConfig {
-            max_degree: Some(vec![16, 32]),
-            l_build: Some(vec![50, 100]),
-            search_l: Some(vec![10, 20, 30]),
-            num_pq_chunks: None,
-        };
+        set_json_path(&mut json, "jobs.0.content.source.max_degree", serde_json::json!(64)).unwrap();
+        assert_eq!(json["jobs"][0]["content"]["source"]["max_degree"], 64);
+    }
 
-        let configs = generate_configurations(&base_config, &sweep_config).unwrap();
+    #[test]
+    fn test_generate_parameter_combinations() {
+        let parameters = vec![
+            ParameterSweep {
+                path: "a".to_string(),
+                values: vec![serde_json::json!(1), serde_json::json!(2)],
+            },
+            ParameterSweep {
+                path: "b".to_string(),
+                values: vec![serde_json::json!(10), serde_json::json!(20)],
+            },
+        ];
 
-        // Should generate 2 max_degree * 2 l_build = 4 configurations
-        assert_eq!(configs.len(), 4);
-
-        // Check that parameters are correctly set
-        for (config_id, config, params) in configs {
-            assert!(config_id.contains("R"));
-            assert!(config_id.contains("L"));
-            assert!(params.contains_key("max_degree"));
-            assert!(params.contains_key("l_build"));
-            assert!(params.contains_key("search_l"));
-
-            // Verify the config has updated values
-            let job = &config["jobs"][0];
-            let source = &job["content"]["source"];
-            let max_degree = source["max_degree"].as_u64().unwrap() as u32;
-            let l_build = source["l_build"].as_u64().unwrap() as u32;
-
-            assert!(max_degree == 16 || max_degree == 32);
-            assert!(l_build == 50 || l_build == 100);
-        }
+        let combinations = generate_parameter_combinations(&parameters);
+        assert_eq!(combinations.len(), 4); // 2 * 2 = 4
     }
 
     #[test]
