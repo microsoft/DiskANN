@@ -11,7 +11,7 @@ use crate::{ANNResult, graph::index::DiskANNIndex, provider::DataProvider};
 
 /// Trait for search parameter types that execute their own search logic.
 ///
-/// Each search type (graph search, flat search, range search, etc.) implements
+/// Each search type (graph search, range search, etc.) implements
 /// this trait to define its complete search behavior. The [`DiskANNIndex::search`]
 /// method delegates to the `dispatch` method.
 pub trait SearchDispatch<DP, S, T: ?Sized, O, OB: ?Sized>
