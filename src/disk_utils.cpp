@@ -16,8 +16,128 @@
 #include "percentile_stats.h"
 #include "partition.h"
 #include "pq_flash_index.h"
+#include "rabitq.h"
 #include "timer.h"
 #include "tsl/robin_set.h"
+
+namespace
+{
+#pragma pack(push, 1)
+struct RaBitQReorderHeader
+{
+    char magic[8];
+    uint32_t version;
+    uint32_t metric;
+    uint32_t nb_bits;
+    uint32_t dim;
+    uint64_t num_points;
+    uint64_t code_size;
+};
+#pragma pack(pop)
+
+static void write_rabitq_reorder_header(std::ofstream &out, uint32_t metric, uint32_t nb_bits, uint32_t dim,
+                                       uint64_t num_points, uint64_t code_size)
+{
+    RaBitQReorderHeader hdr;
+    std::memset(&hdr, 0, sizeof(hdr));
+    hdr.magic[0] = 'D';
+    hdr.magic[1] = 'A';
+    hdr.magic[2] = 'R';
+    hdr.magic[3] = 'B';
+    hdr.magic[4] = 'Q';
+    hdr.magic[5] = '1';
+    hdr.magic[6] = '\0';
+    hdr.magic[7] = '\0';
+    hdr.version = 1;
+    hdr.metric = metric;
+    hdr.nb_bits = nb_bits;
+    hdr.dim = dim;
+    hdr.num_points = num_points;
+    hdr.code_size = code_size;
+    out.write(reinterpret_cast<const char *>(&hdr), sizeof(hdr));
+}
+
+template <typename T>
+static void generate_rabitq_reorder_codes_from_bin(const std::string &data_file_to_use, const std::string &output_file,
+                                                   diskann::rabitq::Metric metric, uint32_t nb_bits)
+{
+    std::ifstream in(data_file_to_use, std::ios::binary);
+    if (!in)
+    {
+        throw diskann::ANNException("Failed to open data file for RaBitQ code generation: " + data_file_to_use, -1);
+    }
+
+    uint32_t npts_u32 = 0, dim_u32 = 0;
+    in.read(reinterpret_cast<char *>(&npts_u32), sizeof(uint32_t));
+    in.read(reinterpret_cast<char *>(&dim_u32), sizeof(uint32_t));
+    if (!in)
+    {
+        throw diskann::ANNException("Failed reading header from data file for RaBitQ code generation: " +
+                                        data_file_to_use,
+                                    -1);
+    }
+
+    const uint64_t npts = npts_u32;
+    const uint64_t dim = dim_u32;
+    const uint64_t code_size =
+        diskann::rabitq::compute_code_size(static_cast<size_t>(dim), static_cast<size_t>(nb_bits));
+
+    std::ofstream out(output_file, std::ios::binary);
+    if (!out)
+    {
+        throw diskann::ANNException("Failed to open output file for RaBitQ code generation: " + output_file, -1);
+    }
+
+    write_rabitq_reorder_header(out, static_cast<uint32_t>(metric), nb_bits, dim_u32, npts, code_size);
+
+    if (npts == 0)
+        return;
+
+    const uint64_t kBlockPts = 100000;
+    const uint64_t block_pts = std::min<uint64_t>(kBlockPts, npts);
+    std::vector<T> in_block;
+    in_block.resize(static_cast<size_t>(block_pts * dim));
+
+    std::vector<uint8_t> out_codes;
+    out_codes.resize(static_cast<size_t>(block_pts * code_size));
+
+    std::vector<float> tmp;
+    tmp.resize(static_cast<size_t>(dim));
+
+    const uint64_t num_blocks = DIV_ROUND_UP(npts, block_pts);
+    for (uint64_t b = 0; b < num_blocks; ++b)
+    {
+        const uint64_t start_id = b * block_pts;
+        const uint64_t end_id = std::min<uint64_t>(npts, start_id + block_pts);
+        const uint64_t cur_pts = end_id - start_id;
+
+        in.read(reinterpret_cast<char *>(in_block.data()), static_cast<std::streamsize>(cur_pts * dim * sizeof(T)));
+        if (!in)
+        {
+            throw diskann::ANNException("Failed reading data payload from: " + data_file_to_use, -1);
+        }
+
+        for (uint64_t i = 0; i < cur_pts; ++i)
+        {
+            const T *row = in_block.data() + i * dim;
+            for (uint64_t j = 0; j < dim; ++j)
+            {
+                tmp[static_cast<size_t>(j)] = static_cast<float>(row[j]);
+            }
+            uint8_t *code = out_codes.data() + i * code_size;
+            diskann::rabitq::encode_vector(tmp.data(), static_cast<size_t>(dim), metric, static_cast<size_t>(nb_bits),
+                                           code);
+        }
+
+        out.write(reinterpret_cast<const char *>(out_codes.data()), static_cast<std::streamsize>(cur_pts * code_size));
+        if (!out)
+        {
+            throw diskann::ANNException("Failed writing RaBitQ codes to: " + output_file, -1);
+        }
+    }
+}
+
+} // namespace
 
 namespace diskann
 {
@@ -147,7 +267,14 @@ template <typename T> T *generateRandomWarmup(uint64_t warmup_num, uint64_t warm
     {
         for (uint32_t d = 0; d < warmup_dim; d++)
         {
-            warmup[i * warmup_aligned_dim + d] = (T)dis(gen);
+            if constexpr (std::is_same<T, diskann::bfloat16>::value)
+            {
+                warmup[i * warmup_aligned_dim + d] = (T)(float)dis(gen);
+            }
+            else
+            {
+                warmup[i * warmup_aligned_dim + d] = (T)dis(gen);
+            }
         }
     }
     diskann::cout << "..done" << std::endl;
@@ -843,7 +970,7 @@ uint32_t optimize_beamwidth(std::unique_ptr<diskann::PQFlashIndex<T, LabelT>> &p
     return best_bw;
 }
 
-template <typename T>
+template <typename T, typename ReorderT>
 void create_disk_layout(const std::string base_file, const std::string mem_index_file, const std::string output_file,
                         const std::string reorder_data_file)
 {
@@ -880,7 +1007,8 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
                 throw ANNException("Mismatch in num_points between reorder "
                                    "data file and base file",
                                    -1, __FUNCSIG__, __FILE__, __LINE__);
-            if (reorder_data_file_size != 8 + sizeof(float) * (size_t)npts_reorder_file * (size_t)ndims_reorder_file)
+            if (reorder_data_file_size !=
+                8 + sizeof(ReorderT) * (size_t)npts_reorder_file * (size_t)ndims_reorder_file)
                 throw ANNException("Discrepancy in reorder data file size ", -1, __FUNCSIG__, __FILE__, __LINE__);
         }
         catch (std::system_error &e)
@@ -942,7 +1070,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
     if (append_reorder_data)
     {
-        n_data_nodes_per_sector = defaults::SECTOR_LEN / (ndims_reorder_file * sizeof(float));
+        n_data_nodes_per_sector = defaults::SECTOR_LEN / (ndims_reorder_file * sizeof(ReorderT));
         n_reorder_sectors = ROUND_UP(npts_64, n_data_nodes_per_sector) / n_data_nodes_per_sector;
     }
     uint64_t disk_index_file_size = (n_sectors + n_reorder_sectors + 1) * defaults::SECTOR_LEN;
@@ -961,6 +1089,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
         output_file_meta.push_back(n_sectors + 1);
         output_file_meta.push_back(ndims_reorder_file);
         output_file_meta.push_back(n_data_nodes_per_sector);
+        output_file_meta.push_back(sizeof(ReorderT));
     }
     output_file_meta.push_back(disk_index_file_size);
 
@@ -1067,7 +1196,7 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     {
         diskann::cout << "Index written. Appending reorder data..." << std::endl;
 
-        auto vec_len = ndims_reorder_file * sizeof(float);
+        auto vec_len = ndims_reorder_file * sizeof(ReorderT);
         std::unique_ptr<char[]> vec_buf = std::make_unique<char[]>(vec_len);
 
         for (uint64_t sector = 0; sector < n_reorder_sectors; sector++)
@@ -1079,9 +1208,13 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
 
             memset(sector_buf.get(), 0, defaults::SECTOR_LEN);
 
-            for (uint64_t sector_node_id = 0; sector_node_id < n_data_nodes_per_sector && sector_node_id < npts_64;
-                 sector_node_id++)
+            for (uint64_t sector_node_id = 0; sector_node_id < n_data_nodes_per_sector; sector_node_id++)
             {
+                const uint64_t global_node_id = sector * n_data_nodes_per_sector + sector_node_id;
+                if (global_node_id >= npts_64)
+                {
+                    break;
+                }
                 memset(vec_buf.get(), 0, vec_len);
                 reorder_data_reader.read(vec_buf.get(), vec_len);
 
@@ -1095,6 +1228,14 @@ void create_disk_layout(const std::string base_file, const std::string mem_index
     diskann_writer.close();
     diskann::save_bin<uint64_t>(output_file, output_file_meta.data(), output_file_meta.size(), 1, 0);
     diskann::cout << "Output disk index file written to " << output_file << std::endl;
+}
+
+// Backwards-compatible entry point: reorder data is stored as float.
+template <typename T>
+void create_disk_layout(const std::string base_file, const std::string mem_index_file, const std::string output_file,
+                        const std::string reorder_data_file)
+{
+    create_disk_layout<T, float>(base_file, mem_index_file, output_file, reorder_data_file);
 }
 
 template <typename T, typename LabelT>
@@ -1111,7 +1252,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     {
         param_list.push_back(cur_param);
     }
-    if (param_list.size() < 5 || param_list.size() > 9)
+    if (param_list.size() < 5 || param_list.size() > 11)
     {
         diskann::cout << "Correct usage of parameters is R (max degree)\n"
                          "L (indexing list size, better if >= R)\n"
@@ -1124,12 +1265,14 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
                          ": optional paramter, use only when using disk PQ\n"
                          "build_PQ_byte (number of PQ bytes for inde build; set 0 to use "
                          "full precision vectors)\n"
-                         "QD Quantized Dimension to overwrite the derived dim from B "
+                         "QD Quantized Dimension to overwrite the derived dim from B\n"
+                         "build_rabitq_main_codes (0/1, optional; generates <index>_disk.index_rabitq_main.bin)\n"
+                         "rabitq_nb_bits (1..9, optional; default 4)"
                       << std::endl;
         return -1;
     }
 
-    if (!std::is_same<T, float>::value &&
+    if (!diskann::is_floating_point_like_v<T> &&
         (compareMetric == diskann::Metric::INNER_PRODUCT || compareMetric == diskann::Metric::COSINE))
     {
         std::stringstream stream;
@@ -1166,6 +1309,20 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
     if (param_list.size() >= 8)
     {
         build_pq_bytes = atoi(param_list[7].c_str());
+    }
+
+    bool build_rabitq_main_codes = false;
+    uint32_t rabitq_nb_bits = 4;
+    if (param_list.size() >= 10)
+    {
+        if (1 == atoi(param_list[9].c_str()))
+        {
+            build_rabitq_main_codes = true;
+        }
+    }
+    if (param_list.size() >= 11)
+    {
+        rabitq_nb_bits = static_cast<uint32_t>(atoi(param_list[10].c_str()));
     }
 
     std::string base_file(dataFilePath);
@@ -1227,7 +1384,7 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
                      "apart from the interim indices created by DiskANN and the final index."
                   << std::endl;
         data_file_to_use = prepped_base;
-        diskann::normalize_data_file(base_file, prepped_base);
+        diskann::normalize_data_file_typed<T>(base_file, prepped_base);
         diskann::cout << timer.elapsed_seconds_for_step("preprocessing data for cosine") << std::endl;
         created_temp_file_for_processed_data = true;
     }
@@ -1338,10 +1495,34 @@ int build_disk_index(const char *dataFilePath, const char *indexFilePath, const 
         if (!reorder_data)
             diskann::create_disk_layout<uint8_t>(disk_pq_compressed_vectors_path, mem_index_path, disk_index_path);
         else
-            diskann::create_disk_layout<uint8_t>(disk_pq_compressed_vectors_path, mem_index_path, disk_index_path,
-                                                 data_file_to_use.c_str());
+            diskann::create_disk_layout<uint8_t, T>(disk_pq_compressed_vectors_path, mem_index_path, disk_index_path,
+                                                    data_file_to_use.c_str());
     }
     diskann::cout << timer.elapsed_seconds_for_step("generating disk layout") << std::endl;
+
+    if (build_rabitq_main_codes)
+    {
+        if (rabitq_nb_bits < 1 || rabitq_nb_bits > 9)
+        {
+            throw diskann::ANNException("rabitq_nb_bits must be in [1,9]", -1);
+        }
+        if (compareMetric != diskann::Metric::INNER_PRODUCT)
+        {
+            throw diskann::ANNException("RaBitQ main code generation is currently supported only for MIPS/IP.", -1);
+        }
+        if (!diskann::is_floating_point_like_v<T>)
+        {
+            throw diskann::ANNException("RaBitQ main code generation requires floating point data.", -1);
+        }
+
+        const std::string rabitq_codes_path = disk_index_path + "_rabitq_main.bin";
+        Timer rabitq_timer;
+        diskann::cout << "Generating RaBitQ main codes to " << rabitq_codes_path << " (nb_bits=" << rabitq_nb_bits
+                      << ")" << std::endl;
+        generate_rabitq_reorder_codes_from_bin<T>(data_file_to_use, rabitq_codes_path,
+                                                  diskann::rabitq::Metric::INNER_PRODUCT, rabitq_nb_bits);
+        diskann::cout << rabitq_timer.elapsed_seconds_for_step("generating rabitq main codes") << std::endl;
+    }
 
     double ten_percent_points = std::ceil(points_num * 0.1);
     double num_sample_points =
@@ -1387,6 +1568,23 @@ template DISKANN_DLLEXPORT void create_disk_layout<uint8_t>(const std::string ba
 template DISKANN_DLLEXPORT void create_disk_layout<float>(const std::string base_file, const std::string mem_index_file,
                                                           const std::string output_file,
                                                           const std::string reorder_data_file);
+template DISKANN_DLLEXPORT void create_disk_layout<diskann::bfloat16>(const std::string base_file,
+                                                                      const std::string mem_index_file,
+                                                                      const std::string output_file,
+                                                                      const std::string reorder_data_file);
+
+template DISKANN_DLLEXPORT void create_disk_layout<uint8_t, float>(const std::string base_file,
+                                                                   const std::string mem_index_file,
+                                                                   const std::string output_file,
+                                                                   const std::string reorder_data_file);
+template DISKANN_DLLEXPORT void create_disk_layout<uint8_t, diskann::bfloat16>(const std::string base_file,
+                                                                               const std::string mem_index_file,
+                                                                               const std::string output_file,
+                                                                               const std::string reorder_data_file);
+template DISKANN_DLLEXPORT void create_disk_layout<diskann::bfloat16, float>(const std::string base_file,
+                                                                             const std::string mem_index_file,
+                                                                             const std::string output_file,
+                                                                             const std::string reorder_data_file);
 
 template DISKANN_DLLEXPORT int8_t *load_warmup<int8_t>(const std::string &cache_warmup_file, uint64_t &warmup_num,
                                                        uint64_t warmup_dim, uint64_t warmup_aligned_dim);
@@ -1394,6 +1592,9 @@ template DISKANN_DLLEXPORT uint8_t *load_warmup<uint8_t>(const std::string &cach
                                                          uint64_t warmup_dim, uint64_t warmup_aligned_dim);
 template DISKANN_DLLEXPORT float *load_warmup<float>(const std::string &cache_warmup_file, uint64_t &warmup_num,
                                                      uint64_t warmup_dim, uint64_t warmup_aligned_dim);
+template DISKANN_DLLEXPORT diskann::bfloat16 *load_warmup<diskann::bfloat16>(const std::string &cache_warmup_file,
+                                                                             uint64_t &warmup_num, uint64_t warmup_dim,
+                                                                             uint64_t warmup_aligned_dim);
 
 #ifdef EXEC_ENV_OLS
 template DISKANN_DLLEXPORT int8_t *load_warmup<int8_t>(MemoryMappedFiles &files, const std::string &cache_warmup_file,
@@ -1416,6 +1617,9 @@ template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<uint8_t, uint32_t>(
 template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float, uint32_t>(
     std::unique_ptr<diskann::PQFlashIndex<float, uint32_t>> &pFlashIndex, float *tuning_sample,
     uint64_t tuning_sample_num, uint64_t tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads, uint32_t start_bw);
+template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<diskann::bfloat16, uint32_t>(
+    std::unique_ptr<diskann::PQFlashIndex<diskann::bfloat16, uint32_t>> &pFlashIndex, diskann::bfloat16 *tuning_sample,
+    uint64_t tuning_sample_num, uint64_t tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads, uint32_t start_bw);
 
 template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<int8_t, uint16_t>(
     std::unique_ptr<diskann::PQFlashIndex<int8_t, uint16_t>> &pFlashIndex, int8_t *tuning_sample,
@@ -1425,6 +1629,9 @@ template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<uint8_t, uint16_t>(
     uint64_t tuning_sample_num, uint64_t tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads, uint32_t start_bw);
 template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<float, uint16_t>(
     std::unique_ptr<diskann::PQFlashIndex<float, uint16_t>> &pFlashIndex, float *tuning_sample,
+    uint64_t tuning_sample_num, uint64_t tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads, uint32_t start_bw);
+template DISKANN_DLLEXPORT uint32_t optimize_beamwidth<diskann::bfloat16, uint16_t>(
+    std::unique_ptr<diskann::PQFlashIndex<diskann::bfloat16, uint16_t>> &pFlashIndex, diskann::bfloat16 *tuning_sample,
     uint64_t tuning_sample_num, uint64_t tuning_sample_aligned_dim, uint32_t L, uint32_t nthreads, uint32_t start_bw);
 
 template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint32_t>(const char *dataFilePath, const char *indexFilePath,
@@ -1448,6 +1655,10 @@ template DISKANN_DLLEXPORT int build_disk_index<float, uint32_t>(const char *dat
                                                                  const std::string &label_file,
                                                                  const std::string &universal_label,
                                                                  const uint32_t filter_threshold, const uint32_t Lf);
+template DISKANN_DLLEXPORT int build_disk_index<diskann::bfloat16, uint32_t>(
+    const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters, diskann::Metric compareMetric,
+    bool use_opq, const std::string &codebook_prefix, bool use_filters, const std::string &label_file,
+    const std::string &universal_label, const uint32_t filter_threshold, const uint32_t Lf);
 // LabelT = uint16
 template DISKANN_DLLEXPORT int build_disk_index<int8_t, uint16_t>(const char *dataFilePath, const char *indexFilePath,
                                                                   const char *indexBuildParameters,
@@ -1470,6 +1681,10 @@ template DISKANN_DLLEXPORT int build_disk_index<float, uint16_t>(const char *dat
                                                                  const std::string &label_file,
                                                                  const std::string &universal_label,
                                                                  const uint32_t filter_threshold, const uint32_t Lf);
+template DISKANN_DLLEXPORT int build_disk_index<diskann::bfloat16, uint16_t>(
+    const char *dataFilePath, const char *indexFilePath, const char *indexBuildParameters, diskann::Metric compareMetric,
+    bool use_opq, const std::string &codebook_prefix, bool use_filters, const std::string &label_file,
+    const std::string &universal_label, const uint32_t filter_threshold, const uint32_t Lf);
 
 template DISKANN_DLLEXPORT int build_merged_vamana_index<int8_t, uint32_t>(
     std::string base_file, diskann::Metric compareMetric, uint32_t L, uint32_t R, double sampling_rate,

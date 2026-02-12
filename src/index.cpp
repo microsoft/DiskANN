@@ -3,6 +3,7 @@
 
 #include <omp.h>
 
+#include <cmath>
 #include <type_traits>
 
 #include "boost/dynamic_bitset.hpp"
@@ -22,6 +23,7 @@
 #endif
 
 #include "index.h"
+#include "bf16_amx_kernels.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
 
@@ -145,14 +147,27 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
                                              (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
                                                       defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
-    if (_pq_dist)
+    if constexpr (std::is_same<T, diskann::bfloat16>::value)
     {
-        _pq_data_store = IndexFactory::construct_pq_datastore<T>(DataStoreStrategy::MEMORY, max_points + num_frozen_pts,
-                                                                 dim, m, num_pq_chunks, use_opq);
+        if (_pq_dist)
+        {
+            throw ANNException("ERROR: pq_dist_build is not supported for bf16 yet.", -1, __FUNCSIG__, __FILE__,
+                               __LINE__);
+        }
+        _pq_data_store = _data_store;
     }
     else
     {
-        _pq_data_store = _data_store;
+        if (_pq_dist)
+        {
+            _pq_data_store = IndexFactory::construct_pq_datastore<T>(DataStoreStrategy::MEMORY,
+                                                                     max_points + num_frozen_pts, dim, m,
+                                                                     num_pq_chunks, use_opq);
+        }
+        else
+        {
+            _pq_data_store = _data_store;
+        }
     }
 }
 
@@ -1089,6 +1104,65 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
+    // AMX-only fast path for bf16 graph-build pruning:
+    // precompute an MxN matrix of pairwise dots for the candidate pool and use it
+    // to answer get_distance(iter2, iter) in O(1) during the nested loop.
+    // Non-AMX / non-bf16 / unsupported datastores fall back to the original logic.
+    const bool use_amx_mxn = [&]() {
+        if constexpr (!std::is_same_v<T, diskann::bfloat16>)
+        {
+            return false;
+        }
+        if (!((_dist_metric == diskann::Metric::L2) || (_dist_metric == diskann::Metric::COSINE)))
+        {
+            return false;
+        }
+        if (!(amxbf16_kernels_compiled() && amxbf16_runtime_available()))
+        {
+            return false;
+        }
+        if (_data_store == nullptr)
+        {
+            return false;
+        }
+        const T *raw = _data_store->get_raw_data();
+        return raw != nullptr;
+    }();
+
+    std::vector<uint32_t> candidate_ids;
+    std::vector<float> candidate_norms;
+    std::vector<float> candidate_dots;
+    size_t candidate_count = 0;
+    size_t aligned_dim = 0;
+
+    if (use_amx_mxn)
+    {
+        candidate_count = pool.size();
+        aligned_dim = _data_store->get_aligned_dim();
+        const diskann::bfloat16 *raw = reinterpret_cast<const diskann::bfloat16 *>(_data_store->get_raw_data());
+
+        candidate_ids.resize(candidate_count);
+        candidate_norms.resize(candidate_count);
+
+        for (size_t i = 0; i < candidate_count; ++i)
+        {
+            candidate_ids[i] = pool[i].id;
+            const diskann::bfloat16 *vec = raw + (static_cast<size_t>(candidate_ids[i]) * aligned_dim);
+            float norm = 0.0f;
+            for (size_t d = 0; d < aligned_dim; ++d)
+            {
+                const float v = vec[d].to_float();
+                norm += v * v;
+            }
+            candidate_norms[i] = norm;
+        }
+
+        candidate_dots.resize(candidate_count * candidate_count);
+        bf16_dot_f32_accum_amx_matmul_gather(raw, (uint32_t)aligned_dim, candidate_ids.data(), (uint32_t)candidate_count,
+                                             candidate_ids.data(), (uint32_t)candidate_count, (uint32_t)aligned_dim,
+                                             candidate_dots.data());
+    }
+
     float cur_alpha = 1;
     while (cur_alpha <= alpha && result.size() < degree)
     {
@@ -1142,7 +1216,30 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                 if (!prune_allowed)
                     continue;
 
-                float djk = _data_store->get_distance(iter2->id, iter->id);
+                float djk = 0.0f;
+                if (use_amx_mxn)
+                {
+                    const size_t i = (size_t)(iter - pool.begin());
+                    const size_t j = (size_t)(iter2 - pool.begin());
+                    const float dot = candidate_dots[j * candidate_count + i];
+
+                    if (_dist_metric == diskann::Metric::L2)
+                    {
+                        djk = candidate_norms[i] + candidate_norms[j] - 2.0f * dot;
+                        if (djk < 0.0f)
+                            djk = 0.0f;
+                    }
+                    else
+                    {
+                        const float denom = std::sqrt(candidate_norms[i]) * std::sqrt(candidate_norms[j]);
+                        const float cos_sim = (denom > 0.0f) ? (dot / denom) : 0.0f;
+                        djk = 1.0f - cos_sim;
+                    }
+                }
+                else
+                {
+                    djk = _data_store->get_distance(iter2->id, iter->id);
+                }
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
@@ -3203,6 +3300,13 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
                                     __FILE__, __LINE__);
     }
 
+    if constexpr (std::is_same<T, diskann::bfloat16>::value)
+    {
+        throw diskann::ANNException(
+            "Optimized index layout is only supported for float (FAST_L2). For bf16, disable optimized layout.", -1,
+            __FUNCSIG__, __FILE__, __LINE__);
+    }
+
     float *cur_vec = new float[_data_store->get_aligned_dim()];
     std::memset(cur_vec, 0, _data_store->get_aligned_dim() * sizeof(float));
     _data_len = (_data_store->get_aligned_dim() + 1) * sizeof(float);
@@ -3253,6 +3357,13 @@ void Index<T, TagT, LabelT>::_search_with_optimized_layout(const DataType &query
 template <typename T, typename TagT, typename LabelT>
 void Index<T, TagT, LabelT>::search_with_optimized_layout(const T *query, size_t K, size_t L, uint32_t *indices)
 {
+    if constexpr (std::is_same<T, diskann::bfloat16>::value)
+    {
+        throw diskann::ANNException(
+            "search_with_optimized_layout is only supported for float (FAST_L2). For bf16, disable optimized layout.",
+            -1, __FUNCSIG__, __FILE__, __LINE__);
+    }
+
     DistanceFastL2<T> *dist_fast = (DistanceFastL2<T> *)(_data_store->get_dist_fn());
 
     NeighborPriorityQueue retset(L);
@@ -3340,15 +3451,19 @@ template <typename T, typename TagT, typename LabelT> const float Index<T, TagT,
 template DISKANN_DLLEXPORT class Index<float, int32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, int32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, int32_t, uint32_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, int32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, uint32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint32_t, uint32_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, uint32_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, int64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, int64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, int64_t, uint32_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, int64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, uint64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t, uint32_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, uint64_t, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, tag_uint128, uint32_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, tag_uint128, uint32_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, tag_uint128, uint32_t>;
@@ -3356,15 +3471,19 @@ template DISKANN_DLLEXPORT class Index<uint8_t, tag_uint128, uint32_t>;
 template DISKANN_DLLEXPORT class Index<float, int32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, int32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, int32_t, uint16_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, int32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<float, uint32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint32_t, uint16_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, uint32_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<float, int64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, int64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, int64_t, uint16_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, int64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<float, uint64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, uint64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, uint64_t, uint16_t>;
+template DISKANN_DLLEXPORT class Index<diskann::bfloat16, uint64_t, uint16_t>;
 template DISKANN_DLLEXPORT class Index<float, tag_uint128, uint16_t>;
 template DISKANN_DLLEXPORT class Index<int8_t, tag_uint128, uint16_t>;
 template DISKANN_DLLEXPORT class Index<uint8_t, tag_uint128, uint16_t>;

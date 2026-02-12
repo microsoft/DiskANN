@@ -105,4 +105,11 @@ DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file, const std
                                           const std::string output_file,
                                           const std::string reorder_data_file = std::string(""));
 
+// Store the graph/base payload as T, and (optionally) append reorder vectors stored as ReorderT.
+// This is primarily used to support bf16 reorder vectors on SSD.
+template <typename T, typename ReorderT>
+DISKANN_DLLEXPORT void create_disk_layout(const std::string base_file, const std::string mem_index_file,
+                                          const std::string output_file,
+                                          const std::string reorder_data_file = std::string(""));
+
 } // namespace diskann

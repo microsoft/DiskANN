@@ -9,6 +9,7 @@
 #include "partition.h"
 #include "math_utils.h"
 #include "tsl/robin_map.h"
+#include "bfloat16.h"
 
 // block size for reading/processing large files and matrices in blocks
 #define BLOCK_SIZE 5000000
@@ -258,6 +259,7 @@ void FixedChunkPQTable::populate_chunk_inner_products(const float *query_vec, fl
 {
     memset(dist_vec, 0, 256 * n_chunks * sizeof(float));
     // chunk wise distance computation
+
     for (size_t chunk = 0; chunk < n_chunks; chunk++)
     {
         // sum (q-c)^2 for the dimensions associated with this chunk
@@ -1081,12 +1083,10 @@ void generate_disk_quantized_data(const std::string &data_file_to_use, const std
     std::cout << "Compressing base for disk-PQ into " << disk_pq_dims << " chunks " << std::endl;
     generate_pq_pivots(train_data, train_size, (uint32_t)train_dim, 256, (uint32_t)disk_pq_dims, NUM_KMEANS_REPS_PQ,
                        disk_pq_pivots_path, false);
-    if (compareMetric == diskann::Metric::INNER_PRODUCT)
-        generate_pq_data_from_pivots<float>(data_file_to_use, 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
-                                            disk_pq_compressed_vectors_path);
-    else
-        generate_pq_data_from_pivots<T>(data_file_to_use, 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
-                                        disk_pq_compressed_vectors_path);
+    // For INNER_PRODUCT we may preprocess the base vectors into a temp file. That temp file must be
+    // read using the same element type that was written (T). Historically this was always float.
+    generate_pq_data_from_pivots<T>(data_file_to_use, 256, (uint32_t)disk_pq_dims, disk_pq_pivots_path,
+                                    disk_pq_compressed_vectors_path);
 
     delete[] train_data;
 }
@@ -1148,6 +1148,9 @@ template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<float>(const std::st
                                                                    const std::string &pq_pivots_path,
                                                                    const std::string &pq_compressed_vectors_path,
                                                                    bool use_opq);
+template DISKANN_DLLEXPORT int generate_pq_data_from_pivots<diskann::bfloat16>(
+    const std::string &data_file, uint32_t num_centers, uint32_t num_pq_chunks, const std::string &pq_pivots_path,
+    const std::string &pq_compressed_vectors_path, bool use_opq);
 
 template DISKANN_DLLEXPORT void generate_disk_quantized_data<int8_t>(const std::string &data_file_to_use,
                                                                      const std::string &disk_pq_pivots_path,
@@ -1165,6 +1168,10 @@ template DISKANN_DLLEXPORT void generate_disk_quantized_data<float>(const std::s
                                                                     const std::string &disk_pq_compressed_vectors_path,
                                                                     diskann::Metric compareMetric, const double p_val,
                                                                     size_t &disk_pq_dims);
+template DISKANN_DLLEXPORT void generate_disk_quantized_data<diskann::bfloat16>(
+    const std::string &data_file_to_use, const std::string &disk_pq_pivots_path,
+    const std::string &disk_pq_compressed_vectors_path, diskann::Metric compareMetric, const double p_val,
+    size_t &disk_pq_dims);
 
 template DISKANN_DLLEXPORT void generate_quantized_data<int8_t>(const std::string &data_file_to_use,
                                                                 const std::string &pq_pivots_path,
@@ -1186,4 +1193,8 @@ template DISKANN_DLLEXPORT void generate_quantized_data<float>(const std::string
                                                                diskann::Metric compareMetric, const double p_val,
                                                                const size_t num_pq_chunks, const bool use_opq,
                                                                const std::string &codebook_prefix);
+template DISKANN_DLLEXPORT void generate_quantized_data<diskann::bfloat16>(
+    const std::string &data_file_to_use, const std::string &pq_pivots_path, const std::string &pq_compressed_vectors_path,
+    diskann::Metric compareMetric, const double p_val, const size_t num_pq_chunks, const bool use_opq,
+    const std::string &codebook_prefix);
 } // namespace diskann

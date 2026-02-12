@@ -1,6 +1,8 @@
 #include "index_factory.h"
 #include "pq_l2_distance.h"
 
+#include "bfloat16.h"
+
 namespace diskann
 {
 
@@ -34,12 +36,16 @@ void IndexFactory::check_config()
                                -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
-    if (_config->data_type != "float" && _config->data_type != "uint8" && _config->data_type != "int8")
+    const bool is_bf16 = (_config->data_type == "bf16" || _config->data_type == "bfloat16");
+    if (_config->data_type != "float" && _config->data_type != "uint8" && _config->data_type != "int8" &&
+        !is_bf16)
     {
         throw ANNException("ERROR: invalid data type : + " + _config->data_type +
-                               " is not supported. please select from [float, int8, uint8]",
+                               " is not supported. please select from [float, int8, uint8, bf16]",
                            -1);
     }
+
+    // bf16 now supports pq_dist_build via PQDataStore<bfloat16> (internally converts queries to float).
 
     if (_config->tag_type != "int32" && _config->tag_type != "uint32" && _config->tag_type != "int64" &&
         _config->tag_type != "uint64")
@@ -126,9 +132,12 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
 
     if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
     {
-        pq_data_store =
-            construct_pq_datastore<data_type>(_config->data_strategy, num_points + _config->num_frozen_pts, dim,
-                                              _config->metric, _config->num_pq_chunks, _config->use_opq);
+        pq_data_store = construct_pq_datastore<data_type>(_config->data_strategy,
+                                                          num_points + _config->num_frozen_pts,
+                                                          dim,
+                                                          _config->metric,
+                                                          _config->num_pq_chunks,
+                                                          _config->use_opq);
     }
     else
     {
@@ -161,8 +170,12 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &
     {
         return create_instance<int8_t>(tag_type, label_type);
     }
+    else if (data_type == std::string("bf16") || data_type == std::string("bfloat16"))
+    {
+        return create_instance<diskann::bfloat16>(tag_type, label_type);
+    }
     else
-        throw ANNException("Error: unsupported data_type please choose from [float/int8/uint8]", -1);
+        throw ANNException("Error: unsupported data_type please choose from [float/int8/uint8/bf16]", -1);
 }
 
 template <typename data_type>

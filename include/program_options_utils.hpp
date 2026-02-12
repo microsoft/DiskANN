@@ -18,7 +18,8 @@ const std::string make_program_description(const char *executable_name, const ch
 }
 
 // Required parameters
-const char *DATA_TYPE_DESCRIPTION = "data type, one of {int8, uint8, float} - float is single precision (32 bit)";
+const char *DATA_TYPE_DESCRIPTION =
+    "data type, one of {int8, uint8, float, bf16} - float is single precision (32 bit), bf16 is bfloat16 (16 bit)";
 const char *DISTANCE_FUNCTION_DESCRIPTION =
     "distance function {l2, mips, fast_l2, cosine}.  'fast l2' and 'mips' only support data_type float";
 const char *INDEX_PATH_PREFIX_DESCRIPTION = "Path prefix to the index, e.g. '/mnt/data/my_ann_index'";

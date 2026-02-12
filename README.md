@@ -48,6 +48,129 @@ sudo sh l_BaseKit_p_2022.1.2.146.sh -a --components intel.oneapi.lin.mkl.devel -
 mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j 
 ```
 
+### AVX-512 BF16 (optional acceleration)
+
+DiskANN includes an optional AVX-512 BF16-accelerated kernel for `bf16` distance computations.
+
+- Compile-time: the AVX-512 BF16 kernel is enabled only when the compiler supports the required flags; it is compiled for a single source file (`src/bf16_simd_kernels.cpp`) so the rest of the project is not forced to use AVX-512.
+- Runtime: `bf16` distance code automatically dispatches to the AVX-512 BF16 kernel only when the running CPU/OS supports AVX-512 BF16; otherwise it falls back to the scalar implementation.
+
+You can control this with the following CMake options (non-MSVC builds):
+
+- Default (try to enable when supported):
+    ```bash
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISKANN_AVX512BF16=ON
+    cmake --build build -j
+    ```
+- Force disable:
+    ```bash
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISKANN_AVX512BF16=OFF
+    cmake --build build -j
+    ```
+- Force enable (fail configure if compiler does not support AVX-512 BF16 flags):
+    ```bash
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISKANN_FORCE_AVX512BF16=ON
+    cmake --build build -j
+    ```
+
+### AMX BF16 (optional acceleration)
+
+DiskANN includes an optional AMX BF16-accelerated kernel for `bf16` inner-product computations.
+
+- Compile-time: the AMX BF16 kernel is enabled only when the compiler supports the required flags; it is compiled for a single source file (`src/bf16_amx_kernels.cpp`) so the rest of the project is not forced to use AMX.
+- Runtime: `bf16` distance code automatically dispatches to the AMX kernel only when the running CPU/OS supports AMX and the current thread is permitted to use AMX tile state (Linux `arch_prctl` request). If unavailable, it falls back to AVX-512 BF16 (if enabled) and then scalar.
+
+You can control this with the following CMake options (non-MSVC builds):
+
+- Default (try to enable when supported):
+    ```bash
+    cmake -S . -B build-amx -DCMAKE_BUILD_TYPE=Release -DDISKANN_AMXBF16=ON
+    cmake --build build-amx -j
+    ```
+- Force disable:
+    ```bash
+    cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDISKANN_AMXBF16=OFF
+    cmake --build build -j
+    ```
+- Force enable (fail configure if compiler does not support AMX flags):
+    ```bash
+    cmake -S . -B build-amx -DCMAKE_BUILD_TYPE=Release -DDISKANN_FORCE_AMXBF16=ON
+    cmake --build build-amx -j
+    ```
+
+### AVX-512 vs AMX (build one or the other)
+
+If you want to do a strict A/B build where only one ISA path is compiled/used, configure two separate build directories.
+
+- AVX-512 BF16 only (no AMX codegen):
+        ```bash
+        cmake -S . -B build-avx512 -DCMAKE_BUILD_TYPE=Release \
+            -DDISKANN_FORCE_AVX512BF16=ON \
+            -DDISKANN_AMXBF16=OFF
+        cmake --build build-avx512 -j
+        ```
+
+- AMX BF16 only (no AVX-512 BF16 code path):
+        ```bash
+        cmake -S . -B build-amx -DCMAKE_BUILD_TYPE=Release \
+            -DDISKANN_FORCE_AMXBF16=ON \
+            -DDISKANN_AVX512BF16=OFF
+        cmake --build build-amx -j
+        ```
+
+Note: some toolchains/build scripts add global `-march=native`. When AMX is disabled (`-DDISKANN_AMXBF16=OFF`), DiskANN explicitly compiles the AMX translation unit with `-mno-amx-tile`/`-mno-amx-bf16` (when supported) to avoid accidentally emitting AMX instructions.
+
+### RaBitQ main-search approximate scoring (optional, runtime-gated)
+
+DiskANN also supports using RaBitQ multi-bit codes as the *main traversal approximate scorer* in SSD search (inside `PQFlashIndex::cached_beam_search`).
+
+- Default behavior is unchanged: traversal uses the existing PQ distance lookup.
+- When enabled, traversal scoring uses RaBitQ approximate inner product (converted to a “distance” as `-ip`) while keeping the rest of the search logic intact.
+
+#### Runtime enable
+
+Set:
+
+```bash
+export DISKANN_USE_RABITQ_MAIN_APPROX=1
+```
+
+If the environment variable is set but RaBitQ main codes are missing or incompatible, DiskANN prints a one-time message and automatically falls back to PQ.
+
+#### Main code file naming
+
+Preferred sidecar file name:
+
+```text
+<index_filepath>_rabitq_main.bin
+```
+
+For example, if your SSD index file is `foo_disk.index`, the RaBitQ main code file should be `foo_disk.index_rabitq_main.bin`.
+
+#### Generating main codes during disk index build
+
+You can generate the main-search sidecar automatically as part of disk index build:
+
+```bash
+./build/apps/build_disk_index \
+    ... \
+    --dist_fn mips \
+    --build_rabitq_main_codes \
+    --rabitq_nb_bits 4
+```
+
+This produces:
+
+```text
+<index_path_prefix>_disk.index_rabitq_main.bin
+```
+
+#### Constraints
+
+- Currently supported only for `dist_fn=mips` / `Metric::INNER_PRODUCT`.
+- The RaBitQ code `dim` must match the index `_data_dim` (post any preprocessing/augmentation), otherwise main-search RaBitQ is disabled and the search falls back to PQ.
+- Ensure you run the updated `search_disk_index`/`build_disk_index` binaries from the same build directory that contains this feature.
+
 ## Windows build:
 
 The Windows version has been tested with Enterprise editions of Visual Studio 2022, 2019 and 2017. It should work with the Community and Professional editions as well without any changes. 

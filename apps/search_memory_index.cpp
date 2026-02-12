@@ -22,6 +22,7 @@
 #include "utils.h"
 #include "program_options_utils.hpp"
 #include "index_factory.h"
+#include "bfloat16.h"
 
 namespace po = boost::program_options;
 
@@ -435,9 +436,15 @@ int main(int argc, char **argv)
                                                             num_threads, K, print_all_recalls, Lvec, dynamic, tags,
                                                             show_qps_per_thread, query_filters, fail_if_recall_below);
             }
+            else if (data_type == std::string("bf16") || data_type == std::string("bfloat16"))
+            {
+                return search_memory_index<diskann::bfloat16, uint16_t>(
+                    metric, index_path_prefix, result_path, query_file, gt_file, num_threads, K, print_all_recalls,
+                    Lvec, dynamic, tags, show_qps_per_thread, query_filters, fail_if_recall_below);
+            }
             else
             {
-                std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+                std::cout << "Unsupported type. Use float/bf16/int8/uint8" << std::endl;
                 return -1;
             }
         }
@@ -461,9 +468,16 @@ int main(int argc, char **argv)
                                                   num_threads, K, print_all_recalls, Lvec, dynamic, tags,
                                                   show_qps_per_thread, query_filters, fail_if_recall_below);
             }
+            else if (data_type == std::string("bf16") || data_type == std::string("bfloat16"))
+            {
+                return search_memory_index<diskann::bfloat16>(metric, index_path_prefix, result_path, query_file,
+                                                             gt_file, num_threads, K, print_all_recalls, Lvec,
+                                                             dynamic, tags, show_qps_per_thread, query_filters,
+                                                             fail_if_recall_below);
+            }
             else
             {
-                std::cout << "Unsupported type. Use float/int8/uint8" << std::endl;
+                std::cout << "Unsupported type. Use float/bf16/int8/uint8" << std::endl;
                 return -1;
             }
         }

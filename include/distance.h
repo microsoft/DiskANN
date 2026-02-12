@@ -1,5 +1,6 @@
 #pragma once
 #include "windows_customizations.h"
+#include "bfloat16.h"
 #include <cstring>
 
 namespace diskann
@@ -231,5 +232,32 @@ class AVXNormalizedCosineDistanceFloat : public Distance<float>
 };
 
 template <typename T> Distance<T> *get_distance_function(Metric m);
+
+class DistanceL2BFloat16 : public Distance<bfloat16>
+{
+  public:
+    DistanceL2BFloat16() : Distance<bfloat16>(diskann::Metric::L2)
+    {
+    }
+    DISKANN_DLLEXPORT virtual float compare(const bfloat16 *a, const bfloat16 *b, uint32_t size) const;
+};
+
+class DistanceCosineBFloat16 : public Distance<bfloat16>
+{
+  public:
+    DistanceCosineBFloat16() : Distance<bfloat16>(diskann::Metric::COSINE)
+    {
+    }
+    DISKANN_DLLEXPORT virtual float compare(const bfloat16 *a, const bfloat16 *b, uint32_t length) const;
+};
+
+class DistanceInnerProductBFloat16 : public Distance<bfloat16>
+{
+  public:
+    DistanceInnerProductBFloat16() : Distance<bfloat16>(diskann::Metric::INNER_PRODUCT)
+    {
+    }
+    DISKANN_DLLEXPORT virtual float compare(const bfloat16 *a, const bfloat16 *b, uint32_t length) const;
+};
 
 } // namespace diskann

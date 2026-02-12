@@ -61,13 +61,124 @@ bool cpuHasAvx2Support()
     return false;
 }
 
+bool cpuHasAvx512bf16Support()
+{
+    // Need OSXSAVE + XCR0 enabling ZMM state, plus AVX-512F and AVX-512 BF16.
+    int cpuInfo[4];
+    __cpuid(cpuInfo, 1);
+    bool osUsesXSAVE_XRSTORE = (cpuInfo[2] & (1 << 27)) != 0;
+    if (!osUsesXSAVE_XRSTORE)
+        return false;
+
+    unsigned long long xcr0 = _xgetbv(_XCR_XFEATURE_ENABLED_MASK);
+    // Require XMM (bit1), YMM (bit2), opmask (bit5), ZMM_hi256 (bit6), hi16_zmm (bit7)
+    const unsigned long long kXcr0Avx512Mask = 0xE6;
+    if ((xcr0 & kXcr0Avx512Mask) != kXcr0Avx512Mask)
+        return false;
+
+    __cpuid(cpuInfo, 0);
+    int n = cpuInfo[0];
+    if (n < 7)
+        return false;
+
+    // AVX-512F is CPUID.(EAX=7,ECX=0):EBX[16]
+    __cpuidex(cpuInfo, 7, 0);
+    const bool hasAvx512F = (cpuInfo[1] & (1 << 16)) != 0;
+    if (!hasAvx512F)
+        return false;
+
+    // AVX512_BF16 is CPUID.(EAX=7,ECX=1):EAX[5]
+    __cpuidex(cpuInfo, 7, 1);
+    const bool hasAvx512Bf16 = (cpuInfo[0] & (1 << 5)) != 0;
+    return hasAvx512Bf16;
+}
+
 bool AvxSupportedCPU = cpuHasAvxSupport();
 bool Avx2SupportedCPU = cpuHasAvx2Support();
+bool Avx512Bf16SupportedCPU = cpuHasAvx512bf16Support();
 
 #else
 
-bool Avx2SupportedCPU = true;
+#if defined(__x86_64__) || defined(__i386__)
+#include <cpuid.h>
+
+static inline uint64_t xgetbv_u32(uint32_t index)
+{
+    uint32_t eax = 0, edx = 0;
+    __asm__ volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(index));
+    return (static_cast<uint64_t>(edx) << 32) | eax;
+}
+
+static inline bool cpuHasOsAvxSupport()
+{
+    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx))
+        return false;
+    const bool osxsave = (ecx & (1u << 27)) != 0;
+    const bool avx = (ecx & (1u << 28)) != 0;
+    if (!(osxsave && avx))
+        return false;
+    const uint64_t xcr0 = xgetbv_u32(0);
+    return (xcr0 & 0x6) == 0x6;
+}
+
+bool cpuHasAvxSupport()
+{
+    return cpuHasOsAvxSupport();
+}
+
+bool cpuHasAvx2Support()
+{
+    if (!cpuHasOsAvxSupport())
+        return false;
+    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+    if (!__get_cpuid_max(0, nullptr))
+        return false;
+    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+    return (ebx & (1u << 5)) != 0;
+}
+
+bool cpuHasAvx512bf16Support()
+{
+    // Require OSXSAVE + XCR0 enabling full AVX-512 ZMM state.
+    unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx))
+        return false;
+    const bool osxsave = (ecx & (1u << 27)) != 0;
+    if (!osxsave)
+        return false;
+
+    const uint64_t xcr0 = xgetbv_u32(0);
+    const uint64_t kXcr0Avx512Mask = 0xE6; // XMM|YMM|opmask|ZMM_hi256|hi16_zmm
+    if ((xcr0 & kXcr0Avx512Mask) != kXcr0Avx512Mask)
+        return false;
+
+    if (__get_cpuid_max(0, nullptr) < 7)
+        return false;
+
+    // AVX-512F: CPUID.(EAX=7,ECX=0):EBX[16]
+    __cpuid_count(7, 0, eax, ebx, ecx, edx);
+    const bool hasAvx512F = (ebx & (1u << 16)) != 0;
+    if (!hasAvx512F)
+        return false;
+
+    // AVX512_BF16: CPUID.(EAX=7,ECX=1):EAX[5]
+    __cpuid_count(7, 1, eax, ebx, ecx, edx);
+    const bool hasAvx512Bf16 = (eax & (1u << 5)) != 0;
+    return hasAvx512Bf16;
+}
+
+bool AvxSupportedCPU = cpuHasAvxSupport();
+bool Avx2SupportedCPU = cpuHasAvx2Support();
+bool Avx512Bf16SupportedCPU = cpuHasAvx512bf16Support();
+
+#else
+
 bool AvxSupportedCPU = false;
+bool Avx2SupportedCPU = false;
+bool Avx512Bf16SupportedCPU = false;
+
+#endif
 #endif
 
 namespace diskann

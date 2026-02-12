@@ -157,6 +157,17 @@ template <typename T, typename LabelT = uint32_t> class PQFlashIndex
     uint64_t _ndims_reorder_vecs = 0;
     uint64_t _reorder_data_start_sector = 0;
     uint64_t _nvecs_per_sector = 0;
+    uint64_t _reorder_bytes_per_element = sizeof(float);
+
+    // Optional: RaBitQ multi-bit codes for *main-search* approximate scoring.
+    // When enabled (runtime-gated), neighbor expansion scoring uses RaBitQ
+    // instead of PQ distance lookup, while preserving the PQ path as default.
+    bool _rabitq_main_codes_exist = false;
+    uint8_t *_rabitq_main_codes = nullptr;
+    uint64_t _rabitq_main_code_size = 0;
+    uint64_t _rabitq_main_dim = 0;
+    uint32_t _rabitq_main_nb_bits = 0;
+    uint32_t _rabitq_main_metric = 0;
 
     diskann::Metric metric = diskann::Metric::L2;
 

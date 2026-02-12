@@ -2,6 +2,7 @@
 #include "pq.h"
 #include "pq_l2_distance.h"
 #include "pq_scratch.h"
+#include "bfloat16.h"
 
 // block size for reading/processing large files and matrices in blocks
 #define BLOCK_SIZE 5000000
@@ -280,5 +281,6 @@ void PQL2Distance<data_t>::prepopulate_chunkwise_distances(const float *query_ve
 template DISKANN_DLLEXPORT class PQL2Distance<int8_t>;
 template DISKANN_DLLEXPORT class PQL2Distance<uint8_t>;
 template DISKANN_DLLEXPORT class PQL2Distance<float>;
+template DISKANN_DLLEXPORT class PQL2Distance<diskann::bfloat16>;
 
 } // namespace diskann
