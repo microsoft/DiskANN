@@ -366,14 +366,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(miri))]
     use diskann_utils::lazy_format;
     use rand::{rngs::StdRng, SeedableRng};
 
     use super::*;
-    use crate::{
-        algorithms::transforms::{test_utils, Transform, TransformKind},
-        alloc::GlobalAllocator,
-    };
+
+    #[cfg(not(miri))]
+    use crate::algorithms::transforms::{test_utils, Transform, TransformKind};
+    use crate::alloc::GlobalAllocator;
 
     // Since we use a slightly non-obvious strategy for applying the +/-1 permutation, we
     // test its behavior explicitly.
@@ -441,11 +442,13 @@ mod tests {
         assert_eq!(output[15], 0.0f32);
     }
 
+    #[cfg(not(miri))]
     test_utils::delegate_transformer!(PaddingHadamard<GlobalAllocator>);
 
     // This tests the natural hadamard transform where the output dimension is upgraded
     // to the next power of 2.
     #[test]
+    #[cfg(not(miri))]
     fn test_padding_hadamard() {
         // Inner product computations are more susceptible to floating point error.
         // Instead of using ULP here, we fall back to using absolute and relative error.

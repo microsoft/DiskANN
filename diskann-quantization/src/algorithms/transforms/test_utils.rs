@@ -172,7 +172,11 @@ fn within_ulp(mut got: f32, expected: f32, ulp: usize) -> bool {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Check {
     Ulp(usize),
-    AbsRel { abs: f32, rel: f32 },
+    AbsRel {
+        abs: f32,
+        rel: f32,
+    },
+    #[cfg(not(miri))]
     Skip,
 }
 
@@ -185,6 +189,7 @@ impl Check {
         Self::AbsRel { abs, rel }
     }
 
+    #[cfg(not(miri))]
     pub(super) fn skip() -> Self {
         Self::Skip
     }
@@ -219,6 +224,7 @@ impl Check {
                     })
                 }
             }
+            #[cfg(not(miri))]
             Self::Skip => Ok(()),
         }
     }
