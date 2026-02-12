@@ -37,5 +37,3 @@ harness = false
 # clippy.undocumented_unsafe_blocks = "warn"
 clippy.uninlined_format_args = "allow"
 
-[features]
-experimental_avx512 = []

@@ -197,7 +197,7 @@ mod tests {
     where
         Unsigned: Representation<NBITS>,
     {
-        let input_mat = MatRef::new(Standard::<f32>::new(n, dim), input).unwrap();
+        let input_mat = MatRef::new(Standard::<f32>::new(n, dim).unwrap(), input).unwrap();
         let mut output: Mat<MinMaxMeta<NBITS>> =
             Mat::new(MinMaxMeta::new(n, dim), Defaulted).unwrap();
         quantizer

@@ -69,6 +69,11 @@ impl QuantVectorProvider {
         self.metric
     }
 
+    /// Access the BfTree config
+    pub(crate) fn config(&self) -> &Config {
+        self.quant_vector_index.config()
+    }
+
     /// Create a snapshot of the quant vector index
     ///
     pub fn snapshot(&self) {

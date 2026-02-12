@@ -20,7 +20,7 @@ rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
-diskann-vector = { workspace = true, features = ["experimental_avx512"] }
+diskann-vector = { workspace = true }
 diskann-wide.workspace = true
 
 [lints]
