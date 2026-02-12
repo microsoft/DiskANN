@@ -42,7 +42,7 @@ where
 /// Stable Rust does not allow expressions involving compile-time computation with
 /// const generic parameters: <http://github.com/rust-lang/rust/issues/76560s>
 ///
-/// This makes is difficult to go a const parameter defining the number of SIMD lanes
+/// This makes it difficult to go from a const parameter defining the number of SIMD lanes
 /// to an appropriately sized mask.
 ///
 /// This helper trait provides a level of indirection to map SIMD representations to
@@ -149,7 +149,7 @@ pub trait SIMDMask: Copy + std::fmt::Debug {
         }
     }
 
-    /// Construct a mask based on the result of invoking `f` once each element in the range
+    /// Construct a mask based on the result of invoking `f` once for each element in the range
     /// `0..Self::LANES` in order.
     ///
     /// In the returned mask `m`, `m.get(0)` corresponds to the value of `f(0)`. Similarly,
@@ -163,7 +163,7 @@ pub trait SIMDMask: Copy + std::fmt::Debug {
         Self::BitMask::from_fn(arch, f).into()
     }
 
-    /// Return `true` if any lane in the mask is set. Otherwise, return `false.
+    /// Return `true` if any lane in the mask is set. Otherwise, return `false`.
     #[inline(always)]
     fn any(self) -> bool {
         // Recurse to BitMask.
@@ -177,7 +177,7 @@ pub trait SIMDMask: Copy + std::fmt::Debug {
         <Self::BitMask as From<Self>>::from(self).all()
     }
 
-    /// Return `true` if all lanes in the mask are set. Otherwise, return `false`.
+    /// Return `true` if no lanes in the mask are set. Otherwise, return `false`.
     #[inline(always)]
     fn none(self) -> bool {
         !self.any()
@@ -298,7 +298,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     ///
     /// # Safety
     ///
-    /// Offsets from the `ptr` where the mask evaluates to true must be dereferencable to
+    /// Offsets from the `ptr` where the mask evaluates to true must be dereferenceable to
     /// the underlying scalar type.
     unsafe fn load_simd_masked_logical(
         arch: Self::Arch,
@@ -312,7 +312,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     ///
     /// # Safety
     ///
-    /// Offsets from the `ptr` where the mask evaluates to true must be dereferencable to
+    /// Offsets from the `ptr` where the mask evaluates to true must be dereferenceable to
     /// the underlying scalar type. For implementations using the provided default, the
     /// conversion from the bitmask to the actual mask must be correct.
     #[inline(always)]
@@ -379,14 +379,14 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     /// The pointed-to memory must adhere to Rust's exclusive reference rules.
     ///
     /// Offsets from the `ptr` where the mask evaluates to true must be mutably
-    /// dereferencable to the underlying scalar type.
+    /// dereferenceable to the underlying scalar type.
     unsafe fn store_simd_masked_logical(
         self,
         ptr: *mut <Self as SIMDVector>::Scalar,
         mask: <Self as SIMDVector>::Mask,
     );
 
-    /// The same as `load_simd_masked_logical` but taking a BitMask instead.
+    /// The same as `store_simd_masked_logical` but taking a BitMask instead.
     ///
     /// No store attempt will be made to lanes that are masked out.
     ///
@@ -395,7 +395,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
     /// The pointed-to memory must adhere to Rust's exclusive reference rules.
     ///
     /// Offsets from the `ptr` where the mask evaluates to true must be mutably
-    /// dereferencable to the underlying scalar type.
+    /// dereferenceable to the underlying scalar type.
     ///
     /// For implementations using the provided default, the conversion from the bitmask to
     /// the actual mask must be correct.
@@ -448,7 +448,7 @@ pub trait SIMDVector: Copy + std::fmt::Debug {
 /// ```ignore
 /// self * rhs + accumulator
 /// ```
-/// with the following semantics dependant on the associated scalar type.
+/// with the following semantics dependent on the associated scalar type.
 ///
 /// * floating point: Perform a fused multiply-add, implementing the operation with only a
 ///   single rounding instance.
@@ -473,7 +473,7 @@ pub trait SIMDMulAdd {
 ///   be returned.
 ///
 /// * Fast (unsuffixed): Compute the minimum or maximum using the fastest possible method
-///   on the given architecture with non-standard NaN handing.
+///   on the given architecture with non-standard NaN handling.
 ///
 ///   When the scalar type is integral, the behavior is the same as the standard
 ///   implementations.
@@ -524,7 +524,7 @@ pub trait SIMDAbs {
 
 /// A SIMD equivalent of `std::cmp::PartialEq`.
 ///
-/// Instead of a boolean, return `Self::Mask` containin the result of the element-wise
+/// Instead of a boolean, return `Self::Mask` containing the result of the element-wise
 /// comparison of the two vectors.
 pub trait SIMDPartialEq: SIMDVector {
     /// SIMD equivalent of `std::cmp::PartialEq::eq`, applying the latter trait to each
@@ -536,7 +536,7 @@ pub trait SIMDPartialEq: SIMDVector {
     fn ne_simd(self, other: Self) -> Self::Mask;
 }
 
-/// A SIMD equaivalent of `std::cmp::PartialOrd`.
+/// A SIMD equivalent of `std::cmp::PartialOrd`.
 ///
 /// Instead of a boolean, return `Self::Mask` containing the result of the element-wise
 /// comparisons of the two vectors.
@@ -617,7 +617,7 @@ pub trait SIMDSelect<V: SIMDVector>: SIMDMask {
 /// 1. Perform multiplication as `i32x32 x i32x32` as if converting each lane to `i32`,
 ///    resulting in effectively `i32x32`. No overflow can happen.
 /// 2. Sum together consecutive groups of 4 in the resulting `i32x32` to yield `i32x8`.
-/// 3. Add the resulting `i342x8` into `Self`.
+/// 3. Add the resulting `i32x8` into `Self`.
 ///
 /// The same applies when the order of `u8x32` and `i8x32` are swapped and for types that
 /// are twice as wide.

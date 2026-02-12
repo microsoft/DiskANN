@@ -31,7 +31,7 @@ use super::{
 /// of all at once.
 ///
 /// NOTE: The alignment requirements of an emulated vector *will* be different than the
-/// alignment requirements an actual intrinsic.
+/// alignment requirements of an actual intrinsic.
 ///
 /// Higher level code *must not* rely on alignments being compatible across architectures!
 #[derive(Debug, Clone, Copy)]
@@ -108,7 +108,7 @@ where
         )
     }
 
-    /// Only load values then the corresponding mask lane is set.
+    /// Only load values when the corresponding mask lane is set.
     unsafe fn load_simd_masked_logical(arch: A, ptr: *const T, mask: Self::Mask) -> Self {
         Self::from_arch_fn(arch, |i| {
             if mask.get_unchecked(i) {
@@ -142,7 +142,7 @@ where
         unsafe { ptr.cast::<[T; N]>().write_unaligned(self.0) }
     }
 
-    /// Only store values then the corresponding mask lane is set.
+    /// Only store values when the corresponding mask lane is set.
     unsafe fn store_simd_masked_logical(self, ptr: *mut T, mask: Self::Mask) {
         for (i, v) in self.0.iter().enumerate() {
             if mask.get_unchecked(i) {
@@ -377,7 +377,7 @@ where
 // i16 to i32
 macro_rules! impl_simd_dot_product_i16_to_i32 {
     ($N:literal, $TwoN:literal) => {
-        /// Promote intermediate values to `i32` and then perform accuulation.
+        /// Promote intermediate values to `i32` and then perform accumulation.
         impl<A> SIMDDotProduct<Emulated<i16, $TwoN, A>> for Emulated<i32, $N, A>
         where
             A: arch::Sealed,
@@ -403,7 +403,7 @@ macro_rules! impl_simd_dot_product_i16_to_i32 {
 //i8/u8 to i32
 macro_rules! impl_simd_dot_product_iu8_to_i32 {
     ($N:literal, $TwoN:literal) => {
-        /// Promote intermediate values to `i32` and then perform accuulation.
+        /// Promote intermediate values to `i32` and then perform accumulation.
         impl<A> SIMDDotProduct<Emulated<u8, $TwoN, A>, Emulated<i8, $TwoN, A>>
             for Emulated<i32, $N, A>
         where
@@ -549,7 +549,7 @@ macro_rules! impl_little_endian_transmute_cast {
         {
             fn reinterpret_simd(self) -> Emulated<$to, $Nto, A> {
                 let array = self.0;
-                // # SAFETY: This is only ever instantiated with arrays of primitive
+                // SAFETY: This is only ever instantiated with arrays of primitive
                 // types that hold no resources, no padding, and are valid for all
                 // possible bit-patterns.
                 let casted = unsafe { std::mem::transmute::<[$from; $Nfrom], [$to; $Nto]>(array) };

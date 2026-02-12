@@ -170,8 +170,6 @@ pub mod arch;
 pub use arch::Architecture;
 
 /// The current architecture that is the closest fit for the current compilation target.
-///
-/// The type [`Wide`] is always configured to use this as its associated architecture type.
 pub const ARCH: arch::Current = arch::current();
 
 ///////////////////////

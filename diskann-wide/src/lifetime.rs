@@ -17,8 +17,8 @@ use std::marker::PhantomData;
 
 /// A lifetime annotator for the function pointer API of [`crate::Architecture`].
 ///
-/// This mainly works around limitations the Rust compiler's ability to infer the proper
-/// of dispatched function pointers.
+/// This mainly works around limitations in the Rust compiler's ability to infer the proper
+/// lifetimes of dispatched function pointers.
 pub trait AddLifetime: 'static {
     /// The type with a lifetime (if any).
     type Of<'a>;

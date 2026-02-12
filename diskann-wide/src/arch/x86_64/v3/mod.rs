@@ -170,7 +170,7 @@ impl V3 {
 
     /// # Safety
     ///
-    /// The architecture number `version` can only be `ARCH_V3` is runtime checks have
+    /// The architecture number `version` can only be `ARCH_V3` if runtime checks have
     /// verified that it is safe to do so.
     unsafe fn new_checked_with(version: u64) -> Option<Self> {
         if version >= super::ARCH_V3 {
