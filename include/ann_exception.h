@@ -20,7 +20,7 @@ class ANNException : public std::runtime_error
   public:
     DISKANN_DLLEXPORT ANNException(const std::string &message, int errorCode);
     DISKANN_DLLEXPORT ANNException(const std::string &message, int errorCode, const std::string &funcSig,
-                                   const std::string &fileName, uint32_t lineNum);
+                                   const std::string &fileName, std::uint32_t lineNum);
 
   private:
     int _errorCode;

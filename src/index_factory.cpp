@@ -127,7 +127,7 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
     if (_config->data_strategy == DataStoreStrategy::MEMORY && _config->pq_dist_build)
     {
         pq_data_store =
-            construct_pq_datastore<data_type>(_config->data_strategy, num_points + _config->num_frozen_pts, dim,
+            construct_pq_datastore<data_type>(_config->data_strategy, num_points, dim,
                                               _config->metric, _config->num_pq_chunks, _config->use_opq);
     }
     else
@@ -138,7 +138,7 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance()
         (size_t)(defaults::GRAPH_SLACK_FACTOR * 1.05 *
                  (_config->index_write_params == nullptr ? 0 : _config->index_write_params->max_degree));
     std::unique_ptr<AbstractGraphStore> graph_store =
-        construct_graphstore(_config->graph_strategy, num_points + _config->num_frozen_pts, max_reserve_degree);
+        construct_graphstore(_config->graph_strategy, num_points, max_reserve_degree);
 
     // REFACTOR TODO: Must construct in-memory PQDatastore if strategy == ONDISK and must construct
     // in-mem and on-disk PQDataStore if strategy == ONDISK and diskPQ is required.
