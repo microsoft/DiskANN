@@ -426,9 +426,9 @@ mod tests {
     use std::fmt::Debug;
 
     use rand::{
+        SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        SeedableRng,
     };
 
     use super::*;

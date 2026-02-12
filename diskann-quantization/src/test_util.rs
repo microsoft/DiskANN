@@ -4,8 +4,8 @@
  */
 
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use diskann_utils::views::Matrix;

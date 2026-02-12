@@ -5,8 +5,9 @@
 
 use std::ptr::NonNull;
 
-use super::super::vectors::DataMutRef;
 use super::super::MinMaxQuantizer;
+use super::super::vectors::DataMutRef;
+use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
 use crate::minmax::{self, Data};
 use crate::multi_vector::matrix::{
@@ -15,7 +16,6 @@ use crate::multi_vector::matrix::{
 use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Standard};
 use crate::scalar::InputContainsNaN;
 use crate::utils;
-use crate::CompressInto;
 
 ////////////////
 // MinMaxMeta //
@@ -297,8 +297,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithms::transforms::NullTransform;
     use crate::algorithms::Transform;
+    use crate::algorithms::transforms::NullTransform;
     use crate::minmax::vectors::DataRef;
     use crate::num::Positive;
     use diskann_utils::{Reborrow, ReborrowMut};

@@ -367,9 +367,9 @@ impl<const N: usize> std::ops::Index<(usize, usize)> for BlockTranspose<N> {
 mod tests {
     use diskann_utils::{lazy_format, views::Matrix};
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        Rng, SeedableRng,
     };
 
     use super::*;

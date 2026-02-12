@@ -42,10 +42,10 @@ impl MinMaxKernel {
     where
         Unsigned: Representation<NBITS>,
         distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-            crate::bits::BitSlice<'x, NBITS, Unsigned>,
-            crate::bits::BitSlice<'y, NBITS, Unsigned>,
-            distances::MathematicalResult<u32>,
-        >,
+                crate::bits::BitSlice<'x, NBITS, Unsigned>,
+                crate::bits::BitSlice<'y, NBITS, Unsigned>,
+                distances::MathematicalResult<u32>,
+            >,
         F: FnMut(usize, f32),
     {
         for (i, q_ref) in query.rows().enumerate() {
@@ -80,10 +80,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-        crate::bits::BitSlice<'x, NBITS, Unsigned>,
-        crate::bits::BitSlice<'y, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            crate::bits::BitSlice<'x, NBITS, Unsigned>,
+            crate::bits::BitSlice<'y, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     #[inline(always)]
     fn evaluate(
@@ -116,10 +116,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     distances::InnerProduct: for<'a, 'b> PureDistanceFunction<
-        crate::bits::BitSlice<'a, NBITS, Unsigned>,
-        crate::bits::BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            crate::bits::BitSlice<'a, NBITS, Unsigned>,
+            crate::bits::BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     #[inline(always)]
     fn evaluate(
@@ -139,13 +139,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithms::transforms::NullTransform;
+    use crate::CompressInto;
     use crate::algorithms::Transform;
+    use crate::algorithms::transforms::NullTransform;
     use crate::bits::{Representation, Unsigned};
     use crate::minmax::{Data, MinMaxQuantizer};
     use crate::multi_vector::{Defaulted, Mat, Standard};
     use crate::num::Positive;
-    use crate::CompressInto;
     use diskann_utils::ReborrowMut;
     use std::num::NonZeroUsize;
 
@@ -214,10 +214,10 @@ mod tests {
     where
         Unsigned: Representation<NBITS>,
         distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-            crate::bits::BitSlice<'x, NBITS, Unsigned>,
-            crate::bits::BitSlice<'y, NBITS, Unsigned>,
-            distances::MathematicalResult<u32>,
-        >,
+                crate::bits::BitSlice<'x, NBITS, Unsigned>,
+                crate::bits::BitSlice<'y, NBITS, Unsigned>,
+                distances::MathematicalResult<u32>,
+            >,
     {
         doc.rows()
             .map(|d| {
@@ -235,10 +235,10 @@ mod tests {
     where
         Unsigned: Representation<NBITS>,
         distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-            crate::bits::BitSlice<'x, NBITS, Unsigned>,
-            crate::bits::BitSlice<'y, NBITS, Unsigned>,
-            distances::MathematicalResult<u32>,
-        >,
+                crate::bits::BitSlice<'x, NBITS, Unsigned>,
+                crate::bits::BitSlice<'y, NBITS, Unsigned>,
+                distances::MathematicalResult<u32>,
+            >,
     {
         for &(nq, nd, dim) in TEST_CASES {
             let quantizer = make_quantizer(dim);

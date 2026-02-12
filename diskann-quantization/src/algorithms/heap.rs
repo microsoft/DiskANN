@@ -191,7 +191,7 @@ impl<'a, T: Ord + Copy> SliceHeap<'a, T> {
 mod tests {
     use std::collections::BinaryHeap;
 
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
 
     use super::*;
 
@@ -350,15 +350,25 @@ mod tests {
 
             // Verify they have the same maximum
             assert_eq!(
-                slice_old_max, binary_old_max,
+                slice_old_max,
+                binary_old_max,
                 "Iteration {}: Old maxima differ after updating {} to {}. SliceHeap old max: {:?}, BinaryHeap old max: {:?}",
-                iteration, slice_old_max.unwrap_or(0), new_value, slice_old_max, binary_old_max
+                iteration,
+                slice_old_max.unwrap_or(0),
+                new_value,
+                slice_old_max,
+                binary_old_max
             );
 
             assert_eq!(
-                slice_new_max, binary_new_max,
+                slice_new_max,
+                binary_new_max,
                 "Iteration {}: Maxima differ after updating {} to {}. SliceHeap max: {:?}, BinaryHeap max: {:?}",
-                iteration, slice_old_max.unwrap_or(0), new_value, slice_new_max, binary_new_max
+                iteration,
+                slice_old_max.unwrap_or(0),
+                new_value,
+                slice_new_max,
+                binary_new_max
             );
 
             // Verify heap property is maintained in slice heap
@@ -440,7 +450,11 @@ mod tests {
                 assert!(
                     slice[i] >= slice[left],
                     "Heap property violated: parent {} at index {} < left child {} at index {}. Full heap: {:?}",
-                    slice[i], i, slice[left], left, slice
+                    slice[i],
+                    i,
+                    slice[left],
+                    left,
+                    slice
                 );
             }
 
@@ -448,7 +462,11 @@ mod tests {
                 assert!(
                     slice[i] >= slice[right],
                     "Heap property violated: parent {} at index {} < right child {} at index {}. Full heap: {:?}",
-                    slice[i], i, slice[right], right, slice
+                    slice[i],
+                    i,
+                    slice[right],
+                    right,
+                    slice
                 );
             }
         }

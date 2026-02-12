@@ -12,7 +12,7 @@ mod traits;
 
 pub use aligned::{AlignedAllocator, NotPowerOfTwo};
 pub use bump::BumpAllocator;
-pub use poly::{poly, CompoundError, Poly, TrustedIter};
+pub use poly::{CompoundError, Poly, TrustedIter, poly};
 pub use traits::{Allocator, AllocatorCore, AllocatorError};
 
 /// A handle to Rust's global allocator. This type does not support allocations of size 0.

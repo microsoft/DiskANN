@@ -141,11 +141,7 @@ impl PowerOfTwo {
     /// method in the standard library.
     pub const fn arg_align_offset(self, lhs: usize) -> usize {
         let m = self.arg_mod(lhs);
-        if m == 0 {
-            0
-        } else {
-            self.raw() - m
-        }
+        if m == 0 { 0 } else { self.raw() - m }
     }
 
     /// Calculate the smallest value greater than or equal to `lhs` that is a multiple of

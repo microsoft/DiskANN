@@ -4,9 +4,9 @@
  */
 
 use super::vectors::{DataMutRef, DataRef, MinMaxCompensation};
+use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
 use crate::scalar::bit_scale;
-use crate::CompressInto;
 use thiserror::Error;
 
 /// Recompression utilities for MinMax quantized vectors.
@@ -193,14 +193,14 @@ mod recompress_tests {
 
     use diskann_utils::{Reborrow, ReborrowMut};
     use rand::{
+        SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        SeedableRng,
     };
 
     use super::*;
     use crate::{
-        algorithms::{transforms::NullTransform, Transform},
+        algorithms::{Transform, transforms::NullTransform},
         minmax::quantizer::MinMaxQuantizer,
         minmax::vectors::Data,
         num::Positive,
