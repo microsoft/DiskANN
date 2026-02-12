@@ -14,18 +14,16 @@ use crate::{
     utils::{VectorId, object_pool::AsPooled},
 };
 use hashbrown::HashSet;
+use std::collections::HashSet as StdHashSet;
 
 /// In-mem index related limits
 pub const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
 
 /// Scratch space used during graph search.
 ///
-/// This struct contains three important members used by both the sync and async indexes:
-/// `query`, `best`, and `visited`.
-///
-/// The member `id_scratch` is only used by the sync index.
-///
-/// Members `labels` and `beta` are used by the async index for beta-filtered search.
+/// This struct holds reusable buffers that are cleared between searches but retain their
+/// heap allocations. The key members are `best` (priority queue), `visited` (dedup set),
+/// and `neighbors`/`submitted` (per-hop buffers used by the search loop).
 #[derive(Debug)]
 pub struct SearchScratch<I, Q = NeighborPriorityQueue<I>>
 where
@@ -34,26 +32,20 @@ where
     /// A priority queue of the best candidates seen during search. This data structure is
     /// also responsible for determining the best unvisited candidate.
     ///
-    /// Used by both sync and async.
-    ///
     /// When used in a paged search context, this queue is unbounded.
     pub best: Q,
 
     /// A record of all ids visited during a search.
     ///
-    /// Used by both sync and async.
-    ///
     /// This is used to prevent multiple requests to the same `id` from the vector providers.
     pub visited: HashSet<I>,
 
-    /// A buffer for adjacency lists.
-    ///
-    /// Only used by sync.
-    ///
-    /// Adjacency lists in the sync provider are guarded by read/write locks. The
-    /// `id_scratch` is used to copy out the contents of an adjacency list to minimize the
-    /// duration the lock is held.
-    pub id_scratch: Vec<I>,
+    /// A reusable buffer for collecting neighbor distances during expansion.
+    pub neighbors: Vec<Neighbor<I>>,
+
+    /// Tracks speculatively submitted (but not yet visited/expanded) nodes so the pipelined
+    /// path can decouple submission from visitation. Empty for non-pipelined search.
+    pub submitted: StdHashSet<I>,
 
     /// A list of beam search nodes used during search. This is used when beam search is enabled
     /// to temporarily hold beam of nodes in each hop.
@@ -123,7 +115,8 @@ where
         Self {
             best,
             visited,
-            id_scratch: Vec::new(),
+            neighbors: Vec::new(),
+            submitted: StdHashSet::new(),
             beam_nodes: Vec::new(),
             in_range: Vec::new(),
             range_frontier: VecDeque::new(),
@@ -147,7 +140,8 @@ where
     pub fn clear(&mut self) {
         self.best.clear();
         self.visited.clear();
-        self.id_scratch.clear();
+        self.neighbors.clear();
+        self.submitted.clear();
         self.beam_nodes.clear();
         self.in_range.clear();
         self.range_frontier.clear();
@@ -244,7 +238,8 @@ mod tests {
             assert_eq!(x.visited.capacity(), 0);
 
             assert!(x.visited.is_empty());
-            assert!(x.id_scratch.is_empty());
+            assert!(x.neighbors.is_empty());
+            assert!(x.submitted.is_empty());
 
             assert!(x.hops == 0);
             assert!(x.cmps == 0);
@@ -262,7 +257,8 @@ mod tests {
             assert_eq!(x.visited.capacity(), 0);
 
             assert!(x.visited.is_empty());
-            assert!(x.id_scratch.is_empty());
+            assert!(x.neighbors.is_empty());
+            assert!(x.submitted.is_empty());
 
             assert!(x.hops == 0);
             assert!(x.cmps == 0);
@@ -299,8 +295,8 @@ mod tests {
         x.visited.insert(1);
         x.visited.insert(10);
 
-        x.id_scratch.push(1);
-        x.id_scratch.push(10);
+        x.neighbors.push(Neighbor::new(1, 1.0));
+        x.neighbors.push(Neighbor::new(10, 2.0));
 
         x.best.insert(Neighbor::new(1, 1.0));
         x.best.insert(Neighbor::new(10, 2.0));
@@ -309,7 +305,8 @@ mod tests {
         // Do the clear.
         x.clear();
         assert!(x.visited.is_empty());
-        assert!(x.id_scratch.is_empty());
+        assert!(x.neighbors.is_empty());
+        assert!(x.submitted.is_empty());
         assert_eq!(x.best.size(), 0);
 
         assert!(x.hops == 0);
