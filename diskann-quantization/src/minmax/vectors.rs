@@ -3,15 +3,15 @@
  * Licensed under the MIT license.
  */
 
-use diskann_utils::{Reborrow, ReborrowMut};
 use diskann_vector::{MathematicalValue, PureDistanceFunction};
 use thiserror::Error;
 
 use crate::{
+    alloc::GlobalAllocator,
     bits::{BitSlice, Dense, Representation, Unsigned},
     distances,
     distances::{InnerProduct, MV},
-    meta::{self},
+    meta::{self, slice},
 };
 
 /// A per-vector precomputed coefficients to help compute inner products
@@ -158,6 +158,9 @@ pub type DataMutRef<'a, const NBITS: usize> =
 // Full Precision //
 ////////////////////
 
+/// A meta struct storing the `sum` and `norm_squared` of a
+/// full query after transformation is applied to it.
+///
 /// The inner product between `X = ax * X' + bx` and `Y` for d-dimensional
 /// vectors X and Y is:
 /// ```math
@@ -172,18 +175,8 @@ pub type DataMutRef<'a, const NBITS: usize> =
 /// ```math
 /// |X - Y|^2 = |ax * X' + bx|^2 + |Y|^2 - 2 * <X', Y>
 /// ```
-///
-/// A Full Precision Query
-#[derive(Debug)]
-pub struct FullQuery {
-    /// The data after transform is applied to it.
-    pub data: Box<[f32]>,
-    pub meta: FullQueryMeta,
-}
-
-/// A meta struct storing the `sum` and `norm_squared` of a
-/// full query after transformation is applied to it.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
 pub struct FullQueryMeta {
     /// The sum of `data`.
     pub sum: f32,
@@ -191,44 +184,25 @@ pub struct FullQueryMeta {
     pub norm_squared: f32,
 }
 
-impl FullQuery {
-    /// Construct an empty `FullQuery` for `dim` dimensional data.
-    pub fn empty(dim: usize) -> Self {
-        Self {
-            data: vec![0.0f32; dim].into(),
-            meta: Default::default(),
-        }
-    }
+/// A full precision query.
+///
+/// See: [`slice::Slice`].
+pub type FullQuery<A = GlobalAllocator> = slice::PolySlice<f32, FullQueryMeta, A>;
 
-    /// Output the length of `data`
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
+/// A borrowed full precision query.
+///
+/// See: [`slice::SliceRef`].
+pub type FullQueryRef<'a> = slice::SliceRef<'a, f32, FullQueryMeta>;
 
-    /// Output if `data` is empty.
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-}
-
-impl<'short> Reborrow<'short> for FullQuery {
-    type Target = &'short FullQuery;
-    fn reborrow(&'short self) -> Self::Target {
-        self
-    }
-}
-
-impl<'short> ReborrowMut<'short> for FullQuery {
-    type Target = &'short mut FullQuery;
-    fn reborrow_mut(&'short mut self) -> Self::Target {
-        self
-    }
-}
+/// A mutable borrowed full precision query.
+///
+/// See: [`slice::SliceMut`].
+pub type FullQueryMut<'a> = slice::SliceMut<'a, f32, FullQueryMeta>;
 
 ///////////////////////////
 // Compensated Distances //
 ///////////////////////////
-
+#[inline(always)]
 fn kernel<const NBITS: usize, F>(
     x: DataRef<'_, NBITS>,
     y: DataRef<'_, NBITS>,
@@ -293,7 +267,7 @@ where
 }
 
 impl<const NBITS: usize>
-    PureDistanceFunction<&FullQuery, DataRef<'_, NBITS>, distances::MathematicalResult<f32>>
+    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::MathematicalResult<f32>>
     for MinMaxIP
 where
     Unsigned: Representation<NBITS>,
@@ -303,16 +277,16 @@ where
         distances::MathematicalResult<f32>,
     >,
 {
-    fn evaluate(x: &FullQuery, y: DataRef<'_, NBITS>) -> distances::MathematicalResult<f32> {
-        let raw_product: f32 = InnerProduct::evaluate(&x.data, y.vector())?.into_inner();
+    fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::MathematicalResult<f32> {
+        let raw_product: f32 = InnerProduct::evaluate(x.vector(), y.vector())?.into_inner();
         Ok(MathematicalValue::new(
-            raw_product * y.meta().a + x.meta.sum * y.meta().b,
+            raw_product * y.meta().a + x.meta().sum * y.meta().b,
         ))
     }
 }
 
 impl<const NBITS: usize>
-    PureDistanceFunction<&FullQuery, DataRef<'_, NBITS>, distances::Result<f32>> for MinMaxIP
+    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::Result<f32>> for MinMaxIP
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
@@ -321,7 +295,7 @@ where
         distances::MathematicalResult<f32>,
     >,
 {
-    fn evaluate(x: &FullQuery, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(-v?.into_inner())
     }
@@ -368,7 +342,7 @@ where
 }
 
 impl<const NBITS: usize>
-    PureDistanceFunction<&FullQuery, DataRef<'_, NBITS>, distances::MathematicalResult<f32>>
+    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::MathematicalResult<f32>>
     for MinMaxL2Squared
 where
     Unsigned: Representation<NBITS>,
@@ -378,19 +352,20 @@ where
         distances::MathematicalResult<f32>,
     >,
 {
-    fn evaluate(x: &FullQuery, y: DataRef<'_, NBITS>) -> distances::MathematicalResult<f32> {
-        let raw_product = InnerProduct::evaluate(&x.data, y.vector())?.into_inner();
+    fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::MathematicalResult<f32> {
+        let raw_product = InnerProduct::evaluate(x.vector(), y.vector())?.into_inner();
 
         let ym = y.meta();
-        let compensated_ip = raw_product * ym.a + x.meta.sum * ym.b;
+        let compensated_ip = raw_product * ym.a + x.meta().sum * ym.b;
         Ok(MV::new(
-            x.meta.norm_squared + ym.norm_squared - 2.0 * compensated_ip,
+            x.meta().norm_squared + ym.norm_squared - 2.0 * compensated_ip,
         ))
     }
 }
 
 impl<const NBITS: usize>
-    PureDistanceFunction<&FullQuery, DataRef<'_, NBITS>, distances::Result<f32>> for MinMaxL2Squared
+    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::Result<f32>>
+    for MinMaxL2Squared
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
@@ -399,7 +374,7 @@ where
         distances::MathematicalResult<f32>,
     >,
 {
-    fn evaluate(x: &FullQuery, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(v?.into_inner())
     }
@@ -431,18 +406,19 @@ where
 }
 
 impl<const NBITS: usize>
-    PureDistanceFunction<&FullQuery, DataRef<'_, NBITS>, distances::Result<f32>> for MinMaxCosine
+    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::Result<f32>>
+    for MinMaxCosine
 where
     Unsigned: Representation<NBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-        &'a FullQuery,
+        FullQueryRef<'a>,
         DataRef<'b, NBITS>,
         distances::MathematicalResult<f32>,
     >,
 {
-    fn evaluate(x: &'_ FullQuery, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
-        let (xm, ym) = (x.meta.norm_squared, y.meta());
+        let (xm, ym) = (x.meta().norm_squared, y.meta());
         Ok(1.0 - ip.into_inner() / (xm.sqrt() * ym.norm_squared.sqrt()))
         // 1 - <X, Y> / (|X| * |Y|)
     }
@@ -468,17 +444,17 @@ where
 }
 
 impl<const NBITS: usize>
-    PureDistanceFunction<&FullQuery, DataRef<'_, NBITS>, distances::Result<f32>>
+    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::Result<f32>>
     for MinMaxCosineNormalized
 where
     Unsigned: Representation<NBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-        &'a FullQuery,
+        FullQueryRef<'a>,
         DataRef<'b, NBITS>,
         distances::MathematicalResult<f32>,
     >,
 {
-    fn evaluate(x: &'_ FullQuery, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
         Ok(1.0 - ip.into_inner()) // 1 - <X, Y>
     }
@@ -498,7 +474,7 @@ mod minmax_vector_tests {
     };
 
     use super::*;
-    use crate::scalar::bit_scale;
+    use crate::{alloc::GlobalAllocator, scalar::bit_scale};
 
     fn test_minmax_compensated_vectors<const NBITS: usize, R>(dim: usize, rng: &mut R)
     where
@@ -646,13 +622,12 @@ mod minmax_vector_tests {
         );
 
         //Calculate inner product with full precision vector
-        let mut fp_query = FullQuery::empty(dim);
-        let fp_meta = FullQueryMeta {
+        let mut fp_query = FullQuery::new_in(dim, GlobalAllocator).unwrap();
+        fp_query.vector_mut().copy_from_slice(&original1);
+        *fp_query.meta_mut() = FullQueryMeta {
             norm_squared: norm1_squared,
             sum: original1.iter().sum::<f32>(),
         };
-        fp_query.data = original1.clone().into_boxed_slice();
-        fp_query.meta = fp_meta;
 
         let fp_ip: distances::Result<f32> = MinMaxIP::evaluate(fp_query.reborrow(), v2.reborrow());
         let fp_ip = fp_ip.unwrap();
