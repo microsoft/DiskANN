@@ -368,7 +368,7 @@ where
                                     q,
                                     search_params.recall_at,
                                     l,
-                                    search_params.beam_width,
+                                    Some(search_params.beam_width),
                                     vector_filter,
                                     search_params.is_flat_search,
                                 ),

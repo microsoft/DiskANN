@@ -324,13 +324,6 @@ where
     /// Default: no-op (non-pipelined providers never need to wait).
     fn wait_for_io(&mut self) {}
 
-    /// Whether this accessor uses asynchronous IO (pipelined).
-    /// When true, the search loop uses speculative submission (peek without
-    /// marking visited). When false, the classic visited-at-selection path.
-    fn is_pipelined(&self) -> bool {
-        false
-    }
-
     /// Expand all `ids` synchronously: load data, get neighbors, compute distances.
     ///
     /// This is the original single-shot expansion method. For non-pipelined providers,

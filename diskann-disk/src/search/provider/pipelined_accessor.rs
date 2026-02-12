@@ -713,10 +713,6 @@ where
             let _ = self.wait_and_drain();
         }
     }
-
-    fn is_pipelined(&self) -> bool {
-        true
-    }
 }
 
 impl<Data> SearchExt for PipelinedDiskAccessor<'_, Data>

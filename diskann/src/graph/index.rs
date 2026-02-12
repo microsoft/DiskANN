@@ -397,10 +397,8 @@ where
             for attempt in 0..num_insert_attempts {
                 let mut search_record =
                     VisitedSearchRecord::new(self.estimate_visited_set_capacity(Some(search_l)));
-
-                let default_params = SearchParams::new(1, scratch.best.search_l(), None)?;
                 self.search_internal(
-                    &default_params,
+                    None, // beam_width
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -522,10 +520,8 @@ where
                 let mut search_record = VisitedSearchRecord::new(
                     self.estimate_visited_set_capacity(Some(scratch.best.search_l())),
                 );
-
-                let default_params = SearchParams::new(1, scratch.best.search_l(), None)?;
                 self.search_internal(
-                    &default_params,
+                    None, // beam_width
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -1331,10 +1327,8 @@ where
             let start_ids = search_accessor.starting_points().await?;
 
             let mut scratch = self.search_scratch(l_value, start_ids.len());
-
-            let default_params = SearchParams::new(1, scratch.best.search_l(), None)?;
             self.search_internal(
-                &default_params,
+                None, // beam_width
                 &start_ids,
                 &mut search_accessor,
                 &computer,
@@ -2066,7 +2060,7 @@ where
     // A is the accessor type, T is the query type used for BuildQueryComputer
     fn search_internal<A, T, SR, Q>(
         &self,
-        search_params: &SearchParams,
+        beam_width: Option<usize>,
         start_ids: &[DP::InternalId],
         accessor: &mut A,
         computer: &A::QueryComputer,
@@ -2080,7 +2074,7 @@ where
         Q: NeighborQueue<DP::InternalId>,
     {
         async move {
-            let beam_width = search_params.beam_width.unwrap_or(1);
+            let beam_width = beam_width.unwrap_or(1);
 
             // paged search can call search_internal multiple times, we only need to initialize
             // state if not already initialized.
@@ -2107,100 +2101,50 @@ where
                 || accessor.has_pending())
                 && !accessor.terminate_early()
             {
-                let has_pending = accessor.has_pending();
-                let pipelining = accessor.is_pipelined();
+                // Phase 1: Expand nodes whose data is available.
+                // Non-pipelined: synchronously expands beam_nodes from previous submit.
+                // Pipelined: polls IO completions and expands one loaded node.
+                // On the first iteration beam_nodes is empty — a no-op for both paths.
+                neighbors.clear();
+                let expanded_ids = accessor
+                    .expand_available(
+                        scratch.beam_nodes.iter().copied(),
+                        computer,
+                        glue::NotInMut::new(&mut scratch.visited),
+                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                    )
+                    .await?;
 
-                // PIPELINED ORDER (matching PipeANN's loop):
-                //   1. poll completions + expand one loaded node
-                //   2. insert neighbors into queue
-                //   3. submit one IO (with latest neighbor info)
-                //
-                // NON-PIPELINED ORDER (original beam search):
-                //   1. submit beam_width nodes
-                //   2. expand all (synchronous)
+                for &id in &expanded_ids {
+                    scratch.best.mark_visited_by_id(&id);
+                    submitted.remove(&id);
+                }
 
-                if pipelining && has_pending {
-                    // Step 1: Expand one loaded node (polls internally).
-                    // Pass empty iterator — the accessor picks by rank.
-                    neighbors.clear();
-                    let expanded_ids = accessor
-                        .expand_available(
-                            std::iter::empty(),
-                            computer,
-                            glue::NotInMut::new(&mut scratch.visited),
-                            |distance, id| neighbors.push(Neighbor::new(id, distance)),
-                        )
-                        .await?;
+                neighbors
+                    .iter()
+                    .for_each(|neighbor| scratch.best.insert(*neighbor));
+                scratch.cmps += neighbors.len() as u32;
+                scratch.hops += expanded_ids.len() as u32;
 
-                    for &id in &expanded_ids {
-                        scratch.best.mark_visited_by_id(&id);
-                        submitted.remove(&id);
+                // Phase 2: Select and submit candidates to fill the pipeline.
+                // Non-pipelined: inflight is always 0, so this submits beam_width nodes.
+                // Pipelined: submits enough to keep beam_width IOs in flight.
+                scratch.beam_nodes.clear();
+                let slots = beam_width.saturating_sub(accessor.inflight_count());
+                while scratch.beam_nodes.len() < slots {
+                    if let Some(closest_node) = scratch.best.peek_best_unsubmitted(&submitted) {
+                        search_record.record(closest_node, scratch.hops, scratch.cmps);
+                        submitted.insert(closest_node.id);
+                        scratch.beam_nodes.push(closest_node.id);
+                    } else {
+                        break;
                     }
+                }
+                accessor.submit_expand(scratch.beam_nodes.iter().copied());
 
-                    // Step 2: Insert neighbors (updates queue before IO decision)
-                    neighbors
-                        .iter()
-                        .for_each(|neighbor| scratch.best.insert(*neighbor));
-                    scratch.cmps += neighbors.len() as u32;
-                    scratch.hops += expanded_ids.len() as u32;
-
-                    // Step 3: Submit one IO (with updated queue)
-                    let inflight = accessor.inflight_count();
-                    if inflight < beam_width {
-                        scratch.beam_nodes.clear();
-                        if let Some(closest_node) = scratch.best.peek_best_unsubmitted(&submitted) {
-                            search_record.record(closest_node, scratch.hops, scratch.cmps);
-                            submitted.insert(closest_node.id);
-                            scratch.beam_nodes.push(closest_node.id);
-                        }
-                        accessor.submit_expand(scratch.beam_nodes.iter().copied());
-                    }
-
-                    // Block if truly idle
-                    if expanded_ids.is_empty() && has_pending {
-                        let inflight = accessor.inflight_count();
-                        if inflight > 0 {
-                            accessor.wait_for_io();
-                        }
-                    }
-                } else {
-                    // Non-pipelined path OR initial burst (has_pending=false).
-                    let submit_limit = if has_pending { 0 } else { beam_width };
-
-                    scratch.beam_nodes.clear();
-                    while scratch.beam_nodes.len() < submit_limit {
-                        if let Some(closest_node) = scratch.best.peek_best_unsubmitted(&submitted) {
-                            search_record.record(closest_node, scratch.hops, scratch.cmps);
-                            submitted.insert(closest_node.id);
-                            scratch.beam_nodes.push(closest_node.id);
-                        } else {
-                            break;
-                        }
-                    }
-
-                    accessor.submit_expand(scratch.beam_nodes.iter().copied());
-
-                    neighbors.clear();
-                    let expanded_ids = accessor
-                        .expand_available(
-                            scratch.beam_nodes.iter().copied(),
-                            computer,
-                            glue::NotInMut::new(&mut scratch.visited),
-                            |distance, id| neighbors.push(Neighbor::new(id, distance)),
-                        )
-                        .await?;
-
-                    // Mark expanded nodes visited.
-                    for &id in &expanded_ids {
-                        scratch.best.mark_visited_by_id(&id);
-                        submitted.remove(&id);
-                    }
-
-                    neighbors
-                        .iter()
-                        .for_each(|neighbor| scratch.best.insert(*neighbor));
-                    scratch.cmps += neighbors.len() as u32;
-                    scratch.hops += expanded_ids.len() as u32;
+                // Phase 3: Block only when no progress was made but IOs are pending.
+                if expanded_ids.is_empty() && accessor.has_pending() {
+                    accessor.wait_for_io();
                 }
             }
 
@@ -2494,7 +2438,7 @@ where
 
             let stats = self
                 .search_internal(
-                    search_params,
+                    search_params.beam_width,
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -2690,12 +2634,9 @@ where
             let start_ids = accessor.starting_points().await?;
 
             let mut scratch = self.search_scratch(search_params.starting_l_value, start_ids.len());
-
-            let range_default_params =
-                SearchParams::new(1, scratch.best.search_l(), search_params.beam_width)?;
             let initial_stats = self
                 .search_internal(
-                    &range_default_params,
+                    search_params.beam_width,
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -3042,10 +2983,8 @@ where
                     .into_ann_result()?;
 
                 let start_ids = accessor.starting_points().await?;
-                let default_params =
-                    SearchParams::new(1, search_state.scratch.best.search_l(), None)?;
                 self.search_internal(
-                    &default_params,
+                    None, // beam_width
                     &start_ids,
                     &mut accessor,
                     &search_state.extra.1,
@@ -3793,7 +3732,7 @@ where
 
             let stats = self
                 .search_internal(
-                    search_params,
+                    search_params.beam_width,
                     &start_ids,
                     &mut accessor,
                     &computer,
