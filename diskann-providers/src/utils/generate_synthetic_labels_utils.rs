@@ -80,7 +80,10 @@ impl ZipfDistribution {
     }
 }
 
-#[allow(clippy::disallowed_methods)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Utility function for generating synthetic label files, needs direct file creation"
+)]
 pub fn generate_labels(
     output_file: &str,
     distribution_type: &str,
