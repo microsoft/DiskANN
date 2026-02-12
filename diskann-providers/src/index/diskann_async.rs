@@ -215,6 +215,55 @@ pub(crate) mod tests {
     // Callbacks for use with `simplified_builder`.
     fn no_modify(_: &mut diskann::graph::config::Builder) {}
 
+    //////////////////////////
+    // Test helper functions //
+    //////////////////////////
+
+    use diskann::graph::index::SearchStats;
+
+    /// Test helper: performs multihop search using the dispatch API.
+    async fn multihop_search<DP, S, T, O, OB>(
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        search_params: &SearchParams,
+        output: &mut OB,
+        filter: &dyn graph::index::QueryLabelProvider<DP::InternalId>,
+    ) -> diskann::ANNResult<SearchStats>
+    where
+        DP: DataProvider,
+        T: Sync + ?Sized,
+        S: graph::glue::SearchStrategy<DP, T, O>,
+        O: Send,
+        OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send,
+    {
+        let multihop = graph::MultihopSearch::new(
+            graph::GraphSearch::from(*search_params),
+            filter,
+        );
+        index.search(strategy, context, query, &multihop, output).await
+    }
+
+    /// Test helper: performs range search using the dispatch API.
+    async fn range_search<DP, S, T, O>(
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        search_params: &RangeSearchParams,
+    ) -> diskann::ANNResult<(SearchStats, Vec<O>, Vec<f32>)>
+    where
+        DP: DataProvider,
+        T: Sync + ?Sized,
+        S: graph::glue::SearchStrategy<DP, T, O>,
+        O: Send + Default + Clone,
+    {
+        let range_search = graph::RangeSearch::from(*search_params);
+        let result = index.search(strategy, context, query, &range_search, &mut ()).await?;
+        Ok((result.stats, result.ids, result.distances))
+    }
+
     /////////////////////////////////////////
     // Tests from the original async index //
     /////////////////////////////////////////
@@ -400,17 +449,17 @@ pub(crate) mod tests {
         let mut distances = vec![0.0; parameters.search_k];
         let mut result_output_buffer =
             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-        index
-            .multihop_search(
-                strategy,
-                &parameters.context,
-                query,
-                &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
-                &mut result_output_buffer,
-                filter,
-            )
-            .await
-            .unwrap();
+        multihop_search(
+            index,
+            strategy,
+            &parameters.context,
+            query,
+            &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
+            &mut result_output_buffer,
+            filter,
+        )
+        .await
+        .unwrap();
 
         // Loop over the requested number of results to check, invoking the checker closure.
         //
@@ -1443,17 +1492,17 @@ pub(crate) mod tests {
 
         let filter = CallbackFilter::new(blocked, adjusted, 0.5);
 
-        let stats = index
-            .multihop_search(
-                &FullPrecision,
-                &parameters.context,
-                query.as_slice(),
-                &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
-                &mut result_output_buffer,
-                &filter,
-            )
-            .await
-            .unwrap();
+        let stats = multihop_search(
+            &index,
+            &FullPrecision,
+            &parameters.context,
+            query.as_slice(),
+            &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
+            &mut result_output_buffer,
+            &filter,
+        )
+        .await
+        .unwrap();
 
         // Retrieve callback metrics for detailed validation
         let callback_metrics = filter.metrics();
@@ -2272,30 +2321,30 @@ pub(crate) mod tests {
             let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             {
                 // Full Precision Search.
-                let (_, ids, _) = index
-                    .range_search(
-                        &FullPrecision,
-                        ctx,
-                        query,
-                        &RangeSearchParams::new_default(starting_l_value, radius).unwrap(),
-                    )
-                    .await
-                    .unwrap();
+                let (_, ids, _) = range_search(
+                    &*index,
+                    &FullPrecision,
+                    ctx,
+                    query,
+                    &RangeSearchParams::new_default(starting_l_value, radius).unwrap(),
+                )
+                .await
+                .unwrap();
 
                 assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
             {
                 // Quantized Search
-                let (_, ids, _) = index
-                    .range_search(
-                        &Hybrid::new(None),
-                        ctx,
-                        query,
-                        &RangeSearchParams::new_default(starting_l_value, radius).unwrap(),
-                    )
-                    .await
-                    .unwrap();
+                let (_, ids, _) = range_search(
+                    &*index,
+                    &Hybrid::new(None),
+                    ctx,
+                    query,
+                    &RangeSearchParams::new_default(starting_l_value, radius).unwrap(),
+                )
+                .await
+                .unwrap();
 
                 assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
@@ -2304,24 +2353,24 @@ pub(crate) mod tests {
                 // Test with an inner radius
 
                 assert!(inner_radius <= radius);
-                let (_, ids, _) = index
-                    .range_search(
-                        &FullPrecision,
-                        ctx,
-                        query,
-                        &RangeSearchParams::new(
-                            None,
-                            starting_l_value,
-                            None,
-                            radius,
-                            Some(inner_radius),
-                            1.0,
-                            1.0,
-                        )
-                        .unwrap(),
+                let (_, ids, _) = range_search(
+                    &*index,
+                    &FullPrecision,
+                    ctx,
+                    query,
+                    &RangeSearchParams::new(
+                        None,
+                        starting_l_value,
+                        None,
+                        radius,
+                        Some(inner_radius),
+                        1.0,
+                        1.0,
                     )
-                    .await
-                    .unwrap();
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
 
                 assert_range_results_exactly_match(q, &gt, &ids, radius, Some(inner_radius));
             }
@@ -2329,15 +2378,15 @@ pub(crate) mod tests {
             {
                 // Test with a lower initial beam to trigger more two-round searches
                 // We don't expect results to exactly match here
-                let (_, ids, _) = index
-                    .range_search(
-                        &FullPrecision,
-                        ctx,
-                        query,
-                        &RangeSearchParams::new_default(lower_l_value, radius).unwrap(),
-                    )
-                    .await
-                    .unwrap();
+                let (_, ids, _) = range_search(
+                    &*index,
+                    &FullPrecision,
+                    ctx,
+                    query,
+                    &RangeSearchParams::new_default(lower_l_value, radius).unwrap(),
+                )
+                .await
+                .unwrap();
 
                 // check that ids don't have duplicates
                 let mut ids_set = std::collections::HashSet::new();
@@ -4104,17 +4153,17 @@ pub(crate) mod tests {
         // but reject everything via on_visit
         let filter = RejectAllFilter::only([0_u32]);
 
-        let stats = index
-            .multihop_search(
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &SearchParams::new_default(10, 20).unwrap(),
-                &mut result_output_buffer,
-                &filter,
-            )
-            .await
-            .unwrap();
+        let stats = multihop_search(
+            &index,
+            &FullPrecision,
+            &DefaultContext,
+            query.as_slice(),
+            &SearchParams::new_default(10, 20).unwrap(),
+            &mut result_output_buffer,
+            &filter,
+        )
+        .await
+        .unwrap();
 
         // When all candidates are rejected via on_visit, result_count should be 0
         // because rejected candidates are not added to the search frontier
@@ -4166,17 +4215,17 @@ pub(crate) mod tests {
         let target = (num_points / 2) as u32;
         let filter = TerminatingFilter::new(target);
 
-        let stats = index
-            .multihop_search(
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &SearchParams::new_default(10, 40).unwrap(),
-                &mut result_output_buffer,
-                &filter,
-            )
-            .await
-            .unwrap();
+        let stats = multihop_search(
+            &index,
+            &FullPrecision,
+            &DefaultContext,
+            query.as_slice(),
+            &SearchParams::new_default(10, 40).unwrap(),
+            &mut result_output_buffer,
+            &filter,
+        )
+        .await
+        .unwrap();
 
         let hits = filter.hits();
 
@@ -4230,17 +4279,17 @@ pub(crate) mod tests {
         let mut baseline_buffer =
             search_output_buffer::IdDistance::new(&mut baseline_ids, &mut baseline_distances);
 
-        let baseline_stats = index
-            .multihop_search(
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &SearchParams::new_default(10, 20).unwrap(),
-                &mut baseline_buffer,
-                &EvenFilter, // Just filter to even IDs
-            )
-            .await
-            .unwrap();
+        let baseline_stats = multihop_search(
+            &index,
+            &FullPrecision,
+            &DefaultContext,
+            query.as_slice(),
+            &SearchParams::new_default(10, 20).unwrap(),
+            &mut baseline_buffer,
+            &EvenFilter, // Just filter to even IDs
+        )
+        .await
+        .unwrap();
 
         // Now run with a filter that boosts a specific far-away point
         let boosted_point = (num_points - 2) as u32; // A point far from origin
@@ -4251,17 +4300,17 @@ pub(crate) mod tests {
         let mut adjusted_buffer =
             search_output_buffer::IdDistance::new(&mut adjusted_ids, &mut adjusted_distances);
 
-        let adjusted_stats = index
-            .multihop_search(
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &SearchParams::new_default(10, 20).unwrap(),
-                &mut adjusted_buffer,
-                &filter,
-            )
-            .await
-            .unwrap();
+        let adjusted_stats = multihop_search(
+            &index,
+            &FullPrecision,
+            &DefaultContext,
+            query.as_slice(),
+            &SearchParams::new_default(10, 20).unwrap(),
+            &mut adjusted_buffer,
+            &filter,
+        )
+        .await
+        .unwrap();
 
         // Both searches should return results
         assert!(
@@ -4377,17 +4426,17 @@ pub(crate) mod tests {
         let max_visits = 5;
         let filter = TerminateAfterN::new(max_visits);
 
-        let _stats = index
-            .multihop_search(
-                &FullPrecision,
-                &DefaultContext,
-                query.as_slice(),
-                &SearchParams::new_default(10, 100).unwrap(), // Large L to ensure we'd visit more without termination
-                &mut result_output_buffer,
-                &filter,
-            )
-            .await
-            .unwrap();
+        let _stats = multihop_search(
+            &index,
+            &FullPrecision,
+            &DefaultContext,
+            query.as_slice(),
+            &SearchParams::new_default(10, 100).unwrap(), // Large L to ensure we'd visit more without termination
+            &mut result_output_buffer,
+            &filter,
+        )
+        .await
+        .unwrap();
 
         // The search should have stopped after max_visits
         assert!(

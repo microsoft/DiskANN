@@ -19,7 +19,7 @@ use diskann::{
     graph::{
         self,
         glue::{self, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
-        search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer, SearchParams,
+        search_output_buffer, AdjacencyList, DiskANNIndex, GraphSearch, SearchOutputBuffer, SearchParams,
     },
     neighbor::Neighbor,
     provider::{
@@ -993,11 +993,12 @@ where
                 &mut result_output_buffer,
             ))?
         } else {
+            let graph_search = GraphSearch::new(k_value, search_list_size as usize, beam_width)?;
             self.runtime.block_on(self.index.search(
                 &strategy,
                 &DefaultContext,
                 strategy.query,
-                &SearchParams::new(k_value, search_list_size as usize, beam_width)?,
+                &graph_search,
                 &mut result_output_buffer,
             ))?
         };
@@ -1040,7 +1041,7 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 #[cfg(test)]
 mod disk_provider_tests {
     use diskann::{
-        graph::{search::record::VisitedSearchRecord, SearchParamsError},
+        graph::{search::record::VisitedSearchRecord, SearchParams, SearchParamsError},
         utils::IntoUsize,
         ANNErrorKind,
     };
@@ -1626,7 +1627,7 @@ mod disk_provider_tests {
         let mut search_record = VisitedSearchRecord::new(0);
         search_engine
             .runtime
-            .block_on(search_engine.index.search_recorded(
+            .block_on(search_engine.index.debug_search(
                 &strategy,
                 &DefaultContext,
                 &query_vector,
@@ -2088,7 +2089,7 @@ mod disk_provider_tests {
         let mut search_record = VisitedSearchRecord::new(0);
         search_engine
             .runtime
-            .block_on(search_engine.index.search_recorded(
+            .block_on(search_engine.index.debug_search(
                 &strategy,
                 &DefaultContext,
                 &query_vector,

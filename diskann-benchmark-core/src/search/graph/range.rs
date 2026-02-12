@@ -104,16 +104,18 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let (_, ids, distances) = self
+        let range_search = graph::RangeSearch::from(*parameters);
+        let result = self
             .index
-            .range_search(
+            .search(
                 self.strategy.get(index)?,
                 &context,
                 self.queries.row(index),
-                parameters,
+                &range_search,
+                &mut (),
             )
             .await?;
-        buffer.extend(std::iter::zip(ids.into_iter(), distances.into_iter()));
+        buffer.extend(std::iter::zip(result.ids.into_iter(), result.distances.into_iter()));
 
         Ok(Metrics {})
     }

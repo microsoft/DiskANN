@@ -32,6 +32,14 @@ pub use misc::DiverseSearchParams;
 pub mod glue;
 pub mod search;
 
+// Re-export unified search interface as the primary API.
+pub use search::{
+    GraphSearch, MultihopSearch, RangeSearch, RangeSearchOutput, SearchDispatch,
+};
+
+#[cfg(feature = "experimental_diversity_search")]
+pub use search::DiverseSearch;
+
 mod internal;
 
 // Integration tests and test providers.

@@ -34,7 +34,7 @@ default-members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.45.0"      # Obeying semver
+version = "0.46.0"      # Obeying semver
 description = "DiskANN is a fast approximate nearest neighbor search library for high dimensional data"
 authors = ["Microsoft"]
 documentation = "https://github.com/microsoft/DiskANN"
@@ -46,22 +46,22 @@ undocumented_unsafe_blocks = "warn"
 
 [workspace.dependencies]
 # Base And Numerics
-diskann-wide = { path = "diskann-wide", version = "0.45.0" }
-diskann-vector = { path = "diskann-vector", version = "0.45.0" }
-diskann-linalg = { path = "diskann-linalg", version = "0.45.0" }
-diskann-utils = { path = "diskann-utils", default-features = false, version = "0.45.0" }
-diskann-quantization = { path = "diskann-quantization", default-features = false, version = "0.45.0" }
-diskann-platform = { path = "diskann-platform", version = "0.45.0" }
+diskann-wide = { path = "diskann-wide", version = "0.46.0" }
+diskann-vector = { path = "diskann-vector", version = "0.46.0" }
+diskann-linalg = { path = "diskann-linalg", version = "0.46.0" }
+diskann-utils = { path = "diskann-utils", default-features = false, version = "0.46.0" }
+diskann-quantization = { path = "diskann-quantization", default-features = false, version = "0.46.0" }
+diskann-platform = { path = "diskann-platform", version = "0.46.0" }
 # Algorithm
-diskann = { path = "diskann", version = "0.45.0" }
+diskann = { path = "diskann", version = "0.46.0" }
 # Providers
-diskann-providers = { path = "diskann-providers", default-features = false, version = "0.45.0" }
-diskann-disk = { path = "diskann-disk", version = "0.45.0" }
-diskann-label-filter = { path = "diskann-label-filter", version = "0.45.0" }
+diskann-providers = { path = "diskann-providers", default-features = false, version = "0.46.0" }
+diskann-disk = { path = "diskann-disk", version = "0.46.0" }
+diskann-label-filter = { path = "diskann-label-filter", version = "0.46.0" }
 # Infra
-diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.45.0" }
-diskann-benchmark-core = { path = "diskann-benchmark-core", version = "0.45.0" }
-diskann-tools = { path = "diskann-tools", version = "0.45.0" }
+diskann-benchmark-runner = { path = "diskann-benchmark-runner", version = "0.46.0" }
+diskann-benchmark-core = { path = "diskann-benchmark-core", version = "0.46.0" }
+diskann-tools = { path = "diskann-tools", version = "0.46.0" }
 
 # External dependencies (shared versions)
 anyhow = "1.0.98"

@@ -9,7 +9,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, DiskANNIndex,
+        self, DiskANNIndex, GraphSearch,
         test::{provider as test_provider, synthetic::Grid},
     },
     neighbor::Neighbor,
@@ -126,10 +126,10 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
             // are correct.
             let index = setup_grid_search(grid, size);
 
-            let params = graph::SearchParams::new(10, 10, Some(beam_width)).unwrap();
+            let params = GraphSearch::new(10, 10, Some(beam_width)).unwrap();
             let context = test_provider::Context::new();
 
-            let mut neighbors = vec![Neighbor::<u32>::default(); params.k_value];
+            let mut neighbors = vec![Neighbor::<u32>::default(); params.k];
             let graph::index::SearchStats {
                 cmps,
                 hops,
@@ -147,7 +147,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
 
             assert_eq!(
                 result_count.into_usize(),
-                params.k_value,
+                params.k,
                 "grid search should be configured to always return the requested number of neighbors",
             );
 
