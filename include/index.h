@@ -29,6 +29,7 @@
 #define EXPAND_IF_FULL 0
 #define DEFAULT_MAXC 750
 
+//extern bool reduce_pool;
 namespace diskann
 {
 
@@ -265,17 +266,17 @@ template <typename T, typename TagT = uint32_t, typename LabelT = uint32_t> clas
                                     uint32_t filteredLindex = 0);
 
     void prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, std::vector<uint32_t> &pruned_list,
-                         InMemQueryScratch<T> *scratch);
+                         InMemQueryScratch<T> *scratch, bool reduce_pool);
 
     void prune_neighbors(const uint32_t location, std::vector<Neighbor> &pool, const uint32_t range,
                          const uint32_t max_candidate_size, const float alpha, std::vector<uint32_t> &pruned_list,
-                         InMemQueryScratch<T> *scratch);
+                         InMemQueryScratch<T> *scratch, bool reduce_pool);
 
     // Prunes candidates in @pool to a shorter list @result
     // @pool must be sorted before calling
     void occlude_list(const uint32_t location, std::vector<Neighbor> &pool, const float alpha, const uint32_t degree,
                       const uint32_t maxc, std::vector<uint32_t> &result, InMemQueryScratch<T> *scratch,
-                      const tsl::robin_set<uint32_t> *const delete_set_ptr = nullptr);
+                      const tsl::robin_set<uint32_t> *const delete_set_ptr = nullptr, bool reduce_pool = false);
 
     // add reverse links from all the visited nodes to node n.
     void inter_insert(uint32_t n, std::vector<uint32_t> &pruned_list, const uint32_t range,
