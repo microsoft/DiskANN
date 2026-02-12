@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::neighbor::{
-    Neighbor,
+    Neighbor, NodeState,
     queue::{
         BestCandidatesIterator, NeighborPriorityQueue, NeighborPriorityQueueIdType, NeighborQueue,
     },
@@ -267,13 +267,27 @@ where
             .map(|n| Neighbor::new(n.id.id, n.distance))
     }
 
+    fn pop_best_unsubmitted(&mut self) -> Option<Neighbor<P::Id>> {
+        self.global_queue
+            .pop_best_unsubmitted()
+            .map(|n| Neighbor::new(n.id.id, n.distance))
+    }
+
     fn mark_visited_by_id(&mut self, id: &P::Id) -> bool {
-        // Scan global_queue for the compound ID matching this bare id
         let limit = self.global_queue.search_l().min(self.global_queue.size());
         for i in self.global_queue.cursor..limit {
-            let entry = self.global_queue.get(i);
-            if entry.id.id == *id {
-                return self.global_queue.mark_visited_by_id(&entry.id);
+            if self.global_queue.get(i).id.id == *id {
+                self.global_queue.set_state(i, NodeState::Visited);
+                // Advance cursor past consecutive Visited nodes
+                if i == self.global_queue.cursor {
+                    while self.global_queue.cursor < limit
+                        && self.global_queue.get_state(self.global_queue.cursor)
+                            == NodeState::Visited
+                    {
+                        self.global_queue.cursor += 1;
+                    }
+                }
+                return true;
             }
         }
         false
@@ -282,9 +296,9 @@ where
     fn mark_submitted(&mut self, id: &P::Id) -> bool {
         let limit = self.global_queue.search_l().min(self.global_queue.size());
         for i in self.global_queue.cursor..limit {
-            let entry = self.global_queue.get(i);
-            if entry.id.id == *id {
-                return self.global_queue.mark_submitted(&entry.id);
+            if self.global_queue.get(i).id.id == *id {
+                self.global_queue.set_state(i, NodeState::Submitted);
+                return true;
             }
         }
         false
@@ -293,9 +307,9 @@ where
     fn revert_submitted(&mut self, id: &P::Id) -> bool {
         let limit = self.global_queue.search_l().min(self.global_queue.size());
         for i in self.global_queue.cursor..limit {
-            let entry = self.global_queue.get(i);
-            if entry.id.id == *id {
-                return self.global_queue.revert_submitted(&entry.id);
+            if self.global_queue.get(i).id.id == *id {
+                self.global_queue.set_state(i, NodeState::Unvisited);
+                return true;
             }
         }
         false

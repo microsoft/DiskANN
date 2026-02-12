@@ -130,7 +130,6 @@ pub struct PipelinedScratch {
     // Per-query scratch collections, cleared between queries but retain capacity
     in_flight_ios: VecDeque<InFlightIo>,
     loaded_nodes: HashMap<u32, LoadedNode>,
-    expanded_ids: Vec<u32>,
     distance_cache: HashMap<u32, f32>,
     /// Reusable buffer for neighbor IDs during expand_available
     neighbor_buf: Vec<u32>,
@@ -176,7 +175,6 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
             pq_scratch,
             in_flight_ios: VecDeque::new(),
             loaded_nodes: HashMap::new(),
-            expanded_ids: Vec::new(),
             distance_cache: HashMap::new(),
             neighbor_buf: Vec::new(),
             node_pool: Vec::new(),
@@ -191,7 +189,6 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
         self.node_pool
             .extend(self.loaded_nodes.drain().map(|(_, node)| node));
         self.in_flight_ios.clear();
-        self.expanded_ids.clear();
         self.distance_cache.clear();
         self.neighbor_buf.clear();
         self.free_slots.clear();
@@ -630,18 +627,19 @@ where
         _computer: &Self::QueryComputer,
         mut pred: P,
         mut on_neighbors: F,
-    ) -> ANNResult<Vec<Self::Id>>
+        expanded_ids: &mut Vec<Self::Id>,
+    ) -> ANNResult<()>
     where
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(f32, Self::Id) + Send,
     {
-        self.scratch.expanded_ids.clear();
+        expanded_ids.clear();
 
         // Non-blocking poll for completions
         self.drain_completions()?;
 
         if self.scratch.loaded_nodes.is_empty() {
-            return Ok(Vec::new());
+            return Ok(());
         }
 
         // Try caller's priority order first
@@ -665,10 +663,10 @@ where
 
         let vid = match best_vid {
             Some(id) => id,
-            None => return Ok(Vec::new()),
+            None => return Ok(()),
         };
         let node = self.scratch.loaded_nodes.remove(&vid).unwrap();
-        self.scratch.expanded_ids.push(vid);
+        expanded_ids.push(vid);
 
         // Compute full-precision distance and cache it for post-processing
         let cpu_start = Instant::now();
@@ -701,7 +699,7 @@ where
         // Return node to pool for reuse
         self.scratch.release_node(node);
 
-        Ok(std::mem::take(&mut self.scratch.expanded_ids))
+        Ok(())
     }
 
     /// Returns true when there are in-flight IO operations.
@@ -713,11 +711,12 @@ where
         self.scratch.in_flight_ios.len()
     }
 
-    fn wait_for_io(&mut self) {
+    fn wait_for_io(&mut self) -> ANNResult<()> {
         // Only block if there are actually in-flight IOs to wait for
         if !self.scratch.in_flight_ios.is_empty() {
-            let _ = self.wait_and_drain();
+            self.wait_and_drain()?;
         }
+        Ok(())
     }
 }
 

@@ -2093,6 +2093,8 @@ where
 
             scratch.neighbors.clear();
 
+            let mut expanded_ids = Vec::new();
+
             while (scratch.best.has_notvisited_node()
                 || scratch.best.peek_best_unsubmitted().is_some()
                 || accessor.has_pending())
@@ -2103,12 +2105,13 @@ where
                 // Pipelined: polls IO completions and expands one loaded node.
                 // On the first iteration beam_nodes is empty — a no-op for both paths.
                 scratch.neighbors.clear();
-                let expanded_ids = accessor
+                accessor
                     .expand_available(
                         scratch.beam_nodes.iter().copied(),
                         computer,
                         glue::NotInMut::new(&mut scratch.visited),
                         |distance, id| scratch.neighbors.push(Neighbor::new(id, distance)),
+                        &mut expanded_ids,
                     )
                     .await?;
 
@@ -2129,9 +2132,8 @@ where
                 scratch.beam_nodes.clear();
                 let slots = beam_width.saturating_sub(accessor.inflight_count());
                 while scratch.beam_nodes.len() < slots {
-                    if let Some(closest_node) = scratch.best.peek_best_unsubmitted() {
+                    if let Some(closest_node) = scratch.best.pop_best_unsubmitted() {
                         search_record.record(closest_node, scratch.hops, scratch.cmps);
-                        scratch.best.mark_submitted(&closest_node.id);
                         scratch.beam_nodes.push(closest_node.id);
                     } else {
                         break;
@@ -2144,7 +2146,7 @@ where
 
                 // Phase 3: Block only when no progress was made but IOs are pending.
                 if expanded_ids.is_empty() && accessor.has_pending() {
-                    accessor.wait_for_io();
+                    accessor.wait_for_io()?;
                 }
             }
 

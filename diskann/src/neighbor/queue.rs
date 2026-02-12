@@ -88,6 +88,11 @@ pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: std::fmt::Debug + Send 
         None
     }
 
+    /// Find the first `Unvisited` node, mark it `Submitted`, and return it — single pass.
+    fn pop_best_unsubmitted(&mut self) -> Option<Neighbor<I>> {
+        None
+    }
+
     /// Find the node with matching `id`, mark it visited, and advance the cursor if needed.
     /// Returns true if found and marked, false otherwise.
     fn mark_visited_by_id(&mut self, _id: &I) -> bool {
@@ -122,7 +127,7 @@ pub struct NeighborPriorityQueue<I: NeighborPriorityQueueIdType> {
     capacity: usize,
 
     /// The current notvisited neighbor whose distance is smallest among all notvisited neighbor
-    cursor: usize,
+    pub(crate) cursor: usize,
 
     /// The neighbor (id, state) collection.
     /// These are stored together to make inserts cheaper.
@@ -434,8 +439,8 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         self.cursor = 0;
     }
 
-    fn set_state(&mut self, index: usize, state: NodeState) {
-        assert!(index <= self.size);
+    pub(crate) fn set_state(&mut self, index: usize, state: NodeState) {
+        assert!(index < self.size);
         assert!(self.size <= self.capacity);
         unsafe { self.id_states.get_unchecked_mut(index) }.1 = state;
     }
@@ -543,6 +548,18 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         None
     }
 
+    /// Find the first `Unvisited` node, mark it `Submitted`, and return it — single pass.
+    pub fn pop_best_unsubmitted(&mut self) -> Option<Neighbor<I>> {
+        let limit = self.search_param_l.min(self.size);
+        for i in self.cursor..limit {
+            if self.id_states[i].1 == NodeState::Unvisited {
+                self.id_states[i].1 = NodeState::Submitted;
+                return Some(Neighbor::new(self.id_states[i].0, self.distances[i]));
+            }
+        }
+        None
+    }
+
     /// Find the node with matching `id`, mark it `Visited`, and advance the cursor if needed.
     /// Returns true if found and marked, false otherwise.
     pub fn mark_visited_by_id(&mut self, id: &I) -> bool {
@@ -637,6 +654,10 @@ impl<I: NeighborPriorityQueueIdType> NeighborQueue<I> for NeighborPriorityQueue<
 
     fn peek_best_unsubmitted(&self) -> Option<Neighbor<I>> {
         self.peek_best_unsubmitted()
+    }
+
+    fn pop_best_unsubmitted(&mut self) -> Option<Neighbor<I>> {
+        self.pop_best_unsubmitted()
     }
 
     fn mark_visited_by_id(&mut self, id: &I) -> bool {

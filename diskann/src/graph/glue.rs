@@ -273,23 +273,25 @@ where
     /// completed IO operations and expands only the nodes whose data has arrived,
     /// returning immediately without blocking.
     ///
-    /// Returns the IDs of nodes that were actually expanded in this call.
+    /// The IDs of nodes actually expanded are written into `expanded_ids`.
     fn expand_available<P, F>(
         &mut self,
         ids: impl Iterator<Item = Self::Id> + Send,
         computer: &Self::QueryComputer,
         pred: P,
         on_neighbors: F,
-    ) -> impl std::future::Future<Output = ANNResult<Vec<Self::Id>>> + Send
+        expanded_ids: &mut Vec<Self::Id>,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
     where
         P: HybridPredicate<Self::Id> + Send + Sync,
         F: FnMut(f32, Self::Id) + Send,
     {
         async move {
-            let id_vec: Vec<Self::Id> = ids.collect();
-            self.expand_beam(id_vec.iter().copied(), computer, pred, on_neighbors)
+            expanded_ids.clear();
+            expanded_ids.extend(ids);
+            self.expand_beam(expanded_ids.iter().copied(), computer, pred, on_neighbors)
                 .await?;
-            Ok(id_vec)
+            Ok(())
         }
     }
 
@@ -318,7 +320,9 @@ where
     /// spin-polling, while the eager drain ensures we process bursts efficiently.
     ///
     /// Default: no-op (non-pipelined providers never need to wait).
-    fn wait_for_io(&mut self) {}
+    fn wait_for_io(&mut self) -> ANNResult<()> {
+        Ok(())
+    }
 
     /// Expand all `ids` synchronously: load data, get neighbors, compute distances.
     ///
