@@ -5,8 +5,6 @@
 
 //! Label-filtered search using multi-hop expansion.
 
-use std::fmt::Debug;
-
 use diskann_utils::future::{AssertSend, SendFuture};
 use diskann_utils::Reborrow;
 use diskann_vector::PreprocessedDistanceFunction;
@@ -35,20 +33,12 @@ use super::graph_search::GraphSearch;
 /// This search extends standard graph search by expanding through non-matching
 /// nodes to find matching neighbors. More efficient than flat search when the
 /// matching subset is reasonably large.
+#[derive(Debug)]
 pub struct MultihopSearch<'q, InternalId> {
     /// Base graph search parameters.
     pub inner: GraphSearch,
     /// Label evaluator for determining node matches.
     pub label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
-}
-
-impl<InternalId: Debug> Debug for MultihopSearch<'_, InternalId> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MultihopSearch")
-            .field("inner", &self.inner)
-            .field("label_evaluator", self.label_evaluator)
-            .finish()
-    }
 }
 
 impl<'q, InternalId> MultihopSearch<'q, InternalId> {

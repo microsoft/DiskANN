@@ -175,6 +175,7 @@ where
 /// Graph search with traversal path recording.
 ///
 /// Records the path taken during search for debugging or analysis.
+#[derive(Debug)]
 pub struct RecordedGraphSearch<'r, SR: ?Sized> {
     /// Base graph search parameters.
     pub inner: GraphSearch,
@@ -186,14 +187,6 @@ impl<'r, SR: ?Sized> RecordedGraphSearch<'r, SR> {
     /// Create new recorded search parameters.
     pub fn new(inner: GraphSearch, recorder: &'r mut SR) -> Self {
         Self { inner, recorder }
-    }
-}
-
-impl<'r, SR: Debug + ?Sized> Debug for RecordedGraphSearch<'r, SR> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RecordedGraphSearch")
-            .field("inner", &self.inner)
-            .finish_non_exhaustive()
     }
 }
 
