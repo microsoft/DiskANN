@@ -420,8 +420,13 @@ unsafe impl<T: Copy> Repr for Standard<T> {
         debug_assert!(ptr.cast::<T>().is_aligned());
         debug_assert!(i < self.nrows);
 
-        let row_ptr = ptr.as_ptr().cast::<T>().add(i * self.ncols);
-        std::slice::from_raw_parts(row_ptr, self.ncols)
+        // SAFETY: The caller asserts that `i` is less than `self.nrows()`. Since this type
+        // audits the constructors for `Mat` and friends, we know that there is room for at
+        // least `self.num_elements()` elements from the base pointer, so this access is safe.
+        let row_ptr = unsafe { ptr.as_ptr().cast::<T>().add(i * self.ncols) };
+
+        // SAFETY: The logic is the same to the previous `unsafe` block.
+        unsafe { std::slice::from_raw_parts(row_ptr, self.ncols) }
     }
 }
 
@@ -437,8 +442,14 @@ unsafe impl<T: Copy> ReprMut for Standard<T> {
         debug_assert!(ptr.cast::<T>().is_aligned());
         debug_assert!(i < self.nrows);
 
-        let row_ptr = ptr.as_ptr().cast::<T>().add(i * self.ncols);
-        std::slice::from_raw_parts_mut(row_ptr, self.ncols)
+        // SAFETY: The caller asserts that `i` is less than `self.nrows()`. Since this type
+        // audits the constructors for `Mat` and friends, we know that there is room for at
+        // least `self.num_elements()` elements from the base pointer, so this access is safe.
+        let row_ptr = unsafe { ptr.as_ptr().cast::<T>().add(i * self.ncols) };
+
+        // SAFETY: The logic is the same to the previous `unsafe` block. Further, the caller
+        // attests that creating a mutable reference is safe.
+        unsafe { std::slice::from_raw_parts_mut(row_ptr, self.ncols) }
     }
 }
 

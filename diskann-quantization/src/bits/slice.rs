@@ -574,7 +574,9 @@ where
     {
         let count: Len = count.into();
         debug_assert_eq!(precursor.precursor_len(), Self::bytes_for(count.value()));
-        Self::new_unchecked_internal(precursor.precursor_into(), count)
+
+        // SAFETY: Inherited from the caller.
+        unsafe { Self::new_unchecked_internal(precursor.precursor_into(), count) }
     }
 
     /// Construct a new `BitSlice` from the `precursor` capable of holding `count` encoded
