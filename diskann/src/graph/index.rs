@@ -2148,9 +2148,7 @@ where
                     let inflight = accessor.inflight_count();
                     if inflight < beam_width {
                         scratch.beam_nodes.clear();
-                        if let Some((_, closest_node)) =
-                            scratch.best.peek_best_unsubmitted_with_position(&submitted)
-                        {
+                        if let Some(closest_node) = scratch.best.peek_best_unsubmitted(&submitted) {
                             search_record.record(closest_node, scratch.hops, scratch.cmps);
                             submitted.insert(closest_node.id);
                             scratch.beam_nodes.push(closest_node.id);
@@ -2171,9 +2169,7 @@ where
 
                     scratch.beam_nodes.clear();
                     while scratch.beam_nodes.len() < submit_limit {
-                        if let Some((_, closest_node)) =
-                            scratch.best.peek_best_unsubmitted_with_position(&submitted)
-                        {
+                        if let Some(closest_node) = scratch.best.peek_best_unsubmitted(&submitted) {
                             search_record.record(closest_node, scratch.hops, scratch.cmps);
                             submitted.insert(closest_node.id);
                             scratch.beam_nodes.push(closest_node.id);

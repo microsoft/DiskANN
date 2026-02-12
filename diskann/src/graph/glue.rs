@@ -308,8 +308,7 @@ where
 
     /// Returns the number of IOs currently in-flight (submitted but not completed).
     ///
-    /// The search loop uses this to cap submissions at `cur_beam_width`, matching
-    /// PipeSearch's behavior of not over-committing speculative reads.
+    /// The search loop uses this to cap submissions at `beam_width`.
     /// Default: 0 (non-pipelined providers have no in-flight IO).
     fn inflight_count(&self) -> usize {
         0
