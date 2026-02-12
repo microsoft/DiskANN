@@ -26,9 +26,8 @@ use tokio::task::JoinSet;
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, SearchParams,
     glue::{
-        self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy,
-        InsertStrategy, PruneStrategy, SearchExt, SearchPostProcess,
-        SearchStrategy, aliases,
+        self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
+        PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
@@ -3116,4 +3115,3 @@ impl InternalSearchStats {
         }
     }
 }
-

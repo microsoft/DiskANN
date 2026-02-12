@@ -238,11 +238,11 @@ pub(crate) mod tests {
         O: Send,
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send,
     {
-        let mut multihop = graph::MultihopSearch::new(
-            graph::GraphSearch::from(*search_params),
-            filter,
-        );
-        index.search(strategy, context, query, &mut multihop, output).await
+        let mut multihop =
+            graph::MultihopSearch::new(graph::GraphSearch::from(*search_params), filter);
+        index
+            .search(strategy, context, query, &mut multihop, output)
+            .await
     }
 
     /// Test helper: performs range search using the dispatch API.
@@ -260,7 +260,9 @@ pub(crate) mod tests {
         O: Send + Default + Clone,
     {
         let mut range_search = graph::RangeSearch::from(*search_params);
-        let result = index.search(strategy, context, query, &mut range_search, &mut ()).await?;
+        let result = index
+            .search(strategy, context, query, &mut range_search, &mut ())
+            .await?;
         Ok((result.stats, result.ids, result.distances))
     }
 
@@ -2513,8 +2515,7 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let mut search_params =
-                            SearchParams::new_default(top_k, search_l).unwrap();
+                        let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
                         // Full Precision Search.
                         index
                             .search(
@@ -2532,8 +2533,7 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let mut search_params =
-                            SearchParams::new_default(top_k, search_l).unwrap();
+                        let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
                         // Quantized Search
                         index
                             .search(
@@ -2620,8 +2620,7 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
-                        let mut search_params =
-                            SearchParams::new_default(top_k, top_k).unwrap();
+                        let mut search_params = SearchParams::new_default(top_k, top_k).unwrap();
                         // Quantized Search
                         index
                             .search(
@@ -2737,13 +2736,7 @@ pub(crate) mod tests {
             let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
             let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
             index
-                .search(
-                    &FullPrecision,
-                    ctx,
-                    query,
-                    &mut search_params,
-                    &mut output,
-                )
+                .search(&FullPrecision, ctx, query, &mut search_params, &mut output)
                 .await
                 .unwrap();
             assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
@@ -2756,13 +2749,7 @@ pub(crate) mod tests {
             let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
 
             index
-                .search(
-                    &strategy,
-                    ctx,
-                    query,
-                    &mut search_params,
-                    &mut output,
-                )
+                .search(&strategy, ctx, query, &mut search_params, &mut output)
                 .await
                 .unwrap();
             assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
@@ -2865,13 +2852,7 @@ pub(crate) mod tests {
             let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
 
             index
-                .search(
-                    &strategy,
-                    ctx,
-                    query,
-                    &mut search_params,
-                    &mut output,
-                )
+                .search(&strategy, ctx, query, &mut search_params, &mut output)
                 .await
                 .unwrap();
 

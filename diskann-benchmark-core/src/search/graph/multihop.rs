@@ -111,10 +111,8 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let mut multihop_search = graph::MultihopSearch::new(
-            graph::GraphSearch::from(*parameters),
-            &*self.labels[index],
-        );
+        let mut multihop_search =
+            graph::MultihopSearch::new(graph::GraphSearch::from(*parameters), &*self.labels[index]);
         let stats = self
             .index
             .search(

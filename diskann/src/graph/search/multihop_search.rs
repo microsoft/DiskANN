@@ -5,8 +5,8 @@
 
 //! Label-filtered search using multi-hop expansion.
 
-use diskann_utils::future::{AssertSend, SendFuture};
 use diskann_utils::Reborrow;
+use diskann_utils::future::{AssertSend, SendFuture};
 use diskann_vector::PreprocessedDistanceFunction;
 use hashbrown::HashSet;
 
@@ -16,8 +16,13 @@ use crate::{
     error::{ErrorExt, IntoANNResult},
     graph::{
         SearchParams,
-        glue::{self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt, SearchPostProcess, SearchStrategy},
-        index::{DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats},
+        glue::{
+            self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
+            SearchPostProcess, SearchStrategy,
+        },
+        index::{
+            DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
+        },
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
     },
@@ -47,7 +52,10 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
         inner: GraphSearch,
         label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
     ) -> Self {
-        Self { inner, label_evaluator }
+        Self {
+            inner,
+            label_evaluator,
+        }
     }
 }
 
@@ -85,15 +93,15 @@ where
             let mut scratch = index.search_scratch(params.l_value, start_ids.len());
 
             let stats = multihop_search_internal(
-                    index.max_degree_with_slack(),
-                    &params,
-                    &mut accessor,
-                    &computer,
-                    &mut scratch,
-                    &mut NoopSearchRecord::new(),
-                    self.label_evaluator,
-                )
-                .await?;
+                index.max_degree_with_slack(),
+                &params,
+                &mut accessor,
+                &computer,
+                &mut scratch,
+                &mut NoopSearchRecord::new(),
+                self.label_evaluator,
+            )
+            .await?;
 
             let result_count = strategy
                 .post_processor()

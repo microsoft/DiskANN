@@ -12,7 +12,10 @@ use std::num::NonZeroUsize;
 use diskann_utils::future::{AssertSend, SendFuture};
 use hashbrown::HashSet;
 
-use super::{dispatch::SearchDispatch, graph_search::GraphSearch, record::NoopSearchRecord, scratch::SearchScratch};
+use super::{
+    dispatch::SearchDispatch, graph_search::GraphSearch, record::NoopSearchRecord,
+    scratch::SearchScratch,
+};
 use crate::{
     ANNResult,
     error::IntoANNResult,
@@ -47,7 +50,10 @@ where
 {
     /// Create new diverse search parameters.
     pub fn new(inner: GraphSearch, diverse_params: DiverseSearchParams<P>) -> Self {
-        Self { inner, diverse_params }
+        Self {
+            inner,
+            diverse_params,
+        }
     }
 }
 

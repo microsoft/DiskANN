@@ -115,7 +115,10 @@ where
                 &mut (),
             )
             .await?;
-        buffer.extend(std::iter::zip(result.ids.into_iter(), result.distances.into_iter()));
+        buffer.extend(std::iter::zip(
+            result.ids.into_iter(),
+            result.distances.into_iter(),
+        ));
 
         Ok(Metrics {})
     }

@@ -51,7 +51,10 @@ impl GraphSearch {
         use super::super::SearchParamsError;
 
         if k > l {
-            return Err(SearchParamsError::LLessThanK { l_value: l, k_value: k });
+            return Err(SearchParamsError::LLessThanK {
+                l_value: l,
+                k_value: k,
+            });
         }
         if let Some(bw) = beam_width {
             if bw == 0 {
@@ -106,7 +109,9 @@ where
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
             let mut graph_search = GraphSearch::from(*self);
-            graph_search.dispatch(index, strategy, context, query, output).await
+            graph_search
+                .dispatch(index, strategy, context, query, output)
+                .await
         }
     }
 }

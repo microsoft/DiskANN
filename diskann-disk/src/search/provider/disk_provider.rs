@@ -19,7 +19,8 @@ use diskann::{
     graph::{
         self,
         glue::{self, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
-        search_output_buffer, AdjacencyList, DiskANNIndex, GraphSearch, SearchOutputBuffer, SearchParams,
+        search_output_buffer, AdjacencyList, DiskANNIndex, GraphSearch, SearchOutputBuffer,
+        SearchParams,
     },
     neighbor::Neighbor,
     provider::{
@@ -993,7 +994,8 @@ where
                 &mut result_output_buffer,
             ))?
         } else {
-            let mut graph_search = GraphSearch::new(k_value, search_list_size as usize, beam_width)?;
+            let mut graph_search =
+                GraphSearch::new(k_value, search_list_size as usize, beam_width)?;
             self.runtime.block_on(self.index.search(
                 &strategy,
                 &DefaultContext,
