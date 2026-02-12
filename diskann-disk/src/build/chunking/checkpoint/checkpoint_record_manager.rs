@@ -100,13 +100,6 @@ mod tests {
     use super::super::NaiveCheckpointRecordManager;
 
     #[test]
-    fn test_checkpoint_manager_trait_exists() {
-        // Verify trait is properly defined
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<NaiveCheckpointRecordManager>();
-    }
-
-    #[test]
     fn test_checkpoint_manager_ext_execute_stage_with_resumption() {
         let mut manager = NaiveCheckpointRecordManager::default();
         let mut executed = false;

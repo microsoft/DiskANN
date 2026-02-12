@@ -101,11 +101,3 @@ pub trait VertexProvider<Data: GraphDataType>: Send + Sync {
     // Clears the members of the vertex provider.
     fn clear(&mut self);
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_vertex_provider_trait() {
-        // Trait definition is verified at compile time
-    }
-}

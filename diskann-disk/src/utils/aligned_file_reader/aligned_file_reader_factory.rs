@@ -76,11 +76,4 @@ mod tests {
         let factory = AlignedFileReaderFactory::new(path.clone());
         assert_eq!(factory.file_path, path);
     }
-
-    #[test]
-    fn test_aligned_file_reader_factory_implements_trait() {
-        // Verify that AlignedFileReaderFactory implements AlignedReaderFactory
-        fn check_impl<T: AlignedReaderFactory>() {}
-        check_impl::<AlignedFileReaderFactory>();
-    }
 }

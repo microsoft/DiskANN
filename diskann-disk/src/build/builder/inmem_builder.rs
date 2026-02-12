@@ -376,12 +376,3 @@ where
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_trait_definition() {
-        // Test verifies the trait and types compile
-        assert!(true);
-    }
-}

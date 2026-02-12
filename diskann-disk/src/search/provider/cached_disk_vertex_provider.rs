@@ -154,11 +154,3 @@ where
         self.nodes_to_fetch_local_idx_to_filtered_idx.clear();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_struct_definition() {
-        // Struct definition is verified at compile time
-    }
-}

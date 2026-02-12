@@ -34,11 +34,3 @@ pub trait VertexProviderFactory<Data: GraphDataType>: Send + Sync {
         header: &GraphHeader,
     ) -> ANNResult<Self::VertexProviderType>;
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_vertex_provider_factory_trait() {
-        // Trait definition is verified at compile time
-    }
-}

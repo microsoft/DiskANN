@@ -13,11 +13,3 @@ pub mod disk_provider;
 pub mod disk_sector_graph;
 pub mod disk_vertex_provider;
 pub mod disk_vertex_provider_factory;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_module_structure() {
-        // Module structure is verified at compile time
-    }
-}

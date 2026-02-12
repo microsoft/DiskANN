@@ -9,11 +9,3 @@ pub use aligned_file_reader::AlignedFileReader;
 
 pub mod aligned_reader_factory;
 pub use aligned_reader_factory::AlignedReaderFactory;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn test_module_structure() {
-        // Module structure is verified at compile time
-    }
-}

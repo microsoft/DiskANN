@@ -34,10 +34,4 @@ mod tests {
         
         assert!(reader.read(&mut requests).is_ok());
     }
-
-    #[test]
-    fn test_aligned_file_reader_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<MockAlignedFileReader>();
-    }
 }

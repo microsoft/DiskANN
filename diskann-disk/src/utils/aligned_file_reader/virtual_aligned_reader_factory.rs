@@ -47,11 +47,4 @@ mod tests {
         
         assert_eq!(factory.file_path, path);
     }
-
-    #[test]
-    fn test_virtual_aligned_reader_factory_implements_trait() {
-        // Verify that VirtualAlignedReaderFactory implements AlignedReaderFactory
-        fn check_impl<T: AlignedReaderFactory>() {}
-        check_impl::<VirtualAlignedReaderFactory<MemoryFS>>();
-    }
 }

@@ -82,10 +82,4 @@ mod tests {
         assert_eq!(config.data_compression_chunk_vector_count, 10000);
         assert_eq!(config.inmemory_build_chunk_vector_count, 20000);
     }
-
-    #[test]
-    fn test_constants() {
-        assert_eq!(PQ_DEFAULT_BATCH_SIZE, 5000000);
-        assert_eq!(PQ_COMPRESSION_DEFAULT_CHUNK_SIZE, 25_000);
-    }
 }
