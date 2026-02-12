@@ -2092,13 +2092,9 @@ where
             }
 
             scratch.neighbors.clear();
-            scratch.submitted.clear();
 
             while (scratch.best.has_notvisited_node()
-                || scratch
-                    .best
-                    .peek_best_unsubmitted(&scratch.submitted)
-                    .is_some()
+                || scratch.best.peek_best_unsubmitted().is_some()
                 || accessor.has_pending())
                 && !accessor.terminate_early()
             {
@@ -2118,7 +2114,6 @@ where
 
                 for &id in &expanded_ids {
                     scratch.best.mark_visited_by_id(&id);
-                    scratch.submitted.remove(&id);
                 }
 
                 scratch
@@ -2134,17 +2129,18 @@ where
                 scratch.beam_nodes.clear();
                 let slots = beam_width.saturating_sub(accessor.inflight_count());
                 while scratch.beam_nodes.len() < slots {
-                    if let Some(closest_node) =
-                        scratch.best.peek_best_unsubmitted(&scratch.submitted)
-                    {
+                    if let Some(closest_node) = scratch.best.peek_best_unsubmitted() {
                         search_record.record(closest_node, scratch.hops, scratch.cmps);
-                        scratch.submitted.insert(closest_node.id);
+                        scratch.best.mark_submitted(&closest_node.id);
                         scratch.beam_nodes.push(closest_node.id);
                     } else {
                         break;
                     }
                 }
-                accessor.submit_expand(scratch.beam_nodes.iter().copied());
+                let rejected = accessor.submit_expand(scratch.beam_nodes.iter().copied());
+                for id in rejected {
+                    scratch.best.revert_submitted(&id);
+                }
 
                 // Phase 3: Block only when no progress was made but IOs are pending.
                 if expanded_ids.is_empty() && accessor.has_pending() {
@@ -3666,7 +3662,6 @@ where
             best: diverse_queue,
             visited: HashSet::with_capacity(self.estimate_visited_set_capacity(Some(l_value))),
             neighbors: Vec::with_capacity(self.max_degree_with_slack()),
-            submitted: std::collections::HashSet::new(),
             beam_nodes: Vec::with_capacity(beam_width.unwrap_or(1)),
             range_frontier: std::collections::VecDeque::new(),
             in_range: Vec::new(),

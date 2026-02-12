@@ -255,18 +255,14 @@ pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized
 where
     T: ?Sized,
 {
-    /// Submit IDs to the expansion queue.
+    /// Submit IDs for expansion.
     ///
-    /// For non-pipelined providers (default), IDs are stored in an internal buffer and
-    /// processed synchronously in [`expand_available`]. For pipelined providers, this
-    /// submits non-blocking IO requests (e.g., io_uring reads) so that data loading
-    /// overlaps with other computation.
-    ///
-    /// The default implementation delegates to [`expand_beam`] from within
-    /// [`expand_available`], so overriding this method is only necessary for pipelined
-    /// providers that need to separate submission from completion.
-    fn submit_expand(&mut self, _ids: impl Iterator<Item = Self::Id> + Send) {
-        // Default: no-op. IDs are passed directly to expand_beam in expand_available.
+    /// For non-pipelined providers (default), this is a no-op — IDs are passed
+    /// directly to [`expand_beam`] in [`expand_available`]. For pipelined providers,
+    /// this submits non-blocking IO requests. Any IDs that could not be submitted
+    /// (e.g., no free IO slots) are returned so the caller can revert their state.
+    fn submit_expand(&mut self, _ids: impl Iterator<Item = Self::Id> + Send) -> Vec<Self::Id> {
+        Vec::new() // Default: all accepted
     }
 
     /// Expand nodes whose data is available, invoking `on_neighbors` for each discovered

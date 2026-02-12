@@ -260,6 +260,46 @@ where
         let sz = self.global_queue.search_l().min(self.global_queue.size());
         BestCandidatesIterator::new(sz, self)
     }
+
+    fn peek_best_unsubmitted(&self) -> Option<Neighbor<P::Id>> {
+        self.global_queue
+            .peek_best_unsubmitted()
+            .map(|n| Neighbor::new(n.id.id, n.distance))
+    }
+
+    fn mark_visited_by_id(&mut self, id: &P::Id) -> bool {
+        // Scan global_queue for the compound ID matching this bare id
+        let limit = self.global_queue.search_l().min(self.global_queue.size());
+        for i in self.global_queue.cursor..limit {
+            let entry = self.global_queue.get(i);
+            if entry.id.id == *id {
+                return self.global_queue.mark_visited_by_id(&entry.id);
+            }
+        }
+        false
+    }
+
+    fn mark_submitted(&mut self, id: &P::Id) -> bool {
+        let limit = self.global_queue.search_l().min(self.global_queue.size());
+        for i in self.global_queue.cursor..limit {
+            let entry = self.global_queue.get(i);
+            if entry.id.id == *id {
+                return self.global_queue.mark_submitted(&entry.id);
+            }
+        }
+        false
+    }
+
+    fn revert_submitted(&mut self, id: &P::Id) -> bool {
+        let limit = self.global_queue.search_l().min(self.global_queue.size());
+        for i in self.global_queue.cursor..limit {
+            let entry = self.global_queue.get(i);
+            if entry.id.id == *id {
+                return self.global_queue.revert_submitted(&entry.id);
+            }
+        }
+        false
+    }
 }
 
 /// Trait for providing attribute values for vector IDs.

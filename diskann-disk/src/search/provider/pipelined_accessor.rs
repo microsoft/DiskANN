@@ -557,9 +557,11 @@ where
 {
     /// Submit non-blocking io_uring reads for the given node IDs.
     /// Nodes found in the node cache are placed directly into `loaded_nodes`,
-    /// skipping disk IO entirely.
-    fn submit_expand(&mut self, ids: impl Iterator<Item = Self::Id> + Send) {
+    /// skipping disk IO entirely. Returns IDs that could not be submitted.
+    fn submit_expand(&mut self, ids: impl Iterator<Item = Self::Id> + Send) -> Vec<Self::Id> {
         let io_start = Instant::now();
+        let mut rejected = Vec::new();
+        let mut hit_slot_limit = false;
         for id in ids {
             if self.scratch.loaded_nodes.contains_key(&id) {
                 continue; // Already loaded from a previous IO
@@ -585,8 +587,10 @@ where
             }
 
             // Don't submit if no free io_uring slots are available.
-            if self.scratch.free_slots.is_empty() {
-                break;
+            if hit_slot_limit || self.scratch.free_slots.is_empty() {
+                hit_slot_limit = true;
+                rejected.push(id);
+                continue;
             }
 
             let sector_idx =
@@ -595,7 +599,7 @@ where
             let slot_id = self.scratch.free_slots.pop_front().unwrap();
             let rank = self.next_rank;
             self.next_rank += 1;
-            // Best-effort: if submission fails, return the slot and retry later
+            // Best-effort: if submission fails, return the slot and reject the ID
             // SAFETY: slot_id was just popped from the free-list, guaranteeing
             // it is not currently in-flight.
             if unsafe { self.scratch.reader.submit_read(sector_offset, slot_id) }.is_ok() {
@@ -607,9 +611,11 @@ where
                 self.io_count += 1;
             } else {
                 self.scratch.free_slots.push_back(slot_id);
+                rejected.push(id);
             }
         }
         self.io_time += io_start.elapsed();
+        rejected
     }
 
     /// Poll for completed reads and expand the best loaded node.

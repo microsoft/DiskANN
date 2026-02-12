@@ -10,7 +10,7 @@ use crate::graph::{SearchOutputBuffer, search_output_buffer};
 
 // Exports
 mod queue;
-pub use queue::{NeighborPriorityQueue, NeighborPriorityQueueIdType, NeighborQueue};
+pub use queue::{NeighborPriorityQueue, NeighborPriorityQueueIdType, NeighborQueue, NodeState};
 
 #[cfg(feature = "experimental_diversity_search")]
 mod diverse_priority_queue;

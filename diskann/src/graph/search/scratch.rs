@@ -14,7 +14,6 @@ use crate::{
     utils::{VectorId, object_pool::AsPooled},
 };
 use hashbrown::HashSet;
-use std::collections::HashSet as StdHashSet;
 
 /// In-mem index related limits
 pub const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
@@ -42,10 +41,6 @@ where
 
     /// A reusable buffer for collecting neighbor distances during expansion.
     pub neighbors: Vec<Neighbor<I>>,
-
-    /// Tracks speculatively submitted (but not yet visited/expanded) nodes so the pipelined
-    /// path can decouple submission from visitation. Empty for non-pipelined search.
-    pub submitted: StdHashSet<I>,
 
     /// A list of beam search nodes used during search. This is used when beam search is enabled
     /// to temporarily hold beam of nodes in each hop.
@@ -116,7 +111,6 @@ where
             best,
             visited,
             neighbors: Vec::new(),
-            submitted: StdHashSet::new(),
             beam_nodes: Vec::new(),
             in_range: Vec::new(),
             range_frontier: VecDeque::new(),
@@ -141,7 +135,6 @@ where
         self.best.clear();
         self.visited.clear();
         self.neighbors.clear();
-        self.submitted.clear();
         self.beam_nodes.clear();
         self.in_range.clear();
         self.range_frontier.clear();
@@ -239,7 +232,6 @@ mod tests {
 
             assert!(x.visited.is_empty());
             assert!(x.neighbors.is_empty());
-            assert!(x.submitted.is_empty());
 
             assert!(x.hops == 0);
             assert!(x.cmps == 0);
@@ -258,7 +250,6 @@ mod tests {
 
             assert!(x.visited.is_empty());
             assert!(x.neighbors.is_empty());
-            assert!(x.submitted.is_empty());
 
             assert!(x.hops == 0);
             assert!(x.cmps == 0);
@@ -306,7 +297,6 @@ mod tests {
         x.clear();
         assert!(x.visited.is_empty());
         assert!(x.neighbors.is_empty());
-        assert!(x.submitted.is_empty());
         assert_eq!(x.best.size(), 0);
 
         assert!(x.hops == 0);
