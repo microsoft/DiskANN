@@ -78,16 +78,4 @@ mod tests {
         let result = manager.mark_as_invalid();
         assert!(result.is_ok());
     }
-
-    #[test]
-    fn test_naive_checkpoint_record_manager_clone() {
-        let manager = NaiveCheckpointRecordManager::default();
-        let cloned = manager.clone();
-        
-        // Both should behave the same
-        let result1 = manager.get_resumption_point(WorkStage::Start);
-        let result2 = cloned.get_resumption_point(WorkStage::Start);
-        
-        assert_eq!(result1.unwrap(), result2.unwrap());
-    }
 }

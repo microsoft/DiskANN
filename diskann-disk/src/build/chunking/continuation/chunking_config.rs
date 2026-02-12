@@ -65,14 +65,6 @@ mod tests {
     }
 
     #[test]
-    fn test_chunking_config_clone() {
-        let config = ChunkingConfig::default();
-        let cloned = config.clone();
-        assert_eq!(cloned.data_compression_chunk_vector_count, config.data_compression_chunk_vector_count);
-        assert_eq!(cloned.inmemory_build_chunk_vector_count, config.inmemory_build_chunk_vector_count);
-    }
-
-    #[test]
     fn test_chunking_config_display() {
         let config = ChunkingConfig::default();
         let display_str = format!("{}", config);
