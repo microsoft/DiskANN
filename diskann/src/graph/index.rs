@@ -2082,25 +2082,6 @@ where
         async move {
             let beam_width = search_params.beam_width.unwrap_or(1);
 
-            // Adaptive beam width: start at initial_beam_width and grow based on
-            // IO waste ratio. Mirrors PipeANN: grow +1 when ≤10% of IOs are wasted
-            // (expanded node no longer in top-L). Only kicks in after 5 hops.
-            let mut cur_beam_width = if search_params.adaptive_beam_width {
-                beam_width.min(search_params.initial_beam_width)
-            } else {
-                beam_width
-            };
-            let mut abw_useful: u32 = 0; // IOs whose expansion was still useful
-            let mut abw_total: u32 = 0; // total IOs tracked for waste ratio
-            // Tracks the deepest position in the sorted queue where we found an
-            // unsubmitted candidate. Mirrors PipeANN's max_marker — when this
-            // reaches the convergence gate, the search has explored past initial
-            // warmup and convergence-dependent features (ABW, RM) activate.
-            let mut max_marker: usize = 0;
-
-            // Relaxed monotonicity: continue exploring after convergence
-            let mut converge_size: Option<usize> = None;
-
             // paged search can call search_internal multiple times, we only need to initialize
             // state if not already initialized.
             if scratch.visited.is_empty() {
@@ -2157,47 +2138,19 @@ where
                     }
 
                     // Step 2: Insert neighbors (updates queue before IO decision)
-                    let worst_before = {
-                        let sz = scratch.best.size().min(scratch.best.search_l());
-                        if sz > 0 {
-                            scratch.best.get(sz - 1).distance
-                        } else {
-                            f32::MAX
-                        }
-                    };
                     neighbors
                         .iter()
                         .for_each(|neighbor| scratch.best.insert(*neighbor));
                     scratch.cmps += neighbors.len() as u32;
                     scratch.hops += expanded_ids.len() as u32;
 
-                    if search_params.adaptive_beam_width
-                        && !expanded_ids.is_empty()
-                        && max_marker >= search_params.abw_convergence_depth
-                    {
-                        let improved = neighbors.iter().any(|n| n.distance < worst_before);
-                        abw_total += 1;
-                        if improved {
-                            abw_useful += 1;
-                        }
-                        // Grow when ≤10% waste (matching PipeANN's kWasteThreshold)
-                        if abw_total > 0
-                            && (abw_total - abw_useful) as f64 / abw_total as f64 <= 0.1
-                        {
-                            cur_beam_width = (cur_beam_width + 1)
-                                .max(search_params.initial_beam_width)
-                                .min(beam_width);
-                        }
-                    }
-
                     // Step 3: Submit one IO (with updated queue)
                     let inflight = accessor.inflight_count();
-                    if inflight < cur_beam_width {
+                    if inflight < beam_width {
                         scratch.beam_nodes.clear();
-                        if let Some((pos, closest_node)) =
+                        if let Some((_, closest_node)) =
                             scratch.best.peek_best_unsubmitted_with_position(&submitted)
                         {
-                            max_marker = max_marker.max(pos);
                             search_record.record(closest_node, scratch.hops, scratch.cmps);
                             submitted.insert(closest_node.id);
                             scratch.beam_nodes.push(closest_node.id);
@@ -2214,16 +2167,13 @@ where
                     }
                 } else {
                     // Non-pipelined path OR initial burst (has_pending=false).
-                    // Both pipelined and non-pipelined use the same node selection
-                    // to track max_marker for ABW/RM convergence detection.
-                    let submit_limit = if has_pending { 0 } else { cur_beam_width };
+                    let submit_limit = if has_pending { 0 } else { beam_width };
 
                     scratch.beam_nodes.clear();
                     while scratch.beam_nodes.len() < submit_limit {
-                        if let Some((pos, closest_node)) =
+                        if let Some((_, closest_node)) =
                             scratch.best.peek_best_unsubmitted_with_position(&submitted)
                         {
-                            max_marker = max_marker.max(pos);
                             search_record.record(closest_node, scratch.hops, scratch.cmps);
                             submitted.insert(closest_node.id);
                             scratch.beam_nodes.push(closest_node.id);
@@ -2250,53 +2200,11 @@ where
                         submitted.remove(&id);
                     }
 
-                    let worst_before = {
-                        let sz = scratch.best.size().min(scratch.best.search_l());
-                        if sz > 0 {
-                            scratch.best.get(sz - 1).distance
-                        } else {
-                            f32::MAX
-                        }
-                    };
                     neighbors
                         .iter()
                         .for_each(|neighbor| scratch.best.insert(*neighbor));
                     scratch.cmps += neighbors.len() as u32;
                     scratch.hops += expanded_ids.len() as u32;
-
-                    if search_params.adaptive_beam_width
-                        && !expanded_ids.is_empty()
-                        && max_marker >= search_params.abw_convergence_depth
-                    {
-                        let improved = neighbors.iter().any(|n| n.distance < worst_before);
-                        abw_total += 1;
-                        if improved {
-                            abw_useful += 1;
-                        }
-                        if abw_total > 0
-                            && (abw_total - abw_useful) as f64 / abw_total as f64 <= 0.1
-                        {
-                            cur_beam_width = (cur_beam_width + 1)
-                                .max(search_params.initial_beam_width)
-                                .min(beam_width);
-                        }
-                    }
-                }
-
-                // Relaxed monotonicity: detect convergence and extend search.
-                // Convergence is detected when max_marker reaches the convergence
-                // depth — meaning the best unsubmitted candidate is deep enough in
-                // the sorted queue that the top candidates have been explored.
-                // After convergence, the search continues for rm_l additional node
-                // expansions to improve recall beyond the greedy optimum.
-                if let Some(rm_l) = search_params.relaxed_monotonicity_l.filter(|&l| l > 0) {
-                    if max_marker >= search_params.abw_convergence_depth && converge_size.is_none()
-                    {
-                        converge_size = Some(scratch.hops as usize);
-                    }
-                    if converge_size.is_some_and(|cs| (scratch.hops as usize) >= cs + rm_l) {
-                        break;
-                    }
                 }
             }
 

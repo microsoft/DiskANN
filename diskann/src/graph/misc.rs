@@ -41,18 +41,6 @@ pub struct SearchParams {
     pub k_value: usize,
     pub l_value: usize,
     pub beam_width: Option<usize>,
-    /// Enable adaptive beam width based on waste ratio tracking.
-    pub adaptive_beam_width: bool,
-    /// Starting beam width when adaptive_beam_width is true.
-    /// Defaults to 4 (matching PipeANN). Grows up to beam_width.
-    pub initial_beam_width: usize,
-    /// Queue depth threshold before adaptive beam width and relaxed monotonicity
-    /// activate. Defaults to 5 (matching PipeANN's max_marker convergence gate).
-    /// When the best unsubmitted candidate is at position ≥ this value in the
-    /// sorted queue, the search is considered past initial warmup.
-    pub abw_convergence_depth: usize,
-    /// Optional relaxed monotonicity parameter.
-    pub relaxed_monotonicity_l: Option<usize>,
 }
 
 #[derive(Debug, Error)]
@@ -92,25 +80,11 @@ impl SearchParams {
             k_value,
             l_value,
             beam_width,
-            adaptive_beam_width: false,
-            initial_beam_width: 4,
-            abw_convergence_depth: 5,
-            relaxed_monotonicity_l: None,
         })
     }
 
     pub fn new_default(k_value: usize, l_value: usize) -> Result<Self, SearchParamsError> {
         SearchParams::new(k_value, l_value, None)
-    }
-
-    pub fn with_adaptive_beam_width(mut self) -> Self {
-        self.adaptive_beam_width = true;
-        self
-    }
-
-    pub fn with_relaxed_monotonicity(mut self, l: usize) -> Self {
-        self.relaxed_monotonicity_l = Some(l);
-        self
     }
 }
 

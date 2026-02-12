@@ -9,7 +9,7 @@ use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, sync::Arc, time::
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
-use diskann::{graph::SearchParams, utils::VectorRepr, ANNResult};
+use diskann::{utils::VectorRepr, ANNResult};
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 #[cfg(target_os = "linux")]
 use diskann_disk::search::pipelined::PipelinedReaderConfig;
@@ -324,10 +324,7 @@ where
     let has_any_search_failed = AtomicBool::new(false);
 
     match &search_params.search_mode {
-        SearchMode::BeamSearch {
-            adaptive_beam_width,
-            relaxed_monotonicity_l,
-        } => {
+        SearchMode::BeamSearch => {
             let searcher = &DiskIndexSearcher::<GraphData<T>, _>::new(
                 search_params.num_threads,
                 search_params.search_io_limit.unwrap_or(usize::MAX),
@@ -336,9 +333,6 @@ where
                 search_params.distance.into(),
                 None,
             )?;
-
-            let abw = *adaptive_beam_width;
-            let rm_l = *relaxed_monotonicity_l;
 
             logger.log_checkpoint("index_loaded");
 
@@ -369,23 +363,12 @@ where
                                     as Box<dyn Fn(&u32) -> bool + Send + Sync>)
                             };
 
-                            let mut sp = SearchParams::new(
-                                search_params.recall_at as usize,
-                                l as usize,
-                                Some(search_params.beam_width),
-                            )
-                            .unwrap();
-                            if abw {
-                                sp = sp.with_adaptive_beam_width();
-                            }
-                            if let Some(rm) = rm_l {
-                                sp = sp.with_relaxed_monotonicity(rm);
-                            }
-
                             write_query_result(
-                                searcher.search_with_params(
+                                searcher.search(
                                     q,
-                                    &sp,
+                                    search_params.recall_at,
+                                    l,
+                                    search_params.beam_width,
                                     vector_filter,
                                     search_params.is_flat_search,
                                 ),
@@ -404,11 +387,7 @@ where
         }
         // Pipelined search — for read-only search on completed (static) indices only.
         // Uses io_uring for IO/compute overlap through the generic search loop.
-        SearchMode::PipeSearch {
-            adaptive_beam_width,
-            relaxed_monotonicity_l,
-            sqpoll_idle_ms,
-        } => {
+        SearchMode::PipeSearch { sqpoll_idle_ms } => {
             #[cfg(target_os = "linux")]
             {
                 use diskann::utils::object_pool::ObjectPool;
@@ -465,8 +444,6 @@ where
 
                 searcher.with_pipelined_config(PipelinedConfig {
                     beam_width: search_params.beam_width,
-                    adaptive_beam_width: *adaptive_beam_width,
-                    relaxed_monotonicity_l: *relaxed_monotonicity_l,
                     node_cache,
                     scratch_pool,
                     scratch_args,
@@ -518,7 +495,7 @@ where
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (adaptive_beam_width, relaxed_monotonicity_l, sqpoll_idle_ms);
+                let _ = sqpoll_idle_ms;
                 anyhow::bail!("PipeSearch is only supported on Linux");
             }
         }

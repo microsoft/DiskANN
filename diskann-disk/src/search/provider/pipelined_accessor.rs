@@ -763,11 +763,6 @@ where
 /// Configuration for creating a pipelined search through DiskIndexSearcher.
 pub struct PipelinedConfig<Data: GraphDataType<VectorIdType = u32>> {
     pub beam_width: usize,
-    /// Start with a smaller beam and grow adaptively.
-    pub adaptive_beam_width: bool,
-    /// Optional relaxed monotonicity: continue exploring this many extra
-    /// comparisons after the candidate list converges.
-    pub relaxed_monotonicity_l: Option<usize>,
     /// Shared node cache. Nodes found here skip disk IO entirely.
     pub node_cache: Arc<Cache<Data>>,
     /// Pooled scratch (io_uring reader + PQ buffers), created once and reused.
@@ -932,18 +927,11 @@ where
             io_stats: io_stats.clone(),
         };
 
-        let mut search_params = SearchParams::new(
+        let search_params = SearchParams::new(
             return_list_size as usize,
             search_list_size as usize,
             Some(beam_width),
         )?;
-
-        if config.adaptive_beam_width {
-            search_params = search_params.with_adaptive_beam_width();
-        }
-        if let Some(rm_l) = config.relaxed_monotonicity_l {
-            search_params = search_params.with_relaxed_monotonicity(rm_l);
-        }
 
         let mut indices = vec![0u32; return_list_size as usize];
         let mut distances = vec![0f32; return_list_size as usize];

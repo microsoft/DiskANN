@@ -70,8 +70,7 @@
           "distance": "squared_l2",
           "vector_filters_file": null,
           "search_mode": {
-            "mode": "PipeSearch",
-            "relaxed_monotonicity_l": 50
+            "mode": "PipeSearch"
           }
         }
       }

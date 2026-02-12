@@ -74,107 +74,34 @@ pub(crate) struct DiskIndexBuild {
 /// Search algorithm to use for disk index search.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "mode")]
+#[derive(Default)]
 pub(crate) enum SearchMode {
     /// Standard beam search (default, current behavior).
-    BeamSearch {
-        /// Start with a smaller beam and grow adaptively. Defaults to false.
-        #[serde(default)]
-        adaptive_beam_width: bool,
-        /// Optional relaxed monotonicity parameter for early termination.
-        #[serde(default)]
-        relaxed_monotonicity_l: Option<usize>,
-    },
+    #[default]
+    BeamSearch,
     /// Pipelined search through the generic search loop (queue-based ExpandBeam).
     /// Overlaps IO and compute using io_uring on Linux.
     #[serde(alias = "UnifiedPipeSearch")]
     PipeSearch {
-        /// Start with a smaller beam and grow adaptively. Defaults to true.
-        #[serde(default = "default_true")]
-        adaptive_beam_width: bool,
-        /// Optional relaxed monotonicity parameter for early termination.
-        #[serde(default)]
-        relaxed_monotonicity_l: Option<usize>,
         /// Enable kernel-side SQ polling (ms idle timeout). None = disabled.
         #[serde(default)]
         sqpoll_idle_ms: Option<u32>,
     },
 }
 
-impl Default for SearchMode {
-    fn default() -> Self {
-        SearchMode::BeamSearch {
-            adaptive_beam_width: false,
-            relaxed_monotonicity_l: None,
-        }
-    }
-}
-
 impl fmt::Display for SearchMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SearchMode::BeamSearch {
-                adaptive_beam_width,
-                relaxed_monotonicity_l,
-            } => {
-                write!(f, "BeamSearch")?;
-                let has_abw = *adaptive_beam_width;
-                let has_rm = relaxed_monotonicity_l.is_some();
-                if has_abw || has_rm {
-                    write!(f, "(")?;
-                    let mut first = true;
-                    if has_abw {
-                        write!(f, "abw")?;
-                        first = false;
-                    }
-                    if let Some(rm) = relaxed_monotonicity_l {
-                        if !first {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "rm_l={}", rm)?;
-                    }
-                    write!(f, ")")?;
-                }
-                Ok(())
-            }
-            SearchMode::PipeSearch {
-                adaptive_beam_width,
-                relaxed_monotonicity_l,
-                sqpoll_idle_ms,
-            } => {
+            SearchMode::BeamSearch => write!(f, "BeamSearch"),
+            SearchMode::PipeSearch { sqpoll_idle_ms } => {
                 write!(f, "PipeSearch")?;
-                let has_abw = *adaptive_beam_width;
-                let has_rm = relaxed_monotonicity_l.is_some();
-                let has_sq = sqpoll_idle_ms.is_some();
-                if has_abw || has_rm || has_sq {
-                    write!(f, "(")?;
-                    let mut first = true;
-                    if has_abw {
-                        write!(f, "abw")?;
-                        first = false;
-                    }
-                    if let Some(rm) = relaxed_monotonicity_l {
-                        if !first {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "rm_l={}", rm)?;
-                        first = false;
-                    }
-                    if let Some(sq) = sqpoll_idle_ms {
-                        if !first {
-                            write!(f, ", ")?;
-                        }
-                        write!(f, "sqpoll={}ms", sq)?;
-                    }
-                    write!(f, ")")?;
+                if let Some(sq) = sqpoll_idle_ms {
+                    write!(f, "(sqpoll={}ms)", sq)?;
                 }
                 Ok(())
             }
         }
     }
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Search phase configuration
@@ -344,7 +271,7 @@ impl CheckDeserialization for DiskSearchPhase {
             }
         }
         match &self.search_mode {
-            SearchMode::BeamSearch { .. } => {}
+            SearchMode::BeamSearch => {}
             SearchMode::PipeSearch { .. } => {}
         }
         Ok(())
