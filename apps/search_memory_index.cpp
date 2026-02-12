@@ -145,7 +145,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
     double best_recall = 0.0;
 
     for (uint32_t test_id = 0; test_id < Lvec.size(); test_id++)
-    {
+    {   
+        std::cout<<"L: "<<test_id<<std::endl;
         uint32_t L = Lvec[test_id];
         if (L < recall_at)
         {
@@ -198,7 +199,8 @@ int search_memory_index(diskann::Metric &metric, const std::string &index_path, 
                 }
             }
             else
-            {
+            {   
+                std::cout<<"Query: "<<i+1<<std::endl;
                 cmp_stats[i] = index
                                    ->search(query + i * query_aligned_dim, recall_at, L,
                                             query_result_ids[test_id].data() + i * recall_at)
