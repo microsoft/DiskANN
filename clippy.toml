@@ -1,6 +1,14 @@
 disallowed-methods = [
     { path = "rand::thread_rng", reason = "Do not use rand::* directly. Instead, use functions from random.rs" },
-    { path = "std::fs", reason = "Do not use std::fs directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests.", allow-invalid = true },
+    { path = "std::fs::File::create", reason = "Do not use std::fs::File::create directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests." },
+    { path = "std::fs::File::create_new", reason = "Do not use std::fs::File::create_new directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests." },
+    { path = "std::fs::OpenOptions::open", reason = "Do not use std::fs::OpenOptions::open for writing. Use FileStorageProvider in production code or VirtualStorageProvider in tests." },
+    { path = "std::fs::write", reason = "Do not use std::fs::write directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests." },
+    { path = "std::fs::remove_file", reason = "Do not use std::fs::remove_file directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests." },
+    { path = "std::fs::remove_dir", reason = "Do not use std::fs::remove_dir directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests." },
+    { path = "std::fs::remove_dir_all", reason = "Do not use std::fs::remove_dir_all directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests." },
+    { path = "std::fs::create_dir", reason = "Do not use std::fs::create_dir directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests." },
+    { path = "std::fs::create_dir_all", reason = "Do not use std::fs::create_dir_all directly. Use FileStorageProvider in production code or VirtualStorageProvider in tests." },
     { path = "vfs::PhysicalFS::new", reason = "Do not use vfs::PhysicalFS in tests. Instead, use the VirtualStorageProvider::new_overlay()." },
     { path = "diskann_providers::storage::virtual_storage_provider::VirtualStorageProvider::new_physical", reason = "In most tests, use VirtualStorageProvider::new_memory() or new_overlay(). Only use new_physical() for integration tests that require actual filesystem operations (e.g., testing BfTree with its disk backend).", allow-invalid = true },
     # Disallowed methods for the rayon crate to enforce execution within a specified thread pool instead of the global thread pool.

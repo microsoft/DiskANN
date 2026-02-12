@@ -20,7 +20,7 @@ pub(crate) mod bin;
 
 pub(crate) mod file_storage_provider;
 // Use VirtualStorageProvider in tests to avoid filesystem side-effects
-#[cfg(not(any(test, feature = "virtual_storage")))]
+#[cfg(not(any(test, feature = "testing", feature = "virtual_storage")))]
 pub use file_storage_provider::FileStorageProvider;
 
 mod pq_storage;

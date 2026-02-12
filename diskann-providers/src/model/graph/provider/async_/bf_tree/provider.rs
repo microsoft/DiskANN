@@ -2453,7 +2453,7 @@ mod tests {
         assert_eq!(vector_config.get_leaf_page_size(), 8192);
         assert_eq!(vector_config.get_cb_max_record_size(), 1024);
 
-        let storage = VirtualStorageProvider::new_physical(temp_path);
+        let storage = VirtualStorageProvider::new_overlay(temp_path);
 
         provider.save_with(&storage, &prefix).await.unwrap();
 
@@ -2621,7 +2621,7 @@ mod tests {
             );
         }
 
-        let storage = VirtualStorageProvider::new_physical(temp_path);
+        let storage = VirtualStorageProvider::new_overlay(temp_path);
 
         provider.save_with(&storage, &prefix).await.unwrap();
 
