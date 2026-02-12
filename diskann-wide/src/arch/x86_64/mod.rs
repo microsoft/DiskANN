@@ -80,8 +80,9 @@ cfg_if::cfg_if! {
 // We cache a single enum and use it to indicate the version with the following meaning:
 //
 // 0: Uninitialized
-// 1: V3
-// 2 and above: Scalar
+// 1: Scalar
+// 2: V3
+// 3: V4
 static ARCH_NUMBER: AtomicU64 = AtomicU64::new(ARCH_UNINITIALIZED);
 
 // NOTE: Architecture must be properly nested in ascending order so compatibility checks
@@ -445,7 +446,7 @@ mod tests {
     // These tests reach directly into the dispatch mechanism.
     //
     // There should only be a single test (this one) that does this, and all other tests
-    // involving dispatch should either be configured to work properly regarless of the
+    // involving dispatch should either be configured to work properly regardless of the
     // backend architecture, or be run in their own process.
     #[test]
     fn test_dispatch() {

@@ -148,7 +148,7 @@ fn check_minmax_standard_f32(got: f32, standard: f32) -> Result<(), String> {
 ///
 /// The [`FastMax`] checker will accept either the IEEE result or `NaN` in such situations.
 ///
-/// If the expected result is +/-0.0, than a zero of either sign will be accepted.
+/// If the expected result is +/-0.0, then a zero of either sign will be accepted.
 ///
 /// If neither argument is `NaN`, then the results must match the IEEE result.
 #[derive(Debug, Clone, Copy)]
@@ -163,10 +163,10 @@ impl CheckBinary<f32, f32> for FastMax {
 
 /// A checker for Rust standard compliant max implementations.
 ///
-/// If one argument is NaN, than the other is returned. A NaN is only returned if both
+/// If one argument is NaN, then the other is returned. A NaN is only returned if both
 /// arguments are NaN.
 ///
-/// If the expected result is +/-0.0, than a zero of either sign will be accepted.
+/// If the expected result is +/-0.0, then a zero of either sign will be accepted.
 ///
 /// If neither argument is `NaN`, then the results must match the IEEE result.
 #[derive(Debug, Clone, Copy)]
@@ -185,9 +185,9 @@ impl CheckBinary<f32, f32> for StandardMax {
 /// IEEE specifies that `min` between a NaN and non-NaN value `x` should return `x`. However,
 /// it is common for Intel hardware to return `NaN` instead for such operations.
 ///
-/// The [`FastMax`] checker will accept either the IEEE result or `NaN` in such situations.
+/// The [`FastMin`] checker will accept either the IEEE result or `NaN` in such situations.
 ///
-/// If the expected result is +/-0.0, than a zero of either sign will be accepted.
+/// If the expected result is +/-0.0, then a zero of either sign will be accepted.
 ///
 /// If neither argument is `NaN`, then the results must match the IEEE result.
 #[derive(Debug, Clone, Copy)]
@@ -202,10 +202,10 @@ impl CheckBinary<f32, f32> for FastMin {
 
 /// A checker for Rust standard compliant min implementations.
 ///
-/// If one argument is NaN, than the other is returned. A NaN is only returned if both
+/// If one argument is NaN, then the other is returned. A NaN is only returned if both
 /// arguments are NaN.
 ///
-/// If the expected result is +/-0.0, than a zero of either sign will be accepted.
+/// If the expected result is +/-0.0, then a zero of either sign will be accepted.
 ///
 /// If neither argument is `NaN`, then the results must match the IEEE result.
 #[derive(Debug, Clone, Copy)]

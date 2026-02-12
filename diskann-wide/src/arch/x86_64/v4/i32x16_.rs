@@ -90,7 +90,7 @@ impl SIMDSumTree for i32x16 {
 impl SIMDSelect<i32x16> for BitMask<16, V4> {
     #[inline(always)]
     fn select(self, x: i32x16, y: i32x16) -> i32x16 {
-        // SAFETY: `_mm512_mask_blend_epi32` requires AVX512F + AVX512VL - implied by V4
+        // SAFETY: `_mm512_mask_blend_epi32` requires AVX512F - implied by V4
         i32x16::from_underlying(self.arch(), unsafe {
             _mm512_mask_blend_epi32(self.to_underlying(), y.to_underlying(), x.to_underlying())
         })

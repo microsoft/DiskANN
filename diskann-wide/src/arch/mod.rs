@@ -190,7 +190,7 @@
 //! The consequence of this is that we need to take an **unsafe** function pointer so we
 //! can dispatch call directly to the implementation.
 //!
-//! Reason 2: Even if the above approach worked, the [`Architecture`] is sill present in the
+//! Reason 2: Even if the above approach worked, the [`Architecture`] is still present in the
 //! signature of the `fn`, meaning we haven't really hidden the micro-architecture
 //! information.
 //!
@@ -690,7 +690,7 @@ pub trait Architecture: sealed::Sealed {
     /// Run the provided closure targeting this architecture.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     fn run<F, R>(self, f: F) -> R
     where
         F: Target<Self, R>;
@@ -698,9 +698,9 @@ pub trait Architecture: sealed::Sealed {
     /// Run the provided closure targeting this architecture with an inlining hint.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     ///
-    /// Note that although an inline hint is applied, it is not a guaranteed that this call
+    /// Note that although an inline hint is applied, it is not guaranteed that this call
     /// will be inlined due to the interaction of `target_features`. If you really need `F`
     /// to be inlined, you can call its `Target` method directly, but care must be taken
     /// because this will not reapply `target_features`.
@@ -711,7 +711,7 @@ pub trait Architecture: sealed::Sealed {
     /// Run the provided closure targeting this architecture with an additional argument.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     fn run1<F, T0, R>(self, f: F, x0: T0) -> R
     where
         F: Target1<Self, R, T0>;
@@ -720,9 +720,9 @@ pub trait Architecture: sealed::Sealed {
     /// an inlining hint.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     ///
-    /// Note that although an inline hint is applied, it is not a guaranteed that this call
+    /// Note that although an inline hint is applied, it is not guaranteed that this call
     /// will be inlined due to the interaction of `target_features`. If you really need `F`
     /// to be inlined, you can call its `Target1` method directly, but care must be taken
     /// because this will not reapply `target_features`.
@@ -733,7 +733,7 @@ pub trait Architecture: sealed::Sealed {
     /// Run the provided closure targeting this architecture with two additional arguments.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     fn run2<F, T0, T1, R>(self, f: F, x0: T0, x1: T1) -> R
     where
         F: Target2<Self, R, T0, T1>;
@@ -742,9 +742,9 @@ pub trait Architecture: sealed::Sealed {
     /// and an inlining hint.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     ///
-    /// Note that although an inline hint is applied, it is not a guaranteed that this call
+    /// Note that although an inline hint is applied, it is not guaranteed that this call
     /// will be inlined due to the interaction of `target_features`. If you really need `F`
     /// to be inlined, you can call its `Target2` method directly, but care must be taken
     /// because this will not reapply `target_features`.
@@ -755,7 +755,7 @@ pub trait Architecture: sealed::Sealed {
     /// Run the provided closure targeting this architecture with three additional arguments.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     fn run3<F, T0, T1, T2, R>(self, f: F, x0: T0, x1: T1, x2: T2) -> R
     where
         F: Target3<Self, R, T0, T1, T2>;
@@ -764,9 +764,9 @@ pub trait Architecture: sealed::Sealed {
     /// and an inlining hint.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     ///
-    /// Note that although an inline hint is applied, it is not a guaranteed that this call
+    /// Note that although an inline hint is applied, it is not guaranteed that this call
     /// will be inlined due to the interaction of `target_features`. If you really need `F`
     /// to be inlined, you can call its `Target3` method directly, but care must be taken
     /// because this will not reapply `target_features`.
@@ -893,7 +893,7 @@ where
 
 /// A variation of [`Target1`] that uses an associated function instead of a method.
 ///
-/// This is useful used in the function pointer API.
+/// This is used in the function pointer API.
 pub trait FTarget1<A, R, T0>
 where
     A: Architecture,
@@ -903,7 +903,7 @@ where
 
 /// A variation of [`Target2`] that uses an associated function instead of a method.
 ///
-/// This is useful used in the function pointer API.
+/// This is used in the function pointer API.
 pub trait FTarget2<A, R, T0, T1>
 where
     A: Architecture,
@@ -913,7 +913,7 @@ where
 
 /// A variation of [`Target3`] that uses an associated function instead of a method.
 ///
-/// This is useful used in the function pointer API.
+/// This is used in the function pointer API.
 pub trait FTarget3<A, R, T0, T1, T2>
 where
     A: Architecture,
@@ -994,7 +994,7 @@ const _ASSERT_ALIGNED: () = assert!(
 macro_rules! dispatched {
     ($name:ident, { $($Ts:ident )* }, { $($xs:ident )* }, { $($lt:lifetime )* }) => {
         /// A function pointer that calls directly into a micro-architecture optimized
-        /// function, returning a value of type `R` and accepting the speficied number of
+        /// function, returning a value of type `R` and accepting the specified number of
         /// arguments.
         ///
         /// Arguments are mapped using the [`AddLifetime`] trait to enable passing structs
@@ -1065,7 +1065,7 @@ dispatched!(Dispatched1, { T0 }, { x0 }, { 'a0 });
 dispatched!(Dispatched2, { T0 T1 }, { x0 x1 }, { 'a0 'a1 });
 dispatched!(Dispatched3, { T0 T1 T2 }, { x0 x1 x2 }, { 'a0 'a1 'a2 });
 
-/// This macro stamps out the function-pointer tranmute trick we use to type-erase
+/// This macro stamps out the function-pointer transmute trick we use to type-erase
 /// architecture in the function-pointer API.
 macro_rules! hide {
     ($name:ident, $dispatched:ident, { $($Ts:ident )* }) => {
@@ -1082,9 +1082,9 @@ macro_rules! hide {
         /// We can do this because Rust guarantees that zero sized types are ABI
         /// compatible.
         ///
-        /// The caller must ensure that winking into existance and instance of `A` is
+        /// The caller must ensure that winking into existence an instance of `A` is
         /// a safe operation. For [`Architectures`], this means that the requirements
-        /// of `A::new()` are uphelf.
+        /// of `A::new()` are upheld.
         ///
         /// Put plainly:
         ///
