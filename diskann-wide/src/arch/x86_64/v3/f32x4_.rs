@@ -134,14 +134,14 @@ impl X86LoadStore for f32x4 {
 impl SIMDPartialEq for f32x4 {
     #[inline(always)]
     fn eq_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_castps_si128` and `_mm_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm_castps_si128(_mm_cmp_ps(self.0, other.0, _CMP_EQ_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
 
     #[inline(always)]
     fn ne_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_castps_si128` and `_mm_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm_castps_si128(_mm_cmp_ps(self.0, other.0, _CMP_NEQ_UQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
@@ -150,28 +150,28 @@ impl SIMDPartialEq for f32x4 {
 impl SIMDPartialOrd for f32x4 {
     #[inline(always)]
     fn lt_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG.
+        // SAFETY: `_mm_castps_si128` and `_mm_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm_castps_si128(_mm_cmp_ps(self.0, other.0, _CMP_LT_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
 
     #[inline(always)]
     fn le_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG.
+        // SAFETY: `_mm_castps_si128` and `_mm_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm_castps_si128(_mm_cmp_ps(self.0, other.0, _CMP_LE_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
 
     #[inline(always)]
     fn gt_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG.
+        // SAFETY: `_mm_castps_si128` and `_mm_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm_castps_si128(_mm_cmp_ps(self.0, other.0, _CMP_GT_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
 
     #[inline(always)]
     fn ge_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG.
+        // SAFETY: `_mm_castps_si128` and `_mm_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm_castps_si128(_mm_cmp_ps(self.0, other.0, _CMP_GE_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
@@ -181,7 +181,7 @@ impl SIMDSumTree for f32x4 {
     #[inline(always)]
     fn sum_tree(self) -> f32 {
         let x = self.to_underlying();
-        // SAFETY: Gated by CFG.
+        // SAFETY: These intrinsics require SSE, implied by V3.
         unsafe {
             // loDual = ( -, -, x1, x0 )
             let lo_dual = x;

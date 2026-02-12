@@ -80,8 +80,9 @@ cfg_if::cfg_if! {
 // We cache a single enum and use it to indicate the version with the following meaning:
 //
 // 0: Uninitialized
-// 1: V3
-// 2 and above: Scalar
+// 1: Scalar
+// 2: V3
+// 3: V4
 static ARCH_NUMBER: AtomicU64 = AtomicU64::new(ARCH_UNINITIALIZED);
 
 // NOTE: Architecture must be properly nested in ascending order so compatibility checks

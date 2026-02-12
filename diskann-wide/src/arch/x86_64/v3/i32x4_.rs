@@ -56,13 +56,13 @@ impl SIMDMulAdd for i32x4 {
 impl SIMDPartialEq for i32x4 {
     #[inline(always)]
     fn eq_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_cmpeq_epi32` requires SSE2, implied by V3.
         Self::Mask::from_underlying(self.arch(), unsafe { _mm_cmpeq_epi32(self.0, other.0) })
     }
 
     #[inline(always)]
     fn ne_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_cmpeq_epi32` and `_mm_xor_si128` require SSE2, implied by V3.
         let m = unsafe { _mm_xor_si128(_mm_cmpeq_epi32(self.0, other.0), __m128i::all_ones()) };
         Self::Mask::from_underlying(self.arch(), m)
     }
@@ -71,13 +71,13 @@ impl SIMDPartialEq for i32x4 {
 impl SIMDPartialOrd for i32x4 {
     #[inline(always)]
     fn lt_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_cmpgt_epi32` requires SSE2, implied by V3.
         Self::Mask::from_underlying(self.arch(), unsafe { _mm_cmpgt_epi32(other.0, self.0) })
     }
 
     #[inline(always)]
     fn le_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_cmpeq_epi32` requires SSE2 and `_mm_min_epi32` requires SSE4.1, implied by V3.
         let m = unsafe { _mm_cmpeq_epi32(self.0, _mm_min_epi32(self.0, other.0)) };
         Self::Mask::from_underlying(self.arch(), m)
     }

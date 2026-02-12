@@ -190,7 +190,7 @@
 //! The consequence of this is that we need to take an **unsafe** function pointer so we
 //! can dispatch call directly to the implementation.
 //!
-//! Reason 2: Even if the above approach worked, the [`Architecture`] is sill present in the
+//! Reason 2: Even if the above approach worked, the [`Architecture`] is still present in the
 //! signature of the `fn`, meaning we haven't really hidden the micro-architecture
 //! information.
 //!

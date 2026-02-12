@@ -40,7 +40,7 @@ where
 }
 
 /// Stable Rust does not allow expressions involving compile-time computation with
-/// const generic parameters: <http://github.com/rust-lang/rust/issues/76560s>
+/// const generic parameters: <http://github.com/rust-lang/rust/issues/76560>
 ///
 /// This makes it difficult to go from a const parameter defining the number of SIMD lanes
 /// to an appropriately sized mask.
