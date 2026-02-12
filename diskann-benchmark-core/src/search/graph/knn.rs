@@ -113,14 +113,14 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let graph_search = graph::GraphSearch::from(*parameters);
+        let mut graph_search = graph::GraphSearch::from(*parameters);
         let stats = self
             .index
             .search(
                 self.strategy.get(index)?,
                 &context,
                 self.queries.row(index),
-                &graph_search,
+                &mut graph_search,
                 buffer,
             )
             .await?;

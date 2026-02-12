@@ -97,7 +97,7 @@ where
     type Output = SearchStats;
 
     fn dispatch<'a>(
-        &'a self,
+        &'a mut self,
         index: &'a DiskANNIndex<DP>,
         strategy: &'a S,
         context: &'a DP::Context,
@@ -105,7 +105,7 @@ where
         output: &'a mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
-            let graph_search = GraphSearch::from(*self);
+            let mut graph_search = GraphSearch::from(*self);
             graph_search.dispatch(index, strategy, context, query, output).await
         }
     }
@@ -122,7 +122,7 @@ where
     type Output = SearchStats;
 
     fn dispatch<'a>(
-        &'a self,
+        &'a mut self,
         index: &'a DiskANNIndex<DP>,
         strategy: &'a S,
         context: &'a DP::Context,
@@ -197,9 +197,63 @@ impl<'r, SR: Debug + ?Sized> Debug for RecordedGraphSearch<'r, SR> {
     }
 }
 
-// Note: RecordedGraphSearch cannot implement SearchDispatch because it holds &mut recorder
-// which conflicts with the shared reference semantics of dispatch. Users should call
-// the search logic directly or use a Cell/RefCell pattern if needed.
+impl<'r, DP, S, T, O, OB, SR> SearchDispatch<DP, S, T, O, OB> for RecordedGraphSearch<'r, SR>
+where
+    DP: DataProvider,
+    T: Sync + ?Sized,
+    S: SearchStrategy<DP, T, O>,
+    O: Send,
+    OB: SearchOutputBuffer<O> + Send + ?Sized,
+    SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
+{
+    type Output = SearchStats;
+
+    fn dispatch<'a>(
+        &'a mut self,
+        index: &'a DiskANNIndex<DP>,
+        strategy: &'a S,
+        context: &'a DP::Context,
+        query: &'a T,
+        output: &'a mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>> {
+        async move {
+            let mut accessor = strategy
+                .search_accessor(&index.data_provider, context)
+                .into_ann_result()?;
+
+            let computer = accessor.build_query_computer(query).into_ann_result()?;
+            let start_ids = accessor.starting_points().await?;
+
+            let mut scratch = index.search_scratch(self.inner.l, start_ids.len());
+
+            let stats = index
+                .search_internal(
+                    self.inner.beam_width,
+                    &start_ids,
+                    &mut accessor,
+                    &computer,
+                    &mut scratch,
+                    self.recorder,
+                )
+                .await?;
+
+            let result_count = strategy
+                .post_processor()
+                .post_process(
+                    &mut accessor,
+                    query,
+                    &computer,
+                    scratch.best.iter().take(self.inner.l.into_usize()),
+                    output,
+                )
+                .send()
+                .await
+                .into_ann_result()?;
+
+            Ok(stats.finish(result_count as u32))
+        }
+    }
+}
 
 //=============================================================================
 // Tests

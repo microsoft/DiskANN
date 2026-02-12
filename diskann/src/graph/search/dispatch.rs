@@ -14,6 +14,9 @@ use crate::{ANNResult, graph::index::DiskANNIndex, provider::DataProvider};
 /// Each search type (graph search, range search, etc.) implements
 /// this trait to define its complete search behavior. The [`DiskANNIndex::search`]
 /// method delegates to the `dispatch` method.
+///
+/// The `dispatch` method takes `&mut self` to support search types that need to
+/// record state during execution (e.g., [`RecordedGraphSearch`] for path recording).
 pub trait SearchDispatch<DP, S, T: ?Sized, O, OB: ?Sized>
 where
     DP: DataProvider,
@@ -23,7 +26,7 @@ where
 
     /// Execute the search operation with full search logic.
     fn dispatch<'a>(
-        &'a self,
+        &'a mut self,
         index: &'a DiskANNIndex<DP>,
         strategy: &'a S,
         context: &'a DP::Context,

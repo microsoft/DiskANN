@@ -2139,11 +2139,11 @@ where
     ///
     /// // Standard graph search
     /// let params = GraphSearch::new(10, 100, None)?;
-    /// let stats = index.search(&strategy, &context, &query, &params, &mut output).await?;
+    /// let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;
     ///
     /// // Range search (note: uses () as output buffer, results in Output type)
-    /// let params = RangeSearch::new(100, 0.5)?;
-    /// let result = index.search(&strategy, &context, &query, &params, &mut ()).await?;
+    /// let mut params = RangeSearch::new(100, 0.5)?;
+    /// let result = index.search(&strategy, &context, &query, &mut params, &mut ()).await?;
     /// // result.ids and result.distances contain the matches
     /// ```
     pub fn search<'a, S, T, O: 'a, OB, P>(
@@ -2151,7 +2151,7 @@ where
         strategy: &'a S,
         context: &'a DP::Context,
         query: &'a T,
-        search_params: &'a P,
+        search_params: &'a mut P,
         output: &'a mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>> + 'a
     where

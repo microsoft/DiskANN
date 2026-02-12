@@ -235,10 +235,10 @@ where
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,
     {
-        let graph_search = diskann::graph::GraphSearch::from(*search_params);
+        let mut graph_search = diskann::graph::GraphSearch::from(*search_params);
         self.handle.block_on(
             self.inner
-                .search(strategy, context, query, &graph_search, output),
+                .search(strategy, context, query, &mut graph_search, output),
         )
     }
 

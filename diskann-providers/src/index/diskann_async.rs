@@ -238,11 +238,11 @@ pub(crate) mod tests {
         O: Send,
         OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send,
     {
-        let multihop = graph::MultihopSearch::new(
+        let mut multihop = graph::MultihopSearch::new(
             graph::GraphSearch::from(*search_params),
             filter,
         );
-        index.search(strategy, context, query, &multihop, output).await
+        index.search(strategy, context, query, &mut multihop, output).await
     }
 
     /// Test helper: performs range search using the dispatch API.
@@ -259,8 +259,8 @@ pub(crate) mod tests {
         S: graph::glue::SearchStrategy<DP, T, O>,
         O: Send + Default + Clone,
     {
-        let range_search = graph::RangeSearch::from(*search_params);
-        let result = index.search(strategy, context, query, &range_search, &mut ()).await?;
+        let mut range_search = graph::RangeSearch::from(*search_params);
+        let result = index.search(strategy, context, query, &mut range_search, &mut ()).await?;
         Ok((result.stats, result.ids, result.distances))
     }
 
@@ -403,12 +403,14 @@ pub(crate) mod tests {
         let mut distances = vec![0.0; parameters.search_k];
         let mut result_output_buffer =
             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+        let mut search_params =
+            SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap();
         index
             .search(
                 &strategy,
                 &parameters.context,
                 query,
-                &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
+                &mut search_params,
                 &mut result_output_buffer,
             )
             .await
@@ -449,12 +451,14 @@ pub(crate) mod tests {
         let mut distances = vec![0.0; parameters.search_k];
         let mut result_output_buffer =
             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+        let mut search_params =
+            SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap();
         multihop_search(
             index,
             strategy,
             &parameters.context,
             query,
-            &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
+            &mut search_params,
             &mut result_output_buffer,
             filter,
         )
@@ -1492,12 +1496,14 @@ pub(crate) mod tests {
 
         let filter = CallbackFilter::new(blocked, adjusted, 0.5);
 
+        let mut search_params =
+            SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap();
         let stats = multihop_search(
             &index,
             &FullPrecision,
             &parameters.context,
             query.as_slice(),
-            &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
+            &mut search_params,
             &mut result_output_buffer,
             &filter,
         )
@@ -2239,13 +2245,14 @@ pub(crate) mod tests {
             {
                 let mut result_output_buffer =
                     search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
                 // Full Precision Search.
                 index
                     .search(
                         &FullPrecision,
                         ctx,
                         query,
-                        &SearchParams::new_default(top_k, search_l).unwrap(),
+                        &mut search_params,
                         &mut result_output_buffer,
                     )
                     .await
@@ -2256,13 +2263,14 @@ pub(crate) mod tests {
             {
                 let mut result_output_buffer =
                     search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
                 // Quantized Search
                 index
                     .search(
                         &Hybrid::new(None),
                         ctx,
                         query,
-                        &SearchParams::new_default(top_k, search_l).unwrap(),
+                        &mut search_params,
                         &mut result_output_buffer,
                     )
                     .await
@@ -2505,13 +2513,15 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                        let mut search_params =
+                            SearchParams::new_default(top_k, search_l).unwrap();
                         // Full Precision Search.
                         index
                             .search(
                                 &FullPrecision,
                                 ctx,
                                 query,
-                                &SearchParams::new_default(top_k, search_l).unwrap(),
+                                &mut search_params,
                                 &mut result_output_buffer,
                             )
                             .await
@@ -2522,13 +2532,15 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                        let mut search_params =
+                            SearchParams::new_default(top_k, search_l).unwrap();
                         // Quantized Search
                         index
                             .search(
                                 &Quantized,
                                 ctx,
                                 query,
-                                &SearchParams::new_default(top_k, search_l).unwrap(),
+                                &mut search_params,
                                 &mut result_output_buffer,
                             )
                             .await
@@ -2608,13 +2620,15 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                        let mut search_params =
+                            SearchParams::new_default(top_k, top_k).unwrap();
                         // Quantized Search
                         index
                             .search(
                                 &Quantized,
                                 ctx,
                                 query,
-                                &SearchParams::new_default(top_k, top_k).unwrap(),
+                                &mut search_params,
                                 &mut result_output_buffer,
                             )
                             .await
@@ -2721,12 +2735,13 @@ pub(crate) mod tests {
 
             // Full Precision Search.
             let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
             index
                 .search(
                     &FullPrecision,
                     ctx,
                     query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
+                    &mut search_params,
                     &mut output,
                 )
                 .await
@@ -2738,13 +2753,14 @@ pub(crate) mod tests {
             let strategy = inmem::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
+            let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
 
             index
                 .search(
                     &strategy,
                     ctx,
                     query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
+                    &mut search_params,
                     &mut output,
                 )
                 .await
@@ -2846,13 +2862,14 @@ pub(crate) mod tests {
             let strategy = inmem::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
+            let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
 
             index
                 .search(
                     &strategy,
                     ctx,
                     query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
+                    &mut search_params,
                     &mut output,
                 )
                 .await
@@ -2938,13 +2955,14 @@ pub(crate) mod tests {
 
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
                     &Quantized,
                     ctx,
                     query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
+                    &mut search_params,
                     &mut result_output_buffer,
                 )
                 .await
@@ -3518,13 +3536,14 @@ pub(crate) mod tests {
             let gt = groundtruth(queries.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
                     &Hybrid::new(max_fp_vecs_per_prune),
                     ctx,
                     query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
+                    &mut search_params,
                     &mut result_output_buffer,
                 )
                 .await
@@ -3664,13 +3683,14 @@ pub(crate) mod tests {
             let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let mut search_params = SearchParams::new_default(top_k, search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
                     &FullPrecision,
                     ctx,
                     query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
+                    &mut search_params,
                     &mut result_output_buffer,
                 )
                 .await
@@ -4153,12 +4173,13 @@ pub(crate) mod tests {
         // but reject everything via on_visit
         let filter = RejectAllFilter::only([0_u32]);
 
+        let mut search_params = SearchParams::new_default(10, 20).unwrap();
         let stats = multihop_search(
             &index,
             &FullPrecision,
             &DefaultContext,
             query.as_slice(),
-            &SearchParams::new_default(10, 20).unwrap(),
+            &mut search_params,
             &mut result_output_buffer,
             &filter,
         )
@@ -4215,12 +4236,13 @@ pub(crate) mod tests {
         let target = (num_points / 2) as u32;
         let filter = TerminatingFilter::new(target);
 
+        let mut search_params = SearchParams::new_default(10, 40).unwrap();
         let stats = multihop_search(
             &index,
             &FullPrecision,
             &DefaultContext,
             query.as_slice(),
-            &SearchParams::new_default(10, 40).unwrap(),
+            &mut search_params,
             &mut result_output_buffer,
             &filter,
         )
@@ -4279,12 +4301,13 @@ pub(crate) mod tests {
         let mut baseline_buffer =
             search_output_buffer::IdDistance::new(&mut baseline_ids, &mut baseline_distances);
 
+        let mut search_params = SearchParams::new_default(10, 20).unwrap();
         let baseline_stats = multihop_search(
             &index,
             &FullPrecision,
             &DefaultContext,
             query.as_slice(),
-            &SearchParams::new_default(10, 20).unwrap(),
+            &mut search_params,
             &mut baseline_buffer,
             &EvenFilter, // Just filter to even IDs
         )
@@ -4300,12 +4323,13 @@ pub(crate) mod tests {
         let mut adjusted_buffer =
             search_output_buffer::IdDistance::new(&mut adjusted_ids, &mut adjusted_distances);
 
+        let mut search_params = SearchParams::new_default(10, 20).unwrap();
         let adjusted_stats = multihop_search(
             &index,
             &FullPrecision,
             &DefaultContext,
             query.as_slice(),
-            &SearchParams::new_default(10, 20).unwrap(),
+            &mut search_params,
             &mut adjusted_buffer,
             &filter,
         )
@@ -4426,12 +4450,13 @@ pub(crate) mod tests {
         let max_visits = 5;
         let filter = TerminateAfterN::new(max_visits);
 
+        let mut search_params = SearchParams::new_default(10, 100).unwrap(); // Large L to ensure we'd visit more without termination
         let _stats = multihop_search(
             &index,
             &FullPrecision,
             &DefaultContext,
             query.as_slice(),
-            &SearchParams::new_default(10, 100).unwrap(), // Large L to ensure we'd visit more without termination
+            &mut search_params,
             &mut result_output_buffer,
             &filter,
         )

@@ -15,12 +15,12 @@
 //! use diskann::graph::{GraphSearch, RangeSearch, MultihopSearch, SearchDispatch};
 //!
 //! // Standard graph search
-//! let params = GraphSearch::new(10, 100, None)?;
-//! let stats = index.search(&strategy, &context, &query, &params, &mut output).await?;
+//! let mut params = GraphSearch::new(10, 100, None)?;
+//! let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;
 //!
 //! // Range search
-//! let params = RangeSearch::new(100, 0.5)?;
-//! let result = index.search(&strategy, &context, &query, &params, &mut ()).await?;
+//! let mut params = RangeSearch::new(100, 0.5)?;
+//! let result = index.search(&strategy, &context, &query, &mut params, &mut ()).await?;
 //! println!("Found {} points within radius", result.ids.len());
 //! ```
 

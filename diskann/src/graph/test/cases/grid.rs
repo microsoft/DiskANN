@@ -126,7 +126,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
             // are correct.
             let index = setup_grid_search(grid, size);
 
-            let params = GraphSearch::new(10, 10, Some(beam_width)).unwrap();
+            let mut params = GraphSearch::new(10, 10, Some(beam_width)).unwrap();
             let context = test_provider::Context::new();
 
             let mut neighbors = vec![Neighbor::<u32>::default(); params.k];
@@ -140,7 +140,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
                     &test_provider::Strategy::new(),
                     &context,
                     query.as_slice(),
-                    &params,
+                    &mut params,
                     &mut crate::neighbor::BackInserter::new(neighbors.as_mut_slice()),
                 ))
                 .unwrap();

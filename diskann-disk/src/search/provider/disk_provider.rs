@@ -993,12 +993,12 @@ where
                 &mut result_output_buffer,
             ))?
         } else {
-            let graph_search = GraphSearch::new(k_value, search_list_size as usize, beam_width)?;
+            let mut graph_search = GraphSearch::new(k_value, search_list_size as usize, beam_width)?;
             self.runtime.block_on(self.index.search(
                 &strategy,
                 &DefaultContext,
                 strategy.query,
-                &graph_search,
+                &mut graph_search,
                 &mut result_output_buffer,
             ))?
         };

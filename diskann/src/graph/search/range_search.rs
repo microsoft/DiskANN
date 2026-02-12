@@ -144,7 +144,7 @@ where
     type Output = RangeSearchOutput<O>;
 
     fn dispatch<'a>(
-        &'a self,
+        &'a mut self,
         index: &'a DiskANNIndex<DP>,
         strategy: &'a S,
         context: &'a DP::Context,
