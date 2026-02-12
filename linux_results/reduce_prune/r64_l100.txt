@@ -1,0 +1,9 @@
+Starting index build with R: 64  Lbuild: 100  alpha: 1.2  #threads: 48
+L2: Using AVX2 distance computation DistanceL2Float
+Using only first 1010812 from file.. 
+Starting index build with 1010812 points... 
+0% of index build completed.9.89304% of index build completed.19.7861% of index build completed.29.6791% of index build completed.39.5721% of index build completed.49.4652% of index build completed.59.3582% of index build completed.69.2513% of index build completed.79.1443% of index build completed.89.0373% of index build completed.98.9304% of index build completed.Starting final cleanup..done. Link time: 89.0615s
+Index built with degree: max:64  avg:48.8244  min:4  count(deg<2):0
+Indexing time: 89.7581
+Not saving tags as they are not enabled.
+Time taken for save: 2.33791s.
