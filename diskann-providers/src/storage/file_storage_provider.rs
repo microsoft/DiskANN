@@ -31,6 +31,7 @@ impl StorageReadProvider for FileStorageProvider {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 impl StorageWriteProvider for FileStorageProvider {
     type Writer = BufWriter<File>;
 
@@ -54,6 +55,7 @@ impl StorageWriteProvider for FileStorageProvider {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use std::io::{Read, Seek, SeekFrom, Write};
 

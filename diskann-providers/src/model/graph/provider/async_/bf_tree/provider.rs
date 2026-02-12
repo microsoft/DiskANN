@@ -2364,8 +2364,8 @@ mod tests {
     // SaveWith/LoadWith Tests for BfTree-based //
     ///////////////////////////////////////////////
 
-    use tempfile::tempdir;
     use crate::storage::VirtualStorageProvider;
+    use tempfile::tempdir;
 
     /// Test saving and loading of BfTreeProvider without quantization, including deleted vertices
     #[tokio::test]

@@ -80,6 +80,7 @@ impl ZipfDistribution {
     }
 }
 
+#[allow(clippy::disallowed_methods)]
 pub fn generate_labels(
     output_file: &str,
     distribution_type: &str,
