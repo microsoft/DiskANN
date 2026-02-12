@@ -160,7 +160,7 @@ pub type DataMutRef<'a, const NBITS: usize> =
 
 /// A meta struct storing the `sum` and `norm_squared` of a
 /// full query after transformation is applied to it.
-/// 
+///
 /// The inner product between `X = ax * X' + bx` and `Y` for d-dimensional
 /// vectors X and Y is:
 /// ```math
@@ -175,7 +175,8 @@ pub type DataMutRef<'a, const NBITS: usize> =
 /// ```math
 /// |X - Y|^2 = |ax * X' + bx|^2 + |Y|^2 - 2 * <X', Y>
 /// ```
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, bytemuck::Zeroable, bytemuck::Pod)]
+#[repr(C)]
 pub struct FullQueryMeta {
     /// The sum of `data`.
     pub sum: f32,
@@ -363,7 +364,8 @@ where
 }
 
 impl<const NBITS: usize>
-    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::Result<f32>> for MinMaxL2Squared
+    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::Result<f32>>
+    for MinMaxL2Squared
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
@@ -404,7 +406,8 @@ where
 }
 
 impl<const NBITS: usize>
-    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::Result<f32>> for MinMaxCosine
+    PureDistanceFunction<FullQueryRef<'_>, DataRef<'_, NBITS>, distances::Result<f32>>
+    for MinMaxCosine
 where
     Unsigned: Representation<NBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
