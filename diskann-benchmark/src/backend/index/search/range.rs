@@ -30,7 +30,7 @@ impl<'a> RangeSearchSteps<'a> {
     }
 }
 
-type Run = core_search::Run<diskann::graph::RangeSearchParams>;
+type Run = core_search::Run<diskann::graph::RangeSearch>;
 
 pub(crate) trait Range<I> {
     fn search_all(
@@ -79,13 +79,13 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::Range<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::RangeSearchParams,
+        Parameters = diskann::graph::RangeSearch,
         Output = core_search::graph::range::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::RangeSearchParams>>,
+        parameters: Vec<core_search::Run<diskann::graph::RangeSearch>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
     ) -> anyhow::Result<Vec<RangeSearchResults>> {
         let results = core_search::search_all(

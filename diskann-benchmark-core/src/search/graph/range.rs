@@ -27,7 +27,7 @@ use crate::{
 /// by the [`Aggregator`] type.
 ///
 /// The provided implementation of [`Search`] accepts
-/// [`graph::RangeSearchParams`] and returns [`Metrics`] as additional output.
+/// [`graph::RangeSearch`] and returns [`Metrics`] as additional output.
 #[derive(Debug)]
 pub struct Range<DP, T, S>
 where
@@ -83,7 +83,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::RangeSearchParams;
+    type Parameters = graph::RangeSearch;
     type Output = Metrics;
 
     fn num_queries(&self) -> usize {
@@ -91,7 +91,7 @@ where
     }
 
     fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
-        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l_value))
+        search::IdCount::Dynamic(NonZeroUsize::new(parameters.starting_l()))
     }
 
     async fn search<O>(
@@ -104,7 +104,7 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let mut range_search = graph::RangeSearch::from(*parameters);
+        let mut range_search = *parameters;
         let result = self
             .index
             .search(
@@ -134,8 +134,8 @@ pub struct Summary {
     /// The [`search::Setup`] used for the batch of runs.
     pub setup: search::Setup,
 
-    /// The [`graph::RangeSearchParams`] used for the batch of runs.
-    pub parameters: graph::RangeSearchParams,
+    /// The [`graph::RangeSearch`] used for the batch of runs.
+    pub parameters: graph::RangeSearch,
 
     /// The end-to-end latency for each repetition in the batch.
     pub end_to_end_latencies: Vec<MicroSeconds>,
@@ -179,7 +179,7 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I> search::Aggregate<graph::RangeSearchParams, I, Metrics> for Aggregator<'_, I>
+impl<I> search::Aggregate<graph::RangeSearch, I, Metrics> for Aggregator<'_, I>
 where
     I: crate::recall::RecallCompatible,
 {
@@ -188,7 +188,7 @@ where
     #[inline(never)]
     fn aggregate(
         &mut self,
-        run: search::Run<graph::RangeSearchParams>,
+        run: search::Run<graph::RangeSearch>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
         // Compute the recall using just the first result.
@@ -266,7 +266,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             range.clone(),
-            graph::RangeSearchParams::new(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
+            graph::RangeSearch::with_options(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -285,11 +285,11 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::RangeSearchParams::new(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
+                graph::RangeSearch::with_options(None, 10, None, 2.0, None, 0.8, 1.2).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::RangeSearchParams::new(None, 15, None, 2.0, None, 0.8, 1.2).unwrap(),
+                graph::RangeSearch::with_options(None, 15, None, 2.0, None, 0.8, 1.2).unwrap(),
                 setup.clone(),
             ),
         ];

@@ -12,10 +12,10 @@
 //! # Usage
 //!
 //! ```ignore
-//! use diskann::graph::{GraphSearch, RangeSearch, MultihopSearch, Search};
+//! use diskann::graph::{KnnSearch, RangeSearch, MultihopSearch, Search};
 //!
-//! // Standard graph search
-//! let mut params = GraphSearch::new(10, 100, None)?;
+//! // Standard k-NN search
+//! let mut params = KnnSearch::new(10, 100, None)?;;
 //! let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;
 //!
 //! // Range search
@@ -28,7 +28,7 @@ use diskann_utils::future::SendFuture;
 
 use crate::{ANNResult, graph::index::DiskANNIndex, provider::DataProvider};
 
-mod graph_search;
+mod knn_search;
 mod multihop_search;
 mod range_search;
 
@@ -59,9 +59,9 @@ where
 }
 
 // Re-export search parameter types.
-pub use graph_search::{GraphSearch, RecordedGraphSearch};
+pub use knn_search::{KnnSearch, KnnSearchError, RecordedKnnSearch};
 pub use multihop_search::MultihopSearch;
-pub use range_search::{RangeSearch, RangeSearchOutput};
+pub use range_search::{RangeSearch, RangeSearchError, RangeSearchOutput};
 
 // Feature-gated diverse search.
 #[cfg(feature = "experimental_diversity_search")]

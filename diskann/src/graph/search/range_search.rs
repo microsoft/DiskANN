@@ -6,13 +6,13 @@
 //! Range-based search within a distance radius.
 
 use diskann_utils::future::{AssertSend, SendFuture};
+use thiserror::Error;
 
 use super::{Search, scratch::SearchScratch};
 use crate::{
-    ANNResult,
+    ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        RangeSearchParams,
         glue::{self, ExpandBeam, SearchExt, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
@@ -33,33 +33,51 @@ pub struct RangeSearchOutput<O> {
     pub distances: Vec<f32>,
 }
 
+/// Error type for [`RangeSearch`] parameter validation.
+#[derive(Debug, Error)]
+pub enum RangeSearchError {
+    #[error("beam width cannot be zero")]
+    BeamWidthZero,
+    #[error("l_value cannot be zero")]
+    LZero,
+    #[error("initial_search_slack must be between 0 and 1.0")]
+    StartingListSlackValueError,
+    #[error("range_search_slack must be greater than or equal to 1.0")]
+    RangeSearchSlackValueError,
+    #[error("inner_radius must be less than or equal to radius")]
+    InnerRadiusValueError,
+}
+
+impl From<RangeSearchError> for ANNError {
+    fn from(err: RangeSearchError) -> Self {
+        Self::new(ANNErrorKind::IndexError, err)
+    }
+}
+
 /// Parameters for range-based search.
 ///
 /// Finds all points within a specified distance radius from the query.
 #[derive(Debug, Clone, Copy)]
 pub struct RangeSearch {
     /// Maximum results to return (None = unlimited).
-    pub max_returned: Option<usize>,
+    max_returned: Option<usize>,
     /// Initial search list size.
-    pub starting_l: usize,
+    starting_l: usize,
     /// Optional beam width.
-    pub beam_width: Option<usize>,
+    beam_width: Option<usize>,
     /// Outer radius - points within this distance are candidates.
-    pub radius: f32,
+    radius: f32,
     /// Inner radius - points closer than this are excluded.
-    pub inner_radius: Option<f32>,
+    inner_radius: Option<f32>,
     /// Slack factor for initial search phase (0.0 to 1.0).
-    pub initial_slack: f32,
+    initial_slack: f32,
     /// Slack factor for range expansion (>= 1.0).
-    pub range_slack: f32,
+    range_slack: f32,
 }
 
 impl RangeSearch {
     /// Create range search with default slack values.
-    pub fn new(
-        starting_l: usize,
-        radius: f32,
-    ) -> Result<Self, super::super::RangeSearchParamsError> {
+    pub fn new(starting_l: usize, radius: f32) -> Result<Self, RangeSearchError> {
         Self::with_options(None, starting_l, None, radius, None, 1.0, 1.0)
     }
 
@@ -73,27 +91,25 @@ impl RangeSearch {
         inner_radius: Option<f32>,
         initial_slack: f32,
         range_slack: f32,
-    ) -> Result<Self, super::super::RangeSearchParamsError> {
-        use super::super::RangeSearchParamsError;
-
-        if let Some(bw) = beam_width {
-            if bw == 0 {
-                return Err(RangeSearchParamsError::BeamWidthZero);
-            }
+    ) -> Result<Self, RangeSearchError> {
+        if let Some(bw) = beam_width
+            && bw == 0
+        {
+            return Err(RangeSearchError::BeamWidthZero);
         }
         if starting_l == 0 {
-            return Err(RangeSearchParamsError::LZero);
+            return Err(RangeSearchError::LZero);
         }
         if !(0.0..=1.0).contains(&initial_slack) {
-            return Err(RangeSearchParamsError::StartingListSlackValueError);
+            return Err(RangeSearchError::StartingListSlackValueError);
         }
         if range_slack < 1.0 {
-            return Err(RangeSearchParamsError::RangeSearchSlackValueError);
+            return Err(RangeSearchError::RangeSearchSlackValueError);
         }
-        if let Some(inner) = inner_radius {
-            if inner > radius {
-                return Err(RangeSearchParamsError::InnerRadiusValueError);
-            }
+        if let Some(inner) = inner_radius
+            && inner > radius
+        {
+            return Err(RangeSearchError::InnerRadiusValueError);
         }
 
         Ok(Self {
@@ -107,30 +123,46 @@ impl RangeSearch {
         })
     }
 
-    fn to_legacy_params(&self) -> RangeSearchParams {
-        RangeSearchParams {
-            max_returned: self.max_returned,
-            starting_l_value: self.starting_l,
-            beam_width: self.beam_width,
-            radius: self.radius,
-            inner_radius: self.inner_radius,
-            initial_search_slack: self.initial_slack,
-            range_search_slack: self.range_slack,
-        }
+    /// Returns the maximum number of results to return.
+    #[inline]
+    pub fn max_returned(&self) -> Option<usize> {
+        self.max_returned
     }
-}
 
-impl From<RangeSearchParams> for RangeSearch {
-    fn from(params: RangeSearchParams) -> Self {
-        Self {
-            max_returned: params.max_returned,
-            starting_l: params.starting_l_value,
-            beam_width: params.beam_width,
-            radius: params.radius,
-            inner_radius: params.inner_radius,
-            initial_slack: params.initial_search_slack,
-            range_slack: params.range_search_slack,
-        }
+    /// Returns the initial search list size.
+    #[inline]
+    pub fn starting_l(&self) -> usize {
+        self.starting_l
+    }
+
+    /// Returns the optional beam width.
+    #[inline]
+    pub fn beam_width(&self) -> Option<usize> {
+        self.beam_width
+    }
+
+    /// Returns the outer radius.
+    #[inline]
+    pub fn radius(&self) -> f32 {
+        self.radius
+    }
+
+    /// Returns the inner radius (points closer are excluded).
+    #[inline]
+    pub fn inner_radius(&self) -> Option<f32> {
+        self.inner_radius
+    }
+
+    /// Returns the initial search slack factor.
+    #[inline]
+    pub fn initial_slack(&self) -> f32 {
+        self.initial_slack
+    }
+
+    /// Returns the range search slack factor.
+    #[inline]
+    pub fn range_slack(&self) -> f32 {
+        self.range_slack
     }
 }
 
@@ -151,7 +183,7 @@ where
         query: &'a T,
         _output: &'a mut (),
     ) -> impl SendFuture<ANNResult<Self::Output>> {
-        let search_params = self.to_legacy_params();
+        let search_params = *self;
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -159,11 +191,11 @@ where
             let computer = accessor.build_query_computer(query).into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
-            let mut scratch = index.search_scratch(search_params.starting_l_value, start_ids.len());
+            let mut scratch = index.search_scratch(search_params.starting_l(), start_ids.len());
 
             let initial_stats = index
                 .search_internal(
-                    search_params.beam_width,
+                    search_params.beam_width(),
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -172,14 +204,14 @@ where
                 )
                 .await?;
 
-            let mut in_range = Vec::with_capacity(search_params.starting_l_value.into_usize());
+            let mut in_range = Vec::with_capacity(search_params.starting_l().into_usize());
 
             for neighbor in scratch
                 .best
                 .iter()
-                .take(search_params.starting_l_value.into_usize())
+                .take(search_params.starting_l().into_usize())
             {
-                if neighbor.distance <= search_params.radius {
+                if neighbor.distance <= search_params.radius() {
                     in_range.push(neighbor);
                 }
             }
@@ -192,8 +224,7 @@ where
             scratch.in_range = in_range;
 
             let stats = if scratch.in_range.len()
-                >= ((search_params.starting_l_value as f32) * search_params.initial_search_slack)
-                    as usize
+                >= ((search_params.starting_l() as f32) * search_params.initial_slack()) as usize
             {
                 // Move to range search
                 let range_stats = range_search_internal(
@@ -237,7 +268,7 @@ where
                 .into_ann_result()?;
 
             // Filter by inner/outer radius
-            let inner_cutoff = if let Some(inner_radius) = search_params.inner_radius {
+            let inner_cutoff = if let Some(inner_radius) = search_params.inner_radius() {
                 result_dists
                     .iter()
                     .position(|dist| *dist > inner_radius)
@@ -248,7 +279,7 @@ where
 
             let outer_cutoff = result_dists
                 .iter()
-                .position(|dist| *dist > search_params.radius)
+                .position(|dist| *dist > search_params.radius())
                 .unwrap_or(result_dists.len());
 
             result_ids.truncate(outer_cutoff);
@@ -283,7 +314,7 @@ where
 /// Called after the initial graph search has identified starting candidates.
 pub(crate) async fn range_search_internal<I, A, T>(
     max_degree_with_slack: usize,
-    search_params: &RangeSearchParams,
+    search_params: &RangeSearch,
     accessor: &mut A,
     computer: &A::QueryComputer,
     scratch: &mut SearchScratch<I>,
@@ -293,7 +324,7 @@ where
     A: ExpandBeam<T, Id = I> + SearchExt,
     T: ?Sized,
 {
-    let beam_width = search_params.beam_width.unwrap_or(1);
+    let beam_width = search_params.beam_width().unwrap_or(1);
 
     for neighbor in &scratch.in_range {
         scratch.range_frontier.push_back(neighbor.id);
@@ -301,7 +332,7 @@ where
 
     let mut neighbors = Vec::with_capacity(max_degree_with_slack);
 
-    let max_returned = search_params.max_returned.unwrap_or(usize::MAX);
+    let max_returned = search_params.max_returned().unwrap_or(usize::MAX);
 
     while !scratch.range_frontier.is_empty() {
         scratch.beam_nodes.clear();
@@ -327,7 +358,7 @@ where
 
         // The predicate ensures that the contents of `neighbors` are unique.
         for neighbor in neighbors.iter() {
-            if neighbor.distance <= search_params.radius * search_params.range_search_slack
+            if neighbor.distance <= search_params.radius() * search_params.range_slack()
                 && scratch.in_range.len() < max_returned
             {
                 scratch.in_range.push(*neighbor);

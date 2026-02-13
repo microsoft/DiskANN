@@ -5,7 +5,7 @@
 
 //! A built-in helper for benchmarking K-nearest neighbors.
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::sync::Arc;
 
 use diskann::{
     ANNResult,
@@ -29,7 +29,7 @@ use crate::{
 /// the latter. Result aggregation for [`search::search_all`] is provided
 /// by the [`Aggregator`] type.
 ///
-/// The provided implementation of [`Search`] accepts [`graph::SearchParams`]
+/// The provided implementation of [`Search`] accepts [`graph::KnnSearch`]
 /// and returns [`Metrics`] as additional output.
 #[derive(Debug)]
 pub struct KNN<DP, T, S>
@@ -92,7 +92,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::SearchParams;
+    type Parameters = graph::KnnSearch;
     type Output = Metrics;
 
     fn num_queries(&self) -> usize {
@@ -100,7 +100,7 @@ where
     }
 
     fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
-        search::IdCount::Fixed(NonZeroUsize::new(parameters.k_value).unwrap_or(diskann::utils::ONE))
+        search::IdCount::Fixed(parameters.k_value())
     }
 
     async fn search<O>(
@@ -113,14 +113,14 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let mut graph_search = graph::GraphSearch::from(*parameters);
+        let mut knn_search = *parameters;
         let stats = self
             .index
             .search(
                 self.strategy.get(index)?,
                 &context,
                 self.queries.row(index),
-                &mut graph_search,
+                &mut knn_search,
                 buffer,
             )
             .await?;
@@ -143,7 +143,7 @@ pub struct Summary {
     pub setup: search::Setup,
 
     /// The [`Search::Parameters`] used for the batch of runs.
-    pub parameters: graph::SearchParams,
+    pub parameters: graph::KnnSearch,
 
     /// The end-to-end latency for each repetition in the batch.
     pub end_to_end_latencies: Vec<MicroSeconds>,
@@ -208,7 +208,7 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I> search::Aggregate<graph::SearchParams, I, Metrics> for Aggregator<'_, I>
+impl<I> search::Aggregate<graph::KnnSearch, I, Metrics> for Aggregator<'_, I>
 where
     I: crate::recall::RecallCompatible,
 {
@@ -216,7 +216,7 @@ where
 
     fn aggregate(
         &mut self,
-        run: search::Run<graph::SearchParams>,
+        run: search::Run<graph::KnnSearch>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
         // Compute the recall using just the first result.
@@ -281,13 +281,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use super::*;
 
     use diskann::graph::test::provider;
 
     #[test]
     fn test_knn() {
-        let nearest_neighbors = 5;
+        let nearest_neighbors = NonZeroUsize::new(5).unwrap();
 
         let index = search::graph::test_grid_provider();
 
@@ -311,7 +313,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             knn.clone(),
-            graph::SearchParams::new(nearest_neighbors, 10, None).unwrap(),
+            graph::KnnSearch::new(nearest_neighbors, NonZeroUsize::new(10).unwrap(), None).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -322,7 +324,7 @@ mod tests {
         assert_eq!(*rows.row(0).first().unwrap(), 0);
 
         for r in 0..rows.nrows() {
-            assert_eq!(rows.row(r).len(), nearest_neighbors);
+            assert_eq!(rows.row(r).len(), nearest_neighbors.get());
         }
 
         const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
@@ -335,17 +337,19 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::SearchParams::new(nearest_neighbors, 10, None).unwrap(),
+                graph::KnnSearch::new(nearest_neighbors, NonZeroUsize::new(10).unwrap(), None)
+                    .unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::SearchParams::new(nearest_neighbors, 15, None).unwrap(),
+                graph::KnnSearch::new(nearest_neighbors, NonZeroUsize::new(15).unwrap(), None)
+                    .unwrap(),
                 setup.clone(),
             ),
         ];
 
-        let recall_k = nearest_neighbors;
-        let recall_n = nearest_neighbors;
+        let recall_k = nearest_neighbors.get();
+        let recall_n = nearest_neighbors.get();
 
         let all =
             search::search_all(knn, parameters, Aggregator::new(rows, recall_k, recall_n)).unwrap();

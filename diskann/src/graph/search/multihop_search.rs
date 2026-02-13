@@ -10,12 +10,11 @@ use diskann_utils::future::{AssertSend, SendFuture};
 use diskann_vector::PreprocessedDistanceFunction;
 use hashbrown::HashSet;
 
-use super::{Search, record::SearchRecord, scratch::SearchScratch};
+use super::{KnnSearch, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::{ErrorExt, IntoANNResult},
     graph::{
-        SearchParams,
         glue::{
             self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
             SearchPostProcess, SearchStrategy,
@@ -28,10 +27,8 @@ use crate::{
     },
     neighbor::Neighbor,
     provider::{BuildQueryComputer, DataProvider},
-    utils::{IntoUsize, VectorId},
+    utils::VectorId,
 };
-
-use super::graph_search::GraphSearch;
 
 /// Parameters for label-filtered search using multi-hop expansion.
 ///
@@ -41,17 +38,14 @@ use super::graph_search::GraphSearch;
 #[derive(Debug)]
 pub struct MultihopSearch<'q, InternalId> {
     /// Base graph search parameters.
-    pub inner: GraphSearch,
+    pub inner: KnnSearch,
     /// Label evaluator for determining node matches.
     pub label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
 }
 
 impl<'q, InternalId> MultihopSearch<'q, InternalId> {
     /// Create new multihop search parameters.
-    pub fn new(
-        inner: GraphSearch,
-        label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
-    ) -> Self {
+    pub fn new(inner: KnnSearch, label_evaluator: &'q dyn QueryLabelProvider<InternalId>) -> Self {
         Self {
             inner,
             label_evaluator,
@@ -77,11 +71,7 @@ where
         query: &'a T,
         output: &'a mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
-        let params = SearchParams {
-            k_value: self.inner.k,
-            l_value: self.inner.l,
-            beam_width: self.inner.beam_width,
-        };
+        let params = self.inner;
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -90,7 +80,7 @@ where
 
             let start_ids = accessor.starting_points().await?;
 
-            let mut scratch = index.search_scratch(params.l_value, start_ids.len());
+            let mut scratch = index.search_scratch(params.l_value().get(), start_ids.len());
 
             let stats = multihop_search_internal(
                 index.max_degree_with_slack(),
@@ -109,7 +99,7 @@ where
                     &mut accessor,
                     query,
                     &computer,
-                    scratch.best.iter().take(params.l_value.into_usize()),
+                    scratch.best.iter().take(params.l_value().get()),
                     output,
                 )
                 .send()
@@ -182,7 +172,7 @@ impl<K> HybridPredicate<K> for NotInMutWithLabelCheck<'_, K> where K: VectorId {
 /// to find matching neighbors within two hops.
 pub(crate) async fn multihop_search_internal<I, A, T, SR>(
     max_degree_with_slack: usize,
-    search_params: &SearchParams,
+    search_params: &KnnSearch,
     accessor: &mut A,
     computer: &A::QueryComputer,
     scratch: &mut SearchScratch<I>,
@@ -195,7 +185,7 @@ where
     T: ?Sized,
     SR: SearchRecord<I> + ?Sized,
 {
-    let beam_width = search_params.beam_width.unwrap_or(1);
+    let beam_width = search_params.beam_width().unwrap_or(1);
 
     // Helper to build the final stats from scratch state.
     let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {

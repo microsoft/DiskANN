@@ -49,8 +49,9 @@ pub(crate) fn run<I>(
                 .search_l
                 .iter()
                 .map(|search_l| {
-                    let search_params =
-                        diskann::graph::SearchParams::new(run.search_n, *search_l, None).unwrap();
+                    let k = NonZeroUsize::new(run.search_n).expect("search_n must be non-zero");
+                    let l = NonZeroUsize::new(*search_l).expect("search_l must be non-zero");
+                    let search_params = diskann::graph::KnnSearch::new(k, l, None).unwrap();
 
                     core_search::Run::new(search_params, setup.clone())
                 })
@@ -63,7 +64,7 @@ pub(crate) fn run<I>(
     Ok(all)
 }
 
-type Run = core_search::Run<diskann::graph::SearchParams>;
+type Run = core_search::Run<diskann::graph::KnnSearch>;
 pub(crate) trait Knn<I> {
     fn search_all(
         &self,
@@ -83,13 +84,13 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::KNN<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::SearchParams,
+        Parameters = diskann::graph::KnnSearch,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::SearchParams>>,
+        parameters: Vec<core_search::Run<diskann::graph::KnnSearch>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,
@@ -109,13 +110,13 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::MultiHop<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::SearchParams,
+        Parameters = diskann::graph::KnnSearch,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::SearchParams>>,
+        parameters: Vec<core_search::Run<diskann::graph::KnnSearch>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,

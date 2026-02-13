@@ -5,14 +5,10 @@
 
 //! Diversity-aware search.
 
-#![cfg(feature = "experimental_diversity_search")]
-
-use std::num::NonZeroUsize;
-
 use diskann_utils::future::{AssertSend, SendFuture};
 use hashbrown::HashSet;
 
-use super::{Search, graph_search::GraphSearch, record::NoopSearchRecord, scratch::SearchScratch};
+use super::{KnnSearch, Search, record::NoopSearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::IntoANNResult,
@@ -24,7 +20,6 @@ use crate::{
     },
     neighbor::{AttributeValueProvider, DiverseNeighborQueue, NeighborQueue},
     provider::{BuildQueryComputer, DataProvider},
-    utils::IntoUsize,
 };
 
 /// Parameters for diversity-aware search.
@@ -35,8 +30,8 @@ pub struct DiverseSearch<P>
 where
     P: AttributeValueProvider,
 {
-    /// Base graph search parameters.
-    pub inner: GraphSearch,
+    /// Base k-NN search parameters.
+    pub inner: KnnSearch,
     /// Diversity-specific parameters.
     pub diverse_params: DiverseSearchParams<P>,
 }
@@ -46,7 +41,7 @@ where
     P: AttributeValueProvider,
 {
     /// Create new diverse search parameters.
-    pub fn new(inner: GraphSearch, diverse_params: DiverseSearchParams<P>) -> Self {
+    pub fn new(inner: KnnSearch, diverse_params: DiverseSearchParams<P>) -> Self {
         Self {
             inner,
             diverse_params,
@@ -64,10 +59,8 @@ where
     {
         let attribute_provider = self.diverse_params.attribute_provider.clone();
         let diverse_queue = DiverseNeighborQueue::new(
-            self.inner.l,
-            // SAFETY: k_value is guaranteed to be non-zero by GraphSearch validation
-            #[allow(clippy::expect_used)]
-            NonZeroUsize::new(self.inner.k).expect("k_value must be non-zero"),
+            self.inner.l_value().get(),
+            self.inner.k_value(),
             self.diverse_params.diverse_results_k,
             attribute_provider,
         );
@@ -75,10 +68,10 @@ where
         SearchScratch {
             best: diverse_queue,
             visited: HashSet::with_capacity(
-                index.estimate_visited_set_capacity(Some(self.inner.l)),
+                index.estimate_visited_set_capacity(Some(self.inner.l_value().get())),
             ),
             id_scratch: Vec::with_capacity(index.max_degree_with_slack()),
-            beam_nodes: Vec::with_capacity(self.inner.beam_width.unwrap_or(1)),
+            beam_nodes: Vec::with_capacity(self.inner.beam_width().unwrap_or(1)),
             range_frontier: std::collections::VecDeque::new(),
             in_range: Vec::new(),
             hops: 0,
@@ -118,7 +111,7 @@ where
 
             let stats = index
                 .search_internal(
-                    self.inner.beam_width,
+                    self.inner.beam_width(),
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -136,7 +129,7 @@ where
                     &mut accessor,
                     query,
                     &computer,
-                    diverse_scratch.best.iter().take(self.inner.l.into_usize()),
+                    diverse_scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )
                 .send()

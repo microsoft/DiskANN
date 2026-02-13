@@ -3,15 +3,16 @@
  * Licensed under the MIT license.
  */
 
-//! Standard graph-based ANN search.
+//! Standard k-NN (k-nearest neighbor) graph-based search.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, num::NonZeroUsize};
 
 use diskann_utils::future::{AssertSend, SendFuture};
+use thiserror::Error;
 
 use super::Search;
 use crate::{
-    ANNResult,
+    ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
         glue::{SearchExt, SearchPostProcess, SearchStrategy},
@@ -23,48 +24,56 @@ use crate::{
     utils::IntoUsize,
 };
 
-/// Parameters for standard graph-based ANN search.
+/// Error type for [`KnnSearch`] parameter validation.
+#[derive(Debug, Error)]
+pub enum KnnSearchError {
+    #[error("l_value ({l_value}) cannot be less than k_value ({k_value})")]
+    LLessThanK { l_value: usize, k_value: usize },
+    #[error("beam width cannot be zero")]
+    BeamWidthZero,
+}
+
+impl From<KnnSearchError> for ANNError {
+    fn from(err: KnnSearchError) -> Self {
+        Self::new(ANNErrorKind::IndexError, err)
+    }
+}
+
+/// Parameters for standard k-NN (k-nearest neighbor) graph-based search.
 ///
 /// This is the primary search mode, using the Vamana graph structure for efficient
 /// approximate nearest neighbor traversal.
-///
-/// This type is also exported as `SearchParams` for backwards compatibility.
 #[derive(Debug, Clone, Copy)]
-pub struct GraphSearch {
+pub struct KnnSearch {
     /// Number of results to return (k in k-NN).
-    k_value: usize,
+    k_value: NonZeroUsize,
     /// Search list size - controls accuracy vs speed tradeoff.
-    l_value: usize,
+    l_value: NonZeroUsize,
     /// Optional beam width for parallel graph exploration.
     beam_width: Option<usize>,
 }
 
-impl GraphSearch {
-    /// Create new graph search parameters.
+impl KnnSearch {
+    /// Create new k-NN search parameters.
     ///
     /// # Errors
     ///
-    /// Returns an error if `l_value < k_value` or if any value is zero.
+    /// Returns an error if `l_value < k_value` or if beam_width is zero.
     pub fn new(
-        k_value: usize,
-        l_value: usize,
+        k_value: NonZeroUsize,
+        l_value: NonZeroUsize,
         beam_width: Option<usize>,
-    ) -> Result<Self, super::super::SearchParamsError> {
-        use super::super::SearchParamsError;
-
+    ) -> Result<Self, KnnSearchError> {
         if k_value > l_value {
-            return Err(SearchParamsError::LLessThanK { l_value, k_value });
+            return Err(KnnSearchError::LLessThanK {
+                l_value: l_value.get(),
+                k_value: k_value.get(),
+            });
         }
-        if let Some(bw) = beam_width {
-            if bw == 0 {
-                return Err(SearchParamsError::BeamWidthZero);
-            }
-        }
-        if k_value == 0 {
-            return Err(SearchParamsError::KZero);
-        }
-        if l_value == 0 {
-            return Err(SearchParamsError::LZero);
+        if let Some(bw) = beam_width
+            && bw == 0
+        {
+            return Err(KnnSearchError::BeamWidthZero);
         }
 
         Ok(Self {
@@ -75,19 +84,22 @@ impl GraphSearch {
     }
 
     /// Create parameters with default beam width.
-    pub fn new_default(k_value: usize, l_value: usize) -> Result<Self, super::super::SearchParamsError> {
+    pub fn new_default(
+        k_value: NonZeroUsize,
+        l_value: NonZeroUsize,
+    ) -> Result<Self, KnnSearchError> {
         Self::new(k_value, l_value, None)
     }
 
     /// Returns the number of results to return (k in k-NN).
     #[inline]
-    pub fn k_value(&self) -> usize {
+    pub fn k_value(&self) -> NonZeroUsize {
         self.k_value
     }
 
     /// Returns the search list size.
     #[inline]
-    pub fn l_value(&self) -> usize {
+    pub fn l_value(&self) -> NonZeroUsize {
         self.l_value
     }
 
@@ -98,7 +110,7 @@ impl GraphSearch {
     }
 }
 
-impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for GraphSearch
+impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for KnnSearch
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -124,7 +136,7 @@ where
             let computer = accessor.build_query_computer(query).into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
-            let mut scratch = index.search_scratch(self.l_value, start_ids.len());
+            let mut scratch = index.search_scratch(self.l_value.get(), start_ids.len());
 
             let stats = index
                 .search_internal(
@@ -143,7 +155,7 @@ where
                     &mut accessor,
                     query,
                     &computer,
-                    scratch.best.iter().take(self.l_value.into_usize()),
+                    scratch.best.iter().take(self.l_value.get().into_usize()),
                     output,
                 )
                 .send()
@@ -155,29 +167,29 @@ where
     }
 }
 
-///////////////////////////
-// Recorded Graph Search //
-///////////////////////////
+////////////////////////
+// Recorded KnnSearch //
+////////////////////////
 
-/// Graph search with traversal path recording.
+/// K-NN search with traversal path recording.
 ///
 /// Records the path taken during search for debugging or analysis.
 #[derive(Debug)]
-pub struct RecordedGraphSearch<'r, SR: ?Sized> {
-    /// Base graph search parameters.
-    pub inner: GraphSearch,
+pub struct RecordedKnnSearch<'r, SR: ?Sized> {
+    /// Base k-NN search parameters.
+    pub inner: KnnSearch,
     /// The recorder to capture search path.
     pub recorder: &'r mut SR,
 }
 
-impl<'r, SR: ?Sized> RecordedGraphSearch<'r, SR> {
+impl<'r, SR: ?Sized> RecordedKnnSearch<'r, SR> {
     /// Create new recorded search parameters.
-    pub fn new(inner: GraphSearch, recorder: &'r mut SR) -> Self {
+    pub fn new(inner: KnnSearch, recorder: &'r mut SR) -> Self {
         Self { inner, recorder }
     }
 }
 
-impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedGraphSearch<'r, SR>
+impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedKnnSearch<'r, SR>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -204,7 +216,7 @@ where
             let computer = accessor.build_query_computer(query).into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
-            let mut scratch = index.search_scratch(self.inner.l_value, start_ids.len());
+            let mut scratch = index.search_scratch(self.inner.l_value.get(), start_ids.len());
 
             let stats = index
                 .search_internal(
@@ -223,7 +235,10 @@ where
                     &mut accessor,
                     query,
                     &computer,
-                    scratch.best.iter().take(self.inner.l_value.into_usize()),
+                    scratch
+                        .best
+                        .iter()
+                        .take(self.inner.l_value.get().into_usize()),
                     output,
                 )
                 .send()
@@ -244,18 +259,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_graph_search_validation() {
+    fn test_knn_search_validation() {
         // Valid
-        assert!(GraphSearch::new(10, 100, None).is_ok());
-        assert!(GraphSearch::new(10, 100, Some(4)).is_ok());
-        assert!(GraphSearch::new(10, 10, None).is_ok()); // k == l is valid
+        assert!(
+            KnnSearch::new(
+                NonZeroUsize::new(10).unwrap(),
+                NonZeroUsize::new(100).unwrap(),
+                None
+            )
+            .is_ok()
+        );
+        assert!(
+            KnnSearch::new(
+                NonZeroUsize::new(10).unwrap(),
+                NonZeroUsize::new(100).unwrap(),
+                Some(4)
+            )
+            .is_ok()
+        );
+        assert!(
+            KnnSearch::new(
+                NonZeroUsize::new(10).unwrap(),
+                NonZeroUsize::new(10).unwrap(),
+                None
+            )
+            .is_ok()
+        ); // k == l is valid
 
         // Invalid: l < k
-        assert!(GraphSearch::new(100, 10, None).is_err());
+        assert!(
+            KnnSearch::new(
+                NonZeroUsize::new(100).unwrap(),
+                NonZeroUsize::new(10).unwrap(),
+                None
+            )
+            .is_err()
+        );
 
-        // Invalid: zero values
-        assert!(GraphSearch::new(0, 100, None).is_err());
-        assert!(GraphSearch::new(10, 0, None).is_err());
-        assert!(GraphSearch::new(10, 100, Some(0)).is_err());
+        // Invalid: zero beam_width
+        assert!(
+            KnnSearch::new(
+                NonZeroUsize::new(10).unwrap(),
+                NonZeroUsize::new(100).unwrap(),
+                Some(0)
+            )
+            .is_err()
+        );
     }
 }

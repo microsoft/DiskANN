@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::sync::Arc;
 
 use diskann::{
     ANNResult,
@@ -22,7 +22,7 @@ use crate::search::{self, Search, graph::Strategy};
 /// [`search::search_all`] is provided by the [`search::graph::knn::Aggregator`] type (same
 /// aggregator as [`search::graph::KNN`]).
 ///
-/// The provided implementation of [`Search`] accepts [`graph::SearchParams`]
+/// The provided implementation of [`Search`] accepts [`graph::KnnSearch`]
 /// and returns [`search::graph::knn::Metrics`] as additional output.
 #[derive(Debug)]
 pub struct MultiHop<DP, T, S>
@@ -90,7 +90,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::SearchParams;
+    type Parameters = graph::KnnSearch;
     type Output = super::knn::Metrics;
 
     fn num_queries(&self) -> usize {
@@ -98,7 +98,7 @@ where
     }
 
     fn id_count(&self, parameters: &Self::Parameters) -> search::IdCount {
-        search::IdCount::Fixed(NonZeroUsize::new(parameters.k_value).unwrap_or(diskann::utils::ONE))
+        search::IdCount::Fixed(parameters.k_value())
     }
 
     async fn search<O>(
@@ -111,8 +111,7 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let mut multihop_search =
-            graph::MultihopSearch::new(graph::GraphSearch::from(*parameters), &*self.labels[index]);
+        let mut multihop_search = graph::MultihopSearch::new(*parameters, &*self.labels[index]);
         let stats = self
             .index
             .search(
@@ -137,6 +136,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use super::*;
 
     use diskann::graph::{index::QueryLabelProvider, test::provider};
@@ -153,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_multihop() {
-        let nearest_neighbors = 5;
+        let nearest_neighbors = NonZeroUsize::new(5).unwrap();
 
         let index = search::graph::test_grid_provider();
 
@@ -180,7 +181,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             multihop.clone(),
-            graph::SearchParams::new(nearest_neighbors, 10, None).unwrap(),
+            graph::KnnSearch::new(nearest_neighbors, NonZeroUsize::new(10).unwrap(), None).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -192,7 +193,7 @@ mod tests {
 
         // Check that only even IDs are returned.
         for r in 0..rows.nrows() {
-            assert_eq!(rows.row(r).len(), nearest_neighbors);
+            assert_eq!(rows.row(r).len(), nearest_neighbors.get());
             for &id in rows.row(r) {
                 assert_eq!(id % 2, 0, "Found odd ID {} in row {}", id, r);
             }
@@ -208,17 +209,19 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::SearchParams::new(nearest_neighbors, 10, None).unwrap(),
+                graph::KnnSearch::new(nearest_neighbors, NonZeroUsize::new(10).unwrap(), None)
+                    .unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::SearchParams::new(nearest_neighbors, 15, None).unwrap(),
+                graph::KnnSearch::new(nearest_neighbors, NonZeroUsize::new(15).unwrap(), None)
+                    .unwrap(),
                 setup.clone(),
             ),
         ];
 
-        let recall_k = nearest_neighbors;
-        let recall_n = nearest_neighbors;
+        let recall_k = nearest_neighbors.get();
+        let recall_n = nearest_neighbors.get();
 
         let all = search::search_all(
             multihop,

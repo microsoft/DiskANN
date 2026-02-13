@@ -3,13 +3,13 @@
  * Licensed under the MIT license.
  */
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, DiskANNIndex, GraphSearch,
+        self, DiskANNIndex, KnnSearch,
         test::{provider as test_provider, synthetic::Grid},
     },
     neighbor::Neighbor,
@@ -126,10 +126,15 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
             // are correct.
             let index = setup_grid_search(grid, size);
 
-            let mut params = GraphSearch::new(10, 10, Some(beam_width)).unwrap();
+            let mut params = KnnSearch::new(
+                NonZeroUsize::new(10).unwrap(),
+                NonZeroUsize::new(10).unwrap(),
+                Some(beam_width),
+            )
+            .unwrap();
             let context = test_provider::Context::new();
 
-            let mut neighbors = vec![Neighbor::<u32>::default(); params.k];
+            let mut neighbors = vec![Neighbor::<u32>::default(); params.k_value().get()];
             let graph::index::SearchStats {
                 cmps,
                 hops,
@@ -147,7 +152,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
 
             assert_eq!(
                 result_count.into_usize(),
-                params.k,
+                params.k_value().get(),
                 "grid search should be configured to always return the requested number of neighbors",
             );
 

@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 
 use super::{
-    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, SearchParams,
+    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, KnnSearch,
     glue::{
         self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
         PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
@@ -2124,7 +2124,7 @@ where
     ///
     /// # Supported Search Types
     ///
-    /// - [`search::GraphSearch`]: Standard graph-based ANN search
+    /// - [`search::KnnSearch`]: Standard k-NN graph-based search
     /// - [`search::MultihopSearch`]: Label-filtered search with multi-hop expansion
     /// - [`search::RangeSearch`]: Range-based search within a distance radius
     /// - [`search::DiverseSearch`]: Diversity-aware search (feature-gated)
@@ -2132,11 +2132,11 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// use diskann::graph::{GraphSearch, RangeSearch, Search};
+    /// use diskann::graph::{KnnSearch, RangeSearch, Search};
     ///
-    /// // Standard graph search
-    /// let mut params = GraphSearch::new(10, 100, None)?;
-    /// let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;
+    /// // Standard k-NN search
+    /// let mut params = KnnSearch::new(10, 100, None)?;
+    /// let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;;
     ///
     /// // Range search (note: uses () as output buffer, results in Output type)
     /// let mut params = RangeSearch::new(100, 0.5)?;
@@ -2162,7 +2162,7 @@ where
     /// Perform a graph search while recording the traversal path.
     ///
     /// **Note:** This method is intended for debugging and analysis only.
-    /// For production searches, use [`Self::search`] with [`super::search::GraphSearch`].
+    /// For production searches, use [`Self::search`] with [`super::search::KnnSearch`].
     ///
     /// Records which nodes were visited during the search traversal, useful for
     /// understanding search behavior or diagnosing issues.
@@ -2172,7 +2172,7 @@ where
         strategy: &'a S,
         context: &'a DP::Context,
         query: &'a T,
-        search_params: &'a SearchParams,
+        search_params: &'a KnnSearch,
         output: &'a mut OB,
         search_record: &'a mut SR,
     ) -> impl SendFuture<ANNResult<SearchStats>> + 'a
@@ -2184,10 +2184,8 @@ where
         SR: SearchRecord<DP::InternalId>,
     {
         async move {
-            let mut recorded_search = super::search::RecordedGraphSearch::new(
-                super::search::GraphSearch::from(*search_params),
-                search_record,
-            );
+            let mut recorded_search =
+                super::search::RecordedKnnSearch::new(*search_params, search_record);
             recorded_search
                 .dispatch(self, strategy, context, query, output)
                 .await
@@ -2227,7 +2225,7 @@ where
         context: &'a DP::Context,
         query: &T,
         vector_filter: &(dyn Fn(&DP::ExternalId) -> bool + Send + Sync),
-        search_params: &SearchParams,
+        search_params: &KnnSearch,
         output: &mut OB,
     ) -> ANNResult<SearchStats>
     where
@@ -2244,7 +2242,7 @@ where
 
         let mut scratch = {
             let num_start_points = accessor.starting_points().await?.len();
-            self.search_scratch(search_params.l_value, num_start_points)
+            self.search_scratch(search_params.l_value().get(), num_start_points)
         };
 
         let id_iterator = accessor.id_iterator().await?;
@@ -2272,7 +2270,7 @@ where
                 &mut accessor,
                 query,
                 &computer,
-                scratch.best.iter().take(search_params.l_value.into_usize()),
+                scratch.best.iter().take(search_params.l_value().get()),
                 output,
             )
             .send()
