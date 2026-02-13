@@ -1633,15 +1633,17 @@ mod disk_provider_tests {
         );
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
         let mut search_record = VisitedSearchRecord::new(0);
+        let search_params = KnnSearch::new(nz(10), nz(10), Some(4)).unwrap();
+        let mut recorded_search =
+            diskann::graph::search::RecordedKnnSearch::new(search_params, &mut search_record);
         search_engine
             .runtime
-            .block_on(search_engine.index.debug_search(
+            .block_on(search_engine.index.search(
                 &strategy,
                 &DefaultContext,
-                &query_vector,
-                &KnnSearch::new(nz(10), nz(10), Some(4)).unwrap(),
+                query_vector.as_slice(),
+                &mut recorded_search,
                 &mut result_output_buffer,
-                &mut search_record,
             ))
             .unwrap();
 
@@ -1752,7 +1754,6 @@ mod disk_provider_tests {
             &mut associated_data,
         );
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
-        let mut search_record = VisitedSearchRecord::new(0);
 
         // Create diverse search parameters with attribute provider
         let diverse_params = DiverseSearchParams::new(
@@ -1763,29 +1764,22 @@ mod disk_provider_tests {
 
         let search_params = KnnSearch::new(nz(10), nz(20), None).unwrap();
 
-        search_engine
+        let mut diverse_search = diskann::graph::DiverseSearch::new(search_params, diverse_params);
+        let stats = search_engine
             .runtime
-            .block_on(search_engine.index.diverse_search_experimental(
+            .block_on(search_engine.index.search(
                 &strategy,
                 &DefaultContext,
-                &query_vector,
-                &search_params,
-                &diverse_params,
+                query_vector.as_slice(),
+                &mut diverse_search,
                 &mut result_output_buffer,
-                &mut search_record,
             ))
             .unwrap();
 
-        let ids = search_record
-            .visited
-            .iter()
-            .map(|n| n.id)
-            .collect::<Vec<_>>();
-
-        // Verify that search was performed and visited some nodes
+        // Verify that search was performed and returned some results
         assert!(
-            !ids.is_empty(),
-            "Expected to visit some nodes during diversity search"
+            stats.result_count > 0,
+            "Expected to get some results during diversity search"
         );
 
         let return_list_size = 10;
@@ -1797,7 +1791,7 @@ mod disk_provider_tests {
             attribute_provider.clone(),
         );
 
-        // Test diverse search using the experimental API
+        // Test diverse search using the search API
         let mut indices2 = vec![0u32; return_list_size as usize];
         let mut distances2 = vec![0f32; return_list_size as usize];
         let mut associated_data2 = vec![(); return_list_size as usize];
@@ -1807,7 +1801,6 @@ mod disk_provider_tests {
             &mut associated_data2,
         );
         let strategy2 = search_engine.search_strategy(&query_vector, &|_| true);
-        let mut search_record2 = VisitedSearchRecord::new(0);
         let search_params2 = KnnSearch::new(
             nz(return_list_size as usize),
             nz(search_list_size as usize),
@@ -1815,16 +1808,16 @@ mod disk_provider_tests {
         )
         .unwrap();
 
+        let mut diverse_search2 =
+            diskann::graph::DiverseSearch::new(search_params2, diverse_params);
         let stats = search_engine
             .runtime
-            .block_on(search_engine.index.diverse_search_experimental(
+            .block_on(search_engine.index.search(
                 &strategy2,
                 &DefaultContext,
-                &query_vector,
-                &search_params2,
-                &diverse_params,
+                query_vector.as_slice(),
+                &mut diverse_search2,
                 &mut result_output_buffer2,
-                &mut search_record2,
             ))
             .unwrap();
 
@@ -2099,15 +2092,17 @@ mod disk_provider_tests {
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
 
         let mut search_record = VisitedSearchRecord::new(0);
+        let search_params = KnnSearch::new(nz(10), nz(10), Some(4)).unwrap();
+        let mut recorded_search =
+            diskann::graph::search::RecordedKnnSearch::new(search_params, &mut search_record);
         search_engine
             .runtime
-            .block_on(search_engine.index.debug_search(
+            .block_on(search_engine.index.search(
                 &strategy,
                 &DefaultContext,
-                &query_vector,
-                &KnnSearch::new(nz(10), nz(10), Some(4)).unwrap(),
+                query_vector.as_slice(),
+                &mut recorded_search,
                 &mut result_output_buffer,
-                &mut search_record,
             ))
             .unwrap();
         let visited_ids = search_record

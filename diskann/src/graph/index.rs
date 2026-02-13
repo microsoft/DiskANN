@@ -31,7 +31,6 @@ use super::{
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
-        Search,
         record::{NoopSearchRecord, SearchRecord, VisitedSearchRecord},
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
@@ -2157,39 +2156,6 @@ where
         OB: ?Sized,
     {
         search_params.dispatch(self, strategy, context, query, output)
-    }
-
-    /// Perform a graph search while recording the traversal path.
-    ///
-    /// **Note:** This method is intended for debugging and analysis only.
-    /// For production searches, use [`Self::search`] with [`super::search::KnnSearch`].
-    ///
-    /// Records which nodes were visited during the search traversal, useful for
-    /// understanding search behavior or diagnosing issues.
-    #[allow(clippy::too_many_arguments)]
-    pub fn debug_search<'a, S, T, O, OB, SR>(
-        &'a self,
-        strategy: &'a S,
-        context: &'a DP::Context,
-        query: &'a T,
-        search_params: &'a KnnSearch,
-        output: &'a mut OB,
-        search_record: &'a mut SR,
-    ) -> impl SendFuture<ANNResult<SearchStats>> + 'a
-    where
-        T: Sync + ?Sized,
-        S: SearchStrategy<DP, T, O>,
-        O: Send + 'a,
-        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
-        SR: SearchRecord<DP::InternalId>,
-    {
-        async move {
-            let mut recorded_search =
-                super::search::RecordedKnnSearch::new(*search_params, search_record);
-            recorded_search
-                .dispatch(self, strategy, context, query, output)
-                .await
-        }
     }
 
     /// Performs a brute-force flat search over the points matching a provided filter function.

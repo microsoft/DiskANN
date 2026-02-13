@@ -3880,24 +3880,21 @@ pub(crate) mod tests {
         );
 
         let search_params = diskann::graph::KnnSearch::new(
-            return_list_size,
-            search_list_size,
+            nz(return_list_size),
+            nz(search_list_size),
             None, // beam_width
         )
         .unwrap();
 
-        use diskann::graph::search::record::NoopSearchRecord;
-        let mut search_record = NoopSearchRecord::new();
+        let mut diverse_search = diskann::graph::DiverseSearch::new(search_params, diverse_params);
 
         let result = index
-            .diverse_search_experimental(
+            .search(
                 &FullPrecision,
                 &DefaultContext,
-                &query,
-                &search_params,
-                &diverse_params,
+                query.as_slice(),
+                &mut diverse_search,
                 &mut result_output_buffer,
-                &mut search_record,
             )
             .await;
 
