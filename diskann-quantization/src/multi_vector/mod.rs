@@ -63,9 +63,11 @@
 
 pub mod distance;
 pub(crate) mod matrix;
+mod slice_repr;
 
 pub use distance::{Chamfer, MaxSim, MaxSimError, QueryMatRef};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, SliceError, Standard,
 };
+pub use slice_repr::{SliceMatRepr, SliceMatReprError, SliceMatError};
