@@ -193,8 +193,8 @@ where
 #[cfg(test)]
 mod tests {
     use diskann_utils::views::Matrix;
-    use diskann_vector::{norm::FastL2Norm, Norm};
-    use rand::{rngs::StdRng, SeedableRng};
+    use diskann_vector::{Norm, norm::FastL2Norm};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::test_util::create_test_problem;

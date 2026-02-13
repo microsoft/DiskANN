@@ -7,13 +7,13 @@ use super::vectors::{DataMutRef, FullQueryMut, MinMaxCompensation, MinMaxIP, Min
 use core::f32;
 
 use crate::{
+    AsFunctor, CompressInto,
     algorithms::Transform,
     alloc::{GlobalAllocator, ScopedAllocator},
     bits::{Representation, Unsigned},
-    minmax::{vectors::FullQueryMeta, MinMaxCosine, MinMaxCosineNormalized},
+    minmax::{MinMaxCosine, MinMaxCosineNormalized, vectors::FullQueryMeta},
     num::Positive,
-    scalar::{bit_scale, InputContainsNaN},
-    AsFunctor, CompressInto,
+    scalar::{InputContainsNaN, bit_scale},
 };
 
 /// Recall that from the module-level documentation, MinMaxQuantizer, quantizes X
@@ -340,11 +340,11 @@ mod minmax_quantizer_tests {
     use std::num::NonZeroUsize;
 
     use diskann_utils::{Reborrow, ReborrowMut};
-    use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
+    use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
     use rand::{
+        SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        SeedableRng,
     };
 
     use super::*;
@@ -398,14 +398,14 @@ mod minmax_quantizer_tests {
         let reconstruction_error: f32 = SquaredL2::evaluate(&*vector, &*reconstructed);
         let norm = vector.iter().map(|x| x * x).sum::<f32>();
         assert!(
-                (reconstruction_error / norm) <= relative_err,
-                "Expected vector : {:?} to be reconstructed within error {} but instead got : {:?}, with error {} for dim : {}",
-                &vector,
-                relative_err,
-                &reconstructed,
-                reconstruction_error / norm,
-                dim,
-            );
+            (reconstruction_error / norm) <= relative_err,
+            "Expected vector : {:?} to be reconstructed within error {} but instead got : {:?}, with error {} for dim : {}",
+            &vector,
+            relative_err,
+            &reconstructed,
+            reconstruction_error / norm,
+            dim,
+        );
 
         assert!((loss.as_f32() - reconstruction_error) <= 1e-4);
 

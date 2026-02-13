@@ -4,8 +4,8 @@
  */
 
 pub(crate) mod common;
-pub(crate) use common::square_norm;
 pub use common::BlockTranspose;
+pub(crate) use common::square_norm;
 
 pub mod lloyds;
 pub mod plusplus;

@@ -211,10 +211,10 @@ fn kernel<const NBITS: usize, F>(
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
     F: Fn(f32, &MinMaxCompensation, &MinMaxCompensation) -> f32,
 {
     let raw_product = InnerProduct::evaluate(x.vector(), y.vector())?;
@@ -236,10 +236,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     fn evaluate(
         x: DataRef<'_, NBITS>,
@@ -255,10 +255,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
@@ -272,10 +272,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        &'a [f32],
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<f32>,
-    >,
+            &'a [f32],
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::MathematicalResult<f32> {
         let raw_product: f32 = InnerProduct::evaluate(x.vector(), y.vector())?.into_inner();
@@ -290,10 +290,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        &'a [f32],
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<f32>,
-    >,
+            &'a [f32],
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
@@ -309,10 +309,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     fn evaluate(
         x: DataRef<'_, NBITS>,
@@ -330,10 +330,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
@@ -347,10 +347,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        &'a [f32],
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<f32>,
-    >,
+            &'a [f32],
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::MathematicalResult<f32> {
         let raw_product = InnerProduct::evaluate(x.vector(), y.vector())?.into_inner();
@@ -369,10 +369,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        &'a [f32],
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<f32>,
-    >,
+            &'a [f32],
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
@@ -392,10 +392,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-        DataRef<'a, NBITS>,
-        DataRef<'b, NBITS>,
-        distances::MathematicalResult<f32>,
-    >,
+            DataRef<'a, NBITS>,
+            DataRef<'b, NBITS>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     // 1 - <X, Y> / (|X| * |Y|)
     fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
@@ -411,10 +411,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-        FullQueryRef<'a>,
-        DataRef<'b, NBITS>,
-        distances::MathematicalResult<f32>,
-    >,
+            FullQueryRef<'a>,
+            DataRef<'b, NBITS>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
@@ -432,10 +432,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-        DataRef<'a, NBITS>,
-        DataRef<'b, NBITS>,
-        distances::MathematicalResult<f32>,
-    >,
+            DataRef<'a, NBITS>,
+            DataRef<'b, NBITS>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
@@ -449,10 +449,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-        FullQueryRef<'a>,
-        DataRef<'b, NBITS>,
-        distances::MathematicalResult<f32>,
-    >,
+            FullQueryRef<'a>,
+            DataRef<'b, NBITS>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate(x: FullQueryRef<'_>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
@@ -468,9 +468,9 @@ where
 mod minmax_vector_tests {
     use diskann_utils::Reborrow;
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        Rng, SeedableRng,
     };
 
     use super::*;
@@ -480,15 +480,15 @@ mod minmax_vector_tests {
     where
         Unsigned: Representation<NBITS>,
         InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
-            distances::MathematicalResult<u32>,
-        >,
+                BitSlice<'a, NBITS, Unsigned>,
+                BitSlice<'b, NBITS, Unsigned>,
+                distances::MathematicalResult<u32>,
+            >,
         InnerProduct: for<'a, 'b> PureDistanceFunction<
-            &'a [f32],
-            BitSlice<'b, NBITS, Unsigned>,
-            distances::MathematicalResult<f32>,
-        >,
+                &'a [f32],
+                BitSlice<'b, NBITS, Unsigned>,
+                distances::MathematicalResult<f32>,
+            >,
         R: Rng,
     {
         assert!(dim <= bit_scale::<NBITS>() as usize);

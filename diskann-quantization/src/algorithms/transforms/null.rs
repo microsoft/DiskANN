@@ -10,7 +10,7 @@ use flatbuffers::{FlatBufferBuilder, WIPOffset};
 #[cfg(feature = "flatbuffers")]
 use thiserror::Error;
 
-use super::utils::{check_dims, TransformFailed};
+use super::utils::{TransformFailed, check_dims};
 #[cfg(feature = "flatbuffers")]
 use crate::flatbuffers as fb;
 
