@@ -12,7 +12,7 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use diskann::{utils::VectorRepr, ANNResult};
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 #[cfg(target_os = "linux")]
-use diskann_disk::search::pipelined::PipelinedReaderConfig;
+use diskann_disk::storage::PipelinedReaderConfig;
 #[cfg(target_os = "linux")]
 use diskann_disk::search::provider::pipelined_accessor::PipelinedConfig;
 use diskann_disk::{

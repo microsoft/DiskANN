@@ -7,7 +7,6 @@
 //! via the `ExpandBeam` trait's `submit_expand` / `expand_available` / `has_pending` methods.
 //!
 //! Plugs into `DiskANNIndex::search_internal()` and overlaps IO with computation
-//! plugs into `DiskANNIndex::search_internal()` and overlaps IO with computation
 //! using io_uring under the hood.
 
 use std::collections::{HashMap, VecDeque};
@@ -38,7 +37,7 @@ use diskann_providers::model::{
 use diskann_vector::DistanceFunction;
 
 use crate::data_model::Cache;
-use crate::search::pipelined::{PipelinedReader, PipelinedReaderConfig};
+use crate::storage::{PipelinedReader, PipelinedReaderConfig};
 
 use crate::search::sector_math::{node_offset_in_sector, node_sector_index};
 use crate::search::traits::VertexProviderFactory;
@@ -135,8 +134,8 @@ pub struct PipelinedScratch {
     neighbor_buf: Vec<u32>,
     /// Freelist of LoadedNode instances to avoid per-node allocation
     node_pool: Vec<LoadedNode>,
-    /// Free io_uring buffer slot IDs available for new submissions.
-    free_slots: VecDeque<usize>,
+    /// Reusable buffer for completed slot IDs from poll/wait.
+    completed_buf: Vec<usize>,
 }
 
 /// Arguments for creating or resetting a [`PipelinedScratch`].
@@ -178,12 +177,11 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
             distance_cache: HashMap::new(),
             neighbor_buf: Vec::new(),
             node_pool: Vec::new(),
-            free_slots: (0..args.max_slots).collect(),
+            completed_buf: Vec::new(),
         })
     }
 
     fn try_modify(&mut self, _args: PipelinedScratchArgs) -> Result<(), Self::Error> {
-        let max_slots = self.reader.max_slots();
         self.reader.reset();
         // Return all loaded_nodes back to the pool before clearing
         self.node_pool
@@ -191,8 +189,7 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
         self.in_flight_ios.clear();
         self.distance_cache.clear();
         self.neighbor_buf.clear();
-        self.free_slots.clear();
-        self.free_slots.extend(0..max_slots);
+        self.completed_buf.clear();
         Ok(())
     }
 }
@@ -355,16 +352,21 @@ where
         }
 
         let io_start = Instant::now();
-        let completed_slots = self.scratch.reader.poll_completions()?;
+        // Split borrows: reader and completed_buf are separate fields.
+        let PipelinedScratch {
+            reader,
+            completed_buf,
+            ..
+        } = &mut *self.scratch;
+        reader.poll_completions(completed_buf)?;
         self.io_time += io_start.elapsed();
 
-        if completed_slots.is_empty() {
+        if completed_buf.is_empty() {
             return Ok(());
         }
 
         Self::process_completed_ios_inner(
             &mut self.scratch,
-            &completed_slots,
             self.num_nodes_per_sector,
             self.node_len,
             self.fp_vector_len,
@@ -373,16 +375,20 @@ where
     /// Block until at least one IO completes, then eagerly drain all available.
     fn wait_and_drain(&mut self) -> ANNResult<()> {
         let io_start = Instant::now();
-        let completed_slots = self.scratch.reader.wait_completions()?;
+        let PipelinedScratch {
+            reader,
+            completed_buf,
+            ..
+        } = &mut *self.scratch;
+        reader.wait_completions(completed_buf)?;
         self.io_time += io_start.elapsed();
 
-        if completed_slots.is_empty() {
+        if completed_buf.is_empty() {
             return Ok(());
         }
 
         Self::process_completed_ios_inner(
             &mut self.scratch,
-            &completed_slots,
             self.num_nodes_per_sector,
             self.node_len,
             self.fp_vector_len,
@@ -390,12 +396,11 @@ where
     }
 
     /// Shared logic: process completed slot IDs, parse nodes, retain in-flight.
-    /// Uses linear scan on completed_slots (small, bounded by max_slots) to
+    /// Uses linear scan on completed_buf (small, bounded by max_slots) to
     /// avoid per-poll HashSet allocation. Reuses LoadedNode instances from the
     /// node pool to avoid per-IO Vec allocations.
     fn process_completed_ios_inner(
         scratch: &mut PipelinedScratch,
-        completed_slots: &[usize],
         num_nodes_per_sector: u64,
         node_len: u64,
         fp_vector_len: u64,
@@ -403,10 +408,8 @@ where
         let mut i = 0;
         while i < scratch.in_flight_ios.len() {
             let io = &scratch.in_flight_ios[i];
-            if completed_slots.contains(&io.slot_id) {
+            if scratch.completed_buf.contains(&io.slot_id) {
                 let io = scratch.in_flight_ios.swap_remove_back(i).unwrap();
-                // Return the slot to the free-list so it can be reused.
-                scratch.free_slots.push_back(io.slot_id);
                 // Acquire node first (mutably borrows node_pool),
                 // then get sector buf (immutably borrows reader) — no conflict.
                 let mut node = scratch.node_pool.pop().unwrap_or_else(|| LoadedNode {
@@ -423,6 +426,9 @@ where
                     fp_vector_len,
                     io.rank,
                 )?;
+                // Release the slot back to the reader's free-list now that
+                // we've copied the data out.
+                scratch.reader.release_slot(io.slot_id);
                 scratch.loaded_nodes.insert(io.vertex_id, node);
             } else {
                 i += 1;
@@ -559,6 +565,7 @@ where
         let io_start = Instant::now();
         let mut rejected = Vec::new();
         let mut hit_slot_limit = false;
+        let mut enqueued = 0u32;
         for id in ids {
             if self.scratch.loaded_nodes.contains_key(&id) {
                 continue; // Already loaded from a previous IO
@@ -584,7 +591,7 @@ where
             }
 
             // Don't submit if no free io_uring slots are available.
-            if hit_slot_limit || self.scratch.free_slots.is_empty() {
+            if hit_slot_limit || !self.scratch.reader.has_free_slot() {
                 hit_slot_limit = true;
                 rejected.push(id);
                 continue;
@@ -593,22 +600,32 @@ where
             let sector_idx =
                 node_sector_index(id, self.num_nodes_per_sector, self.num_sectors_per_node);
             let sector_offset = sector_idx * self.block_size as u64;
-            let slot_id = self.scratch.free_slots.pop_front().unwrap();
             let rank = self.next_rank;
             self.next_rank += 1;
-            // Best-effort: if submission fails, return the slot and reject the ID
-            // SAFETY: slot_id was just popped from the free-list, guaranteeing
-            // it is not currently in-flight.
-            if unsafe { self.scratch.reader.submit_read(sector_offset, slot_id) }.is_ok() {
-                self.scratch.in_flight_ios.push_back(InFlightIo {
-                    vertex_id: id,
-                    slot_id,
-                    rank,
-                });
-                self.io_count += 1;
-            } else {
-                self.scratch.free_slots.push_back(slot_id);
-                rejected.push(id);
+            // enqueue_read allocates a slot internally and pushes the SQE.
+            // On failure the slot stays free inside the reader.
+            match self.scratch.reader.enqueue_read(sector_offset) {
+                Ok(slot_id) => {
+                    self.scratch.in_flight_ios.push_back(InFlightIo {
+                        vertex_id: id,
+                        slot_id,
+                        rank,
+                    });
+                    self.io_count += 1;
+                    enqueued += 1;
+                }
+                Err(_) => {
+                    rejected.push(id);
+                }
+            }
+        }
+        // Flush all enqueued SQEs in a single syscall.
+        if enqueued > 0 {
+            if let Err(e) = self.scratch.reader.flush() {
+                // Slots remain InFlight; they'll be drained on drop/reset.
+                self.io_time += io_start.elapsed();
+                tracing::warn!("PipelinedReader::flush failed: {e}");
+                return rejected;
             }
         }
         self.io_time += io_start.elapsed();

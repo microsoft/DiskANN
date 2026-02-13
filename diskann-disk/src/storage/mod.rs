@@ -21,4 +21,9 @@ pub use cached_writer::CachedWriter;
 
 pub mod quant;
 
+#[cfg(target_os = "linux")]
+pub(crate) mod pipelined_reader;
+#[cfg(target_os = "linux")]
+pub use pipelined_reader::{PipelinedReader, PipelinedReaderConfig, MAX_IO_CONCURRENCY};
+
 pub mod api;
