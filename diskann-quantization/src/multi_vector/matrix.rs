@@ -655,9 +655,9 @@ impl<T: ReprOwned> Mat<T> {
         Self { ptr, repr }
     }
 
-    #[cfg(test)]
-    fn as_ptr(&self) -> NonNull<u8> {
-        self.ptr
+    /// Return the base pointer for the [`Mat`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -782,6 +782,11 @@ impl<'a, T: Repr> MatRef<'a, T> {
             repr,
             _lifetime: PhantomData,
         }
+    }
+
+    /// Return the base pointer for the [`MatRef`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -960,6 +965,11 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
             repr,
             _lifetime: PhantomData,
         }
+    }
+
+    /// Return the base pointer for the [`MatMut`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -1396,7 +1406,7 @@ mod tests {
     #[test]
     fn mat_new_and_basic_accessors() {
         let mat = Mat::new(Standard::<usize>::new(3, 4).unwrap(), 42usize).unwrap();
-        let base: *const u8 = mat.as_ptr().as_ptr();
+        let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 3);
         assert_eq!(mat.vector_dim(), 4);
@@ -1418,7 +1428,7 @@ mod tests {
     #[test]
     fn mat_new_with_default() {
         let mat = Mat::new(Standard::<usize>::new(2, 3).unwrap(), Defaulted).unwrap();
-        let base: *const u8 = mat.as_ptr().as_ptr();
+        let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 2);
         for (i, row) in mat.rows().enumerate() {
@@ -1514,7 +1524,7 @@ mod tests {
 
                     // Cloned allocation is independent.
                     if repr.num_elements() > 0 {
-                        assert_ne!(mat.as_ptr(), cloned.as_ptr());
+                        assert_ne!(mat.as_raw_ptr(), cloned.as_raw_ptr());
                     }
                 }
 
@@ -1528,7 +1538,7 @@ mod tests {
                     check_rows(owned.rows(), repr, ctx);
 
                     if repr.num_elements() > 0 {
-                        assert_ne!(mat.as_ptr(), owned.as_ptr());
+                        assert_ne!(mat.as_raw_ptr(), owned.as_raw_ptr());
                     }
                 }
 
@@ -1542,7 +1552,7 @@ mod tests {
                     check_rows(owned.rows(), repr, ctx);
 
                     if repr.num_elements() > 0 {
-                        assert_ne!(mat.as_ptr(), owned.as_ptr());
+                        assert_ne!(mat.as_raw_ptr(), owned.as_raw_ptr());
                     }
                 }
             }
