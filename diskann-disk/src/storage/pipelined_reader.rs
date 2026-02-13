@@ -269,9 +269,9 @@ impl PipelinedReader {
                 self.slot_states[slot_id] = SlotState::Free;
                 self.free_slots.push_back(slot_id);
                 if first_error.is_none() {
-                    first_error = Some(ANNError::log_io_error(
-                        std::io::Error::from_raw_os_error(-cqe.result()),
-                    ));
+                    first_error = Some(ANNError::log_io_error(std::io::Error::from_raw_os_error(
+                        -cqe.result(),
+                    )));
                 }
                 continue;
             }
@@ -322,7 +322,9 @@ impl PipelinedReader {
         // SAFETY: The slot is Completed — the kernel has finished writing.
         // `buf_base` was derived from a valid, aligned allocation that outlives
         // `self`. The slice covers exactly `slot_size` bytes within bounds.
-        unsafe { std::slice::from_raw_parts(self.buf_base.add(slot_id * self.slot_size), self.slot_size) }
+        unsafe {
+            std::slice::from_raw_parts(self.buf_base.add(slot_id * self.slot_size), self.slot_size)
+        }
     }
 
     /// Release a completed slot back to the free-list for reuse.
@@ -705,8 +707,9 @@ mod tests {
         let (_f, mut reader) = make_reader(max_slots, max_slots);
 
         for cycle in 0..100 {
-            let sectors: Vec<usize> =
-                (0..max_slots).map(|i| (cycle * max_slots + i) % max_slots).collect();
+            let sectors: Vec<usize> = (0..max_slots)
+                .map(|i| (cycle * max_slots + i) % max_slots)
+                .collect();
             let slots = enqueue_flush_wait(&mut reader, sectors.iter().copied());
             assert!(reader.enqueue_read(0).is_err());
 
@@ -776,6 +779,9 @@ mod tests {
             }
         }
 
-        assert!(sectors_verified.iter().all(|&v| v), "not all sectors verified");
+        assert!(
+            sectors_verified.iter().all(|&v| v),
+            "not all sectors verified"
+        );
     }
 }
