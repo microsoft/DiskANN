@@ -389,7 +389,7 @@ where
             _span.set_attribute(KeyValue::new("latency_95", latency_95 as f64));
             _span.set_attribute(KeyValue::new("mean_cpus", mean_cpus));
             _span.set_attribute(KeyValue::new("mean_io_time", mean_io_time));
-            _span.set_attribute(KeyValue::new("mean_ios", mean_ios as f64));
+            _span.set_attribute(KeyValue::new("mean_ios", mean_ios));
             _span.set_attribute(KeyValue::new("mean_comps", mean_comps));
             _span.set_attribute(KeyValue::new("mean_hops", mean_hops));
             _span.set_attribute(KeyValue::new("recall", recall as f64));

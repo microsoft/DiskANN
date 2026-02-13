@@ -71,19 +71,19 @@ where
     Data: GraphDataType<VectorIdType = u32>,
 {
     /// Holds the graph header information that contains metadata about disk-index file.
-    graph_header: GraphHeader,
+    pub(crate) graph_header: GraphHeader,
 
     // Full precision distance comparer used in post_process to reorder results.
-    distance_comparer: <Data::VectorDataType as VectorRepr>::Distance,
+    pub(crate) distance_comparer: <Data::VectorDataType as VectorRepr>::Distance,
 
     /// The PQ data used for quantization.
-    pq_data: Arc<PQData>,
+    pub(crate) pq_data: Arc<PQData>,
 
     /// The number of points in the graph.
-    num_points: usize,
+    pub(crate) num_points: usize,
 
     /// Metric used for distance computation.
-    metric: Metric,
+    pub(crate) metric: Metric,
 
     /// The number of IO operations that can be done in parallel.
     search_io_limit: usize,
@@ -373,8 +373,8 @@ where
 
 /// The query computer for the disk provider. This is used to compute the distance between the query vector and the PQ coordinates.
 pub struct DiskQueryComputer {
-    num_pq_chunks: usize,
-    query_centroid_l2_distance: Vec<f32>,
+    pub(crate) num_pq_chunks: usize,
+    pub(crate) query_centroid_l2_distance: Vec<f32>,
 }
 
 impl PreprocessedDistanceFunction<&[u8], f32> for DiskQueryComputer {
@@ -783,14 +783,18 @@ pub struct DiskIndexSearcher<
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,
 {
-    index: DiskANNIndex<DiskProvider<Data>>,
-    runtime: Runtime,
+    pub(crate) index: DiskANNIndex<DiskProvider<Data>>,
+    pub(crate) runtime: Runtime,
 
     /// The vertex provider factory is used to create the vertex provider for each search instance.
     vertex_provider_factory: ProviderFactory,
 
     /// Scratch pool for disk search operations that need allocations.
     scratch_pool: Arc<ObjectPool<DiskSearchScratch<Data, ProviderFactory::VertexProviderType>>>,
+
+    /// Optional pipelined search configuration (Linux only, io_uring-based).
+    #[cfg(target_os = "linux")]
+    pub(crate) pipelined_config: Option<super::pipelined_accessor::PipelinedConfig<Data>>,
 }
 
 #[derive(Debug)]
@@ -891,6 +895,8 @@ where
             runtime,
             vertex_provider_factory,
             scratch_pool,
+            #[cfg(target_os = "linux")]
+            pipelined_config: None,
         })
     }
 
@@ -942,6 +948,84 @@ where
         let mut search_result = SearchResult {
             results: Vec::with_capacity(return_list_size as usize),
             stats,
+        };
+
+        for ((vertex_id, distance), associated_data) in indices
+            .into_iter()
+            .zip(distances.into_iter())
+            .zip(associated_data.into_iter())
+        {
+            search_result.results.push(SearchResultItem {
+                vertex_id,
+                distance,
+                data: associated_data,
+            });
+        }
+
+        Ok(search_result)
+    }
+
+    /// Perform a search with explicit [`SearchParams`] for full control over
+    /// adaptive beam width, relaxed monotonicity, etc.
+    pub fn search_with_params(
+        &self,
+        query: &[Data::VectorDataType],
+        search_params: &SearchParams,
+        vector_filter: Option<VectorFilter<Data>>,
+        is_flat_search: bool,
+    ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
+        let k_value = search_params.k_value;
+        let mut query_stats = QueryStatistics::default();
+        let mut indices = vec![0u32; k_value];
+        let mut distances = vec![0f32; k_value];
+        let mut associated_data = vec![Data::AssociatedDataType::default(); k_value];
+
+        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
+            &mut indices[..k_value],
+            &mut distances[..k_value],
+            &mut associated_data[..k_value],
+        );
+
+        let filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
+        let strategy = self.search_strategy(query, &filter);
+        let timer = Instant::now();
+        let stats = if is_flat_search {
+            self.runtime.block_on(self.index.flat_search(
+                &strategy,
+                &DefaultContext,
+                strategy.query,
+                &filter,
+                search_params,
+                &mut result_output_buffer,
+            ))?
+        } else {
+            self.runtime.block_on(self.index.search(
+                &strategy,
+                &DefaultContext,
+                strategy.query,
+                search_params,
+                &mut result_output_buffer,
+            ))?
+        };
+        query_stats.total_comparisons = stats.cmps;
+        query_stats.search_hops = stats.hops;
+        query_stats.total_execution_time_us = timer.elapsed().as_micros();
+        query_stats.io_time_us = IOTracker::time(&strategy.io_tracker.io_time_us) as u128;
+        query_stats.total_io_operations = strategy.io_tracker.io_count() as u32;
+        query_stats.total_vertices_loaded = strategy.io_tracker.io_count() as u32;
+        query_stats.query_pq_preprocess_time_us =
+            IOTracker::time(&strategy.io_tracker.preprocess_time_us) as u128;
+        query_stats.cpu_time_us = query_stats.total_execution_time_us
+            - query_stats.io_time_us
+            - query_stats.query_pq_preprocess_time_us;
+
+        let mut search_result = SearchResult {
+            results: Vec::with_capacity(k_value),
+            stats: SearchResultStats {
+                cmps: query_stats.total_comparisons,
+                result_count: stats.result_count,
+                query_statistics: query_stats,
+            },
         };
 
         for ((vertex_id, distance), associated_data) in indices

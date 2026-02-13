@@ -397,7 +397,6 @@ where
             for attempt in 0..num_insert_attempts {
                 let mut search_record =
                     VisitedSearchRecord::new(self.estimate_visited_set_capacity(Some(search_l)));
-
                 self.search_internal(
                     None, // beam_width
                     &start_ids,
@@ -521,7 +520,6 @@ where
                 let mut search_record = VisitedSearchRecord::new(
                     self.estimate_visited_set_capacity(Some(scratch.best.search_l())),
                 );
-
                 self.search_internal(
                     None, // beam_width
                     &start_ids,
@@ -1329,7 +1327,6 @@ where
             let start_ids = search_accessor.starting_points().await?;
 
             let mut scratch = self.search_scratch(l_value, start_ids.len());
-
             self.search_internal(
                 None, // beam_width
                 &start_ids,
@@ -2094,38 +2091,63 @@ where
                 }
             }
 
-            let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
-            while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
-                scratch.beam_nodes.clear();
+            scratch.neighbors.clear();
 
-                // In this loop we are going to find the beam_width number of nodes that are closest to the query.
-                // Each of these nodes will be a frontier node.
-                while scratch.best.has_notvisited_node() && scratch.beam_nodes.len() < beam_width {
-                    let closest_node = scratch.best.closest_notvisited();
-                    search_record.record(closest_node, scratch.hops, scratch.cmps);
-                    scratch.beam_nodes.push(closest_node.id);
-                }
+            let mut expanded_ids = Vec::new();
 
-                neighbors.clear();
+            while (scratch.best.has_notvisited_node()
+                || scratch.best.peek_best_unsubmitted().is_some()
+                || accessor.has_pending())
+                && !accessor.terminate_early()
+            {
+                // Phase 1: Expand nodes whose data is available.
+                // Non-pipelined: synchronously expands beam_nodes from previous submit.
+                // Pipelined: polls IO completions and expands one loaded node.
+                // On the first iteration beam_nodes is empty — a no-op for both paths.
+                scratch.neighbors.clear();
                 accessor
-                    .expand_beam(
+                    .expand_available(
                         scratch.beam_nodes.iter().copied(),
                         computer,
                         glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        |distance, id| scratch.neighbors.push(Neighbor::new(id, distance)),
+                        &mut expanded_ids,
                     )
                     .await?;
 
-                // The predicate ensures that the contents of `neighbors` are unique.
-                //
-                // We insert into the priority queue outside of the expansion for
-                // code-locality purposes.
-                neighbors
+                for &id in &expanded_ids {
+                    scratch.best.mark_visited_by_id(&id);
+                }
+
+                scratch
+                    .neighbors
                     .iter()
                     .for_each(|neighbor| scratch.best.insert(*neighbor));
+                scratch.cmps += scratch.neighbors.len() as u32;
+                scratch.hops += expanded_ids.len() as u32;
 
-                scratch.cmps += neighbors.len() as u32;
-                scratch.hops += scratch.beam_nodes.len() as u32;
+                // Phase 2: Select and submit candidates to fill the pipeline.
+                // Non-pipelined: inflight is always 0, so this submits beam_width nodes.
+                // Pipelined: submits enough to keep beam_width IOs in flight.
+                scratch.beam_nodes.clear();
+                let slots = beam_width.saturating_sub(accessor.inflight_count());
+                while scratch.beam_nodes.len() < slots {
+                    if let Some(closest_node) = scratch.best.pop_best_unsubmitted() {
+                        search_record.record(closest_node, scratch.hops, scratch.cmps);
+                        scratch.beam_nodes.push(closest_node.id);
+                    } else {
+                        break;
+                    }
+                }
+                let rejected = accessor.submit_expand(scratch.beam_nodes.iter().copied());
+                for id in rejected {
+                    scratch.best.revert_submitted(&id);
+                }
+
+                // Phase 3: Block only when no progress was made but IOs are pending.
+                if expanded_ids.is_empty() && accessor.has_pending() {
+                    accessor.wait_for_io()?;
+                }
             }
 
             Ok(InternalSearchStats {
@@ -2156,8 +2178,6 @@ where
                 scratch.range_frontier.push_back(neighbor.id);
             }
 
-            let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
-
             let max_returned = search_params.max_returned.unwrap_or(usize::MAX);
 
             while !scratch.range_frontier.is_empty() {
@@ -2172,18 +2192,18 @@ where
                     }
                 }
 
-                neighbors.clear();
+                scratch.neighbors.clear();
                 accessor
                     .expand_beam(
                         scratch.beam_nodes.iter().copied(),
                         computer,
                         glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        |distance, id| scratch.neighbors.push(Neighbor::new(id, distance)),
                     )
                     .await?;
 
                 // The predicate ensure that the contents of `neighbors` are unique.
-                for neighbor in neighbors.iter() {
+                for neighbor in scratch.neighbors.iter() {
                     if neighbor.distance <= search_params.radius * search_params.range_search_slack
                         && scratch.in_range.len() < max_returned
                     {
@@ -2191,7 +2211,7 @@ where
                         scratch.range_frontier.push_back(neighbor.id);
                     }
                 }
-                scratch.cmps += neighbors.len() as u32;
+                scratch.cmps += scratch.neighbors.len() as u32;
                 scratch.hops += scratch.beam_nodes.len() as u32;
             }
 
@@ -2614,7 +2634,6 @@ where
             let start_ids = accessor.starting_points().await?;
 
             let mut scratch = self.search_scratch(search_params.starting_l_value, start_ids.len());
-
             let initial_stats = self
                 .search_internal(
                     search_params.beam_width,
@@ -3644,7 +3663,7 @@ where
         SearchScratch {
             best: diverse_queue,
             visited: HashSet::with_capacity(self.estimate_visited_set_capacity(Some(l_value))),
-            id_scratch: Vec::with_capacity(self.max_degree_with_slack()),
+            neighbors: Vec::with_capacity(self.max_degree_with_slack()),
             beam_nodes: Vec::with_capacity(beam_width.unwrap_or(1)),
             range_frontier: std::collections::VecDeque::new(),
             in_range: Vec::new(),
