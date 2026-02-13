@@ -425,7 +425,7 @@ unsafe impl<T: Copy> Repr for Standard<T> {
         // least `self.num_elements()` elements from the base pointer, so this access is safe.
         let row_ptr = unsafe { ptr.as_ptr().cast::<T>().add(i * self.ncols) };
 
-        // SAFETY: The logic is the same to the previous `unsafe` block.
+        // SAFETY: The logic is the same as the previous `unsafe` block.
         unsafe { std::slice::from_raw_parts(row_ptr, self.ncols) }
     }
 }
@@ -447,7 +447,7 @@ unsafe impl<T: Copy> ReprMut for Standard<T> {
         // least `self.num_elements()` elements from the base pointer, so this access is safe.
         let row_ptr = unsafe { ptr.as_ptr().cast::<T>().add(i * self.ncols) };
 
-        // SAFETY: The logic is the same to the previous `unsafe` block. Further, the caller
+        // SAFETY: The logic is the same as the previous `unsafe` block. Further, the caller
         // attests that creating a mutable reference is safe.
         unsafe { std::slice::from_raw_parts_mut(row_ptr, self.ncols) }
     }

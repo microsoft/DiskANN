@@ -156,7 +156,7 @@ where
     unsafe fn drop(self, ptr: NonNull<u8>) {
         let slice_ptr = std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), self.bytes());
 
-        // Safety: inherited from caller. All implementations that create a new owned
+        // SAFETY: inherited from caller. All implementations that create a new owned
         // `Mat<Self>` are compatible with `Box` deallocation.
         let _ = unsafe { Box::from_raw(slice_ptr) };
     }
