@@ -132,6 +132,10 @@ pub fn generate_labels(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Test for generate_labels function which creates files, needs cleanup with fs::remove_file"
+)]
 mod test {
     use std::fs;
 
