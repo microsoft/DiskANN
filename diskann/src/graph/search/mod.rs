@@ -48,6 +48,27 @@ where
     type Output;
 
     /// Execute the search operation with full search logic.
+    ///
+    /// This method executes a search using the provided `strategy` to access and process elements.
+    /// It computes the similarity between the query vector and the elements in the index,
+    /// finding nearest neighbors according to the search parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The DiskANN index to search.
+    /// * `strategy` - The search strategy to use for accessing and processing elements.
+    /// * `context` - The context to pass through to providers.
+    /// * `query` - The query vector for which nearest neighbors are sought.
+    /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Self::Output` which varies by search type (e.g., [`SearchStats`](super::index::SearchStats)
+    /// for k-NN, [`RangeSearchOutput`] for range search).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is a failure accessing elements or computing distances.
     fn dispatch<'a>(
         &'a mut self,
         index: &'a DiskANNIndex<DP>,

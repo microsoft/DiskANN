@@ -110,6 +110,35 @@ impl KnnSearch {
     }
 }
 
+/// Standard k-NN graph-based search implementation.
+///
+/// This is the primary search type for approximate nearest neighbor queries. It performs
+/// a greedy beam search over the graph, maintaining a priority queue of the best candidates
+/// found so far. The search explores neighbors of promising candidates until convergence.
+///
+/// # Algorithm
+///
+/// 1. Initialize with starting points
+/// 2. Compute distances from query to starting points
+/// 3. Greedily expand the most promising unexplored candidate
+/// 4. Add the candidate's neighbors to the frontier
+/// 5. Repeat until no unexplored candidates remain within the search list
+/// 6. Return the top-k results from the best candidates found
+///
+/// # Parameters
+///
+/// - `k_value`: Number of nearest neighbors to return
+/// - `l_value`: Search list size (larger values improve recall at cost of latency)
+/// - `beam_width`: Optional parallel exploration width
+///
+/// # Example
+///
+/// ```ignore
+/// use diskann::graph::{search::KnnSearch, Search};
+///
+/// let mut params = KnnSearch::new(10, 100, None)?;
+/// let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;
+/// ```
 impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for KnnSearch
 where
     DP: DataProvider,
@@ -120,6 +149,30 @@ where
 {
     type Output = SearchStats;
 
+    /// Execute the k-NN search on the given index.
+    ///
+    /// This method executes a search using the provided `strategy` to access and process elements.
+    /// It computes the similarity between the query vector and the elements in the index, traversing
+    /// the graph towards the nearest neighbors according to the search parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The DiskANN index to search.
+    /// * `strategy` - The search strategy to use for accessing and processing elements.
+    /// * `context` - The context to pass through to providers.
+    /// * `query` - The query vector for which nearest neighbors are sought.
+    /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
+    ///
+    /// # Returns
+    ///
+    /// Returns [`SearchStats`] containing:
+    /// - The number of distance computations performed.
+    /// - The number of hops (graph traversal steps).
+    /// - Timing information for the search operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is a failure accessing elements or computing distances.
     fn dispatch<'a>(
         &'a mut self,
         index: &'a DiskANNIndex<DP>,
