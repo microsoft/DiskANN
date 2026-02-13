@@ -1466,6 +1466,10 @@ mod tests {
                     check_mat_ref(mat.reborrow(), repr, ctx);
                     check_mat_mut(mat.reborrow_mut(), repr, ctx);
                     check_rows(mat.rows(), repr, ctx);
+
+                    // Check reborrow preserves pointers.
+                    assert_eq!(mat.as_raw_ptr(), mat.reborrow().as_raw_ptr());
+                    assert_eq!(mat.as_raw_ptr(), mat.reborrow_mut().as_raw_ptr());
                 }
 
                 // Populate the matrix using `MatMut`
@@ -1570,7 +1574,14 @@ mod tests {
                 {
                     let ctx = &lazy_format!("{ctx} - by matmut");
                     let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
+                    let ptr = b.as_ptr().cast::<u8>();
                     let mut matmut = MatMut::new(repr, &mut b).unwrap();
+
+                    assert_eq!(
+                        ptr,
+                        matmut.as_raw_ptr(),
+                        "underlying memory should be preserved",
+                    );
 
                     fill_mat_mut(matmut.reborrow_mut(), repr);
 
@@ -1589,7 +1600,14 @@ mod tests {
                 {
                     let ctx = &lazy_format!("{ctx} - by rows");
                     let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
+                    let ptr = b.as_ptr().cast::<u8>();
                     let mut matmut = MatMut::new(repr, &mut b).unwrap();
+
+                    assert_eq!(
+                        ptr,
+                        matmut.as_raw_ptr(),
+                        "underlying memory should be preserved",
+                    );
 
                     fill_rows_mut(matmut.rows_mut(), repr);
 
