@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-//! Diversity-aware search (feature-gated).
+//! Diversity-aware search.
 
 #![cfg(feature = "experimental_diversity_search")]
 
@@ -12,10 +12,7 @@ use std::num::NonZeroUsize;
 use diskann_utils::future::{AssertSend, SendFuture};
 use hashbrown::HashSet;
 
-use super::{
-    dispatch::SearchDispatch, graph_search::GraphSearch, record::NoopSearchRecord,
-    scratch::SearchScratch,
-};
+use super::{Search, graph_search::GraphSearch, record::NoopSearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::IntoANNResult,
@@ -55,9 +52,42 @@ where
             diverse_params,
         }
     }
+
+    /// Create search scratch with DiverseNeighborQueue for this search.
+    fn create_scratch<DP>(
+        &self,
+        index: &DiskANNIndex<DP>,
+    ) -> SearchScratch<DP::InternalId, DiverseNeighborQueue<P>>
+    where
+        DP: DataProvider,
+        P: AttributeValueProvider<Id = DP::InternalId>,
+    {
+        let attribute_provider = self.diverse_params.attribute_provider.clone();
+        let diverse_queue = DiverseNeighborQueue::new(
+            self.inner.l,
+            // SAFETY: k_value is guaranteed to be non-zero by GraphSearch validation
+            #[allow(clippy::expect_used)]
+            NonZeroUsize::new(self.inner.k).expect("k_value must be non-zero"),
+            self.diverse_params.diverse_results_k,
+            attribute_provider,
+        );
+
+        SearchScratch {
+            best: diverse_queue,
+            visited: HashSet::with_capacity(
+                index.estimate_visited_set_capacity(Some(self.inner.l)),
+            ),
+            id_scratch: Vec::with_capacity(index.max_degree_with_slack()),
+            beam_nodes: Vec::with_capacity(self.inner.beam_width.unwrap_or(1)),
+            range_frontier: std::collections::VecDeque::new(),
+            in_range: Vec::new(),
+            hops: 0,
+            cmps: 0,
+        }
+    }
 }
 
-impl<DP, S, T, O, OB, P> SearchDispatch<DP, S, T, O, OB> for DiverseSearch<P>
+impl<DP, S, T, O, OB, P> Search<DP, S, T, O, OB> for DiverseSearch<P>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -84,13 +114,7 @@ where
             let computer = accessor.build_query_computer(query).into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
-            let mut diverse_scratch = create_diverse_scratch(
-                index,
-                self.inner.l,
-                self.inner.beam_width,
-                &self.diverse_params,
-                self.inner.k,
-            );
+            let mut diverse_scratch = self.create_scratch(index);
 
             let stats = index
                 .search_internal(
@@ -121,51 +145,5 @@ where
 
             Ok(stats.finish(result_count as u32))
         }
-    }
-}
-
-//=============================================================================
-// Internal Implementation
-//=============================================================================
-
-/// Create a diverse search scratch with DiverseNeighborQueue.
-///
-/// # Arguments
-///
-/// * `index` - The DiskANN index for capacity estimation
-/// * `l_value` - Search list size
-/// * `beam_width` - Optional beam width for parallel exploration
-/// * `diverse_params` - Diversity-specific parameters
-/// * `k_value` - Number of results to return
-pub(crate) fn create_diverse_scratch<DP, P>(
-    index: &DiskANNIndex<DP>,
-    l_value: usize,
-    beam_width: Option<usize>,
-    diverse_params: &DiverseSearchParams<P>,
-    k_value: usize,
-) -> SearchScratch<DP::InternalId, DiverseNeighborQueue<P>>
-where
-    DP: DataProvider,
-    P: AttributeValueProvider<Id = DP::InternalId>,
-{
-    let attribute_provider = diverse_params.attribute_provider.clone();
-    let diverse_queue = DiverseNeighborQueue::new(
-        l_value,
-        // SAFETY: k_value is guaranteed to be non-zero by SearchParams validation by caller
-        #[allow(clippy::expect_used)]
-        NonZeroUsize::new(k_value).expect("k_value must be non-zero"),
-        diverse_params.diverse_results_k,
-        attribute_provider,
-    );
-
-    SearchScratch {
-        best: diverse_queue,
-        visited: HashSet::with_capacity(index.estimate_visited_set_capacity(Some(l_value))),
-        id_scratch: Vec::with_capacity(index.max_degree_with_slack()),
-        beam_nodes: Vec::with_capacity(beam_width.unwrap_or(1)),
-        range_frontier: std::collections::VecDeque::new(),
-        in_range: Vec::new(),
-        hops: 0,
-        cmps: 0,
     }
 }

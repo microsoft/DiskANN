@@ -10,7 +10,7 @@ use diskann_utils::future::{AssertSend, SendFuture};
 use diskann_vector::PreprocessedDistanceFunction;
 use hashbrown::HashSet;
 
-use super::{dispatch::SearchDispatch, record::SearchRecord, scratch::SearchScratch};
+use super::{Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::{ErrorExt, IntoANNResult},
@@ -59,7 +59,7 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
     }
 }
 
-impl<'q, DP, S, T, O, OB> SearchDispatch<DP, S, T, O, OB> for MultihopSearch<'q, DP::InternalId>
+impl<'q, DP, S, T, O, OB> Search<DP, S, T, O, OB> for MultihopSearch<'q, DP::InternalId>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -121,9 +121,9 @@ where
     }
 }
 
-//=============================================================================
-// Internal Implementation
-//=============================================================================
+/////////////////////////////
+// Internal Implementation //
+/////////////////////////////
 
 /// A predicate that checks if an item is not in the visited set AND matches the label filter.
 ///

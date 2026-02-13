@@ -31,6 +31,7 @@ use super::{
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
+        Search,
         record::{NoopSearchRecord, SearchRecord, VisitedSearchRecord},
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
@@ -2115,10 +2116,10 @@ where
         }
     }
 
-    /// Execute a search using the unified search dispatch interface.
+    /// Execute a search using the unified search interface.
     ///
-    /// This method provides a single entry point for all search types. The `parameters` argument
-    /// implements [`search::SearchDispatch`], which defines the complete search behavior including
+    /// This method provides a single entry point for all search types. The `search_params` argument
+    /// implements [`search::Search`], which defines the complete search behavior including
     /// algorithm selection and post-processing.
     ///
     /// # Supported Search Types
@@ -2128,16 +2129,13 @@ where
     /// - [`search::RangeSearch`]: Range-based search within a distance radius
     /// - [`search::DiverseSearch`]: Diversity-aware search (feature-gated)
     ///
-    /// For flat (brute-force) search, use [`Self::flat_search`] directly due to its
-    /// unique iterator type constraints.
-    ///
     /// # Example
     ///
     /// ```ignore
-    /// use diskann::graph::{GraphSearch, RangeSearch, SearchDispatch};
+    /// use diskann::graph::{GraphSearch, RangeSearch, Search};
     ///
     /// // Standard graph search
-    /// let params = GraphSearch::new(10, 100, None)?;
+    /// let mut params = GraphSearch::new(10, 100, None)?;
     /// let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;
     ///
     /// // Range search (note: uses () as output buffer, results in Output type)
@@ -2154,7 +2152,7 @@ where
         output: &'a mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>> + 'a
     where
-        P: super::search::SearchDispatch<DP, S, T, O, OB>,
+        P: super::search::Search<DP, S, T, O, OB>,
         T: ?Sized,
         OB: ?Sized,
     {
@@ -2183,44 +2181,16 @@ where
         S: SearchStrategy<DP, T, O>,
         O: Send + 'a,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
-        SR: SearchRecord<DP::InternalId> + Send,
+        SR: SearchRecord<DP::InternalId>,
     {
         async move {
-            let mut accessor = strategy
-                .search_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            let graph_search = super::search::GraphSearch::from(*search_params);
-            let mut scratch = self.search_scratch(graph_search.l, start_ids.len());
-
-            let stats = self
-                .search_internal(
-                    graph_search.beam_width,
-                    &start_ids,
-                    &mut accessor,
-                    &computer,
-                    &mut scratch,
-                    search_record,
-                )
-                .await?;
-
-            let result_count = strategy
-                .post_processor()
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    scratch.best.iter().take(graph_search.l.into_usize()),
-                    output,
-                )
-                .send()
+            let mut recorded_search = super::search::RecordedGraphSearch::new(
+                super::search::GraphSearch::from(*search_params),
+                search_record,
+            );
+            recorded_search
+                .dispatch(self, strategy, context, query, output)
                 .await
-                .into_ann_result()?;
-
-            Ok(stats.finish(result_count as u32))
         }
     }
 

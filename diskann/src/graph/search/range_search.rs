@@ -7,7 +7,7 @@
 
 use diskann_utils::future::{AssertSend, SendFuture};
 
-use super::{dispatch::SearchDispatch, scratch::SearchScratch};
+use super::{Search, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::IntoANNResult,
@@ -134,7 +134,7 @@ impl From<RangeSearchParams> for RangeSearch {
     }
 }
 
-impl<DP, S, T, O> SearchDispatch<DP, S, T, O, ()> for RangeSearch
+impl<DP, S, T, O> Search<DP, S, T, O, ()> for RangeSearch
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -273,9 +273,9 @@ where
     }
 }
 
-//=============================================================================
-// Internal Implementation
-//=============================================================================
+/////////////////////////////
+// Internal Implementation //
+/////////////////////////////
 
 /// Internal range search implementation.
 ///
@@ -345,9 +345,9 @@ where
     })
 }
 
-//=============================================================================
-// Tests
-//=============================================================================
+///////////
+// Tests //
+///////////
 
 #[cfg(test)]
 mod tests {

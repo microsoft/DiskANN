@@ -9,7 +9,7 @@ use std::fmt::Debug;
 
 use diskann_utils::future::{AssertSend, SendFuture};
 
-use super::dispatch::SearchDispatch;
+use super::Search;
 use crate::{
     ANNResult,
     error::IntoANNResult,
@@ -87,9 +87,9 @@ impl From<super::super::SearchParams> for GraphSearch {
     }
 }
 
-/// Implement SearchDispatch for SearchParams to provide backwards compatibility.
+/// Implement Search for SearchParams to provide backwards compatibility.
 /// This treats SearchParams as an alias for GraphSearch.
-impl<DP, S, T, O, OB> SearchDispatch<DP, S, T, O, OB> for super::super::SearchParams
+impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for super::super::SearchParams
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -116,7 +116,7 @@ where
     }
 }
 
-impl<DP, S, T, O, OB> SearchDispatch<DP, S, T, O, OB> for GraphSearch
+impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for GraphSearch
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -173,9 +173,9 @@ where
     }
 }
 
-//=============================================================================
-// Recorded Graph Search
-//=============================================================================
+///////////////////////////
+// Recorded Graph Search //
+///////////////////////////
 
 /// Graph search with traversal path recording.
 ///
@@ -195,7 +195,7 @@ impl<'r, SR: ?Sized> RecordedGraphSearch<'r, SR> {
     }
 }
 
-impl<'r, DP, S, T, O, OB, SR> SearchDispatch<DP, S, T, O, OB> for RecordedGraphSearch<'r, SR>
+impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedGraphSearch<'r, SR>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -253,9 +253,9 @@ where
     }
 }
 
-//=============================================================================
-// Tests
-//=============================================================================
+///////////
+// Tests //
+///////////
 
 #[cfg(test)]
 mod tests {
