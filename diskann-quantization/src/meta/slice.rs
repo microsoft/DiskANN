@@ -8,6 +8,7 @@ use std::{
     ptr::NonNull,
 };
 
+use diskann_utils::{Reborrow, ReborrowMut};
 use thiserror::Error;
 
 use crate::{
@@ -286,6 +287,42 @@ pub type SliceMut<'a, T, M> = Slice<&'a mut [T], Mut<'a, M>>;
 
 /// An owning slice and associated metadata.
 pub type PolySlice<T, M, A> = Slice<Poly<[T], A>, Owned<M>>;
+
+//////////////
+// Reborrow //
+//////////////
+
+impl<'a, T, A, M> Reborrow<'a> for Slice<Poly<[T], A>, Owned<M>>
+where
+    A: AllocatorCore,
+    M: 'static,
+{
+    type Target = SliceRef<'a, T, M>;
+    fn reborrow(&'a self) -> Self::Target {
+        Slice {
+            slice: &*self.slice,
+            meta: Ref::from(&self.meta.0),
+        }
+    }
+}
+
+/////////////////
+// ReborrowMut //
+////////////////
+
+impl<'a, T, A, M> ReborrowMut<'a> for Slice<Poly<[T], A>, Owned<M>>
+where
+    A: AllocatorCore,
+    M: 'static,
+{
+    type Target = SliceMut<'a, T, M>;
+    fn reborrow_mut(&'a mut self) -> Self::Target {
+        Slice {
+            slice: &mut *self.slice,
+            meta: Mut::from(&mut self.meta.0),
+        }
+    }
+}
 
 //////////////////////
 // Canonical Layout //

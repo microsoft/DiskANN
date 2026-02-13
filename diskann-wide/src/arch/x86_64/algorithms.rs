@@ -74,7 +74,7 @@ pub(crate) unsafe fn __load_first_of_16_bytes(arch: V3, ptr: *const u8, first: u
         // SAFETY:
         // * Pointer Cast: The instruction `_mm_loadu_si128` does not have any alignment
         //     restrictions, so if `[ptr, ptr + first)` is valid, the cast will be valid.
-        // * `_mm_loadu_si128`: Use of the intrinsic is gated by the `cfg` macro.
+        // * `_mm_loadu_si128`: The intrinsic requires SSE2, implied by V3.
         //     The load is valid since the caller passed a value greater than 16.
         // *`__m128i` and `u128` are both the same size, do not own any resources, and are
         //     valid for all bit patterns.

@@ -130,7 +130,7 @@ mod imp {
                     DataRef<'y, NBITS>,
                     distances::Result<f32>,
                 > + for<'x, 'y> PureDistanceFunction<
-                    &'x minmax::FullQuery,
+                    minmax::FullQueryRef<'x>,
                     DataRef<'y, NBITS>,
                     distances::Result<f32>,
                 >,
@@ -139,7 +139,7 @@ mod imp {
                     DataRef<'y, NBITS>,
                     distances::Result<f32>,
                 > + for<'x, 'y> PureDistanceFunction<
-                    &'x minmax::FullQuery,
+                    minmax::FullQueryRef<'x>,
                     DataRef<'y, NBITS>,
                     distances::Result<f32>,
                 > + for<'x, 'y> PureDistanceFunction<
@@ -147,7 +147,7 @@ mod imp {
                     DataRef<'y, NBITS>,
                     distances::MathematicalResult<f32>,
                 > + for<'x, 'y> PureDistanceFunction<
-                    &'x minmax::FullQuery,
+                    minmax::FullQueryRef<'x>,
                     DataRef<'y, NBITS>,
                     distances::MathematicalResult<f32>,
                 >,
@@ -595,7 +595,7 @@ mod imp {
                 DataRef<'b, NBITS>,
                 distances::Result<f32>,
             > + for<'a, 'b> PureDistanceFunction<
-                &'a minmax::FullQuery,
+                minmax::FullQueryRef<'a>,
                 DataRef<'b, NBITS>,
                 distances::Result<f32>,
             >,
@@ -604,7 +604,7 @@ mod imp {
                 DataRef<'b, NBITS>,
                 distances::Result<f32>,
             > + for<'a, 'b> PureDistanceFunction<
-                &'a minmax::FullQuery,
+                minmax::FullQueryRef<'a>,
                 DataRef<'b, NBITS>,
                 distances::Result<f32>,
             > + for<'a, 'b> PureDistanceFunction<
@@ -612,7 +612,7 @@ mod imp {
                 DataRef<'b, NBITS>,
                 distances::MathematicalResult<f32>,
             > + for<'a, 'b> PureDistanceFunction<
-                &'a minmax::FullQuery,
+                minmax::FullQueryRef<'a>,
                 DataRef<'b, NBITS>,
                 distances::MathematicalResult<f32>,
             >,
@@ -653,7 +653,10 @@ mod imp {
                     }
                 }
                 MinMaxQuery::FullPrecision => {
-                    let mut compressed = minmax::FullQuery::empty(output_dim);
+                    let mut compressed = minmax::FullQuery::new_in(
+                        output_dim,
+                        diskann_quantization::alloc::GlobalAllocator,
+                    )?;
                     quantizer.compress_into(query, compressed.reborrow_mut())?;
 
                     match self.measure {

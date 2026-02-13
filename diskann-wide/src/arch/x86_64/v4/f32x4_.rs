@@ -37,7 +37,8 @@ helpers::unsafe_map_binary_op!(f32x4, std::ops::Mul, mul, _mm_mul_ps, "sse");
 impl f32x4 {
     #[inline(always)]
     fn is_nan(self) -> BitMask<4, V4> {
-        // NOTE: `_CMP_UNORD_Q` returns `true` only if both arguments are NAN.
+        // NOTE: `_CMP_UNORD_Q` returns `true` if either argument is NaN. Since we compare
+        // `self` with `self`, this returns `true` exactly when `self` is NaN.
         BitMask::from_underlying(
             self.arch(),
             // SAFETY: `_mm_cmp_ps_mask` requires AVX512F + AVX512VL, both of which

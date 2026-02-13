@@ -7,9 +7,9 @@
 use super::u8x32;
 use crate::doubled;
 
-///////////////////
-// 8-bit integer //
-///////////////////
+////////////////////
+// 8-bit unsigned //
+////////////////////
 
 doubled::double_vector!(u8, 64, u8x32);
 doubled::double_scalar_shift!(Doubled<u8x32>);
