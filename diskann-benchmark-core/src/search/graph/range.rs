@@ -108,10 +108,10 @@ where
         let result = self
             .index
             .search(
+                &mut range_search,
                 self.strategy.get(index)?,
                 &context,
                 self.queries.row(index),
-                &mut range_search,
                 &mut (),
             )
             .await?;

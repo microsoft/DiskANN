@@ -31,9 +31,9 @@ where
     P: AttributeValueProvider,
 {
     /// Base k-NN search parameters.
-    pub inner: KnnSearch,
+    inner: KnnSearch,
     /// Diversity-specific parameters.
-    pub diverse_params: DiverseSearchParams<P>,
+    diverse_params: DiverseSearchParams<P>,
 }
 
 impl<P> DiverseSearch<P>
@@ -46,6 +46,18 @@ where
             inner,
             diverse_params,
         }
+    }
+
+    /// Returns a reference to the inner k-NN search parameters.
+    #[inline]
+    pub fn inner(&self) -> &KnnSearch {
+        &self.inner
+    }
+
+    /// Returns a reference to the diversity-specific parameters.
+    #[inline]
+    pub fn diverse_params(&self) -> &DiverseSearchParams<P> {
+        &self.diverse_params
     }
 
     /// Create search scratch with DiverseNeighborQueue for this search.
@@ -71,7 +83,7 @@ where
                 index.estimate_visited_set_capacity(Some(self.inner.l_value().get())),
             ),
             id_scratch: Vec::with_capacity(index.max_degree_with_slack()),
-            beam_nodes: Vec::with_capacity(self.inner.beam_width().unwrap_or(1)),
+            beam_nodes: Vec::with_capacity(self.inner.beam_width().map_or(1, |nz| nz.get())),
             range_frontier: std::collections::VecDeque::new(),
             in_range: Vec::new(),
             hops: 0,
@@ -91,13 +103,13 @@ where
 {
     type Output = SearchStats;
 
-    fn dispatch<'a>(
-        &'a mut self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
-        context: &'a DP::Context,
-        query: &'a T,
-        output: &'a mut OB,
+    fn search(
+        &mut self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
             let mut accessor = strategy
@@ -111,7 +123,7 @@ where
 
             let stats = index
                 .search_internal(
-                    self.inner.beam_width(),
+                    self.inner.beam_width().map(|nz| nz.get()),
                     &start_ids,
                     &mut accessor,
                     &computer,

@@ -49,6 +49,7 @@ pub enum RangeSearchError {
 }
 
 impl From<RangeSearchError> for ANNError {
+    #[track_caller]
     fn from(err: RangeSearchError) -> Self {
         Self::new(ANNErrorKind::IndexError, err)
     }
@@ -175,13 +176,13 @@ where
 {
     type Output = RangeSearchOutput<O>;
 
-    fn dispatch<'a>(
-        &'a mut self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
-        context: &'a DP::Context,
-        query: &'a T,
-        _output: &'a mut (),
+    fn search(
+        &mut self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        _output: &mut (),
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         let search_params = *self;
         async move {

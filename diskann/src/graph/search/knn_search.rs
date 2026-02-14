@@ -31,9 +31,14 @@ pub enum KnnSearchError {
     LLessThanK { l_value: usize, k_value: usize },
     #[error("beam width cannot be zero")]
     BeamWidthZero,
+    #[error("k_value cannot be zero")]
+    KZero,
+    #[error("l_value cannot be zero")]
+    LZero,
 }
 
 impl From<KnnSearchError> for ANNError {
+    #[track_caller]
     fn from(err: KnnSearchError) -> Self {
         Self::new(ANNErrorKind::IndexError, err)
     }
@@ -50,7 +55,7 @@ pub struct KnnSearch {
     /// Search list size - controls accuracy vs speed tradeoff.
     l_value: NonZeroUsize,
     /// Optional beam width for parallel graph exploration.
-    beam_width: Option<usize>,
+    beam_width: Option<NonZeroUsize>,
 }
 
 impl KnnSearch {
@@ -58,17 +63,21 @@ impl KnnSearch {
     ///
     /// # Errors
     ///
-    /// Returns an error if `l_value < k_value` or if beam_width is zero.
+    /// Returns an error if `k_value` is zero, `l_value` is zero,
+    /// `l_value < k_value`, or if `beam_width` is zero.
     pub fn new(
-        k_value: NonZeroUsize,
-        l_value: NonZeroUsize,
+        k_value: usize,
+        l_value: usize,
         beam_width: Option<usize>,
     ) -> Result<Self, KnnSearchError> {
+        if k_value == 0 {
+            return Err(KnnSearchError::KZero);
+        }
+        if l_value == 0 {
+            return Err(KnnSearchError::LZero);
+        }
         if k_value > l_value {
-            return Err(KnnSearchError::LLessThanK {
-                l_value: l_value.get(),
-                k_value: k_value.get(),
-            });
+            return Err(KnnSearchError::LLessThanK { l_value, k_value });
         }
         if let Some(bw) = beam_width
             && bw == 0
@@ -76,18 +85,16 @@ impl KnnSearch {
             return Err(KnnSearchError::BeamWidthZero);
         }
 
+        // SAFETY: We've validated k_value != 0 and l_value != 0 above
         Ok(Self {
-            k_value,
-            l_value,
-            beam_width,
+            k_value: unsafe { NonZeroUsize::new_unchecked(k_value) },
+            l_value: unsafe { NonZeroUsize::new_unchecked(l_value) },
+            beam_width: beam_width.and_then(NonZeroUsize::new),
         })
     }
 
     /// Create parameters with default beam width.
-    pub fn new_default(
-        k_value: NonZeroUsize,
-        l_value: NonZeroUsize,
-    ) -> Result<Self, KnnSearchError> {
+    pub fn new_default(k_value: usize, l_value: usize) -> Result<Self, KnnSearchError> {
         Self::new(k_value, l_value, None)
     }
 
@@ -105,7 +112,7 @@ impl KnnSearch {
 
     /// Returns the optional beam width for parallel graph exploration.
     #[inline]
-    pub fn beam_width(&self) -> Option<usize> {
+    pub fn beam_width(&self) -> Option<NonZeroUsize> {
         self.beam_width
     }
 }
@@ -137,7 +144,7 @@ impl KnnSearch {
 /// use diskann::graph::{search::KnnSearch, Search};
 ///
 /// let mut params = KnnSearch::new(10, 100, None)?;
-/// let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;
+/// let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
 /// ```
 impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for KnnSearch
 where
@@ -173,13 +180,13 @@ where
     /// # Errors
     ///
     /// Returns an error if there is a failure accessing elements or computing distances.
-    fn dispatch<'a>(
-        &'a mut self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
-        context: &'a DP::Context,
-        query: &'a T,
-        output: &'a mut OB,
+    fn search(
+        &mut self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
             let mut accessor = strategy
@@ -193,7 +200,7 @@ where
 
             let stats = index
                 .search_internal(
-                    self.beam_width,
+                    self.beam_width.map(|nz| nz.get()),
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -253,13 +260,13 @@ where
 {
     type Output = SearchStats;
 
-    fn dispatch<'a>(
-        &'a mut self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
-        context: &'a DP::Context,
-        query: &'a T,
-        output: &'a mut OB,
+    fn search(
+        &mut self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
             let mut accessor = strategy
@@ -273,7 +280,7 @@ where
 
             let stats = index
                 .search_internal(
-                    self.inner.beam_width,
+                    self.inner.beam_width.map(|nz| nz.get()),
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -314,49 +321,32 @@ mod tests {
     #[test]
     fn test_knn_search_validation() {
         // Valid
-        assert!(
-            KnnSearch::new(
-                NonZeroUsize::new(10).unwrap(),
-                NonZeroUsize::new(100).unwrap(),
-                None
-            )
-            .is_ok()
-        );
-        assert!(
-            KnnSearch::new(
-                NonZeroUsize::new(10).unwrap(),
-                NonZeroUsize::new(100).unwrap(),
-                Some(4)
-            )
-            .is_ok()
-        );
-        assert!(
-            KnnSearch::new(
-                NonZeroUsize::new(10).unwrap(),
-                NonZeroUsize::new(10).unwrap(),
-                None
-            )
-            .is_ok()
-        ); // k == l is valid
+        assert!(KnnSearch::new(10, 100, None).is_ok());
+        assert!(KnnSearch::new(10, 100, Some(4)).is_ok());
+        assert!(KnnSearch::new(10, 10, None).is_ok()); // k == l is valid
+
+        // Invalid: k = 0
+        assert!(matches!(
+            KnnSearch::new(0, 100, None),
+            Err(KnnSearchError::KZero)
+        ));
+
+        // Invalid: l = 0
+        assert!(matches!(
+            KnnSearch::new(10, 0, None),
+            Err(KnnSearchError::LZero)
+        ));
 
         // Invalid: l < k
-        assert!(
-            KnnSearch::new(
-                NonZeroUsize::new(100).unwrap(),
-                NonZeroUsize::new(10).unwrap(),
-                None
-            )
-            .is_err()
-        );
+        assert!(matches!(
+            KnnSearch::new(100, 10, None),
+            Err(KnnSearchError::LLessThanK { .. })
+        ));
 
         // Invalid: zero beam_width
-        assert!(
-            KnnSearch::new(
-                NonZeroUsize::new(10).unwrap(),
-                NonZeroUsize::new(100).unwrap(),
-                Some(0)
-            )
-            .is_err()
-        );
+        assert!(matches!(
+            KnnSearch::new(10, 100, Some(0)),
+            Err(KnnSearchError::BeamWidthZero)
+        ));
     }
 }

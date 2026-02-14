@@ -115,10 +115,10 @@ where
         let stats = self
             .index
             .search(
+                &mut multihop_search,
                 self.strategy.get(index)?,
                 &context,
                 self.queries.row(index),
-                &mut multihop_search,
                 buffer,
             )
             .await?;
@@ -181,7 +181,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             multihop.clone(),
-            graph::KnnSearch::new(nearest_neighbors, NonZeroUsize::new(10).unwrap(), None).unwrap(),
+            graph::KnnSearch::new(nearest_neighbors.get(), 10, None).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -209,13 +209,11 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::KnnSearch::new(nearest_neighbors, NonZeroUsize::new(10).unwrap(), None)
-                    .unwrap(),
+                graph::KnnSearch::new(nearest_neighbors.get(), 10, None).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::KnnSearch::new(nearest_neighbors, NonZeroUsize::new(15).unwrap(), None)
-                    .unwrap(),
+                graph::KnnSearch::new(nearest_neighbors.get(), 15, None).unwrap(),
                 setup.clone(),
             ),
         ];

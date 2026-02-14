@@ -983,9 +983,8 @@ where
 
         let strategy = self.search_strategy(query, vector_filter);
         let timer = Instant::now();
-        let k = NonZeroUsize::new(k_value).expect("k_value must be non-zero");
-        let l = NonZeroUsize::new(search_list_size as usize)
-            .expect("search_list_size must be non-zero");
+        let k = k_value;
+        let l = search_list_size as usize;
         let stats = if is_flat_search {
             self.runtime.block_on(self.index.flat_search(
                 &strategy,
@@ -998,10 +997,10 @@ where
         } else {
             let mut knn_search = KnnSearch::new(k, l, beam_width)?;
             self.runtime.block_on(self.index.search(
+                &mut knn_search,
                 &strategy,
                 &DefaultContext,
                 strategy.query,
-                &mut knn_search,
                 &mut result_output_buffer,
             ))?
         };
@@ -1073,11 +1072,6 @@ mod disk_provider_tests {
         build::builder::core::disk_index_builder_tests::{IndexBuildFixture, TestParams},
         utils::{QueryStatistics, VirtualAlignedReaderFactory},
     };
-
-    /// Helper to create NonZeroUsize from usize (for tests only).
-    fn nz(v: usize) -> NonZeroUsize {
-        NonZeroUsize::new(v).expect("value must be non-zero")
-    }
 
     const TEST_INDEX_PREFIX_128DIM: &str =
         "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search";
@@ -1541,14 +1535,14 @@ mod disk_provider_tests {
         );
 
         // Test error case: l < k
-        let res = KnnSearch::new_default(nz(20), nz(10));
+        let res = KnnSearch::new_default(20, 10);
         assert!(res.is_err());
         assert_eq!(
             <KnnSearchError as std::convert::Into<ANNError>>::into(res.unwrap_err()).kind(),
             ANNErrorKind::IndexError
         );
         // Test error case: beam_width = 0
-        let res = KnnSearch::new(nz(10), nz(10), Some(0));
+        let res = KnnSearch::new(10, 10, Some(0));
         assert!(res.is_err());
 
         let search_engine =
@@ -1633,7 +1627,7 @@ mod disk_provider_tests {
         );
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
         let mut search_record = VisitedSearchRecord::new(0);
-        let search_params = KnnSearch::new(nz(10), nz(10), Some(4)).unwrap();
+        let search_params = KnnSearch::new(10, 10, Some(4)).unwrap();
         let mut recorded_search =
             diskann::graph::search::RecordedKnnSearch::new(search_params, &mut search_record);
         search_engine
@@ -1762,16 +1756,16 @@ mod disk_provider_tests {
             attribute_provider.clone(),
         );
 
-        let search_params = KnnSearch::new(nz(10), nz(20), None).unwrap();
+        let search_params = KnnSearch::new(10, 20, None).unwrap();
 
         let mut diverse_search = diskann::graph::DiverseSearch::new(search_params, diverse_params);
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
+                &mut diverse_search,
                 &strategy,
                 &DefaultContext,
                 query_vector.as_slice(),
-                &mut diverse_search,
                 &mut result_output_buffer,
             ))
             .unwrap();
@@ -1801,22 +1795,18 @@ mod disk_provider_tests {
             &mut associated_data2,
         );
         let strategy2 = search_engine.search_strategy(&query_vector, &|_| true);
-        let search_params2 = KnnSearch::new(
-            nz(return_list_size as usize),
-            nz(search_list_size as usize),
-            None,
-        )
-        .unwrap();
+        let search_params2 =
+            KnnSearch::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
         let mut diverse_search2 =
             diskann::graph::DiverseSearch::new(search_params2, diverse_params);
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
+                &mut diverse_search2,
                 &strategy2,
                 &DefaultContext,
                 query_vector.as_slice(),
-                &mut diverse_search2,
                 &mut result_output_buffer2,
             ))
             .unwrap();
@@ -2092,16 +2082,16 @@ mod disk_provider_tests {
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
 
         let mut search_record = VisitedSearchRecord::new(0);
-        let search_params = KnnSearch::new(nz(10), nz(10), Some(4)).unwrap();
+        let search_params = KnnSearch::new(10, 10, Some(4)).unwrap();
         let mut recorded_search =
             diskann::graph::search::RecordedKnnSearch::new(search_params, &mut search_record);
         search_engine
             .runtime
             .block_on(search_engine.index.search(
+                &mut recorded_search,
                 &strategy,
                 &DefaultContext,
                 query_vector.as_slice(),
-                &mut recorded_search,
                 &mut result_output_buffer,
             ))
             .unwrap();

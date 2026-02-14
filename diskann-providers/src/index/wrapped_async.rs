@@ -238,7 +238,7 @@ where
         let mut knn_search = *search_params;
         self.handle.block_on(
             self.inner
-                .search(strategy, context, query, &mut knn_search, output),
+                .search(&mut knn_search, strategy, context, query, output),
         )
     }
 

@@ -63,13 +63,13 @@ where
 {
     type Output = SearchStats;
 
-    fn dispatch<'a>(
-        &'a mut self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
-        context: &'a DP::Context,
-        query: &'a T,
-        output: &'a mut OB,
+    fn search(
+        &mut self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         let params = self.inner;
         async move {
@@ -185,7 +185,7 @@ where
     T: ?Sized,
     SR: SearchRecord<I> + ?Sized,
 {
-    let beam_width = search_params.beam_width().unwrap_or(1);
+    let beam_width = search_params.beam_width().map_or(1, |nz| nz.get());
 
     // Helper to build the final stats from scratch state.
     let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {

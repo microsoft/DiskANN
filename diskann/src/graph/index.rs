@@ -2135,19 +2135,19 @@ where
     ///
     /// // Standard k-NN search
     /// let mut params = KnnSearch::new(10, 100, None)?;
-    /// let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;;
+    /// let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
     ///
     /// // Range search (note: uses () as output buffer, results in Output type)
     /// let mut params = RangeSearch::new(100, 0.5)?;
-    /// let result = index.search(&strategy, &context, &query, &mut params, &mut ()).await?;
+    /// let result = index.search(&mut params, &strategy, &context, &query, &mut ()).await?;
     /// // result.ids and result.distances contain the matches
     /// ```
     pub fn search<'a, S, T, O: 'a, OB, P>(
         &'a self,
+        search_params: &'a mut P,
         strategy: &'a S,
         context: &'a DP::Context,
         query: &'a T,
-        search_params: &'a mut P,
         output: &'a mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>> + 'a
     where
@@ -2155,7 +2155,7 @@ where
         T: ?Sized,
         OB: ?Sized,
     {
-        search_params.dispatch(self, strategy, context, query, output)
+        search_params.search(self, strategy, context, query, output)
     }
 
     /// Performs a brute-force flat search over the points matching a provided filter function.
@@ -2170,7 +2170,7 @@ where
     /// * `context` - The context to pass through to providers.
     /// * `query` - The query vector for which nearest neighbors are sought.
     /// * `vector_filter` - A predicate function used to filter candidate vectors based on their external IDs.
-    /// * `search_params` - Parameters controlling the search behavior, such as search depth (`l_value`) and beam width.
+    /// * `search_params` - Parameters controlling the search behavior, such as search depth (`l_value`).
     /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
     ///
     /// # Returns

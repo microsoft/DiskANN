@@ -15,12 +15,12 @@
 //! use diskann::graph::{KnnSearch, RangeSearch, MultihopSearch, Search};
 //!
 //! // Standard k-NN search
-//! let mut params = KnnSearch::new(10, 100, None)?;;
-//! let stats = index.search(&strategy, &context, &query, &mut params, &mut output).await?;
+//! let mut params = KnnSearch::new(10, 100, None)?;
+//! let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
 //!
 //! // Range search
 //! let mut params = RangeSearch::new(100, 0.5)?;
-//! let result = index.search(&strategy, &context, &query, &mut params, &mut ()).await?;
+//! let result = index.search(&mut params, &strategy, &context, &query, &mut ()).await?;
 //! println!("Found {} points within radius", result.ids.len());
 //! ```
 
@@ -39,7 +39,7 @@ pub(crate) mod scratch;
 ///
 /// Each search type (graph search, range search, etc.) implements this trait
 /// to define its complete search behavior. The [`DiskANNIndex::search`] method
-/// delegates to the `dispatch` method.
+/// delegates to the `search` method.
 pub trait Search<DP, S, T: ?Sized, O, OB: ?Sized>
 where
     DP: DataProvider,
@@ -69,13 +69,13 @@ where
     /// # Errors
     ///
     /// Returns an error if there is a failure accessing elements or computing distances.
-    fn dispatch<'a>(
-        &'a mut self,
-        index: &'a DiskANNIndex<DP>,
-        strategy: &'a S,
-        context: &'a DP::Context,
-        query: &'a T,
-        output: &'a mut OB,
+    fn search(
+        &mut self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>;
 }
 

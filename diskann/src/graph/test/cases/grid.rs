@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{num::NonZeroUsize, sync::Arc};
+use std::sync::Arc;
 
 use diskann_vector::distance::Metric;
 
@@ -126,12 +126,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
             // are correct.
             let index = setup_grid_search(grid, size);
 
-            let mut params = KnnSearch::new(
-                NonZeroUsize::new(10).unwrap(),
-                NonZeroUsize::new(10).unwrap(),
-                Some(beam_width),
-            )
-            .unwrap();
+            let mut params = KnnSearch::new(10, 10, Some(beam_width)).unwrap();
             let context = test_provider::Context::new();
 
             let mut neighbors = vec![Neighbor::<u32>::default(); params.k_value().get()];
@@ -142,10 +137,10 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
                 range_search_second_round,
             } = rt
                 .block_on(index.search(
+                    &mut params,
                     &test_provider::Strategy::new(),
                     &context,
                     query.as_slice(),
-                    &mut params,
                     &mut crate::neighbor::BackInserter::new(neighbors.as_mut_slice()),
                 ))
                 .unwrap();
