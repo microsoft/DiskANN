@@ -43,3 +43,5 @@ where
     fn compress(&self, vector: MatrixView<f32>, output: MutMatrixView<u8>) -> ANNResult<()>;
     fn compressed_bytes(&self) -> usize;
 }
+
+
