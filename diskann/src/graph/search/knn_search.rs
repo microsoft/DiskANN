@@ -1,0 +1,352 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
+//! Standard k-NN (k-nearest neighbor) graph-based search.
+
+use std::{fmt::Debug, num::NonZeroUsize};
+
+use diskann_utils::future::{AssertSend, SendFuture};
+use thiserror::Error;
+
+use super::Search;
+use crate::{
+    ANNError, ANNErrorKind, ANNResult,
+    error::IntoANNResult,
+    graph::{
+        glue::{SearchExt, SearchPostProcess, SearchStrategy},
+        index::{DiskANNIndex, SearchStats},
+        search::record::NoopSearchRecord,
+        search_output_buffer::SearchOutputBuffer,
+    },
+    provider::{BuildQueryComputer, DataProvider},
+    utils::IntoUsize,
+};
+
+/// Error type for [`KnnSearch`] parameter validation.
+#[derive(Debug, Error)]
+pub enum KnnSearchError {
+    #[error("l_value ({l_value}) cannot be less than k_value ({k_value})")]
+    LLessThanK { l_value: usize, k_value: usize },
+    #[error("beam width cannot be zero")]
+    BeamWidthZero,
+    #[error("k_value cannot be zero")]
+    KZero,
+    #[error("l_value cannot be zero")]
+    LZero,
+}
+
+impl From<KnnSearchError> for ANNError {
+    #[track_caller]
+    fn from(err: KnnSearchError) -> Self {
+        Self::new(ANNErrorKind::IndexError, err)
+    }
+}
+
+/// Parameters for standard k-NN (k-nearest neighbor) graph-based search.
+///
+/// This is the primary search mode, using the Vamana graph structure for efficient
+/// approximate nearest neighbor traversal.
+#[derive(Debug, Clone, Copy)]
+pub struct KnnSearch {
+    /// Number of results to return (k in k-NN).
+    k_value: NonZeroUsize,
+    /// Search list size - controls accuracy vs speed tradeoff.
+    l_value: NonZeroUsize,
+    /// Optional beam width for parallel graph exploration.
+    beam_width: Option<NonZeroUsize>,
+}
+
+impl KnnSearch {
+    /// Create new k-NN search parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `k_value` is zero, `l_value` is zero,
+    /// `l_value < k_value`, or if `beam_width` is zero.
+    pub fn new(
+        k_value: usize,
+        l_value: usize,
+        beam_width: Option<usize>,
+    ) -> Result<Self, KnnSearchError> {
+        if k_value == 0 {
+            return Err(KnnSearchError::KZero);
+        }
+        if l_value == 0 {
+            return Err(KnnSearchError::LZero);
+        }
+        if k_value > l_value {
+            return Err(KnnSearchError::LLessThanK { l_value, k_value });
+        }
+        if let Some(bw) = beam_width
+            && bw == 0
+        {
+            return Err(KnnSearchError::BeamWidthZero);
+        }
+
+        // SAFETY: We've validated k_value != 0 and l_value != 0 above
+        Ok(Self {
+            k_value: unsafe { NonZeroUsize::new_unchecked(k_value) },
+            l_value: unsafe { NonZeroUsize::new_unchecked(l_value) },
+            beam_width: beam_width.and_then(NonZeroUsize::new),
+        })
+    }
+
+    /// Create parameters with default beam width.
+    pub fn new_default(k_value: usize, l_value: usize) -> Result<Self, KnnSearchError> {
+        Self::new(k_value, l_value, None)
+    }
+
+    /// Returns the number of results to return (k in k-NN).
+    #[inline]
+    pub fn k_value(&self) -> NonZeroUsize {
+        self.k_value
+    }
+
+    /// Returns the search list size.
+    #[inline]
+    pub fn l_value(&self) -> NonZeroUsize {
+        self.l_value
+    }
+
+    /// Returns the optional beam width for parallel graph exploration.
+    #[inline]
+    pub fn beam_width(&self) -> Option<NonZeroUsize> {
+        self.beam_width
+    }
+}
+
+/// Standard k-NN graph-based search implementation.
+///
+/// This is the primary search type for approximate nearest neighbor queries. It performs
+/// a greedy beam search over the graph, maintaining a priority queue of the best candidates
+/// found so far. The search explores neighbors of promising candidates until convergence.
+///
+/// # Algorithm
+///
+/// 1. Initialize with starting points
+/// 2. Compute distances from query to starting points
+/// 3. Greedily expand the most promising unexplored candidate
+/// 4. Add the candidate's neighbors to the frontier
+/// 5. Repeat until no unexplored candidates remain within the search list
+/// 6. Return the top-k results from the best candidates found
+///
+/// # Parameters
+///
+/// - `k_value`: Number of nearest neighbors to return
+/// - `l_value`: Search list size (larger values improve recall at cost of latency)
+/// - `beam_width`: Optional parallel exploration width
+///
+/// # Example
+///
+/// ```ignore
+/// use diskann::graph::{search::KnnSearch, Search};
+///
+/// let mut params = KnnSearch::new(10, 100, None)?;
+/// let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
+/// ```
+impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for KnnSearch
+where
+    DP: DataProvider,
+    T: Sync + ?Sized,
+    S: SearchStrategy<DP, T, O>,
+    O: Send,
+    OB: SearchOutputBuffer<O> + Send + ?Sized,
+{
+    type Output = SearchStats;
+
+    /// Execute the k-NN search on the given index.
+    ///
+    /// This method executes a search using the provided `strategy` to access and process elements.
+    /// It computes the similarity between the query vector and the elements in the index, traversing
+    /// the graph towards the nearest neighbors according to the search parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The DiskANN index to search.
+    /// * `strategy` - The search strategy to use for accessing and processing elements.
+    /// * `context` - The context to pass through to providers.
+    /// * `query` - The query vector for which nearest neighbors are sought.
+    /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
+    ///
+    /// # Returns
+    ///
+    /// Returns [`SearchStats`] containing:
+    /// - The number of distance computations performed.
+    /// - The number of hops (graph traversal steps).
+    /// - Timing information for the search operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is a failure accessing elements or computing distances.
+    fn search(
+        &mut self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>> {
+        async move {
+            let mut accessor = strategy
+                .search_accessor(&index.data_provider, context)
+                .into_ann_result()?;
+
+            let computer = accessor.build_query_computer(query).into_ann_result()?;
+            let start_ids = accessor.starting_points().await?;
+
+            let mut scratch = index.search_scratch(self.l_value.get(), start_ids.len());
+
+            let stats = index
+                .search_internal(
+                    self.beam_width.map(|nz| nz.get()),
+                    &start_ids,
+                    &mut accessor,
+                    &computer,
+                    &mut scratch,
+                    &mut NoopSearchRecord::new(),
+                )
+                .await?;
+
+            let result_count = strategy
+                .post_processor()
+                .post_process(
+                    &mut accessor,
+                    query,
+                    &computer,
+                    scratch.best.iter().take(self.l_value.get().into_usize()),
+                    output,
+                )
+                .send()
+                .await
+                .into_ann_result()?;
+
+            Ok(stats.finish(result_count as u32))
+        }
+    }
+}
+
+////////////////////////
+// Recorded KnnSearch //
+////////////////////////
+
+/// K-NN search with traversal path recording.
+///
+/// Records the path taken during search for debugging or analysis.
+#[derive(Debug)]
+pub struct RecordedKnnSearch<'r, SR: ?Sized> {
+    /// Base k-NN search parameters.
+    pub inner: KnnSearch,
+    /// The recorder to capture search path.
+    pub recorder: &'r mut SR,
+}
+
+impl<'r, SR: ?Sized> RecordedKnnSearch<'r, SR> {
+    /// Create new recorded search parameters.
+    pub fn new(inner: KnnSearch, recorder: &'r mut SR) -> Self {
+        Self { inner, recorder }
+    }
+}
+
+impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedKnnSearch<'r, SR>
+where
+    DP: DataProvider,
+    T: Sync + ?Sized,
+    S: SearchStrategy<DP, T, O>,
+    O: Send,
+    OB: SearchOutputBuffer<O> + Send + ?Sized,
+    SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
+{
+    type Output = SearchStats;
+
+    fn search(
+        &mut self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>> {
+        async move {
+            let mut accessor = strategy
+                .search_accessor(&index.data_provider, context)
+                .into_ann_result()?;
+
+            let computer = accessor.build_query_computer(query).into_ann_result()?;
+            let start_ids = accessor.starting_points().await?;
+
+            let mut scratch = index.search_scratch(self.inner.l_value.get(), start_ids.len());
+
+            let stats = index
+                .search_internal(
+                    self.inner.beam_width.map(|nz| nz.get()),
+                    &start_ids,
+                    &mut accessor,
+                    &computer,
+                    &mut scratch,
+                    self.recorder,
+                )
+                .await?;
+
+            let result_count = strategy
+                .post_processor()
+                .post_process(
+                    &mut accessor,
+                    query,
+                    &computer,
+                    scratch
+                        .best
+                        .iter()
+                        .take(self.inner.l_value.get().into_usize()),
+                    output,
+                )
+                .send()
+                .await
+                .into_ann_result()?;
+
+            Ok(stats.finish(result_count as u32))
+        }
+    }
+}
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_knn_search_validation() {
+        // Valid
+        assert!(KnnSearch::new(10, 100, None).is_ok());
+        assert!(KnnSearch::new(10, 100, Some(4)).is_ok());
+        assert!(KnnSearch::new(10, 10, None).is_ok()); // k == l is valid
+
+        // Invalid: k = 0
+        assert!(matches!(
+            KnnSearch::new(0, 100, None),
+            Err(KnnSearchError::KZero)
+        ));
+
+        // Invalid: l = 0
+        assert!(matches!(
+            KnnSearch::new(10, 0, None),
+            Err(KnnSearchError::LZero)
+        ));
+
+        // Invalid: l < k
+        assert!(matches!(
+            KnnSearch::new(100, 10, None),
+            Err(KnnSearchError::LLessThanK { .. })
+        ));
+
+        // Invalid: zero beam_width
+        assert!(matches!(
+            KnnSearch::new(10, 100, Some(0)),
+            Err(KnnSearchError::BeamWidthZero)
+        ));
+    }
+}

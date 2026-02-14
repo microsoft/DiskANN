@@ -8,7 +8,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 use diskann::{
     ANNResult,
     graph::{
-        self, ConsolidateKind, InplaceDeleteMethod, SearchParams,
+        self, ConsolidateKind, InplaceDeleteMethod, KnnSearch,
         glue::{
             self, AsElement, InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchStrategy,
         },
@@ -226,7 +226,7 @@ where
         strategy: &S,
         context: &DP::Context,
         query: &T,
-        search_params: &SearchParams,
+        search_params: &KnnSearch,
         output: &mut OB,
     ) -> ANNResult<SearchStats>
     where
@@ -235,9 +235,10 @@ where
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,
     {
+        let mut knn_search = *search_params;
         self.handle.block_on(
             self.inner
-                .search(strategy, context, query, search_params, output),
+                .search(&mut knn_search, strategy, context, query, output),
         )
     }
 

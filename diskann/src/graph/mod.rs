@@ -21,16 +21,22 @@ mod start_point;
 pub use start_point::{SampleableForStart, StartPointStrategy};
 
 mod misc;
-pub use misc::{
-    ConsolidateKind, InplaceDeleteMethod, RangeSearchParams, RangeSearchParamsError, SearchParams,
-    SearchParamsError,
-};
+pub use misc::{ConsolidateKind, InplaceDeleteMethod};
 
 #[cfg(feature = "experimental_diversity_search")]
 pub use misc::DiverseSearchParams;
 
 pub mod glue;
 pub mod search;
+
+// Re-export unified search interface as the primary API.
+pub use search::{
+    KnnSearch, KnnSearchError, MultihopSearch, RangeSearch, RangeSearchError, RangeSearchOutput,
+    RecordedKnnSearch, Search,
+};
+
+#[cfg(feature = "experimental_diversity_search")]
+pub use search::DiverseSearch;
 
 mod internal;
 
