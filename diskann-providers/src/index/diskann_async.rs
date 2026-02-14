@@ -357,14 +357,13 @@ pub(crate) mod tests {
         let mut result_output_buffer =
             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
         let mut graph_search =
-            graph::KnnSearch::new_default(parameters.search_k, parameters.search_l)
-                .unwrap();
+            graph::KnnSearch::new_default(parameters.search_k, parameters.search_l).unwrap();
         index
             .search(
+                &mut graph_search,
                 &strategy,
                 &parameters.context,
                 query,
-                &mut graph_search,
                 &mut result_output_buffer,
             )
             .await
@@ -410,10 +409,10 @@ pub(crate) mod tests {
         let mut multihop = graph::MultihopSearch::new(search_params, filter);
         index
             .search(
+                &mut multihop,
                 strategy,
                 &parameters.context,
                 query,
-                &mut multihop,
                 &mut result_output_buffer,
             )
             .await
@@ -1455,10 +1454,10 @@ pub(crate) mod tests {
         let mut multihop = graph::MultihopSearch::new(search_params, &filter);
         let stats = index
             .search(
+                &mut multihop,
                 &FullPrecision,
                 &parameters.context,
                 query.as_slice(),
-                &mut multihop,
                 &mut result_output_buffer,
             )
             .await
@@ -4093,10 +4092,10 @@ pub(crate) mod tests {
         let mut multihop = graph::MultihopSearch::new(search_params, &filter);
         let stats = index
             .search(
+                &mut multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &mut multihop,
                 &mut result_output_buffer,
             )
             .await
@@ -4156,10 +4155,10 @@ pub(crate) mod tests {
         let mut multihop = graph::MultihopSearch::new(search_params, &filter);
         let stats = index
             .search(
+                &mut multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &mut multihop,
                 &mut result_output_buffer,
             )
             .await
@@ -4221,10 +4220,10 @@ pub(crate) mod tests {
         let mut multihop = graph::MultihopSearch::new(search_params, &EvenFilter);
         let baseline_stats = index
             .search(
+                &mut multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &mut multihop,
                 &mut baseline_buffer,
             )
             .await
@@ -4243,10 +4242,10 @@ pub(crate) mod tests {
         let mut multihop = graph::MultihopSearch::new(search_params, &filter);
         let adjusted_stats = index
             .search(
+                &mut multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &mut multihop,
                 &mut adjusted_buffer,
             )
             .await
@@ -4370,10 +4369,10 @@ pub(crate) mod tests {
         let mut multihop = graph::MultihopSearch::new(search_params, &filter);
         let _stats = index
             .search(
+                &mut multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &mut multihop,
                 &mut result_output_buffer,
             )
             .await

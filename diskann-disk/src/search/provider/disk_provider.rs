@@ -1042,8 +1042,6 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 
 #[cfg(test)]
 mod disk_provider_tests {
-    use std::num::NonZeroUsize;
-
     use diskann::{
         graph::{search::record::VisitedSearchRecord, KnnSearch, KnnSearchError},
         utils::IntoUsize,
@@ -1633,10 +1631,10 @@ mod disk_provider_tests {
         search_engine
             .runtime
             .block_on(search_engine.index.search(
+                &mut recorded_search,
                 &strategy,
                 &DefaultContext,
                 query_vector.as_slice(),
-                &mut recorded_search,
                 &mut result_output_buffer,
             ))
             .unwrap();
