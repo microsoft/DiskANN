@@ -31,6 +31,10 @@ impl StorageReadProvider for FileStorageProvider {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "FileStorageProvider is the abstraction layer that wraps std::fs for production use"
+)]
 impl StorageWriteProvider for FileStorageProvider {
     type Writer = BufWriter<File>;
 
@@ -54,6 +58,10 @@ impl StorageWriteProvider for FileStorageProvider {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "These tests verify FileStorageProvider's functionality with real filesystem operations"
+)]
 mod tests {
     use std::io::{Read, Seek, SeekFrom, Write};
 

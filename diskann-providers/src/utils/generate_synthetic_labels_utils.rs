@@ -80,6 +80,10 @@ impl ZipfDistribution {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Utility function for generating synthetic label files, needs direct file creation"
+)]
 pub fn generate_labels(
     output_file: &str,
     distribution_type: &str,
@@ -128,6 +132,10 @@ pub fn generate_labels(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Test for generate_labels function which creates files, needs cleanup with fs::remove_file"
+)]
 mod test {
     use std::fs;
 
