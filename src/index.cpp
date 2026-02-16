@@ -1621,10 +1621,18 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                     continue;
 
                 float raw_distance = _data_store->get_distance(iter2->id, iter->id);
-                float normalized_distance = g_normalization_config.normalize_distance(raw_distance);
-                float djk = normalized_distance + (1 - calculate_jaccard_similarity(
-                    _location_to_labels[iter2->id], _location_to_labels[iter->id])) * w_m;
-
+                float djk;
+                if (_filtered_index)
+                {
+                    float normalized_distance = g_normalization_config.normalize_distance(raw_distance);
+                    djk = normalized_distance + (1 - calculate_jaccard_similarity(_location_to_labels[iter2->id],
+                                                                                  _location_to_labels[iter->id])) *
+                                                    w_m; 
+                }
+                else
+                {
+                    djk = raw_distance;
+                }
                 if (_dist_metric == diskann::Metric::L2 || _dist_metric == diskann::Metric::COSINE)
                 {
                     occlude_factor[t] = (djk == 0) ? std::numeric_limits<float>::max()
@@ -1673,16 +1681,21 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
             ngh.distance = _data_store->get_distance(ngh.id, location);
     }
 
-    for (auto &ngh : pool)
+    if (_filtered_index)
     {
-        // Compute Jaccard distance between `location` and `ngh.id`
-        float jaccard_distance = 1.0f - calculate_jaccard_similarity(_location_to_labels[ngh.id], _location_to_labels[location]);
 
-        // Apply normalization to vector distance before combining with filter score
-        float normalized_vector_distance = g_normalization_config.normalize_distance(ngh.distance);
-        
-        // Update the neighbor's distance with the weighted distance
-        ngh.distance = normalized_vector_distance + w_m * jaccard_distance;
+        for (auto &ngh : pool)
+        {
+            // Compute Jaccard distance between `location` and `ngh.id`
+            float jaccard_distance =
+                1.0f - calculate_jaccard_similarity(_location_to_labels[ngh.id], _location_to_labels[location]);
+
+            // Apply normalization to vector distance before combining with filter score
+            float normalized_vector_distance = g_normalization_config.normalize_distance(ngh.distance);
+
+            // Update the neighbor's distance with the weighted distance
+            ngh.distance = normalized_vector_distance + w_m * jaccard_distance;
+        }
     }
 
     // sort the pool based on distance to query and prune it with occlude_list
