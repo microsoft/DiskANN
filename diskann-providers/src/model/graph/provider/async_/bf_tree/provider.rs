@@ -1897,8 +1897,28 @@ where
         }
 
         // Save vectors and neighbors
-        self.full_vectors.snapshot();
-        self.neighbor_provider.snapshot();
+        let vectors_snapshot_path = self.full_vectors.snapshot();
+        let neighbors_snapshot_path = self.neighbor_provider.snapshot();
+
+        // Copy snapshot files to the target prefix location if they differ
+        let target_vectors_path = BfTreePaths::vectors_bftree(&saved_params.prefix);
+        if vectors_snapshot_path != target_vectors_path {
+            std::fs::copy(&vectors_snapshot_path, &target_vectors_path).map_err(|e| {
+                ANNError::log_index_error(format!(
+                    "Failed to copy vectors from {:?} to {:?}: {}",
+                    vectors_snapshot_path, target_vectors_path, e
+                ))
+            })?;
+        }
+        let target_neighbors_path = BfTreePaths::neighbors_bftree(&saved_params.prefix);
+        if neighbors_snapshot_path != target_neighbors_path {
+            std::fs::copy(&neighbors_snapshot_path, &target_neighbors_path).map_err(|e| {
+                ANNError::log_index_error(format!(
+                    "Failed to copy neighbors from {:?} to {:?}: {}",
+                    neighbors_snapshot_path, target_neighbors_path, e
+                ))
+            })?;
+        }
 
         // Save delete bitmap
         {
@@ -2035,9 +2055,38 @@ where
         }
 
         // Save vectors, neighbors, and quant vectors
-        self.full_vectors.snapshot();
-        self.neighbor_provider.snapshot();
-        self.quant_vectors.snapshot();
+        let vectors_snapshot_path = self.full_vectors.snapshot();
+        let neighbors_snapshot_path = self.neighbor_provider.snapshot();
+        let quant_snapshot_path = self.quant_vectors.snapshot();
+
+        // Copy snapshot files to the target prefix location if they differ
+        let target_vectors_path = BfTreePaths::vectors_bftree(&saved_params.prefix);
+        if vectors_snapshot_path != target_vectors_path {
+            std::fs::copy(&vectors_snapshot_path, &target_vectors_path).map_err(|e| {
+                ANNError::log_index_error(format!(
+                    "Failed to copy vectors from {:?} to {:?}: {}",
+                    vectors_snapshot_path, target_vectors_path, e
+                ))
+            })?;
+        }
+        let target_neighbors_path = BfTreePaths::neighbors_bftree(&saved_params.prefix);
+        if neighbors_snapshot_path != target_neighbors_path {
+            std::fs::copy(&neighbors_snapshot_path, &target_neighbors_path).map_err(|e| {
+                ANNError::log_index_error(format!(
+                    "Failed to copy neighbors from {:?} to {:?}: {}",
+                    neighbors_snapshot_path, target_neighbors_path, e
+                ))
+            })?;
+        }
+        let target_quant_path = BfTreePaths::quant_bftree(&saved_params.prefix);
+        if quant_snapshot_path != target_quant_path {
+            std::fs::copy(&quant_snapshot_path, &target_quant_path).map_err(|e| {
+                ANNError::log_index_error(format!(
+                    "Failed to copy quant from {:?} to {:?}: {}",
+                    quant_snapshot_path, target_quant_path, e
+                ))
+            })?;
+        }
 
         // Save PQ table metadata and data using PQStorage format
         let filename = BfTreePaths::pq_pivots_bin(&saved_params.prefix);
