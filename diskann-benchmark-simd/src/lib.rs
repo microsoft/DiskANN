@@ -801,6 +801,11 @@ stamp!("x86_64", diskann_wide::arch::x86_64::V3, f16, f16);
 stamp!("x86_64", diskann_wide::arch::x86_64::V3, u8, u8);
 stamp!("x86_64", diskann_wide::arch::x86_64::V3, i8, i8);
 
+stamp!("aarch64", diskann_wide::arch::aarch64::Neon, f32, f32);
+stamp!("aarch64", diskann_wide::arch::aarch64::Neon, f16, f16);
+stamp!("aarch64", diskann_wide::arch::aarch64::Neon, u8, u8);
+stamp!("aarch64", diskann_wide::arch::aarch64::Neon, i8, i8);
+
 stamp!(diskann_wide::arch::Scalar, f32, f32);
 stamp!(diskann_wide::arch::Scalar, f16, f16);
 stamp!(diskann_wide::arch::Scalar, u8, u8);
@@ -870,6 +875,13 @@ mod reference {
 
     #[cfg(target_arch = "x86_64")]
     impl MaybeFMA for diskann_wide::arch::x86_64::V4 {
+        fn maybe_fma(self, a: f32, b: f32, c: f32) -> f32 {
+            a.mul_add(b, c)
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    impl MaybeFMA for diskann_wide::arch::aarch64::Neon {
         fn maybe_fma(self, a: f32, b: f32, c: f32) -> f32 {
             a.mul_add(b, c)
         }
