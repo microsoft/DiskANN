@@ -202,7 +202,7 @@ impl MaskOps for uint8x16_t {
                     let low = vaddlv_u8(vshl_u8(vget_low_u8(masked), shifts));
                     let high = vaddlv_u8(vshl_u8(vget_high_u8(masked), shifts));
 
-                    (low as u16) | ((high as u16) << 8)
+                    low | (high << 8)
                 };
                 BitMask::from_int(arch, value)
             }

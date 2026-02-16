@@ -38,21 +38,25 @@ macros::aarch64_define_fma!(f32x4, vfmaq_f32);
 impl SIMDMinMax for f32x4 {
     #[inline(always)]
     fn min_simd(self, rhs: Self) -> Self {
+        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
         Self(unsafe { vminnmq_f32(self.0, rhs.0) })
     }
 
     #[inline(always)]
     fn min_simd_standard(self, rhs: Self) -> Self {
+        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
         Self(unsafe { vminnmq_f32(self.0, rhs.0) })
     }
 
     #[inline(always)]
     fn max_simd(self, rhs: Self) -> Self {
+        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
         Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
     }
 
     #[inline(always)]
     fn max_simd_standard(self, rhs: Self) -> Self {
+        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
         Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
     }
 }
