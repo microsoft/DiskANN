@@ -7,7 +7,7 @@ use diskann::ANNResult;
 
 #[cfg(all(not(miri), target_os = "linux"))]
 use super::LinuxAlignedFileReader;
-#[cfg(miri)]
+#[cfg(any(miri, all(not(target_os = "linux"), not(target_os = "windows"))))]
 use super::StorageProviderAlignedFileReader;
 #[cfg(all(not(miri), target_os = "windows"))]
 use super::WindowsAlignedFileReader;
@@ -45,6 +45,10 @@ impl AlignedReaderFactory for AlignedFileReaderFactory {
     #[cfg(all(not(miri), target_os = "windows"))]
     type AlignedReaderType = WindowsAlignedFileReader;
 
+    // Use StorageProviderAlignedFileReader for macOS and other Unix-like systems
+    #[cfg(all(not(miri), not(target_os = "linux"), not(target_os = "windows")))]
+    type AlignedReaderType = StorageProviderAlignedFileReader;
+
     fn build(&self) -> ANNResult<Self::AlignedReaderType> {
         #[cfg(miri)]
         return StorageProviderAlignedFileReader::new(
@@ -57,6 +61,12 @@ impl AlignedReaderFactory for AlignedFileReaderFactory {
 
         #[cfg(all(not(miri), target_os = "linux"))]
         return LinuxAlignedFileReader::new(self.file_path.as_str());
+
+        #[cfg(all(not(miri), not(target_os = "linux"), not(target_os = "windows")))]
+        return StorageProviderAlignedFileReader::new(
+            &crate::storage::FileStorageProvider,
+            self.file_path.as_str(),
+        );
     }
 }
 
