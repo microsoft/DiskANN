@@ -20,7 +20,7 @@ use crate::{
 };
 
 /////
-///// 64-bit unsigned integerA
+///// 64-bit unsigned integer
 /////
 
 macros::x86_define_register!(u64x2, __m128i, BitMask<2, V4>, u64, 2, V4);

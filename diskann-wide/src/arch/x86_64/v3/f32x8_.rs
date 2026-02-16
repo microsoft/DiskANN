@@ -37,7 +37,8 @@ helpers::unsafe_map_binary_op!(f32x8, std::ops::Mul, mul, _mm256_mul_ps, "avx");
 impl f32x8 {
     #[inline(always)]
     fn is_nan(self) -> mask32x8 {
-        // NOTE: `_CMP_UNORD_Q` returns `true` only if both arguments are NAN.
+        // NOTE: `_CMP_UNORD_Q` returns `true` if either argument is NaN. Since we compare
+        // `self` with `self`, this returns `true` exactly when `self` is NaN.
         mask32x8::from_underlying(
             self.arch(),
             // SAFETY: `_mm256_castps_si256` and `_mm256_cmp_ps` requires AVX, which is
@@ -138,14 +139,14 @@ impl X86LoadStore for f32x8 {
 impl SIMDPartialEq for f32x8 {
     #[inline(always)]
     fn eq_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_castps_si256` and `_mm256_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm256_castps_si256(_mm256_cmp_ps(self.0, other.0, _CMP_EQ_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
 
     #[inline(always)]
     fn ne_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_castps_si256` and `_mm256_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm256_castps_si256(_mm256_cmp_ps(self.0, other.0, _CMP_NEQ_UQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
@@ -154,28 +155,28 @@ impl SIMDPartialEq for f32x8 {
 impl SIMDPartialOrd for f32x8 {
     #[inline(always)]
     fn lt_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG.
+        // SAFETY: `_mm256_castps_si256` and `_mm256_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm256_castps_si256(_mm256_cmp_ps(self.0, other.0, _CMP_LT_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
 
     #[inline(always)]
     fn le_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG.
+        // SAFETY: `_mm256_castps_si256` and `_mm256_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm256_castps_si256(_mm256_cmp_ps(self.0, other.0, _CMP_LE_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
 
     #[inline(always)]
     fn gt_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG.
+        // SAFETY: `_mm256_castps_si256` and `_mm256_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm256_castps_si256(_mm256_cmp_ps(self.0, other.0, _CMP_GT_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
 
     #[inline(always)]
     fn ge_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG.
+        // SAFETY: `_mm256_castps_si256` and `_mm256_cmp_ps` require AVX, implied by V3.
         let m = unsafe { _mm256_castps_si256(_mm256_cmp_ps(self.0, other.0, _CMP_GE_OQ)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
@@ -185,7 +186,9 @@ impl SIMDSumTree for f32x8 {
     #[inline(always)]
     fn sum_tree(self) -> f32 {
         let x = self.to_underlying();
-        // SAFETY: Gated by CFG.
+        // SAFETY: `_mm256_extractf128_ps` and `_mm256_castps256_ps128` require AVX;
+        // `_mm_add_ps`, `_mm_movehl_ps`, `_mm_shuffle_ps`, `_mm_add_ss`, and
+        // `_mm_cvtss_f32` require SSE, implied by V3.
         unsafe {
             // hiQuad = ( x7, x6, x5, x4 )
             let hi_quad = _mm256_extractf128_ps(x, 1);

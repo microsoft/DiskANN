@@ -30,7 +30,7 @@ use crate::{
 macros::x86_define_register!(f32x8, __m256, BitMask<8, V4>, f32, 8, V4);
 macros::x86_define_splat!(f32x8, _mm256_set1_ps, "avx");
 macros::x86_define_default!(f32x8, _mm256_setzero_ps, "avx");
-macros::x86_splitjoin!(f32x8, f32x4, _mm256_extractf128_ps, _mm256_set_m128, "avx2");
+macros::x86_splitjoin!(f32x8, f32x4, _mm256_extractf128_ps, _mm256_set_m128, "avx");
 macros::x86_retarget!(f32x8 => v3::f32x8);
 
 helpers::unsafe_map_binary_op!(f32x8, std::ops::Add, add, _mm256_add_ps, "avx");
@@ -40,7 +40,8 @@ helpers::unsafe_map_binary_op!(f32x8, std::ops::Mul, mul, _mm256_mul_ps, "avx");
 impl f32x8 {
     #[inline(always)]
     fn is_nan(self) -> BitMask<8, V4> {
-        // NOTE: `_CMP_UNORD_Q` returns `true` only if both arguments are NAN.
+        // NOTE: `_CMP_UNORD_Q` returns `true` if either argument is NaN. Since we compare
+        // `self` with `self`, this returns `true` exactly when `self` is NaN.
         BitMask::from_underlying(
             self.arch(),
             // SAFETY: `_mm256_cmp_ps_mask` requires AVX512F + AVX512VL, both of which

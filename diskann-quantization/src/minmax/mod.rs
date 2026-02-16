@@ -64,6 +64,7 @@ pub use multi::{MinMaxKernel, MinMaxMeta};
 pub use quantizer::{L2Loss, MinMaxQuantizer};
 pub use recompress::{RecompressError, Recompressor};
 pub use vectors::{
-    Data, DataMutRef, DataRef, DecompressError, FullQuery, FullQueryMeta, MetaParseError,
-    MinMaxCompensation, MinMaxCosine, MinMaxCosineNormalized, MinMaxIP, MinMaxL2Squared,
+    Data, DataMutRef, DataRef, DecompressError, FullQuery, FullQueryMeta, FullQueryMut,
+    FullQueryRef, MetaParseError, MinMaxCompensation, MinMaxCosine, MinMaxCosineNormalized,
+    MinMaxIP, MinMaxL2Squared,
 };

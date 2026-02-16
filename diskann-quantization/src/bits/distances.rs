@@ -104,14 +104,14 @@
 //! | `BSlice`      | `BSlice`      | `MV<u32>` | Optimized | Optimized     | Uses V3   |
 
 use diskann_vector::PureDistanceFunction;
-use diskann_wide::{arch::Target2, Architecture, ARCH};
+use diskann_wide::{ARCH, Architecture, arch::Target2};
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::{
     SIMDCast, SIMDDotProduct, SIMDMulAdd, SIMDReinterpret, SIMDSumTree, SIMDVector,
 };
 
 use super::{Binary, BitSlice, BitTranspose, Dense, Representation, Unsigned};
-use crate::distances::{check_lengths, Hamming, InnerProduct, MathematicalResult, SquaredL2, MV};
+use crate::distances::{Hamming, InnerProduct, MV, MathematicalResult, SquaredL2, check_lengths};
 
 // Convenience alias.
 type USlice<'a, const N: usize, Perm = Dense> = BitSlice<'a, N, Unsigned, Perm>;
@@ -1965,10 +1965,10 @@ mod tests {
 
     use diskann_utils::Reborrow;
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
         seq::IndexedRandom,
-        Rng, SeedableRng,
     };
 
     use super::*;
@@ -2176,11 +2176,7 @@ mod tests {
         }
 
         fn get(&self) -> usize {
-            if cfg!(miri) {
-                self.miri
-            } else {
-                self.standard
-            }
+            if cfg!(miri) { self.miri } else { self.standard }
         }
     }
 

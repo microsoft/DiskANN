@@ -21,7 +21,7 @@ use crate::{
 };
 
 /////
-///// 32-bit floating point
+///// 32-bit unsigned integer
 /////
 
 macros::x86_define_register!(u32x8, __m256i, BitMask<8, V4>, u32, 8, V4);

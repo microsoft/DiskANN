@@ -14,8 +14,8 @@ use super::{
     },
 };
 use crate::{
-    bits::{MutBitSlice, PermutationStrategy, Representation, Unsigned},
     AsFunctor, CompressInto,
+    bits::{MutBitSlice, PermutationStrategy, Representation, Unsigned},
 };
 
 /// A central parameter collection for a scalar quantization schema.
@@ -459,20 +459,20 @@ pub enum SQComparisonError {
 mod tests {
     use std::collections::HashSet;
 
-    use diskann_utils::{views, ReborrowMut};
+    use diskann_utils::{ReborrowMut, views};
 
     use rand::{
+        SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
         seq::SliceRandom,
-        SeedableRng,
     };
     use rand_distr::Normal;
 
     use super::*;
     use crate::{
         bits::BoxedBitSlice,
-        scalar::{inverse_bit_scale, CompensatedVector},
+        scalar::{CompensatedVector, inverse_bit_scale},
     };
 
     /// Test Rescale.

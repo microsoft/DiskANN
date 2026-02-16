@@ -96,6 +96,11 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
             .collect()
     }
 
+    /// Access the BfTree config
+    pub(crate) fn config(&self) -> &Config {
+        self.vector_index.config()
+    }
+
     /// Create a snapshot of the vector index
     ///
     #[inline(always)]

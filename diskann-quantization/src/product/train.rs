@@ -12,13 +12,13 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use thiserror::Error;
 
 use crate::{
+    Parallelism,
     algorithms::kmeans::{
         self,
-        common::{square_norm, BlockTranspose},
+        common::{BlockTranspose, square_norm},
     },
     cancel::Cancelation,
     random::{BoxedRngBuilder, RngBuilder},
-    Parallelism,
 };
 
 pub struct LightPQTrainingParameters {
@@ -270,10 +270,10 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, StandardUniform, Uniform},
         rngs::StdRng,
         seq::SliceRandom,
-        Rng, SeedableRng,
     };
 
     use diskann_utils::lazy_format;

@@ -1061,11 +1061,11 @@ where
 #[cfg(test)]
 mod tests {
     use diskann_utils::{lazy_format, views};
-    use diskann_vector::{distance, PureDistanceFunction};
+    use diskann_vector::{PureDistanceFunction, distance};
     use rand::{
+        SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        SeedableRng,
     };
 
     use super::*;
@@ -1245,11 +1245,7 @@ mod tests {
 
             // Check that we correctly handle invalid configurations.
             let maybe_broadcast = |k, v: f32| {
-                if k == j {
-                    vec![v; dim]
-                } else {
-                    query.to_vec()
-                }
+                if k == j { vec![v; dim] } else { query.to_vec() }
             };
 
             // Don't loop over the pathological values because that makes the test run way
@@ -1452,16 +1448,18 @@ mod tests {
         // No dimensions
         let chunk = Chunk::new(strided::StridedView::try_from(&[], 3, 0, 0).unwrap());
         let err = chunk.unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("cannot construct a Chunk from a source with zero dimensions"));
+        assert!(
+            err.to_string()
+                .contains("cannot construct a Chunk from a source with zero dimensions")
+        );
 
         // No length
         let chunk = Chunk::new(strided::StridedView::try_from(&[], 0, 10, 10).unwrap());
         let err = chunk.unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("cannot construct a Chunk from a source with zero length"));
+        assert!(
+            err.to_string()
+                .contains("cannot construct a Chunk from a source with zero length")
+        );
     }
 
     // Make sure `find_closest` panics for an incorrect dimension.

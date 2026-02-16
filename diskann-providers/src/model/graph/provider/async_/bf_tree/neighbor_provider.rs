@@ -47,6 +47,11 @@ impl<I: VectorId> NeighborProvider<I> {
         }
     }
 
+    /// Access the BfTree config
+    pub(crate) fn config(&self) -> &Config {
+        self.adjacency_list_index.config()
+    }
+
     /// Create a snapshot of the adjacency list index
     ///
     pub fn snapshot(&self) {

@@ -18,6 +18,14 @@ pub mod v4;
 pub use v3::V3;
 pub use v4::V4;
 
+// The ordering is `Scalar < V3 < V4`.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub(super) enum LevelInner {
+    Scalar,
+    V3,
+    V4,
+}
+
 ////////////////////////////
 // Architecture Selection //
 ////////////////////////////
@@ -72,8 +80,9 @@ cfg_if::cfg_if! {
 // We cache a single enum and use it to indicate the version with the following meaning:
 //
 // 0: Uninitialized
-// 1: V3
-// 2 and above: Scalar
+// 1: Scalar
+// 2: V3
+// 3: V4
 static ARCH_NUMBER: AtomicU64 = AtomicU64::new(ARCH_UNINITIALIZED);
 
 // NOTE: Architecture must be properly nested in ascending order so compatibility checks
@@ -437,7 +446,7 @@ mod tests {
     // These tests reach directly into the dispatch mechanism.
     //
     // There should only be a single test (this one) that does this, and all other tests
-    // involving dispatch should either be configured to work properly regarless of the
+    // involving dispatch should either be configured to work properly regardless of the
     // backend architecture, or be run in their own process.
     #[test]
     fn test_dispatch() {
@@ -526,5 +535,34 @@ mod tests {
             assert_eq!(x, 20);
             assert_eq!(y, "foo");
         }
+    }
+
+    #[test]
+    fn test_level_ordering() {
+        use crate::Architecture;
+
+        let scalar = Scalar::level();
+        let v3 = V3::level();
+        let v4 = V4::level();
+
+        // Scalar < V3 < V4
+        assert!(scalar < v3);
+        assert!(scalar < v4);
+        assert!(v3 < v4);
+
+        // Reverse
+        assert!(v4 > v3);
+        assert!(v4 > scalar);
+        assert!(v3 > scalar);
+
+        // Equality
+        assert_eq!(scalar, Scalar::level());
+        assert_eq!(v3, V3::level());
+        assert_eq!(v4, V4::level());
+
+        // Not equal across levels
+        assert_ne!(scalar, v3);
+        assert_ne!(scalar, v4);
+        assert_ne!(v3, v4);
     }
 }

@@ -105,9 +105,9 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
 name = "bf-tree"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8cce2075c711f351f0aa52c05e645cc41f1b3cc0cdba1ad12c5f67c121c1bb7d"
+checksum = "dc59924517d26b63895ed60675e01a8dc27ee1d24d2b62cd6a272e7bd0af19a0"
 dependencies = [
  "cfg-if",
  "io-uring",
@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "diskann"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -427,7 +427,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "anyhow",
  "bf-tree",
@@ -464,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-core"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "anyhow",
  "diskann",
@@ -481,7 +481,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-runner"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-benchmark-simd"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "anyhow",
  "diskann-benchmark-runner",
@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-disk"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-label-filter"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "anyhow",
  "bf-tree",
@@ -570,7 +570,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-linalg"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "approx",
  "cfg-if",
@@ -584,7 +584,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-platform"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "io-uring",
  "libc",
@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-providers"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "anyhow",
  "approx",
@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-quantization"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "bytemuck",
  "cfg-if",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-tools"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-utils"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "cfg-if",
  "diskann-vector",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-vector"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "approx",
  "cfg-if",
@@ -718,7 +718,7 @@ dependencies = [
 
 [[package]]
 name = "diskann-wide"
-version = "0.45.0"
+version = "0.46.0"
 dependencies = [
  "cfg-if",
  "half",
