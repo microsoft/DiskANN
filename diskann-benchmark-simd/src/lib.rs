@@ -405,7 +405,7 @@ impl DispatchRule<Arch> for Identity<Reference> {
         if *from == Arch::Reference {
             Ok(MatchScore(0))
         } else {
-            Err(FailureScore(10))
+            Err(FailureScore(1))
         }
     }
 
