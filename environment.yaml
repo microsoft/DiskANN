@@ -1,0 +1,25 @@
+name: diskann-conda
+channels:
+  - conda-forge
+  - anaconda
+dependencies:
+  - bzip2
+  - cmake
+  - curl
+  - make
+  - git
+  - gcc_linux-64
+  - gxx_linux-64
+  - binutils_linux-64
+  - boost-cpp
+  - gperftools
+  - libunwind
+  - libaio
+  - mkl-devel
+  - intel-openmp
+  - pkg-config
+  - tar
+  - wget
+  - xz
+  - zstd
+  - pkg-config
