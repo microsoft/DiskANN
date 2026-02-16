@@ -279,7 +279,7 @@ fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry:
         Kernel<'static, diskann_wide::arch::x86_64::V3, i8, i8>
     );
 
-    // x86-64-v3
+    // aarch64-neon
     register!(
         "aarch64",
         dispatcher,

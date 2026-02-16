@@ -56,13 +56,13 @@ impl SIMDMinMax for f32x4 {
 
     #[inline(always)]
     fn max_simd(self, rhs: Self) -> Self {
-        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
+        // SAFETY: `vmaxnmq_f32` requires "neon", implied by the `Neon` architecture.
         Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
     }
 
     #[inline(always)]
     fn max_simd_standard(self, rhs: Self) -> Self {
-        // SAFETY: `vminnmq_f32` requires "neon", implied by the `Neon` architecture.
+        // SAFETY: `vmaxnmq_f32` requires "neon", implied by the `Neon` architecture.
         Self(unsafe { vmaxnmq_f32(self.0, rhs.0) })
     }
 }
