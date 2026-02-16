@@ -86,7 +86,7 @@ pub use double::u64x4;
 mod macros;
 mod masks;
 
-// The ordering is `Scalar < V3 < V4`.
+// The ordering is `Scalar < Neon`.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub(super) enum LevelInner {
     Scalar,
@@ -346,7 +346,7 @@ impl arch::Architecture for Neon {
         let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, _, _>;
 
         // SAFETY: The present of `self` as an argument attests that it is safe to construct
-        // a `Neon` architecture. Additionally, since `V3` is a `Copy` zero-sized type,
+        // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
         // it is safe to wink into existence and is ABI compattible with `Hidden`.
         unsafe { arch::hide1(f) }
     }
@@ -361,7 +361,7 @@ impl arch::Architecture for Neon {
             Self::run_function_with_2::<F, _, _, _>;
 
         // SAFETY: The present of `self` as an argument attests that it is safe to construct
-        // a `Neon` architecture. Additionally, since `V3` is a `Copy` zero-sized type,
+        // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
         // it is safe to wink into existence and is ABI compattible with `Hidden`.
         unsafe { arch::hide2(f) }
     }
@@ -377,7 +377,7 @@ impl arch::Architecture for Neon {
             Self::run_function_with_3::<F, _, _, _, _>;
 
         // SAFETY: The present of `self` as an argument attests that it is safe to construct
-        // A `Neon` architecture. Additionally, since `V3` is a `Copy` zero-sized type,
+        // A `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
         // it is safe to wink into existence and is ABI compattible with `Hidden`.
         unsafe { arch::hide3(f) }
     }
