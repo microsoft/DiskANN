@@ -7,5 +7,9 @@ rustflags = ["-C", "control-flow-guard"]
 [target.'cfg(target_arch="x86_64")']
 rustflags = ["-C", "target-cpu=x86-64-v3"]
 
+# If running on an Aarch64 CPU, this enables the `neon` and `dotprod`.
+#
+# Generally speaking, CPUs like Apple M-series and Graviton 2+ will support `dotprod`, so
+# enabling this seems acceptable.
 [target.'cfg(target_arch="aarch64")']
 rustflags = ["-C", "target-feature=+neon,+dotprod"]

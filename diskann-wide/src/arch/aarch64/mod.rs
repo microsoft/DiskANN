@@ -382,3 +382,37 @@ impl arch::Architecture for Neon {
         unsafe { arch::hide3(f) }
     }
 }
+
+///////////
+// Tests //
+///////////
+
+/// Return `Some(Neon)` if the Neon architecture should be used for testing.
+///
+/// If the environment variable `WIDE_TEST_MIN_ARCH` is set, this uses the configured
+/// architecture with the following mapping:
+///
+/// * `all` or `neon`: Run the Neon backend
+/// * `scalar`: Skip the Neon backend (returns `None`)
+///
+/// If the variable is not set, this defaults to [`Neon::new_checked()`].
+#[cfg(test)]
+pub(super) fn test_neon() -> Option<Neon> {
+    match crate::get_test_arch() {
+        Some(arch) => {
+            if arch == "all" || arch == "neon" {
+                match Neon::new_checked() {
+                    Some(v) => Some(v),
+                    None => panic!(
+                        "Neon architecture was requested but is not available on the current target"
+                    ),
+                }
+            } else if arch == "scalar" {
+                None
+            } else {
+                panic!("Unrecognized test architecture: \"{arch}\"");
+            }
+        }
+        None => Neon::new_checked(),
+    }
+}

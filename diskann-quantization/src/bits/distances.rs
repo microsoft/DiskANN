@@ -2135,34 +2135,42 @@ mod tests {
     // However, some SIMD kernels (especially for the lower bit widths), require higher bounds
     // to trigger all possible corner cases.
     static BITSLICE_TEST_BOUNDS: LazyLock<HashMap<Key, Bounds>> = LazyLock::new(|| {
-        use ArchKey::{Scalar, X86_64_V3, X86_64_V4};
+        use ArchKey::{Neon, Scalar, X86_64_V3, X86_64_V4};
         [
             (Key::new(1, Scalar), Bounds::new(64, 64)),
             (Key::new(1, X86_64_V3), Bounds::new(256, 256)),
             (Key::new(1, X86_64_V4), Bounds::new(256, 256)),
+            (Key::new(1, Neon), Bounds::new(64, 64)),
             (Key::new(2, Scalar), Bounds::new(64, 64)),
             // Need a higher miri-amount due to the larget block size
             (Key::new(2, X86_64_V3), Bounds::new(512, 300)),
             (Key::new(2, X86_64_V4), Bounds::new(768, 600)), // main loop processes 256 items
+            (Key::new(2, Neon), Bounds::new(64, 64)),
             (Key::new(3, Scalar), Bounds::new(64, 64)),
             (Key::new(3, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(3, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(3, Neon), Bounds::new(64, 64)),
             (Key::new(4, Scalar), Bounds::new(64, 64)),
             // Need a higher miri-amount due to the larget block size
             (Key::new(4, X86_64_V3), Bounds::new(256, 150)),
             (Key::new(4, X86_64_V4), Bounds::new(256, 150)),
+            (Key::new(4, Neon), Bounds::new(64, 64)),
             (Key::new(5, Scalar), Bounds::new(64, 64)),
             (Key::new(5, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(5, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(5, Neon), Bounds::new(64, 64)),
             (Key::new(6, Scalar), Bounds::new(64, 64)),
             (Key::new(6, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(6, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(6, Neon), Bounds::new(64, 64)),
             (Key::new(7, Scalar), Bounds::new(64, 64)),
             (Key::new(7, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(7, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(7, Neon), Bounds::new(64, 64)),
             (Key::new(8, Scalar), Bounds::new(64, 64)),
             (Key::new(8, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(8, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(8, Neon), Bounds::new(64, 64)),
         ]
         .into_iter()
         .collect()
@@ -2175,6 +2183,7 @@ mod tests {
         X86_64_V3,
         #[expect(non_camel_case_types)]
         X86_64_V4,
+        Neon,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2254,6 +2263,19 @@ mod tests {
                         &|x, y| arch.run2(SquaredL2, x, y),
                         &|x, y| arch.run2(InnerProduct, x, y),
                         "x86-64-v4",
+                        &mut rng,
+                    );
+                }
+
+                #[cfg(target_arch = "aarch64")]
+                if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                    let max_dim = BITSLICE_TEST_BOUNDS[&Key::new($nbits, ArchKey::Neon)].get();
+                    test_bitslice_distances::<$nbits, _>(
+                        max_dim,
+                        TRIALS_PER_DIM,
+                        &|x, y| arch.run2(SquaredL2, x, y),
+                        &|x, y| arch.run2(InnerProduct, x, y),
+                        "neon",
                         &mut rng,
                     );
                 }
@@ -2453,6 +2475,18 @@ mod tests {
                 &mut rng,
             );
         }
+
+        // Architecture Specific.
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+            test_bit_transpose_distances(
+                MAX_DIM,
+                TRIALS_PER_DIM,
+                &|x, y| arch.run2(InnerProduct, x, y),
+                "neon",
+                &mut rng,
+            );
+        }
     }
 
     //////////
@@ -2571,12 +2605,23 @@ mod tests {
                 }
 
                 #[cfg(target_arch = "x86_64")]
-                if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked() {
+                if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked_miri() {
                     test_full_distances::<$nbits>(
                         MAX_DIM,
                         TRIALS_PER_DIM,
                         &|x, y| arch.run2(InnerProduct, x, y),
                         "x86-64-v4",
+                        &mut rng,
+                    );
+                }
+
+                #[cfg(target_arch = "aarch64")]
+                if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                    test_full_distances::<$nbits>(
+                        MAX_DIM,
+                        TRIALS_PER_DIM,
+                        &|x, y| arch.run2(InnerProduct, x, y),
+                        "neon",
                         &mut rng,
                     );
                 }

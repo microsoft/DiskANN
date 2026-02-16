@@ -17,15 +17,15 @@
 //!
 //! Setting all bits is important because the `select` operations in Neon are bit-wise
 //! selects, unlike AVX2 where only the most-significant bit is important.
-//!
-//! The conversion implementation in this file still refer to the uppermost bit when
-//! implementing `move_mask`-like functionality.
-
-use crate::{BitMask, FromInt, SIMDMask};
-
-use super::Neon;
 
 use std::arch::aarch64::*;
+
+use crate::{BitMask, SIMDMask};
+
+#[cfg(not(miri))]
+use crate::FromInt;
+
+use super::Neon;
 
 macro_rules! define_mask {
     ($mask:ident, $repr:ident, $lanes:literal, $arch:ty) => {
@@ -617,7 +617,7 @@ impl MaskOps for uint64x2_t {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Const, SupportedLaneCount};
+    use crate::{Const, SupportedLaneCount, arch::aarch64::test_neon};
 
     trait MaskTraits: std::fmt::Debug {
         const SET: Self;
@@ -686,7 +686,9 @@ mod tests {
         M: SIMDMask<Arch = Neon, BitMask = BitMask<N, Neon>> + From<BitMask<N, Neon>>,
         <M as SIMDMask>::Underlying: MaskOps<BitMask = BitMask<N, Neon>, Array = [T; N]>,
     {
-        let arch = Neon::new_checked().unwrap();
+        let Some(arch) = test_neon() else {
+            return;
+        };
 
         // Test keep-first.
         for i in 0..N + 5 {

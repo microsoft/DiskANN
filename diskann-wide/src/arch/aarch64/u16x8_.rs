@@ -72,32 +72,38 @@ macros::aarch64_define_bitops!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{reference::ReferenceScalarOps, test_utils};
+    use crate::{arch::aarch64::test_neon, reference::ReferenceScalarOps, test_utils};
 
     #[test]
     fn miri_test_load() {
-        test_utils::test_load_simd::<u16, 8, u16x8>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_load_simd::<u16, 8, u16x8>(arch);
+        }
     }
 
     #[test]
     fn miri_test_store() {
-        test_utils::test_store_simd::<u16, 8, u16x8>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_store_simd::<u16, 8, u16x8>(arch);
+        }
     }
 
     // constructors
     #[test]
     fn test_constructors() {
-        test_utils::ops::test_splat::<u16, 8, u16x8>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::ops::test_splat::<u16, 8, u16x8>(arch);
+        }
     }
 
     // Ops
-    test_utils::ops::test_add!(u16x8, 0x3017fd73c99cc633, Neon::new_checked());
-    test_utils::ops::test_sub!(u16x8, 0xfc627f10b5f8db8a, Neon::new_checked());
-    test_utils::ops::test_mul!(u16x8, 0x0f4caa80eceaa523, Neon::new_checked());
-    test_utils::ops::test_fma!(u16x8, 0xb8f702ba85375041, Neon::new_checked());
+    test_utils::ops::test_add!(u16x8, 0x3017fd73c99cc633, test_neon());
+    test_utils::ops::test_sub!(u16x8, 0xfc627f10b5f8db8a, test_neon());
+    test_utils::ops::test_mul!(u16x8, 0x0f4caa80eceaa523, test_neon());
+    test_utils::ops::test_fma!(u16x8, 0xb8f702ba85375041, test_neon());
 
-    test_utils::ops::test_cmp!(u16x8, 0x941757bd5cc641a1, Neon::new_checked());
+    test_utils::ops::test_cmp!(u16x8, 0x941757bd5cc641a1, test_neon());
 
     // Bit ops
-    test_utils::ops::test_bitops!(u16x8, 0xd62d8de09f82ed4e, Neon::new_checked());
+    test_utils::ops::test_bitops!(u16x8, 0xd62d8de09f82ed4e, test_neon());
 }

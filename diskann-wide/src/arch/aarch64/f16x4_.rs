@@ -14,7 +14,7 @@ use half::f16;
 
 // AArch64 masks
 use super::{
-    Neon,
+    Neon, algorithms,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask16x4,
 };
@@ -59,9 +59,9 @@ impl AArchLoadStore for f16x4 {
 
     #[inline(always)]
     unsafe fn load_simd_first(arch: Neon, ptr: *const f16, first: usize) -> Self {
-        // SAFETY: Pointer access safety inhereted from the caller.
-        let e = unsafe { Emulated::<f16, 4>::load_simd_first(Scalar, ptr, first) };
-        Self::from_array(arch, e.to_array())
+        // SAFETY: f16 and u16 share the same 2-byte representation. Pointer access
+        // inherited from caller.
+        Self(unsafe { algorithms::load_first::u16x4(arch, ptr.cast::<u16>(), first) })
     }
 
     #[inline(always)]
@@ -93,21 +93,27 @@ impl AArchLoadStore for f16x4 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils;
+    use crate::{arch::aarch64::test_neon, test_utils};
 
     #[test]
     fn miri_test_load() {
-        test_utils::test_load_simd::<f16, 4, f16x4>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_load_simd::<f16, 4, f16x4>(arch);
+        }
     }
 
     #[test]
     fn miri_test_store() {
-        test_utils::test_store_simd::<f16, 4, f16x4>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_store_simd::<f16, 4, f16x4>(arch);
+        }
     }
 
     // constructors
     #[test]
     fn test_constructors() {
-        test_utils::ops::test_splat::<f16, 4, f16x4>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::ops::test_splat::<f16, 4, f16x4>(arch);
+        }
     }
 }

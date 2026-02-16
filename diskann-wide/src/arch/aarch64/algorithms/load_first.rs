@@ -39,6 +39,18 @@ pub(in crate::arch::aarch64) unsafe fn i8x8(_: Neon, ptr: *const i8, first: usiz
     unsafe { vreinterpret_s8_u8(vcreate_u8(load_first_of_8_bytes(ptr.cast::<u8>(), first))) }
 }
 
+/// Load the first `first` elements from `ptr` into a `uint16x4_t` register.
+///
+/// # Safety
+///
+/// The caller must ensure `[ptr, ptr + first)` is readable. The presence of `Neon`
+/// enables the use of "neon" intrinsics.
+#[inline(always)]
+pub(in crate::arch::aarch64) unsafe fn u16x4(_: Neon, ptr: *const u16, first: usize) -> uint16x4_t {
+    // SAFETY: Pointer access inherited from caller. `Neon` enables "neon" intrinsics.
+    unsafe { vcreate_u16(load_first_of_8_bytes(ptr.cast::<u8>(), 2 * first)) }
+}
+
 /// Load the first `first` elements from `ptr` into a `float32x2_t` register.
 ///
 /// # Safety

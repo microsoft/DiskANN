@@ -202,64 +202,70 @@ helpers::unsafe_map_cast!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{reference::ReferenceScalarOps, test_utils};
+    use crate::{arch::aarch64::test_neon, reference::ReferenceScalarOps, test_utils};
 
     #[test]
     fn miri_test_load() {
-        test_utils::test_load_simd::<i32, 4, i32x4>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_load_simd::<i32, 4, i32x4>(arch);
+        }
     }
 
     #[test]
     fn miri_test_store() {
-        test_utils::test_store_simd::<i32, 4, i32x4>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_store_simd::<i32, 4, i32x4>(arch);
+        }
     }
 
     // constructors
     #[test]
     fn test_constructors() {
-        test_utils::ops::test_splat::<i32, 4, i32x4>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::ops::test_splat::<i32, 4, i32x4>(arch);
+        }
     }
 
     // Ops
-    test_utils::ops::test_add!(i32x4, 0x3017fd73c99cc633, Neon::new_checked());
-    test_utils::ops::test_sub!(i32x4, 0xfc627f10b5f8db8a, Neon::new_checked());
-    test_utils::ops::test_mul!(i32x4, 0x0f4caa80eceaa523, Neon::new_checked());
-    test_utils::ops::test_fma!(i32x4, 0xb8f702ba85375041, Neon::new_checked());
-    test_utils::ops::test_abs!(i32x4, 0xb8f702ba85375041, Neon::new_checked());
+    test_utils::ops::test_add!(i32x4, 0x3017fd73c99cc633, test_neon());
+    test_utils::ops::test_sub!(i32x4, 0xfc627f10b5f8db8a, test_neon());
+    test_utils::ops::test_mul!(i32x4, 0x0f4caa80eceaa523, test_neon());
+    test_utils::ops::test_fma!(i32x4, 0xb8f702ba85375041, test_neon());
+    test_utils::ops::test_abs!(i32x4, 0xb8f702ba85375041, test_neon());
 
-    test_utils::ops::test_cmp!(i32x4, 0x941757bd5cc641a1, Neon::new_checked());
+    test_utils::ops::test_cmp!(i32x4, 0x941757bd5cc641a1, test_neon());
 
     // Bit ops
-    test_utils::ops::test_bitops!(i32x4, 0xd62d8de09f82ed4e, Neon::new_checked());
+    test_utils::ops::test_bitops!(i32x4, 0xd62d8de09f82ed4e, test_neon());
 
     // Dot Products
     test_utils::dot_product::test_dot_product!(
         (i16x8, i16x8) => i32x4,
         0x145f89b446c03ff1,
-        Neon::new_checked()
+        test_neon()
     );
 
     test_utils::dot_product::test_dot_product!(
         (u8x16, i8x16) => i32x4,
         0x145f89b446c03ff1,
-        Neon::new_checked()
+        test_neon()
     );
 
     test_utils::dot_product::test_dot_product!(
         (i8x16, u8x16) => i32x4,
         0x145f89b446c03ff1,
-        Neon::new_checked()
+        test_neon()
     );
 
     test_utils::dot_product::test_dot_product!(
         (i8x16, i8x16) => i32x4,
         0x145f89b446c03ff1,
-        Neon::new_checked()
+        test_neon()
     );
 
     // Reductions
-    test_utils::ops::test_sumtree!(i32x4, 0xb9ac82ab23a855da, Neon::new_checked());
+    test_utils::ops::test_sumtree!(i32x4, 0xb9ac82ab23a855da, test_neon());
 
     // Conversions
-    test_utils::ops::test_cast!(i32x4 => f32x4, 0xba8fe343fc9dbeff, Neon::new_checked());
+    test_utils::ops::test_cast!(i32x4 => f32x4, 0xba8fe343fc9dbeff, test_neon());
 }

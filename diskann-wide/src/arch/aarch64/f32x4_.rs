@@ -165,40 +165,46 @@ impl crate::SIMDCast<f16> for f32x4 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{reference::ReferenceScalarOps, test_utils};
+    use crate::{arch::aarch64::test_neon, reference::ReferenceScalarOps, test_utils};
 
     #[test]
     fn miri_test_load() {
-        test_utils::test_load_simd::<f32, 4, f32x4>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_load_simd::<f32, 4, f32x4>(arch);
+        }
     }
 
     #[test]
     fn miri_test_store() {
-        test_utils::test_store_simd::<f32, 4, f32x4>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_store_simd::<f32, 4, f32x4>(arch);
+        }
     }
 
     // constructors
     #[test]
     fn test_constructors() {
-        test_utils::ops::test_splat::<f32, 4, f32x4>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::ops::test_splat::<f32, 4, f32x4>(arch);
+        }
     }
 
     // Ops
-    test_utils::ops::test_add!(f32x4, 0xcd7a8fea9a3fb727, Neon::new_checked());
-    test_utils::ops::test_sub!(f32x4, 0x3f6562c94c923238, Neon::new_checked());
-    test_utils::ops::test_mul!(f32x4, 0x07e48666c0fc564c, Neon::new_checked());
-    test_utils::ops::test_fma!(f32x4, 0xcfde9d031302cf2c, Neon::new_checked());
-    test_utils::ops::test_abs!(f32x4, 0xb8f702ba85375041, Neon::new_checked());
-    test_utils::ops::test_minmax!(f32x4, 0x6d7fc8ed6d852187, Neon::new_checked());
-    test_utils::ops::test_splitjoin!(f32x4 => f32x2, 0xa4d00a4d04293967, Neon::new_checked());
+    test_utils::ops::test_add!(f32x4, 0xcd7a8fea9a3fb727, test_neon());
+    test_utils::ops::test_sub!(f32x4, 0x3f6562c94c923238, test_neon());
+    test_utils::ops::test_mul!(f32x4, 0x07e48666c0fc564c, test_neon());
+    test_utils::ops::test_fma!(f32x4, 0xcfde9d031302cf2c, test_neon());
+    test_utils::ops::test_abs!(f32x4, 0xb8f702ba85375041, test_neon());
+    test_utils::ops::test_minmax!(f32x4, 0x6d7fc8ed6d852187, test_neon());
+    test_utils::ops::test_splitjoin!(f32x4 => f32x2, 0xa4d00a4d04293967, test_neon());
 
-    test_utils::ops::test_cmp!(f32x4, 0xc4f468b224622326, Neon::new_checked());
-    test_utils::ops::test_select!(f32x4, 0xef24013b8578637c, Neon::new_checked());
+    test_utils::ops::test_cmp!(f32x4, 0xc4f468b224622326, test_neon());
+    test_utils::ops::test_select!(f32x4, 0xef24013b8578637c, test_neon());
 
-    test_utils::ops::test_sumtree!(f32x4, 0x828bd890a470dc4d, Neon::new_checked());
+    test_utils::ops::test_sumtree!(f32x4, 0x828bd890a470dc4d, test_neon());
 
     // Conversions
-    test_utils::ops::test_lossless_convert!(f16x4 => f32x4, 0xecba3008eae54ce7, Neon::new_checked());
+    test_utils::ops::test_lossless_convert!(f16x4 => f32x4, 0xecba3008eae54ce7, test_neon());
 
-    test_utils::ops::test_cast!(f32x4 => f16x4, 0xba8fe343fc9dbeff, Neon::new_checked());
+    test_utils::ops::test_cast!(f32x4 => f16x4, 0xba8fe343fc9dbeff, test_neon());
 }

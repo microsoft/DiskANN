@@ -47,7 +47,7 @@ impl SIMDSumTree for f32x2 {
     #[inline(always)]
     fn sum_tree(self) -> f32 {
         if cfg!(miri) {
-            self.sum_tree()
+            self.emulated().sum_tree()
         } else {
             // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
             unsafe { vaddv_f32(self.to_underlying()) }
@@ -62,31 +62,37 @@ impl SIMDSumTree for f32x2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{reference::ReferenceScalarOps, test_utils};
+    use crate::{arch::aarch64::test_neon, reference::ReferenceScalarOps, test_utils};
 
     #[test]
     fn miri_test_load() {
-        test_utils::test_load_simd::<f32, 2, f32x2>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_load_simd::<f32, 2, f32x2>(arch);
+        }
     }
 
     #[test]
     fn miri_test_store() {
-        test_utils::test_store_simd::<f32, 2, f32x2>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_store_simd::<f32, 2, f32x2>(arch);
+        }
     }
 
     // constructors
     #[test]
     fn test_constructors() {
-        test_utils::ops::test_splat::<f32, 2, f32x2>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::ops::test_splat::<f32, 2, f32x2>(arch);
+        }
     }
 
     // Ops
-    test_utils::ops::test_add!(f32x2, 0xcd7a8fea9a3fb727, Neon::new_checked());
-    test_utils::ops::test_sub!(f32x2, 0x3f6562c94c923238, Neon::new_checked());
-    test_utils::ops::test_mul!(f32x2, 0x07e48666c0fc564c, Neon::new_checked());
-    test_utils::ops::test_fma!(f32x2, 0xcfde9d031302cf2c, Neon::new_checked());
+    test_utils::ops::test_add!(f32x2, 0xcd7a8fea9a3fb727, test_neon());
+    test_utils::ops::test_sub!(f32x2, 0x3f6562c94c923238, test_neon());
+    test_utils::ops::test_mul!(f32x2, 0x07e48666c0fc564c, test_neon());
+    test_utils::ops::test_fma!(f32x2, 0xcfde9d031302cf2c, test_neon());
 
-    test_utils::ops::test_cmp!(f32x2, 0xc4f468b224622326, Neon::new_checked());
+    test_utils::ops::test_cmp!(f32x2, 0xc4f468b224622326, test_neon());
 
-    test_utils::ops::test_sumtree!(f32x2, 0x828bd890a470dc4d, Neon::new_checked());
+    test_utils::ops::test_sumtree!(f32x2, 0x828bd890a470dc4d, test_neon());
 }

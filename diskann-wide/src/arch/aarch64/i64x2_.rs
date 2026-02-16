@@ -91,33 +91,39 @@ macros::aarch64_define_bitops!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{reference::ReferenceScalarOps, test_utils};
+    use crate::{arch::aarch64::test_neon, reference::ReferenceScalarOps, test_utils};
 
     #[test]
     fn miri_test_load() {
-        test_utils::test_load_simd::<i64, 2, i64x2>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_load_simd::<i64, 2, i64x2>(arch);
+        }
     }
 
     #[test]
     fn miri_test_store() {
-        test_utils::test_store_simd::<i64, 2, i64x2>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_store_simd::<i64, 2, i64x2>(arch);
+        }
     }
 
     // constructors
     #[test]
     fn test_constructors() {
-        test_utils::ops::test_splat::<i64, 2, i64x2>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::ops::test_splat::<i64, 2, i64x2>(arch);
+        }
     }
 
     // Binary Ops
-    test_utils::ops::test_add!(i64x2, 0x8d7bf28b1c6e2545, Neon::new_checked());
-    test_utils::ops::test_sub!(i64x2, 0x4a1c644a1a910bed, Neon::new_checked());
-    test_utils::ops::test_mul!(i64x2, 0xf42ee707a808fd10, Neon::new_checked());
-    test_utils::ops::test_fma!(i64x2, 0x28540d9936a9e803, Neon::new_checked());
-    test_utils::ops::test_abs!(i64x2, 0xb8f702ba85375041, Neon::new_checked());
+    test_utils::ops::test_add!(i64x2, 0x8d7bf28b1c6e2545, test_neon());
+    test_utils::ops::test_sub!(i64x2, 0x4a1c644a1a910bed, test_neon());
+    test_utils::ops::test_mul!(i64x2, 0xf42ee707a808fd10, test_neon());
+    test_utils::ops::test_fma!(i64x2, 0x28540d9936a9e803, test_neon());
+    test_utils::ops::test_abs!(i64x2, 0xb8f702ba85375041, test_neon());
 
-    test_utils::ops::test_cmp!(i64x2, 0xfae27072c6b70885, Neon::new_checked());
+    test_utils::ops::test_cmp!(i64x2, 0xfae27072c6b70885, test_neon());
 
     // Bit ops
-    test_utils::ops::test_bitops!(i64x2, 0xbe927713ea310164, Neon::new_checked());
+    test_utils::ops::test_bitops!(i64x2, 0xbe927713ea310164, test_neon());
 }

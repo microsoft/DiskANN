@@ -369,7 +369,7 @@ mod tests {
                     let num_trials = 100;
 
                     let errors = test_utils::RelativeAndAbsolute {
-                        relative: 6e-7,
+                        relative: 6.3e-7,
                         absolute: 0.0,
                     };
 

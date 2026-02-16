@@ -68,33 +68,39 @@ macros::aarch64_define_bitops!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{reference::ReferenceScalarOps, test_utils};
+    use crate::{arch::aarch64::test_neon, reference::ReferenceScalarOps, test_utils};
 
     #[test]
     fn miri_test_load() {
-        test_utils::test_load_simd::<u8, 16, u8x16>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_load_simd::<u8, 16, u8x16>(arch);
+        }
     }
 
     #[test]
     fn miri_test_store() {
-        test_utils::test_store_simd::<u8, 16, u8x16>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::test_store_simd::<u8, 16, u8x16>(arch);
+        }
     }
 
     // constructors
     #[test]
     fn test_constructors() {
-        test_utils::ops::test_splat::<u8, 16, u8x16>(Neon::new_checked().unwrap());
+        if let Some(arch) = test_neon() {
+            test_utils::ops::test_splat::<u8, 16, u8x16>(arch);
+        }
     }
 
     // Ops
-    test_utils::ops::test_add!(u8x16, 0x3017fd73c99cc633, Neon::new_checked());
-    test_utils::ops::test_sub!(u8x16, 0xfc627f10b5f8db8a, Neon::new_checked());
-    test_utils::ops::test_mul!(u8x16, 0x0f4caa80eceaa523, Neon::new_checked());
-    test_utils::ops::test_fma!(u8x16, 0xb8f702ba85375041, Neon::new_checked());
-    test_utils::ops::test_splitjoin!(u8x16 => u8x8, 0xa4d00a4d04293967, Neon::new_checked());
+    test_utils::ops::test_add!(u8x16, 0x3017fd73c99cc633, test_neon());
+    test_utils::ops::test_sub!(u8x16, 0xfc627f10b5f8db8a, test_neon());
+    test_utils::ops::test_mul!(u8x16, 0x0f4caa80eceaa523, test_neon());
+    test_utils::ops::test_fma!(u8x16, 0xb8f702ba85375041, test_neon());
+    test_utils::ops::test_splitjoin!(u8x16 => u8x8, 0xa4d00a4d04293967, test_neon());
 
-    test_utils::ops::test_cmp!(u8x16, 0x941757bd5cc641a1, Neon::new_checked());
+    test_utils::ops::test_cmp!(u8x16, 0x941757bd5cc641a1, test_neon());
 
     // Bit ops
-    test_utils::ops::test_bitops!(u8x16, 0xd62d8de09f82ed4e, Neon::new_checked());
+    test_utils::ops::test_bitops!(u8x16, 0xd62d8de09f82ed4e, test_neon());
 }
