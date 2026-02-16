@@ -154,7 +154,6 @@ pub use splitjoin::{LoHi, SplitJoin};
 mod bitmask;
 pub use bitmask::{BitMask, FromInt};
 
-#[cfg(target_arch = "x86_64")]
 pub(crate) mod doubled;
 
 mod emulated;
@@ -232,7 +231,6 @@ fn get_test_arch() -> Option<String> {
     }
 }
 
-#[cfg(not(target_arch = "aarch64"))]
 pub(crate) mod helpers;
 
 #[cfg(test)]

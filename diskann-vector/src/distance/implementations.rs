@@ -70,11 +70,9 @@ macro_rules! architecture_hook {
 }
 
 /// A utility for specializing distance computatiosn for fixed-length slices.
-#[cfg(any(test, target_arch = "x86_64"))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Specialize<const N: usize, F>(std::marker::PhantomData<F>);
 
-#[cfg(any(test, target_arch = "x86_64"))]
 impl<A, T, L, R, const N: usize, F> diskann_wide::arch::FTarget2<A, T, &[L], &[R]>
     for Specialize<N, F>
 where
@@ -101,7 +99,6 @@ where
 
 // Outline the panic formatting and keep the calling convention the same as
 // the top function. This keeps code generation extremely lightweight.
-#[cfg(any(test, target_arch = "x86_64"))]
 #[inline(never)]
 #[allow(clippy::panic)]
 fn fail_length_check<L, R>(x: &[L], y: &[R], len: usize) -> ! {
@@ -114,6 +111,10 @@ fn fail_length_check<L, R>(x: &[L], y: &[R], len: usize) -> ! {
         "expected {} argument to have length {}, instead it has length {}",
         message.0, len, message.1
     );
+}
+
+pub fn test_function(x: &[Half], y: &[Half]) -> f32 {
+    InnerProduct::evaluate(x, y)
 }
 
 /// An internal trait to transform the result of the low-level SIMD ops into a value

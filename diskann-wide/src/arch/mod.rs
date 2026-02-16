@@ -409,6 +409,30 @@ cfg_if::cfg_if! {
                 Self(LevelInner::V4)
             }
         }
+    } else if #[cfg(target_arch = "aarch64")] {
+        // Delegate to the architecture selection within the `aarch64` module,.
+        pub mod aarch64;
+
+        use aarch64::LevelInner;
+
+        pub use aarch64::current;
+        pub use aarch64::Current;
+
+        pub use aarch64::dispatch;
+        pub use aarch64::dispatch1;
+        pub use aarch64::dispatch2;
+        pub use aarch64::dispatch3;
+
+        pub use aarch64::dispatch_no_features;
+        pub use aarch64::dispatch1_no_features;
+        pub use aarch64::dispatch2_no_features;
+        pub use aarch64::dispatch3_no_features;
+
+        impl Level {
+            const fn neon() -> Self {
+                Self(LevelInner::Neon)
+            }
+        }
     } else {
         pub type Current = Scalar;
 

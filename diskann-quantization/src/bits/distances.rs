@@ -118,7 +118,6 @@ type USlice<'a, const N: usize, Perm = Dense> = BitSlice<'a, N, Unsigned, Perm>;
 
 /// Retarget the [`diskann_wide::arch::x86_64::V3`] architecture to
 /// [`diskann_wide::arch::Scalar`] or [`diskann_wide::arch::x86_64::V4`] to V3 etc.
-#[cfg(target_arch = "x86_64")]
 macro_rules! retarget {
     ($arch:path, $op:ty, $N:literal) => {
         impl Target2<
@@ -788,6 +787,18 @@ retarget!(diskann_wide::arch::x86_64::V3, SquaredL2, 7, 6, 5, 3);
 #[cfg(target_arch = "x86_64")]
 retarget!(diskann_wide::arch::x86_64::V4, SquaredL2, 7, 6, 5, 4, 3, 2);
 
+#[cfg(target_arch = "aarch64")]
+retarget!(
+    diskann_wide::arch::aarch64::Neon,
+    SquaredL2,
+    7,
+    6,
+    5,
+    4,
+    3,
+    2
+);
+
 dispatch_pure!(SquaredL2, 1, 2, 3, 4, 5, 6, 7, 8);
 
 ///////////////////
@@ -1316,6 +1327,18 @@ retarget!(diskann_wide::arch::x86_64::V3, InnerProduct, 7, 6, 5, 3);
 
 #[cfg(target_arch = "x86_64")]
 retarget!(diskann_wide::arch::x86_64::V4, InnerProduct, 7, 6, 4, 5, 3);
+
+#[cfg(target_arch = "aarch64")]
+retarget!(
+    diskann_wide::arch::aarch64::Neon,
+    InnerProduct,
+    7,
+    6,
+    4,
+    5,
+    3,
+    2
+);
 
 dispatch_pure!(InnerProduct, 1, 2, 3, 4, 5, 6, 7, 8);
 
@@ -1905,7 +1928,6 @@ where
 }
 
 /// Implement `Target2` for higher architecture in terms of the scalar fallback.
-#[cfg(target_arch = "x86_64")]
 macro_rules! ip_retarget {
     ($arch:path, $N:literal) => {
         impl Target2<$arch, MathematicalResult<f32>, &[f32], USlice<'_, $N>>
@@ -1932,6 +1954,9 @@ ip_retarget!(diskann_wide::arch::x86_64::V3, 3, 5, 6, 7, 8);
 
 #[cfg(target_arch = "x86_64")]
 ip_retarget!(diskann_wide::arch::x86_64::V4, 1, 2, 3, 4, 5, 6, 7, 8);
+
+#[cfg(target_arch = "aarch64")]
+ip_retarget!(diskann_wide::arch::aarch64::Neon, 1, 2, 3, 4, 5, 6, 7, 8);
 
 /// Delegate the implementation of `PureDistanceFunction` to `diskann_wide::arch::Target2`
 /// with the current architectures.

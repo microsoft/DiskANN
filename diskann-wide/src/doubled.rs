@@ -377,6 +377,7 @@ macro_rules! double_mask {
                 )
             }
 
+            #[inline(always)]
             fn get_unchecked(&self, i: usize) -> bool {
                 if i < { $N / 2 } {
                     self.0.get_unchecked(i)
@@ -385,6 +386,7 @@ macro_rules! double_mask {
                 }
             }
 
+            #[inline(always)]
             fn keep_first(arch: Self::Arch, i: usize) -> Self {
                 let lo = <$repr>::keep_first(arch, i);
                 let hi = <$repr>::keep_first(arch, i.saturating_sub({ $N / 2 }));

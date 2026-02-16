@@ -8,11 +8,12 @@ use std::convert::AsRef;
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
 
-#[cfg(not(target_arch = "aarch64"))]
-use diskann_wide::SIMDDotProduct;
+#[cfg(target_arch = "aarch64")]
+use diskann_wide::arch::aarch64::Neon;
+
 use diskann_wide::{
-    arch::Scalar, Architecture, Const, Constant, Emulated, SIMDAbs, SIMDMulAdd, SIMDSumTree,
-    SIMDVector,
+    arch::Scalar, Architecture, Const, Constant, Emulated, SIMDAbs, SIMDDotProduct, SIMDMulAdd,
+    SIMDSumTree, SIMDVector,
 };
 
 use crate::Half;
@@ -29,6 +30,12 @@ impl LossyF32Conversion for f32 {
 }
 
 impl LossyF32Conversion for i32 {
+    fn as_f32_lossy(self) -> f32 {
+        self as f32
+    }
+}
+
+impl LossyF32Conversion for u32 {
     fn as_f32_lossy(self) -> f32 {
         self as f32
     }
@@ -741,6 +748,34 @@ where
     schema.reduce(s0)
 }
 
+//----------//
+// Epilogue //
+//----------//
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn scalar_epilogue<L, R, F, Acc>(
+    left: *const L,
+    right: *const R,
+    len: usize,
+    mut acc: Acc,
+    mut f: F,
+) -> Acc
+where
+    L: Copy,
+    R: Copy,
+    F: FnMut(Acc, L, R) -> Acc,
+{
+    for i in 0..len {
+        // SAFETY: The range `[x, x.add(len))` is valid for reads.
+        let left = unsafe { left.add(i).read_unaligned() };
+        // SAFETY: The range `[y, y.add(len))` is valid for reads.
+        let right = unsafe { right.add(i).read_unaligned() };
+        acc = f(acc, left, right);
+    }
+    acc
+}
+
 /////
 ///// L2 Implementations
 /////
@@ -811,6 +846,59 @@ impl SIMDSchema<f32, f32, V3> for L2 {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<f32, f32, Neon> for L2 {
+    type SIMDWidth = Const<4>;
+    type Accumulator = <Neon as Architecture>::f32x4;
+    type Left = <Neon as Architecture>::f32x4;
+    type Right = <Neon as Architecture>::f32x4;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let c = x - y;
+        c.mul_add_simd(c, acc)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const f32,
+        y: *const f32,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let scalar = scalar_epilogue(
+            x,
+            y,
+            len.min(Self::SIMDWidth::value() - 1),
+            0.0f32,
+            |acc, x, y| -> f32 {
+                let c = x - y;
+                c.mul_add(c, acc)
+            },
+        );
+        acc + Self::Accumulator::from_array(arch, [scalar, 0.0, 0.0, 0.0])
+    }
+
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree()
+    }
+}
+
 impl SIMDSchema<f32, f32, Scalar> for L2 {
     type SIMDWidth = Const<4>;
     type Accumulator = Emulated<f32, 4>;
@@ -853,9 +941,9 @@ impl SIMDSchema<f32, f32, Scalar> for L2 {
         let mut s: f32 = 0.0;
         for i in 0..len {
             // SAFETY: The range `[x, x.add(len))` is valid for reads.
-            let vx = unsafe { x.add(i).read() };
+            let vx = unsafe { x.add(i).read_unaligned() };
             // SAFETY: The range `[y, y.add(len))` is valid for reads.
-            let vy = unsafe { y.add(i).read() };
+            let vy = unsafe { y.add(i).read_unaligned() };
             let d = vx - vy;
             s += d * d;
         }
@@ -930,6 +1018,69 @@ impl SIMDSchema<Half, Half, V3> for L2 {
     }
 
     // Perform a final reduction.
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree()
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<Half, Half, Neon> for L2 {
+    type SIMDWidth = Const<4>;
+    type Accumulator = <Neon as Architecture>::f32x4;
+    type Left = diskann_wide::arch::aarch64::f16x4;
+    type Right = diskann_wide::arch::aarch64::f16x4;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        diskann_wide::alias!(f32s = <Neon>::f32x4);
+
+        let x: f32s = x.into();
+        let y: f32s = y.into();
+
+        let c = x - y;
+        c.mul_add_simd(c, acc)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const Half,
+        y: *const Half,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        diskann_wide::alias!(f32s = <Neon>::f32x4);
+
+        let rest = scalar_epilogue(
+            x,
+            y,
+            len.min(Self::SIMDWidth::value() - 1),
+            f32s::default(arch),
+            |acc, x: Half, y: Half| -> f32s {
+                let zero = Half::default();
+                let x: f32s = Self::Left::from_array(arch, [x, zero, zero, zero]).into();
+                let y: f32s = Self::Right::from_array(arch, [y, zero, zero, zero]).into();
+                let c: f32s = x - y;
+                c.mul_add_simd(c, acc)
+            },
+        );
+        acc + rest
+    }
+
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
         x.sum_tree()
@@ -1075,6 +1226,64 @@ impl SIMDSchema<i8, i8, V3> for L2 {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<i8, i8, Neon> for L2 {
+    type SIMDWidth = Const<8>;
+    type Accumulator = <Neon as Architecture>::i32x4;
+    type Left = diskann_wide::arch::aarch64::i8x8;
+    type Right = diskann_wide::arch::aarch64::i8x8;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        diskann_wide::alias!(i16s = <Neon>::i16x8);
+
+        let x: i16s = x.into();
+        let y: i16s = y.into();
+        let c = x - y;
+        acc.dot_simd(c, c)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const i8,
+        y: *const i8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let scalar = scalar_epilogue(
+            x,
+            y,
+            len.min(Self::SIMDWidth::value() - 1),
+            0i32,
+            |acc, x: i8, y: i8| -> i32 {
+                let c = (x as i32) - (y as i32);
+                acc + c * c
+            },
+        );
+        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
+    }
+
+    // Perform a final reduction.
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree().as_f32_lossy()
+    }
+}
+
 impl SIMDSchema<i8, i8, Scalar> for L2 {
     type SIMDWidth = Const<4>;
     type Accumulator = Emulated<i32, 4>;
@@ -1119,9 +1328,9 @@ impl SIMDSchema<i8, i8, Scalar> for L2 {
         let mut s: i32 = 0;
         for i in 0..len {
             // SAFETY: The range `[x, x.add(len))` is valid for reads.
-            let vx: i32 = unsafe { x.add(i).read() }.into();
+            let vx: i32 = unsafe { x.add(i).read_unaligned() }.into();
             // SAFETY: The range `[y, y.add(len))` is valid for reads.
-            let vy: i32 = unsafe { y.add(i).read() }.into();
+            let vy: i32 = unsafe { y.add(i).read_unaligned() }.into();
             let d = vx - vy;
             s += d * d;
         }
@@ -1200,6 +1409,64 @@ impl SIMDSchema<u8, u8, V3> for L2 {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<u8, u8, Neon> for L2 {
+    type SIMDWidth = Const<8>;
+    type Accumulator = <Neon as Architecture>::i32x4;
+    type Left = diskann_wide::arch::aarch64::u8x8;
+    type Right = diskann_wide::arch::aarch64::u8x8;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        diskann_wide::alias!(i16s = <Neon>::i16x8);
+
+        let x: i16s = x.into();
+        let y: i16s = y.into();
+        let c = x - y;
+        acc.dot_simd(c, c)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const u8,
+        y: *const u8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let scalar = scalar_epilogue(
+            x,
+            y,
+            len.min(Self::SIMDWidth::value() - 1),
+            0i32,
+            |acc, x: u8, y: u8| -> i32 {
+                let c = (x as i32) - (y as i32);
+                acc + c * c
+            },
+        );
+        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
+    }
+
+    // Perform a final reduction.
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree().as_f32_lossy()
+    }
+}
+
 impl SIMDSchema<u8, u8, Scalar> for L2 {
     type SIMDWidth = Const<4>;
     type Accumulator = Emulated<i32, 4>;
@@ -1244,9 +1511,9 @@ impl SIMDSchema<u8, u8, Scalar> for L2 {
         let mut s: i32 = 0;
         for i in 0..len {
             // SAFETY: The range `[x, x.add(len))` is valid for reads.
-            let vx: i32 = unsafe { x.add(i).read() }.into();
+            let vx: i32 = unsafe { x.add(i).read_unaligned() }.into();
             // SAFETY: The range `[y, y.add(len))` is valid for reads.
-            let vy: i32 = unsafe { y.add(i).read() }.into();
+            let vy: i32 = unsafe { y.add(i).read_unaligned() }.into();
             let d = vx - vy;
             s += d * d;
         }
@@ -1360,6 +1627,55 @@ impl SIMDSchema<f32, f32, V3> for IP {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<f32, f32, Neon> for IP {
+    type SIMDWidth = Const<4>;
+    type Accumulator = <Neon as Architecture>::f32x4;
+    type Left = <Neon as Architecture>::f32x4;
+    type Right = <Neon as Architecture>::f32x4;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        x.mul_add_simd(y, acc)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const f32,
+        y: *const f32,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let scalar = scalar_epilogue(
+            x,
+            y,
+            len.min(Self::SIMDWidth::value() - 1),
+            0.0f32,
+            |acc, x: f32, y: f32| -> f32 { x.mul_add(y, acc) },
+        );
+        acc + Self::Accumulator::from_array(arch, [scalar, 0.0, 0.0, 0.0])
+    }
+
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree()
+    }
+}
+
 impl SIMDSchema<f32, f32, Scalar> for IP {
     type SIMDWidth = Const<4>;
     type Accumulator = Emulated<f32, 4>;
@@ -1401,9 +1717,9 @@ impl SIMDSchema<f32, f32, Scalar> for IP {
         let mut s: f32 = 0.0;
         for i in 0..len {
             // SAFETY: The range `[x, x.add(len))` is valid for reads.
-            let vx = unsafe { x.add(i).read() };
+            let vx = unsafe { x.add(i).read_unaligned() };
             // SAFETY: The range `[y, y.add(len))` is valid for reads.
-            let vy = unsafe { y.add(i).read() };
+            let vy = unsafe { y.add(i).read_unaligned() };
             s += vx * vy;
         }
         acc + Self::Accumulator::from_array(arch, [s, 0.0, 0.0, 0.0])
@@ -1473,6 +1789,67 @@ impl SIMDSchema<Half, Half, V3> for IP {
     }
 
     // Perform a final reduction.
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree()
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<Half, Half, Neon> for IP {
+    type SIMDWidth = Const<4>;
+    type Accumulator = <Neon as Architecture>::f32x4;
+    type Left = diskann_wide::arch::aarch64::f16x4;
+    type Right = diskann_wide::arch::aarch64::f16x4;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        diskann_wide::alias!(f32s = <Neon>::f32x4);
+
+        let x: f32s = x.into();
+        let y: f32s = y.into();
+
+        x.mul_add_simd(y, acc)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const Half,
+        y: *const Half,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        diskann_wide::alias!(f32s = <Neon>::f32x4);
+
+        let rest = scalar_epilogue(
+            x,
+            y,
+            len.min(Self::SIMDWidth::value() - 1),
+            f32s::default(arch),
+            |acc, x: Half, y: Half| -> f32s {
+                let zero = Half::default();
+                let x: f32s = Self::Left::from_array(arch, [x, zero, zero, zero]).into();
+                let y: f32s = Self::Right::from_array(arch, [y, zero, zero, zero]).into();
+                x.mul_add_simd(y, acc)
+            },
+        );
+        acc + rest
+    }
+
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
         x.sum_tree()
@@ -1613,6 +1990,55 @@ impl SIMDSchema<i8, i8, V3> for IP {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<i8, i8, Neon> for IP {
+    type SIMDWidth = Const<16>;
+    type Accumulator = <Neon as Architecture>::i32x4;
+    type Left = <Neon as Architecture>::i8x16;
+    type Right = <Neon as Architecture>::i8x16;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        acc.dot_simd(x, y)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const i8,
+        y: *const i8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let scalar = scalar_epilogue(
+            x,
+            y,
+            len.min(Self::SIMDWidth::value() - 1),
+            0i32,
+            |acc, x: i8, y: i8| -> i32 { acc + (x as i32) * (y as i32) },
+        );
+        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
+    }
+
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree().as_f32_lossy()
+    }
+}
+
 impl SIMDSchema<i8, i8, Scalar> for IP {
     type SIMDWidth = Const<1>;
     type Accumulator = Emulated<i32, 1>;
@@ -1722,6 +2148,55 @@ impl SIMDSchema<u8, u8, V3> for IP {
     }
 
     // Perform a final reduction.
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree().as_f32_lossy()
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<u8, u8, Neon> for IP {
+    type SIMDWidth = Const<16>;
+    type Accumulator = <Neon as Architecture>::u32x4;
+    type Left = <Neon as Architecture>::u8x16;
+    type Right = <Neon as Architecture>::u8x16;
+    type Return = f32;
+    type Main = Strategy4x2;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        acc.dot_simd(x, y)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const u8,
+        y: *const u8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let scalar = scalar_epilogue(
+            x,
+            y,
+            len.min(Self::SIMDWidth::value() - 1),
+            0u32,
+            |acc, x: u8, y: u8| -> u32 { acc + (x as u32) * (y as u32) },
+        );
+        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
+    }
+
     #[inline(always)]
     fn reduce(&self, x: Self::Accumulator) -> Self::Return {
         x.sum_tree().as_f32_lossy()
@@ -1997,6 +2472,69 @@ impl SIMDSchema<f32, f32, V3> for CosineStateless {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<f32, f32, Neon> for CosineStateless {
+    type SIMDWidth = Const<4>;
+    type Accumulator = FullCosineAccumulator<<Neon as Architecture>::f32x4>;
+    type Left = <Neon as Architecture>::f32x4;
+    type Right = <Neon as Architecture>::f32x4;
+    type Return = f32;
+
+    // Cosine accumulators are pretty large, so only use 2 parallel accumulator with a
+    // hefty unroll factor.
+    type Main = Strategy2x4;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::new(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        acc.add_with(x, y)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const f32,
+        y: *const f32,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let mut xx: f32 = 0.0;
+        let mut yy: f32 = 0.0;
+        let mut xy: f32 = 0.0;
+        for i in 0..len.min(Self::SIMDWidth::value() - 1) {
+            // SAFETY: The range `[x, x.add(len))` is valid for reads.
+            let vx = unsafe { x.add(i).read_unaligned() };
+            // SAFETY: The range `[y, y.add(len))` is valid for reads.
+            let vy = unsafe { y.add(i).read_unaligned() };
+            xx = vx.mul_add(vx, xx);
+            yy = vy.mul_add(vy, yy);
+            xy = vx.mul_add(vy, xy);
+        }
+        type V = <Neon as Architecture>::f32x4;
+        acc + FullCosineAccumulator {
+            normx: V::from_array(arch, [xx, 0.0, 0.0, 0.0]),
+            normy: V::from_array(arch, [yy, 0.0, 0.0, 0.0]),
+            xy: V::from_array(arch, [xy, 0.0, 0.0, 0.0]),
+        }
+    }
+
+    // Perform a final reduction.
+    #[inline(always)]
+    fn reduce(&self, acc: Self::Accumulator) -> Self::Return {
+        acc.sum()
+    }
+}
+
 impl SIMDSchema<f32, f32, Scalar> for CosineStateless {
     type SIMDWidth = Const<4>;
     type Accumulator = FullCosineAccumulator<Emulated<f32, 4>>;
@@ -2090,6 +2628,67 @@ impl SIMDSchema<Half, Half, V3> for CosineStateless {
     }
 
     // Perform a final reduction.
+    #[inline(always)]
+    fn reduce(&self, acc: Self::Accumulator) -> Self::Return {
+        acc.sum()
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<Half, Half, Neon> for CosineStateless {
+    type SIMDWidth = Const<4>;
+    type Accumulator = FullCosineAccumulator<<Neon as Architecture>::f32x4>;
+    type Left = diskann_wide::arch::aarch64::f16x4;
+    type Right = diskann_wide::arch::aarch64::f16x4;
+    type Return = f32;
+
+    type Main = Strategy2x4;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::new(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        diskann_wide::alias!(f32s = <Neon>::f32x4);
+
+        let x: f32s = x.into();
+        let y: f32s = y.into();
+        acc.add_with(x, y)
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const Half,
+        y: *const Half,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        type V = <Neon as Architecture>::f32x4;
+
+        let rest = scalar_epilogue(
+            x,
+            y,
+            len.min(Self::SIMDWidth::value() - 1),
+            FullCosineAccumulator::<V>::new(arch),
+            |acc, x: Half, y: Half| -> FullCosineAccumulator<V> {
+                let zero = Half::default();
+                let x: V = Self::Left::from_array(arch, [x, zero, zero, zero]).into();
+                let y: V = Self::Right::from_array(arch, [y, zero, zero, zero]).into();
+                acc.add_with(x, y)
+            },
+        );
+        acc + rest
+    }
+
     #[inline(always)]
     fn reduce(&self, acc: Self::Accumulator) -> Self::Return {
         acc.sum()
@@ -2239,6 +2838,69 @@ impl SIMDSchema<i8, i8, V3> for CosineStateless {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<i8, i8, Neon> for CosineStateless {
+    type SIMDWidth = Const<16>;
+    type Accumulator = FullCosineAccumulator<<Neon as Architecture>::i32x4>;
+    type Left = <Neon as Architecture>::i8x16;
+    type Right = <Neon as Architecture>::i8x16;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::new(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        FullCosineAccumulator {
+            normx: acc.normx.dot_simd(x, x),
+            normy: acc.normy.dot_simd(y, y),
+            xy: acc.xy.dot_simd(x, y),
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const i8,
+        y: *const i8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let mut xx: i32 = 0;
+        let mut yy: i32 = 0;
+        let mut xy: i32 = 0;
+        for i in 0..len.min(Self::SIMDWidth::value() - 1) {
+            // SAFETY: The range `[x, x.add(len))` is valid for reads.
+            let vx: i32 = unsafe { x.add(i).read_unaligned() }.into();
+            // SAFETY: The range `[y, y.add(len))` is valid for reads.
+            let vy: i32 = unsafe { y.add(i).read_unaligned() }.into();
+            xx += vx * vx;
+            xy += vx * vy;
+            yy += vy * vy;
+        }
+        type V = <Neon as Architecture>::i32x4;
+        acc + FullCosineAccumulator {
+            normx: V::from_array(arch, [xx, 0, 0, 0]),
+            normy: V::from_array(arch, [yy, 0, 0, 0]),
+            xy: V::from_array(arch, [xy, 0, 0, 0]),
+        }
+    }
+
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum()
+    }
+}
+
 impl SIMDSchema<i8, i8, Scalar> for CosineStateless {
     type SIMDWidth = Const<4>;
     type Accumulator = FullCosineAccumulator<Emulated<i32, 4>>;
@@ -2285,9 +2947,9 @@ impl SIMDSchema<i8, i8, Scalar> for CosineStateless {
 
         for i in 0..len {
             // SAFETY: The range `[x, x.add(len))` is valid for reads.
-            let vx: i32 = unsafe { x.add(i).read() }.into();
+            let vx: i32 = unsafe { x.add(i).read_unaligned() }.into();
             // SAFETY: The range `[y, y.add(len))` is valid for reads.
-            let vy: i32 = unsafe { y.add(i).read() }.into();
+            let vy: i32 = unsafe { y.add(i).read_unaligned() }.into();
 
             xx += vx * vx;
             xy += vx * vy;
@@ -2382,6 +3044,69 @@ impl SIMDSchema<u8, u8, V3> for CosineStateless {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<u8, u8, Neon> for CosineStateless {
+    type SIMDWidth = Const<16>;
+    type Accumulator = FullCosineAccumulator<<Neon as Architecture>::u32x4>;
+    type Left = <Neon as Architecture>::u8x16;
+    type Right = <Neon as Architecture>::u8x16;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::new(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        FullCosineAccumulator {
+            normx: acc.normx.dot_simd(x, x),
+            normy: acc.normy.dot_simd(y, y),
+            xy: acc.xy.dot_simd(x, y),
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const u8,
+        y: *const u8,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let mut xx: u32 = 0;
+        let mut yy: u32 = 0;
+        let mut xy: u32 = 0;
+        for i in 0..len.min(Self::SIMDWidth::value() - 1) {
+            // SAFETY: The range `[x, x.add(len))` is valid for reads.
+            let vx: u32 = unsafe { x.add(i).read_unaligned() }.into();
+            // SAFETY: The range `[y, y.add(len))` is valid for reads.
+            let vy: u32 = unsafe { y.add(i).read_unaligned() }.into();
+            xx += vx * vx;
+            xy += vx * vy;
+            yy += vy * vy;
+        }
+        type V = <Neon as Architecture>::u32x4;
+        acc + FullCosineAccumulator {
+            normx: V::from_array(arch, [xx, 0, 0, 0]),
+            normy: V::from_array(arch, [yy, 0, 0, 0]),
+            xy: V::from_array(arch, [xy, 0, 0, 0]),
+        }
+    }
+
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum()
+    }
+}
+
 impl SIMDSchema<u8, u8, Scalar> for CosineStateless {
     type SIMDWidth = Const<4>;
     type Accumulator = FullCosineAccumulator<Emulated<i32, 4>>;
@@ -2428,9 +3153,9 @@ impl SIMDSchema<u8, u8, Scalar> for CosineStateless {
 
         for i in 0..len {
             // SAFETY: The range `[x, x.add(len))` is valid for reads.
-            let vx: i32 = unsafe { x.add(i).read() }.into();
+            let vx: i32 = unsafe { x.add(i).read_unaligned() }.into();
             // SAFETY: The range `[y, y.add(len))` is valid for reads.
-            let vy: i32 = unsafe { y.add(i).read() }.into();
+            let vy: i32 = unsafe { y.add(i).read_unaligned() }.into();
 
             xx += vx * vx;
             xy += vx * vy;
@@ -2560,6 +3285,54 @@ impl SIMDSchema<f32, f32, V3> for L1Norm {
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<f32, f32, Neon> for L1Norm {
+    type SIMDWidth = Const<4>;
+    type Accumulator = <Neon as Architecture>::f32x4;
+    type Left = <Neon as Architecture>::f32x4;
+    type Right = <Neon as Architecture>::f32x4;
+    type Return = f32;
+    type Main = Strategy4x1;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        _y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        x.abs_simd() + acc
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const f32,
+        _y: *const f32,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let mut s: f32 = 0.0;
+        for i in 0..len.min(Self::SIMDWidth::value() - 1) {
+            // SAFETY: The range `[x, x.add(len))` is valid for reads.
+            let vx = unsafe { x.add(i).read_unaligned() };
+            s += vx.abs();
+        }
+        acc + Self::Accumulator::from_array(arch, [s, 0.0, 0.0, 0.0])
+    }
+
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree()
+    }
+}
+
 impl SIMDSchema<f32, f32, Scalar> for L1Norm {
     type SIMDWidth = Const<4>;
     type Accumulator = Emulated<f32, 4>;
@@ -2601,7 +3374,7 @@ impl SIMDSchema<f32, f32, Scalar> for L1Norm {
         let mut s: f32 = 0.0;
         for i in 0..len {
             // SAFETY: The range `[x, x.add(len))` is valid for reads.
-            let vx = unsafe { x.add(i).read() };
+            let vx = unsafe { x.add(i).read_unaligned() };
             s += vx.abs();
         }
         acc + Self::Accumulator::from_array(arch, [s, 0.0, 0.0, 0.0])
@@ -2663,6 +3436,62 @@ impl SIMDSchema<Half, Half, V3> for L1Norm {
     ) -> Self::Accumulator {
         let x: <V3 as Architecture>::f32x8 = x.into();
         x.abs_simd() + acc
+    }
+
+    // Perform a final reduction.
+    #[inline(always)]
+    fn reduce(&self, x: Self::Accumulator) -> Self::Return {
+        x.sum_tree()
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl SIMDSchema<Half, Half, Neon> for L1Norm {
+    type SIMDWidth = Const<4>;
+    type Accumulator = <Neon as Architecture>::f32x4;
+    type Left = diskann_wide::arch::aarch64::f16x4;
+    type Right = diskann_wide::arch::aarch64::f16x4;
+    type Return = f32;
+    type Main = Strategy2x4;
+
+    #[inline(always)]
+    fn init(&self, arch: Neon) -> Self::Accumulator {
+        Self::Accumulator::default(arch)
+    }
+
+    #[inline(always)]
+    fn accumulate(
+        &self,
+        x: Self::Left,
+        _y: Self::Right,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let x: <Neon as Architecture>::f32x4 = x.into();
+        x.abs_simd() + acc
+    }
+
+    #[inline(always)]
+    unsafe fn epilogue(
+        &self,
+        arch: Neon,
+        x: *const Half,
+        _y: *const Half,
+        len: usize,
+        acc: Self::Accumulator,
+    ) -> Self::Accumulator {
+        let rest = scalar_epilogue(
+            x,
+            x, // unused, but scalar_epilogue requires a right pointer
+            len.min(Self::SIMDWidth::value() - 1),
+            Self::Accumulator::default(arch),
+            |acc, x: Half, _: Half| -> Self::Accumulator {
+                let zero = Half::default();
+                let x: Self::Accumulator =
+                    Self::Left::from_array(arch, [x, zero, zero, zero]).into();
+                x.abs_simd() + acc
+            },
+        );
+        acc + rest
     }
 
     // Perform a final reduction.
@@ -3138,6 +3967,19 @@ mod tests {
         V4::new_checked_miri()
     );
 
+    #[cfg(target_arch = "aarch64")]
+    float_test!(
+        test_l2_f32_aarch64_neon,
+        L2,
+        ResumableL2,
+        reference::reference_squared_l2_f32_mathematical,
+        1e-5,
+        1e-5,
+        0xf149c2bcde660128,
+        256,
+        Neon::new_checked()
+    );
+
     //----//
     // IP //
     //----//
@@ -3192,6 +4034,19 @@ mod tests {
         V4::new_checked_miri()
     );
 
+    #[cfg(target_arch = "aarch64")]
+    float_test!(
+        test_ip_f32_aarch64_neon,
+        IP,
+        ResumableIP,
+        reference::reference_innerproduct_f32_mathematical,
+        2e-4,
+        1e-3,
+        0xb4687c17a9ea9866,
+        256,
+        Neon::new_checked()
+    );
+
     //--------//
     // Cosine //
     //--------//
@@ -3244,6 +4099,19 @@ mod tests {
         0xe860e9dc65f38bb8,
         256,
         V4::new_checked_miri()
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    float_test!(
+        test_cosine_f32_aarch64_neon,
+        CosineStateless,
+        ResumableCosine,
+        reference::reference_cosine_f32_mathematical,
+        1e-5,
+        1e-5,
+        0xe860e9dc65f38bb8,
+        256,
+        Neon::new_checked()
     );
 
     /////////
@@ -3339,6 +4207,18 @@ mod tests {
         V4::new_checked_miri()
     );
 
+    #[cfg(target_arch = "aarch64")]
+    half_test!(
+        test_l2_f16_aarch64_neon,
+        L2,
+        reference::reference_squared_l2_f16_mathematical,
+        1e-5,
+        1e-5,
+        0x87ca6f1051667500,
+        256,
+        Neon::new_checked()
+    );
+
     //----//
     // IP //
     //----//
@@ -3389,6 +4269,18 @@ mod tests {
         V4::new_checked_miri()
     );
 
+    #[cfg(target_arch = "aarch64")]
+    half_test!(
+        test_ip_f16_aarch64_neon,
+        IP,
+        reference::reference_innerproduct_f16_mathematical,
+        2e-4,
+        2e-4,
+        0x5909f5f20307ccbe,
+        256,
+        Neon::new_checked()
+    );
+
     //--------//
     // Cosine //
     //--------//
@@ -3437,6 +4329,18 @@ mod tests {
         0x41dda34655f05ef6,
         256,
         V4::new_checked_miri()
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    half_test!(
+        test_cosine_f16_aarch64_neon,
+        CosineStateless,
+        reference::reference_cosine_f16_mathematical,
+        1e-5,
+        1e-5,
+        0x41dda34655f05ef6,
+        256,
+        Neon::new_checked()
     );
 
     /////////////
@@ -3520,6 +4424,17 @@ mod tests {
         { V4::new_checked_miri() }
     );
 
+    #[cfg(target_arch = "aarch64")]
+    int_test!(
+        test_l2_u8_aarch64_neon,
+        u8,
+        L2,
+        reference::reference_squared_l2_u8_mathematical,
+        0x74c86334ab7a51f9,
+        320,
+        { Neon::new_checked() }
+    );
+
     int_test!(
         test_ip_u8_current,
         u8,
@@ -3562,6 +4477,17 @@ mod tests {
         { V4::new_checked_miri() }
     );
 
+    #[cfg(target_arch = "aarch64")]
+    int_test!(
+        test_ip_u8_aarch64_neon,
+        u8,
+        IP,
+        reference::reference_innerproduct_u8_mathematical,
+        0x888e07fc489e773f,
+        320,
+        { Neon::new_checked() }
+    );
+
     int_test!(
         test_cosine_u8_current,
         u8,
@@ -3602,6 +4528,17 @@ mod tests {
         0xcc258c9391733211,
         320,
         { V4::new_checked_miri() }
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    int_test!(
+        test_cosine_u8_aarch64_neon,
+        u8,
+        CosineStateless,
+        reference::reference_cosine_u8_mathematical,
+        0xcc258c9391733211,
+        320,
+        { Neon::new_checked() }
     );
 
     //----//
@@ -3650,6 +4587,17 @@ mod tests {
         { V4::new_checked_miri() }
     );
 
+    #[cfg(target_arch = "aarch64")]
+    int_test!(
+        test_l2_i8_aarch64_neon,
+        i8,
+        L2,
+        reference::reference_squared_l2_i8_mathematical,
+        0x3e8bada709e176be,
+        320,
+        { Neon::new_checked() }
+    );
+
     int_test!(
         test_ip_i8_current,
         i8,
@@ -3692,6 +4640,17 @@ mod tests {
         { V4::new_checked_miri() }
     );
 
+    #[cfg(target_arch = "aarch64")]
+    int_test!(
+        test_ip_i8_aarch64_neon,
+        i8,
+        IP,
+        reference::reference_innerproduct_i8_mathematical,
+        0x8a263408c7b31d85,
+        320,
+        { Neon::new_checked() }
+    );
+
     int_test!(
         test_cosine_i8_current,
         i8,
@@ -3732,6 +4691,17 @@ mod tests {
         0x2d077bed2629b18e,
         320,
         { V4::new_checked_miri() }
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    int_test!(
+        test_cosine_i8_aarch64_neon,
+        i8,
+        CosineStateless,
+        reference::reference_cosine_i8_mathematical,
+        0x2d077bed2629b18e,
+        320,
+        { Neon::new_checked() }
     );
 
     //////////
@@ -3803,6 +4773,18 @@ mod tests {
         V4::new_checked_miri()
     );
 
+    #[cfg(target_arch = "aarch64")]
+    linf_test!(
+        test_linf_f32_neon,
+        f32,
+        reference::reference_linf_f32_mathematical,
+        1e-6,
+        1e-6,
+        0xf149c2bcde660128,
+        256,
+        Neon::new_checked()
+    );
+
     linf_test!(
         test_linf_f16_scalar,
         f16,
@@ -3836,6 +4818,18 @@ mod tests {
         0xf149c2bcde660128,
         256,
         V4::new_checked_miri()
+    );
+
+    #[cfg(target_arch = "aarch64")]
+    linf_test!(
+        test_linf_f16_neon,
+        f16,
+        reference::reference_linf_f16_mathematical,
+        1e-6,
+        1e-6,
+        0xf149c2bcde660128,
+        256,
+        Neon::new_checked()
     );
 
     ////////////////
@@ -3885,6 +4879,7 @@ mod tests {
         X86_64_V3,
         #[expect(non_camel_case_types)]
         X86_64_V4,
+        Aarch64Neon,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -3901,25 +4896,30 @@ mod tests {
     }
 
     static MIRI_BOUNDS: LazyLock<HashMap<Key, usize>> = LazyLock::new(|| {
-        use Arch::{Scalar, X86_64_V3, X86_64_V4};
+        use Arch::{Aarch64Neon, Scalar, X86_64_V3, X86_64_V4};
         use DataType::{Float16, Float32, Int8, UInt8};
 
         [
             (Key::new(Scalar, Float32, Float32), 64),
             (Key::new(X86_64_V3, Float32, Float32), 256),
             (Key::new(X86_64_V4, Float32, Float32), 256),
+            (Key::new(Aarch64Neon, Float32, Float32), 128),
             (Key::new(Scalar, Float16, Float16), 64),
             (Key::new(X86_64_V3, Float16, Float16), 256),
             (Key::new(X86_64_V4, Float16, Float16), 256),
+            (Key::new(Aarch64Neon, Float16, Float16), 128),
             (Key::new(Scalar, Float32, Float16), 64),
             (Key::new(X86_64_V3, Float32, Float16), 256),
             (Key::new(X86_64_V4, Float32, Float16), 256),
+            (Key::new(Aarch64Neon, Float32, Float16), 128),
             (Key::new(Scalar, UInt8, UInt8), 64),
             (Key::new(X86_64_V3, UInt8, UInt8), 256),
             (Key::new(X86_64_V4, UInt8, UInt8), 320),
+            (Key::new(Aarch64Neon, UInt8, UInt8), 128),
             (Key::new(Scalar, Int8, Int8), 64),
             (Key::new(X86_64_V3, Int8, Int8), 256),
             (Key::new(X86_64_V4, Int8, Int8), 320),
+            (Key::new(Aarch64Neon, Int8, Int8), 128),
         ]
         .into_iter()
         .collect()
@@ -3971,6 +4971,19 @@ mod tests {
                 #[cfg(target_arch = "x86_64")]
                 if let Some(arch) = V4::new_checked_miri() {
                     let max = MIRI_BOUNDS[&Key::new(Arch::X86_64_V4, left_type, right_type)];
+                    for dim in 0..max {
+                        let left: Vec<$left> = vec![left; dim];
+                        let right: Vec<$right> = vec![right; dim];
+
+                        simd_op(&L2, arch, left.as_slice(), right.as_slice());
+                        simd_op(&IP, arch, left.as_slice(), right.as_slice());
+                        simd_op(&CosineStateless, arch, left.as_slice(), right.as_slice());
+                    }
+                }
+
+                #[cfg(target_arch = "aarch64")]
+                if let Some(arch) = Neon::new_checked() {
+                    let max = MIRI_BOUNDS[&Key::new(Arch::Aarch64Neon, left_type, right_type)];
                     for dim in 0..max {
                         let left: Vec<$left> = vec![left; dim];
                         let right: Vec<$right> = vec![right; dim];

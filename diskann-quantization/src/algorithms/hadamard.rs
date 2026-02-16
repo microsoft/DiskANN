@@ -81,6 +81,24 @@ impl
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl
+    diskann_wide::arch::Target1<
+        diskann_wide::arch::aarch64::Neon,
+        Result<(), NotPowerOfTwo>,
+        &mut [f32],
+    > for HadamardTransform
+{
+    #[inline(never)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::aarch64::Neon,
+        x: &mut [f32],
+    ) -> Result<(), NotPowerOfTwo> {
+        arch.retarget().run1(HadamardTransformOuter, x)
+    }
+}
+
 ////////////////////
 // Implementation //
 ////////////////////
