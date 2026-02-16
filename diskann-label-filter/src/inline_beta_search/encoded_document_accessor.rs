@@ -28,7 +28,7 @@ use crate::{
 
 type AttrAccessor<IA> = EncodedAttributeAccessor<RoaringTreemapSetProvider<<IA as HasId>::Id>>;
 
-pub(crate) struct EncodedDocumentAccessor<IA>
+pub struct EncodedDocumentAccessor<IA>
 where
     IA: HasId,
 {
@@ -136,7 +136,7 @@ where
                     Some(set) => Ok(set.into_owned()),
                     None => Err(ANNError::message(
                         ANNErrorKind::IndexError,
-                        "No labels were found for vector",
+                        format!("No labels were found for vector:{:?}", id),
                     )),
                 }
             })?;
@@ -220,12 +220,20 @@ where
             .inner_accessor
             .build_query_computer(from.query())
             .into_ann_result()?;
-        let id_query = EncodedFilterExpr::new(from.filter_expr(), self.attribute_map.clone())?;
+        let id_query = EncodedFilterExpr::new(from.filter_expr(), self.attribute_map.clone());
+        let is_valid_filter = id_query.encoded_filter_expr().is_some();
+        if !is_valid_filter {
+            tracing::warn!(
+                "Failed to convert {} into an id expr. This will now be an unfiltered search.",
+                from.filter_expr()
+            );
+        }
 
         Ok(InlineBetaComputer::new(
             inner_computer,
             self.beta_value,
             id_query,
+            is_valid_filter,
         ))
     }
 }

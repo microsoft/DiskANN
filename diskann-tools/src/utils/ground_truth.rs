@@ -32,14 +32,14 @@ use crate::utils::{search_index_utils, CMDResult, CMDToolError};
 /// Expands a JSON object with array-valued fields into multiple objects with scalar values.
 /// For example: {"country": ["AU", "NZ"], "year": 2007}
 /// becomes: [{"country": "AU", "year": 2007}, {"country": "NZ", "year": 2007}]
-/// 
+///
 /// If multiple fields have arrays, all combinations are generated.
 fn expand_array_fields(value: &Value) -> Vec<Value> {
     match value {
         Value::Object(map) => {
             // Start with a single empty object
             let mut results: Vec<Map<String, Value>> = vec![Map::new()];
-            
+
             for (key, val) in map.iter() {
                 if let Value::Array(arr) = val {
                     // Expand: for each existing result, create copies for each array element
@@ -62,7 +62,7 @@ fn expand_array_fields(value: &Value) -> Vec<Value> {
                     }
                 }
             }
-            
+
             results.into_iter().map(Value::Object).collect()
         }
         // If not an object, return as-is
@@ -74,7 +74,9 @@ fn expand_array_fields(value: &Value) -> Vec<Value> {
 /// Returns true if any expanded variant matches the query.
 fn eval_query_with_array_expansion(query_expr: &ASTExpr, label: &Value) -> bool {
     let expanded = expand_array_fields(label);
-    expanded.iter().any(|item| eval_query_expr(query_expr, item))
+    expanded
+        .iter()
+        .any(|item| eval_query_expr(query_expr, item))
 }
 
 pub fn read_labels_and_compute_bitmap(
@@ -127,11 +129,13 @@ pub fn read_labels_and_compute_bitmap(
                 // Handle case where base_label.label is an array - check if any element matches
                 // Also expand array-valued fields within objects (e.g., {"country": ["AU", "NZ"]})
                 let matches = if let Some(array) = base_label.label.as_array() {
-                    array.iter().any(|item| eval_query_with_array_expansion(query_expr, item))
+                    array
+                        .iter()
+                        .any(|item| eval_query_with_array_expansion(query_expr, item))
                 } else {
                     eval_query_with_array_expansion(query_expr, &base_label.label)
                 };
-                
+
                 if matches {
                     bitmap.insert(base_label.doc_id);
                 }
@@ -164,11 +168,17 @@ pub fn read_labels_and_compute_bitmap(
     // If no matches, print more diagnostic info
     if total_matches == 0 {
         tracing::warn!("WARNING: No base vectors matched any query filters!");
-        tracing::warn!("This could indicate a format mismatch between base labels and query filters.");
-        
+        tracing::warn!(
+            "This could indicate a format mismatch between base labels and query filters."
+        );
+
         // Try to identify what keys exist in base labels vs queries
         if let Some(first_label) = base_labels.first() {
-            tracing::warn!("First base label (full): doc_id={}, label={}", first_label.doc_id, first_label.label);
+            tracing::warn!(
+                "First base label (full): doc_id={}, label={}",
+                first_label.doc_id,
+                first_label.label
+            );
         }
     }
 
@@ -323,7 +333,7 @@ pub fn compute_ground_truth_from_datafiles<
     for (query_idx, npq) in ground_truth.iter().enumerate() {
         let neighbors: Vec<_> = npq.iter().collect();
         let neighbor_count = neighbors.len();
-        
+
         if query_idx < 10 {
             // Print top K IDs and distances for first 10 queries
             let top_ids: Vec<u32> = neighbors.iter().take(10).map(|n| n.id).collect();
@@ -336,7 +346,7 @@ pub fn compute_ground_truth_from_datafiles<
                 top_dists
             );
         }
-        
+
         if neighbor_count == 0 {
             tracing::warn!("Query {} has 0 neighbors in ground truth!", query_idx);
         }
@@ -344,7 +354,10 @@ pub fn compute_ground_truth_from_datafiles<
 
     // Summary stats
     let total_neighbors: usize = ground_truth.iter().map(|npq| npq.iter().count()).sum();
-    let queries_with_neighbors = ground_truth.iter().filter(|npq| npq.iter().count() > 0).count();
+    let queries_with_neighbors = ground_truth
+        .iter()
+        .filter(|npq| npq.iter().count() > 0)
+        .count();
     tracing::info!(
         "Ground truth summary: {} total neighbors, {} queries have neighbors, {} queries have 0 neighbors",
         total_neighbors,

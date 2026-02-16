@@ -15,7 +15,7 @@ use diskann::{utils::VectorId, ANNError, ANNErrorKind, ANNResult};
 use diskann_utils::future::AsyncFriendly;
 use std::sync::{Arc, RwLock};
 
-pub(crate) struct RoaringAttributeStore<IT>
+pub struct RoaringAttributeStore<IT>
 where
     IT: VectorId + AsyncFriendly,
 {

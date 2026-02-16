@@ -109,6 +109,7 @@ impl std::fmt::Display for AggregatedSearchResults {
 #[derive(Debug, Serialize)]
 pub(super) struct SearchResults {
     pub(super) num_tasks: usize,
+    pub(super) num_queries: usize,
     pub(super) search_n: usize,
     pub(super) search_l: usize,
     pub(super) qps: Vec<f64>,
@@ -143,6 +144,7 @@ impl SearchResults {
 
         Self {
             num_tasks: setup.tasks.into(),
+            num_queries: recall.num_queries,
             search_n: parameters.k_value,
             search_l: parameters.l_value,
             qps,
@@ -182,6 +184,8 @@ where
             "p99 Latency",
             "Recall",
             "Threads",
+            "Queries",
+            "WallClock(s)",
         ]
     } else {
         &[
@@ -194,6 +198,8 @@ where
             "p99 Latency",
             "Recall",
             "Threads",
+            "Queries",
+            "WallClock(s)",
         ]
     };
 
@@ -237,6 +243,13 @@ where
         );
         row.insert(format!("{:3}", r.recall.average), col_idx + 7);
         row.insert(r.num_tasks, col_idx + 8);
+        row.insert(r.num_queries, col_idx + 9);
+        let mean_wall_clock = if r.search_latencies.is_empty() {
+            0.0
+        } else {
+            r.search_latencies.iter().map(|t| t.as_seconds()).sum::<f64>() / r.search_latencies.len() as f64
+        };
+        row.insert(format!("{:.3}", mean_wall_clock), col_idx + 10);
     });
 
     write!(f, "{}", table)

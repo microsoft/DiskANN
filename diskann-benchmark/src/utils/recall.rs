@@ -3,6 +3,7 @@
  * Licensed under the MIT license.
  */
 
+pub(crate) use benchmark_core::recall::knn;
 use diskann_benchmark_core as benchmark_core;
 
 use serde::Serialize;

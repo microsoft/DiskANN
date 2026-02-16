@@ -1,0 +1,34 @@
+{
+    "search_directories": [
+        "test_data/disk_index_search"
+    ],
+    "jobs": [
+        {
+            "type": "document-index-build",
+            "content": {
+                "build": {
+                    "data_type": "float32",
+                    "data": "disk_index_siftsmall_learn_256pts_data.fbin",
+                    "data_labels": "data.256.label.jsonl",
+                    "distance": "squared_l2",
+                    "max_degree": 32,
+                    "l_build": 50,
+                    "alpha": 1.2
+                },
+                "search": {
+                    "queries": "disk_index_sample_query_10pts.fbin",
+                    "query_predicates": "query.10.label.jsonl",
+                    "groundtruth": "disk_index_10pts_idx_uint32_truth_search_filter_res.bin",
+                    "beta": 0.5,
+                    "runs": [
+                        {
+                            "search_n": 20,
+                            "search_l": [20, 30, 40],
+                            "recall_k": 10
+                        }
+                    ]
+                }
+            }
+        }
+    ]
+}
