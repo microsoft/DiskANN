@@ -142,8 +142,7 @@ impl MaskOps for uint8x8_t {
                 let array = self.to_array();
                 BitMask::from_fn(arch, |i| array[i] == u8::MAX)
             } else {
-                // SAFETY: Inclusion of this function is dependent on the "neon" target
-                // feature. This function does not access memory directly.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 let value = unsafe {
                     let mask =  vmov_n_u8(0x80);
                     // Effectively creates [-7, -6, -5, -4, -3, -2, -1, 0]
@@ -158,8 +157,7 @@ impl MaskOps for uint8x8_t {
     #[inline(always)]
     fn from_mask(mask: Self::BitMask) -> Self {
         const BIT_SELECTOR: u64 = 0x8040201008040201;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe { vtst_u8(vmov_n_u8(mask.0), vcreate_u8(BIT_SELECTOR)) }
     }
 
@@ -167,8 +165,7 @@ impl MaskOps for uint8x8_t {
     fn keep_first(_arch: Neon, lanes: usize) -> Self {
         const INDICES: u64 = 0x0706050403020100;
         let n = lanes.min(8) as u8;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe { vclt_u8(vcreate_u8(INDICES), vmov_n_u8(n)) }
     }
 
@@ -191,8 +188,7 @@ impl MaskOps for uint8x16_t {
                 let array = self.to_array();
                 BitMask::from_fn(arch, |i| array[i] == u8::MAX)
             } else {
-                // SAFETY: Inclusion of this function is dependent on the "neon" target
-                // feature. This function does not access memory directly.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 let value = unsafe {
                     let mask = vmovq_n_u8(0x80);
                     let masked = vandq_u8(self, mask);
@@ -216,8 +212,7 @@ impl MaskOps for uint8x16_t {
 
         let low = mask as u8;
         let high = (mask >> 8) as u8;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe {
             vtstq_u8(
                 vcombine_u8(vmov_n_u8(low), vmov_n_u8(high)),
@@ -231,8 +226,7 @@ impl MaskOps for uint8x16_t {
         const LO: u64 = 0x0706050403020100;
         const HI: u64 = 0x0F0E0D0C0B0A0908;
         let n = lanes.min(16) as u8;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe { vcltq_u8(vcombine_u8(vcreate_u8(LO), vcreate_u8(HI)), vmovq_n_u8(n)) }
     }
 
@@ -271,8 +265,7 @@ impl MaskOps for uint16x4_t {
                 //
                 // Thus, everything gets compressed down to 4-bits.
                 //
-                // SAFETY: Inclusion of this function is dependent on the "neon" target
-                // feature. This function does not access memory directly.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 let value = unsafe {
                     let bits = vshr_n_u16(self, 15);
                     let paired = vsra_n_u32(
@@ -295,8 +288,7 @@ impl MaskOps for uint16x4_t {
     #[inline(always)]
     fn from_mask(mask: Self::BitMask) -> Self {
         const BIT_SELECTOR: u64 = 0x0008_0004_0002_0001;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe { vtst_u16(vmov_n_u16(mask.0 as u16), vcreate_u16(BIT_SELECTOR)) }
     }
 
@@ -304,8 +296,7 @@ impl MaskOps for uint16x4_t {
     fn keep_first(_arch: Neon, lanes: usize) -> Self {
         const INDICES: u64 = 0x0003_0002_0001_0000;
         let n = lanes.min(4) as u16;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe { vclt_u16(vcreate_u16(INDICES), vmov_n_u16(n)) }
     }
 
@@ -328,8 +319,7 @@ impl MaskOps for uint16x8_t {
                 let array = self.to_array();
                 BitMask::from_fn(arch, |i| array[i] == u16::MAX)
             } else {
-                // SAFETY: Inclusion of this function is dependent on the "neon" target
-                // feature. This function does not access memory directly.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 let value = unsafe {
                     // Effectively creates [-15, -14, -13, -12, -11, -10, -9, -8]
                     let shifts = vcombine_s16(
@@ -348,8 +338,7 @@ impl MaskOps for uint16x8_t {
     fn from_mask(mask: Self::BitMask) -> Self {
         const BIT_SELECTOR_LOW: u64 = 0x0008_0004_0002_0001;
         const BIT_SELECTOR_HIGH: u64 = 0x0080_0040_0020_0010;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe {
             vtstq_u16(
                 vmovq_n_u16(mask.0 as u16),
@@ -366,8 +355,7 @@ impl MaskOps for uint16x8_t {
         const LO: u64 = 0x0003_0002_0001_0000;
         const HI: u64 = 0x0007_0006_0005_0004;
         let n = lanes.min(8) as u16;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe {
             vcltq_u16(
                 vcombine_u16(vcreate_u16(LO), vcreate_u16(HI)),
@@ -398,8 +386,7 @@ impl MaskOps for uint32x2_t {
                 // Normalize each lane to 0 or 1, then use shift-right-accumulate to pack
                 // bits into position.
                 //
-                // SAFETY: Inclusion of this function is dependent on the "neon" target
-                // feature. This function does not access memory directly.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 let value = unsafe {
                     let bits = vshr_n_u32(self, 31);
                     let packed = vsra_n_u64(
@@ -417,8 +404,7 @@ impl MaskOps for uint32x2_t {
     #[inline(always)]
     fn from_mask(mask: Self::BitMask) -> Self {
         const BIT_SELECTOR: u64 = 0x0000_0002_0000_0001;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe { vtst_u32(vmov_n_u32(mask.0 as u32), vcreate_u32(BIT_SELECTOR)) }
     }
 
@@ -426,8 +412,7 @@ impl MaskOps for uint32x2_t {
     fn keep_first(_arch: Neon, lanes: usize) -> Self {
         const INDICES: u64 = 0x0000_0001_0000_0000;
         let n = lanes.min(2) as u32;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe { vclt_u32(vcreate_u32(INDICES), vmov_n_u32(n)) }
     }
 
@@ -453,8 +438,7 @@ impl MaskOps for uint32x4_t {
                 // Refer to the implementation for `uint16x4_t`. The approach here is
                 // identical, just twice as wide.
                 //
-                // SAFETY: Inclusion of this function is dependent on the "neon" target
-                // feature. This function does not access memory directly.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 let value = unsafe {
                     let bits = vshrq_n_u32(self, 31);
                     let paired = vsraq_n_u64(
@@ -480,8 +464,7 @@ impl MaskOps for uint32x4_t {
     fn from_mask(mask: Self::BitMask) -> Self {
         const BIT_SELECTOR_LOW: u64 = 0x0000_0002_0000_0001;
         const BIT_SELECTOR_HIGH: u64 = 0x0000_0008_0000_0004;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe {
             vtstq_u32(
                 vmovq_n_u32(mask.0 as u32),
@@ -498,8 +481,7 @@ impl MaskOps for uint32x4_t {
         const LO: u64 = 0x0000_0001_0000_0000;
         const HI: u64 = 0x0000_0003_0000_0002;
         let n = lanes.min(4) as u32;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe {
             vcltq_u32(
                 vcombine_u32(vcreate_u32(LO), vcreate_u32(HI)),
@@ -529,8 +511,7 @@ impl MaskOps for uint64x1_t {
             } else {
                 // Single lane: just shift the MSB down to bit 0 and extract.
                 //
-                // SAFETY: Inclusion of this function is dependent on the "neon" target
-                // feature. This function does not access memory directly.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 let value = unsafe {
                     vget_lane_u8(vreinterpret_u8_u64(vshr_n_u64(self, 63)), 0)
                 };
@@ -542,16 +523,14 @@ impl MaskOps for uint64x1_t {
     #[inline(always)]
     fn from_mask(mask: Self::BitMask) -> Self {
         // Single lane: negation maps 0→0 and 1→0xFFFF_FFFF_FFFF_FFFF.
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe { vcreate_u64((mask.0 as u64).wrapping_neg()) }
     }
 
     #[inline(always)]
     fn keep_first(_arch: Neon, lanes: usize) -> Self {
         // Single lane: negation maps 0→0 and 1→0xFFFF_FFFF_FFFF_FFFF.
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe { vcreate_u64((lanes.min(1) as u64).wrapping_neg()) }
     }
 
@@ -577,8 +556,7 @@ impl MaskOps for uint64x2_t {
                 // Normalize each lane to 0 or 1, then narrow to a 64-bit register and
                 // use shift-right-accumulate to combine the two bits.
                 //
-                // SAFETY: Inclusion of this function is dependent on the "neon" target
-                // feature. This function does not access memory directly.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 let value = unsafe {
                     let bits = vshrq_n_u64(self, 63);
                     let narrowed = vmovn_u64(bits);
@@ -598,8 +576,7 @@ impl MaskOps for uint64x2_t {
     fn from_mask(mask: Self::BitMask) -> Self {
         const BIT_SELECTOR_LOW: u64 = 0x0000_0000_0000_0001;
         const BIT_SELECTOR_HIGH: u64 = 0x0000_0000_0000_0002;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe {
             vtstq_u64(
                 vmovq_n_u64(mask.0 as u64),
@@ -616,8 +593,7 @@ impl MaskOps for uint64x2_t {
         const LO: u64 = 0;
         const HI: u64 = 1;
         let n = lanes.min(2) as u64;
-        // SAFETY: Inclusion of this function is dependent on the "neon" target
-        // feature. This function does not access memory directly.
+        // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
         unsafe {
             vcltq_u64(
                 vcombine_u64(vcreate_u64(LO), vcreate_u64(HI)),

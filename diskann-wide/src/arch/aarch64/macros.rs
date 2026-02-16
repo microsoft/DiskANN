@@ -186,7 +186,7 @@ macro_rules! aarch64_define_splat {
 }
 
 macro_rules! aarch64_define_loadstore {
-    ($type:ty, $load:expr, $store:expr, $lanes:literal) => {
+    ($type:ty, $load:expr, $load_first:expr, $store:expr, $lanes:literal) => {
         impl AArchLoadStore for $type {
             #[inline(always)]
             unsafe fn load_simd(
@@ -222,11 +222,7 @@ macro_rules! aarch64_define_loadstore {
                 first: usize,
             ) -> Self {
                 // SAFETY: Inherited from caller.
-                let e = unsafe {
-                    Emulated::<_, $lanes>::load_simd_first($crate::arch::Scalar, ptr, first)
-                };
-
-                Self::from_array(arch, e.to_array())
+                Self(unsafe { ($load_first)(arch, ptr, first) })
             }
 
             #[inline(always)]
@@ -262,7 +258,7 @@ macro_rules! aarch64_define_cmp {
         impl SIMDPartialEq for $type {
             #[inline(always)]
             fn eq_simd(self, other: Self) -> Self::Mask {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -271,7 +267,7 @@ macro_rules! aarch64_define_cmp {
 
             #[inline(always)]
             fn ne_simd(self, other: Self) -> Self::Mask {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -282,7 +278,7 @@ macro_rules! aarch64_define_cmp {
         impl SIMDPartialOrd for $type {
             #[inline(always)]
             fn lt_simd(self, other: Self) -> Self::Mask {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -291,7 +287,7 @@ macro_rules! aarch64_define_cmp {
 
             #[inline(always)]
             fn le_simd(self, other: Self) -> Self::Mask {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -300,7 +296,7 @@ macro_rules! aarch64_define_cmp {
 
             #[inline(always)]
             fn gt_simd(self, other: Self) -> Self::Mask {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -309,7 +305,7 @@ macro_rules! aarch64_define_cmp {
 
             #[inline(always)]
             fn ge_simd(self, other: Self) -> Self::Mask {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -383,7 +379,7 @@ macro_rules! aarch64_define_bitops {
             type Output = Self;
             #[inline(always)]
             fn not(self) -> Self {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -395,7 +391,7 @@ macro_rules! aarch64_define_bitops {
             type Output = Self;
             #[inline(always)]
             fn bitand(self, rhs: Self) -> Self {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -407,7 +403,7 @@ macro_rules! aarch64_define_bitops {
             type Output = Self;
             #[inline(always)]
             fn bitor(self, rhs: Self) -> Self {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -419,7 +415,7 @@ macro_rules! aarch64_define_bitops {
             type Output = Self;
             #[inline(always)]
             fn bitxor(self, rhs: Self) -> Self {
-                // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                 //
                 // It is the caller's responsibility to instantiate the macro with an
                 // intrinsics also gated by "neon".
@@ -439,7 +435,7 @@ macro_rules! aarch64_define_bitops {
                 if cfg!(miri) {
                     self.emulated().shr(rhs.emulated()).as_simd(self.arch())
                 } else {
-                    // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                    // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                     //
                     // It is the caller's responsibility to instantiate the macro with an
                     // intrinsics also gated by "neon".
@@ -464,7 +460,7 @@ macro_rules! aarch64_define_bitops {
                 if cfg!(miri) {
                     self.emulated().shl(rhs.emulated()).as_simd(self.arch())
                 } else {
-                    // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                    // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                     //
                     // It is the caller's responsibility to instantiate the macro with an
                     // intrinsics also gated by "neon".
@@ -493,7 +489,7 @@ macro_rules! aarch64_define_bitops {
                 if cfg!(miri) {
                     self.emulated().shr(rhs).as_simd(self.arch())
                 } else {
-                    // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                    // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                     //
                     // It is the caller's responsibility to instantiate the macro with an
                     // intrinsics also gated by "neon".
@@ -515,7 +511,7 @@ macro_rules! aarch64_define_bitops {
                 if cfg!(miri) {
                     self.emulated().shl(rhs).as_simd(self.arch())
                 } else {
-                    // SAFETY: Inclusion of this macro is gated by the "neon" feature.
+                    // SAFETY: The presence of `Neon` enables the use of "neon" intrinsics.
                     //
                     // It is the caller's responsibility to instantiate the macro with an
                     // intrinsics also gated by "neon".

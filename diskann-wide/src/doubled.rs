@@ -122,6 +122,27 @@ macro_rules! double_vector {
             }
 
             #[inline(always)]
+            unsafe fn load_simd_first(
+                arch: Self::Arch,
+                ptr: *const Self::Scalar,
+                first: usize,
+            ) -> Self {
+                const HALF: usize = { $N / 2 };
+                Self(
+                    // SAFETY: Inherited from caller.
+                    unsafe { <$repr as $crate::SIMDVector>::load_simd_first(arch, ptr, first) },
+                    // SAFETY: Inherited from caller.
+                    unsafe {
+                        <$repr as $crate::SIMDVector>::load_simd_first(
+                            arch,
+                            ptr.wrapping_add(HALF),
+                            first.saturating_sub(HALF),
+                        )
+                    },
+                )
+            }
+
+            #[inline(always)]
             unsafe fn store_simd(self, ptr: *mut Self::Scalar) {
                 // SAFETY: The caller asserts this pointer access is safe.
                 unsafe { self.0.store_simd(ptr) };
@@ -141,6 +162,19 @@ macro_rules! double_vector {
                 unsafe {
                     self.1
                         .store_simd_masked_logical(ptr.wrapping_add({ $N / 2 }), mask.1)
+                };
+            }
+
+            #[inline(always)]
+            unsafe fn store_simd_first(self, ptr: *mut Self::Scalar, first: usize) {
+                const HALF: usize = { $N / 2 };
+
+                // SAFETY: Inherited from caller.
+                unsafe { self.0.store_simd_first(ptr, first) };
+                // SAFETY: Inherited from caller.
+                unsafe {
+                    self.1
+                        .store_simd_first(ptr.wrapping_add(HALF), first.saturating_sub(HALF))
                 };
             }
         }

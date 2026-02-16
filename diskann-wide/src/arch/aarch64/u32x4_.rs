@@ -10,7 +10,7 @@ use crate::{
 
 // AArch64 masks
 use super::{
-    Neon,
+    Neon, algorithms,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask32x4,
     u8x16,
@@ -25,7 +25,13 @@ use std::arch::{aarch64::*, asm};
 
 macros::aarch64_define_register!(u32x4, uint32x4_t, mask32x4, u32, 4, Neon);
 macros::aarch64_define_splat!(u32x4, vmovq_n_u32);
-macros::aarch64_define_loadstore!(u32x4, vld1q_u32, vst1q_u32, 4);
+macros::aarch64_define_loadstore!(
+    u32x4,
+    vld1q_u32,
+    algorithms::load_first::u32x4,
+    vst1q_u32,
+    4
+);
 
 helpers::unsafe_map_binary_op!(u32x4, std::ops::Add, add, vaddq_u32, "neon");
 helpers::unsafe_map_binary_op!(u32x4, std::ops::Sub, sub, vsubq_u32, "neon");
