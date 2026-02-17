@@ -22,8 +22,6 @@ const char *DATA_TYPE_DESCRIPTION = "data type, one of {int8, uint8, float} - fl
 const char *DISTANCE_FUNCTION_DESCRIPTION =
     "distance function {l2, mips, fast_l2, cosine}.  'fast l2' and 'mips' only support data_type float";
 const char *INDEX_PATH_PREFIX_DESCRIPTION = "Path prefix to the index, e.g. '/mnt/data/my_ann_index'";
-const char *RESULT_PATH_DESCRIPTION =
-    "Path prefix for saving results of the queries, e.g. '/mnt/data/query_file_X.bin'";
 const char *QUERY_FILE_DESCRIPTION = "Query file in binary format, e.g. '/mnt/data/query_file_X.bin'";
 const char *NUMBER_OF_RESULTS_DESCRIPTION = "Number of neighbors to be returned (K in the DiskANN white paper)";
 const char *SEARCH_LIST_DESCRIPTION =
@@ -35,6 +33,8 @@ const char *INPUT_DATA_PATH = "Input data file in bin format.  This is the file 
                               "File format:  Shape of the vector followed by the vector of embeddings as binary data.";
 
 // Optional parameters
+const char *RESULT_PATH_DESCRIPTION =
+    "Path prefix for saving results of the queries, e.g. '/mnt/data/query_file_X.bin'";
 const char *FILTER_LABEL_DESCRIPTION =
     "Filter to use when running a query.  'filter_label' and 'query_filters_file' are mutually exclusive.";
 const char *FILTERS_FILE_DESCRIPTION =
