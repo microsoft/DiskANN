@@ -6,7 +6,7 @@
       "content": {
         "query_type": "float32",
         "data_type": "float32",
-        "arch": "x86-64-v3",
+        "arch": "scalar",
         "runs": [
           {
             "distance": "squared_l2",
@@ -352,7 +352,7 @@
       "content": {
         "query_type": "float16",
         "data_type": "float16",
-        "arch": "x86-64-v3",
+        "arch": "scalar",
         "runs": [
           {
             "distance": "squared_l2",
@@ -699,7 +699,7 @@
       "content": {
         "query_type": "uint8",
         "data_type": "uint8",
-        "arch": "x86-64-v3",
+        "arch": "scalar",
         "runs": [
           {
             "distance": "squared_l2",
@@ -1046,7 +1046,7 @@
       "content": {
         "query_type": "int8",
         "data_type": "int8",
-        "arch": "x86-64-v3",
+        "arch": "scalar",
         "runs": [
           {
             "distance": "squared_l2",
