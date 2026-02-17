@@ -18,7 +18,9 @@ pub fn get_process_time() -> Option<u64> {
     let result = unsafe { getrusage(RUSAGE_SELF, &mut usage) };
 
     if result == 0 {
-        // Convert timeval to microseconds (100-nanosecond units to match Windows FILETIME)
+        // Convert timeval to 100-nanosecond units (to match Windows FILETIME)
+        // tv_sec is in seconds, tv_usec is in microseconds
+        // 1 second = 10_000_000 * 100ns, 1 microsecond = 10 * 100ns
         let user_time =
             (usage.ru_utime.tv_sec as u64) * 10_000_000 + (usage.ru_utime.tv_usec as u64) * 10;
         let system_time =
