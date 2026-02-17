@@ -586,57 +586,6 @@ where
     let recall_metrics: recall::RecallMetrics =
         (&recall::knn(groundtruth, None, &merged.ids, recall_k, search_n, false)?).into();
 
-    // Compute per-query details (only for queries with recall < 1)
-    let per_query_details: Vec<PerQueryDetails> = (0..num_queries)
-        .filter_map(|query_idx| {
-            let result_ids: Vec<u32> = merged
-                .ids
-                .row(query_idx)
-                .iter()
-                .copied()
-                .filter(|&id| id != u32::MAX)
-                .collect();
-            let result_distances: Vec<f32> = merged
-                .distances
-                .get(query_idx)
-                .map(|d| d.iter().copied().filter(|&dist| dist != f32::MAX).collect())
-                .unwrap_or_default();
-            // Only keep top 20 from ground truth
-            let gt_ids: Vec<u32> = groundtruth
-                .get(query_idx)
-                .map(|gt| gt.iter().take(20).copied().collect())
-                .unwrap_or_default();
-
-            // Compute per-query recall: intersection of result_ids with gt_ids / recall_k
-            let result_set: std::collections::HashSet<u32> = result_ids.iter().copied().collect();
-            let gt_set: std::collections::HashSet<u32> =
-                gt_ids.iter().take(recall_k).copied().collect();
-            let intersection = result_set.intersection(&gt_set).count();
-            let per_query_recall = if gt_set.is_empty() {
-                1.0
-            } else {
-                intersection as f64 / gt_set.len() as f64
-            };
-
-            // Only include queries with imperfect recall
-            if per_query_recall >= 1.0 {
-                return None;
-            }
-
-            let (_, ref ast_expr) = predicates[query_idx];
-            let filter_str = format!("{:?}", ast_expr);
-
-            Some(PerQueryDetails {
-                query_id: query_idx,
-                filter: filter_str,
-                recall: per_query_recall,
-                result_ids,
-                result_distances,
-                groundtruth_ids: gt_ids,
-            })
-        })
-        .collect();
-
     // Compute QPS from rep latencies
     let qps: Vec<f64> = rep_latencies
         .iter()
@@ -684,18 +633,15 @@ where
 
     Ok(SearchRunStats {
         num_threads: num_threads.get(),
-        num_queries,
         search_n,
         search_l,
         recall: recall_metrics,
         qps,
-        wall_clock_time: rep_latencies,
         mean_latency: mean,
         p90_latency: p90,
         p99_latency: p99,
         mean_cmps,
         mean_hops,
-        per_query_details: Some(per_query_details),
     })
 }
 async fn run_search_parallel<DP, T>(
@@ -830,60 +776,19 @@ pub struct BuildParamsStats {
     pub alpha: f32,
 }
 
-/// Helper module for serializing arrays as compact single-line JSON strings
-mod compact_array {
-    use serde::Serializer;
-
-    pub fn serialize_u32_vec<S>(vec: &Vec<u32>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Serialize as a string containing the compact JSON array
-        let compact = serde_json::to_string(vec).unwrap_or_default();
-        serializer.serialize_str(&compact)
-    }
-
-    pub fn serialize_f32_vec<S>(vec: &Vec<f32>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Serialize as a string containing the compact JSON array
-        let compact = serde_json::to_string(vec).unwrap_or_default();
-        serializer.serialize_str(&compact)
-    }
-}
-
-/// Per-query detailed results for debugging/analysis
-#[derive(Debug, Serialize)]
-pub struct PerQueryDetails {
-    pub query_id: usize,
-    pub filter: String,
-    pub recall: f64,
-    #[serde(serialize_with = "compact_array::serialize_u32_vec")]
-    pub result_ids: Vec<u32>,
-    #[serde(serialize_with = "compact_array::serialize_f32_vec")]
-    pub result_distances: Vec<f32>,
-    #[serde(serialize_with = "compact_array::serialize_u32_vec")]
-    pub groundtruth_ids: Vec<u32>,
-}
-
 /// Results from a single search configuration (one search_l value).
 #[derive(Debug, Serialize)]
 pub struct SearchRunStats {
     pub num_threads: usize,
-    pub num_queries: usize,
     pub search_n: usize,
     pub search_l: usize,
     pub recall: recall::RecallMetrics,
     pub qps: Vec<f64>,
-    pub wall_clock_time: Vec<MicroSeconds>,
     pub mean_latency: f64,
     pub p90_latency: MicroSeconds,
     pub p99_latency: MicroSeconds,
     pub mean_cmps: f32,
     pub mean_hops: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub per_query_details: Option<Vec<PerQueryDetails>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -929,8 +834,16 @@ impl std::fmt::Display for DocumentIndexStats {
             writeln!(f, "\nFiltered Search Results:")?;
             writeln!(
                 f,
-                "  {:>8} {:>8} {:>10} {:>10} {:>15} {:>12} {:>12} {:>10} {:>8} {:>10} {:>12}",
-                "L", "KNN", "Avg Cmps", "Avg Hops", "QPS -mean(max)", "Avg Latency", "p99 Latency", "Recall", "Threads", "Queries", "WallClock(s)"
+                "  {:>8} {:>8} {:>10} {:>10} {:>15} {:>12} {:>12} {:>10} {:>8}",
+                "L",
+                "KNN",
+                "Avg Cmps",
+                "Avg Hops",
+                "QPS -mean(max)",
+                "Avg Latency",
+                "p99 Latency",
+                "Recall",
+                "Threads"
             )?;
             for s in &self.search {
                 let mean_qps = if s.qps.is_empty() {
@@ -939,14 +852,9 @@ impl std::fmt::Display for DocumentIndexStats {
                     s.qps.iter().sum::<f64>() / s.qps.len() as f64
                 };
                 let max_qps = s.qps.iter().cloned().fold(0.0_f64, f64::max);
-                let mean_wall_clock = if s.wall_clock_time.is_empty() {
-                    0.0
-                } else {
-                    s.wall_clock_time.iter().map(|t| t.as_seconds()).sum::<f64>() / s.wall_clock_time.len() as f64
-                };
                 writeln!(
                     f,
-                    "  {:>8} {:>8} {:>10.1} {:>10.1} {:>7.1}({:>5.1}) {:>12.1} {:>12} {:>10.4} {:>8} {:>10} {:>12.3}",
+                    "  {:>8} {:>8} {:>10.1} {:>10.1} {:>7.1}({:>5.1}) {:>12.1} {:>12} {:>10.4} {:>8}",
                     s.search_l,
                     s.search_n,
                     s.mean_cmps,
@@ -956,9 +864,7 @@ impl std::fmt::Display for DocumentIndexStats {
                     s.mean_latency,
                     s.p99_latency,
                     s.recall.average,
-                    s.num_threads,
-                    s.num_queries,
-                    mean_wall_clock
+                    s.num_threads
                 )?;
             }
         }
