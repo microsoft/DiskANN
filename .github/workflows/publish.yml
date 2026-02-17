@@ -30,7 +30,6 @@ on:
 
 env:
   RUST_BACKTRACE: 1
-  rust_stable: "1.92"
 
 defaults:
   run:
@@ -50,10 +49,17 @@ jobs:
         with:
           lfs: true
       
-      - name: Install Rust ${{ env.rust_stable }}
+      - name: Read Rust version from rust-toolchain.toml
+        id: rust-version
+        run: |
+          RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          echo "channel=$RUST_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Using Rust version: $RUST_VERSION"
+      
+      - name: Install Rust ${{ steps.rust-version.outputs.channel }}
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ env.rust_stable }}
+          toolchain: ${{ steps.rust-version.outputs.channel }}
       
       - uses: Swatinem/rust-cache@v2
       
