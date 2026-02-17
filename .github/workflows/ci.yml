@@ -19,8 +19,9 @@ env:
   # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
-  # Use the Rust version specified in rust-toolchain.toml
-  rust_stable: "1.92"
+  # Rust toolchain version is automatically detected from rust-toolchain.toml
+  # When using dtolnay/rust-toolchain@master without an explicit toolchain parameter,
+  # the action automatically installs the version specified in rust-toolchain.toml
 
 defaults:
   run:
@@ -48,10 +49,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       # Check fmt
@@ -73,10 +73,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
@@ -106,10 +105,9 @@ jobs:
         with:
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -141,10 +139,8 @@ jobs:
         with:
           languages: rust
 
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
 
       - uses: Swatinem/rust-cache@v2
 
@@ -162,10 +158,8 @@ jobs:
   #   runs-on: ubuntu-latest
   #   steps:
   #     - uses: actions/checkout@v4
-  #     - name: Install Rust ${{ env.rust_stable }}
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: ${{ env.rust_stable }}
+  #     - name: Install Rust toolchain
+  #       uses: dtolnay/rust-toolchain@master
   #     - uses: Swatinem/rust-cache@v2
   #     - name: "doc --workspace --no-deps"
   #       run: cargo doc --workspace --no-deps --document-private-items
@@ -240,10 +234,8 @@ jobs:
         with:
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -273,10 +265,8 @@ jobs:
         with:
           lfs: true
 
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.rust_stable }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -307,10 +297,9 @@ jobs:
           lfs: true
           fetch-depth: 0
 
-      - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ env.rust_stable }}
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
