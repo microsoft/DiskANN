@@ -98,16 +98,27 @@ impl SIMDDotProduct<i16x8> for i32x4 {
             let right = right.0;
             // SAFETY: Allowed by the `Neon` architecture.
             unsafe {
-                let left_lo = vget_low_s16(left);
-                let left_hi = vget_high_s16(left);
+                // println!("self = {:?}", self.to_array());
 
-                let right_lo = vget_low_s16(right);
-                let right_hi = vget_high_s16(right);
+                let a = vmlal_s16(self.0, vget_low_s16(left), vget_low_s16(right));
 
-                let lo: int32x4_t = vmull_s16(left_lo, right_lo);
-                let hi: int32x4_t = vmull_s16(left_hi, right_hi);
+                // println!("a = {:?}", Self(a).to_array());
 
-                Self(vaddq_s32(self.0, vpaddq_s32(lo, hi)))
+                let b = vmlal_high_s16(a, left, right);
+
+                // println!("b = {:?}", Self(b).to_array());
+                Self(b)
+
+                // let left_lo = vget_low_s16(left);
+                // let left_hi = vget_high_s16(left);
+
+                // let right_lo = vget_low_s16(right);
+                // let right_hi = vget_high_s16(right);
+
+                // let partial = vmlal_s16(self.0, left_lo, right_lo);
+                // Self(vmlal_s16(partial, left_hi, right_hi))
+
+                // Self(vaddq_s32(self.0, vpaddq_s32(lo, hi)))
             }
         }
     }
