@@ -47,7 +47,8 @@ def parse_index_with_PQ_vectors(index_path_prefix, data_type_code, data_type_siz
             max_node_len = struct.unpack('Q', index_file.read(8))[0]
             nnodes_per_sector = struct.unpack('Q', index_file.read(8))[0]
 
-            metadata_file = pathlib.Path.stem(out_graph_csv) + "_metadata.tsv"
+            output_path = pathlib.Path(out_graph_csv)
+            metadata_file = output_path.parent / (output_path.stem + "_metadata.tsv")
             with open(metadata_file, "w") as metadata_out:
                 str_metadata = "Num nodes: " + str(num_nodes) + "\n" + "Num dims: " + str(num_dims) + "\n" + "Medoid id: " + str(medoid_id) + "\n" + "Max node len: " + str(max_node_len) + "\n" + "Nodes per sector: " + str(nnodes_per_sector) + "\n"
                 metadata_out.write(str_metadata)
