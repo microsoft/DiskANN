@@ -68,6 +68,7 @@ const char *GRAPH_BUILD_ALPHA = "Alpha controls density and diameter of graph, s
                                 "denser graphs with lower diameter";
 const char *BUIlD_GRAPH_PQ_BYTES = "Number of PQ bytes to build the index; 0 for full precision build";
 const char *USE_OPQ = "Use Optimized Product Quantization (OPQ).";
+const char *DIVERSE_INDEX = "Build Diverse Index";
 const char *LABEL_FILE = "Input label file in txt format for Filtered Index build. The file should contain comma "
                          "separated filters for each node with each line corresponding to a graph node";
 const char *UNIVERSAL_LABEL =
@@ -77,5 +78,7 @@ const char *UNIVERSAL_LABEL =
     "in the labels file instead of listing all labels for a node.  DiskANN will not automatically assign a "
     "universal label to a node.";
 const char *FILTERED_LBUILD = "Build complexity for filtered points, higher value results in better graphs";
+const char *DIVERSITY_FILE = "Seller diversity file for diverse index";
+const char *NUM_DIVERSE = "Number of diverse edges needed per node in each local region";
 
 } // namespace program_options_utils
