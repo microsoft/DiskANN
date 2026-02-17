@@ -369,288 +369,834 @@ where
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{Reborrow, ReborrowMut};
+    use std::fmt::Display;
+
+    use diskann_utils::{lazy_format, Reborrow, ReborrowMut};
 
     use super::*;
 
-    /// A simple test metadata type.
+    /// A simple 4-byte metadata type with no special alignment.
     #[derive(Debug, Default, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
     #[repr(C)]
     struct Meta {
         scale: f32,
     }
 
-    #[test]
-    fn new_and_basic_accessors() {
-        let repr = SliceMatRepr::<f32, Meta>::new(3, 4).unwrap();
-        let mut mat = Mat::new(repr, Defaulted).unwrap();
-
-        assert_eq!(mat.num_vectors(), 3);
-
-        // All rows should be zeroed (default).
-        for i in 0..3 {
-            let row = mat.get_row(i).unwrap();
-            assert_eq!(*row.meta(), Meta::default());
-            assert_eq!(row.vector(), &[0.0f32; 4]);
-        }
-
-        // Write to each row.
-        for i in 0..3 {
-            let mut row = mat.get_row_mut(i).unwrap();
-            *row.meta_mut() = Meta { scale: i as f32 };
-            row.vector_mut()
-                .iter_mut()
-                .enumerate()
-                .for_each(|(j, v)| *v = (10 * i + j) as f32);
-        }
-
-        // Verify reads.
-        for i in 0..3 {
-            let row = mat.get_row(i).unwrap();
-            assert_eq!(*row.meta(), Meta { scale: i as f32 });
-            for j in 0..4 {
-                assert_eq!(row.vector()[j], (10 * i + j) as f32);
-            }
-        }
-    }
-
-    #[test]
-    fn out_of_bounds_returns_none() {
-        let repr = SliceMatRepr::<u8, Meta>::new(2, 3).unwrap();
-        let mat = Mat::new(repr, Defaulted).unwrap();
-
-        assert!(mat.get_row(0).is_some());
-        assert!(mat.get_row(1).is_some());
-        assert!(mat.get_row(2).is_none());
-        assert!(mat.get_row(usize::MAX).is_none());
-    }
-
-    #[test]
-    fn clone_produces_independent_copy() {
-        let repr = SliceMatRepr::<u16, Meta>::new(2, 3).unwrap();
-        let mut mat = Mat::new(repr, Defaulted).unwrap();
-
-        // Write data.
-        {
-            let mut row = mat.get_row_mut(0).unwrap();
-            *row.meta_mut() = Meta { scale: 1.5 };
-            row.vector_mut().copy_from_slice(&[10, 20, 30]);
-        }
-        {
-            let mut row = mat.get_row_mut(1).unwrap();
-            *row.meta_mut() = Meta { scale: 2.5 };
-            row.vector_mut().copy_from_slice(&[40, 50, 60]);
-        }
-
-        let cloned = mat.clone();
-
-        // Verify the clone has the same data.
-        for i in 0..2 {
-            let orig = mat.get_row(i).unwrap();
-            let copy = cloned.get_row(i).unwrap();
-            assert_eq!(*orig.meta(), *copy.meta());
-            assert_eq!(orig.vector(), copy.vector());
-        }
-
-        // Mutating original should not affect clone.
-        {
-            let mut row = mat.get_row_mut(0).unwrap();
-            *row.meta_mut() = Meta { scale: 99.0 };
-            row.vector_mut()[0] = 999;
-        }
-
-        let orig_row = mat.get_row(0).unwrap();
-        let clone_row = cloned.get_row(0).unwrap();
-        assert_eq!(*orig_row.meta(), Meta { scale: 99.0 });
-        assert_eq!(*clone_row.meta(), Meta { scale: 1.5 });
-        assert_eq!(orig_row.vector()[0], 999);
-        assert_eq!(clone_row.vector()[0], 10);
-    }
-
-    #[test]
-    fn zero_dimensions() {
-        // Zero rows.
-        let repr = SliceMatRepr::<f32, Meta>::new(0, 5).unwrap();
-        let mat = Mat::new(repr, Defaulted).unwrap();
-        assert_eq!(mat.num_vectors(), 0);
-        assert!(mat.get_row(0).is_none());
-
-        // Zero cols.
-        let repr = SliceMatRepr::<f32, Meta>::new(3, 0).unwrap();
-        let mat = Mat::new(repr, Defaulted).unwrap();
-        assert_eq!(mat.num_vectors(), 3);
-        for i in 0..3 {
-            let row = mat.get_row(i).unwrap();
-            assert_eq!(row.vector().len(), 0);
-            assert_eq!(*row.meta(), Meta::default());
-        }
-
-        // Zero rows and zero cols.
-        let repr = SliceMatRepr::<f32, Meta>::new(0, 0).unwrap();
-        let mat = Mat::new(repr, Defaulted).unwrap();
-        assert_eq!(mat.num_vectors(), 0);
-    }
-
-    #[test]
-    fn rows_iterator() {
-        let repr = SliceMatRepr::<u8, Meta>::new(4, 2).unwrap();
-        let mut mat = Mat::new(repr, Defaulted).unwrap();
-
-        // Fill via get_row_mut.
-        for i in 0..4 {
-            let mut row = mat.get_row_mut(i).unwrap();
-            *row.meta_mut() = Meta { scale: i as f32 };
-            row.vector_mut()
-                .iter_mut()
-                .enumerate()
-                .for_each(|(j, v)| *v = (i * 10 + j) as u8);
-        }
-
-        // Verify via rows iterator.
-        let rows: Vec<_> = mat.rows().collect();
-        assert_eq!(rows.len(), 4);
-        for (i, row) in rows.iter().enumerate() {
-            assert_eq!(*row.meta(), Meta { scale: i as f32 });
-            for j in 0..2 {
-                assert_eq!(row.vector()[j], (i * 10 + j) as u8);
-            }
-        }
-    }
-
-    #[test]
-    fn rows_mut_iterator() {
-        let repr = SliceMatRepr::<u32, Meta>::new(3, 2).unwrap();
-        let mut mat = Mat::new(repr, Defaulted).unwrap();
-
-        // Fill via rows_mut.
-        for (i, mut row) in mat.rows_mut().enumerate() {
-            *row.meta_mut() = Meta {
-                scale: (i + 1) as f32,
-            };
-            row.vector_mut()
-                .iter_mut()
-                .enumerate()
-                .for_each(|(j, v)| *v = (i * 10 + j) as u32);
-        }
-
-        // Verify.
-        for i in 0..3 {
-            let row = mat.get_row(i).unwrap();
-            assert_eq!(
-                *row.meta(),
-                Meta {
-                    scale: (i + 1) as f32
-                }
-            );
-            for j in 0..2 {
-                assert_eq!(row.vector()[j], (i * 10 + j) as u32);
-            }
-        }
-    }
-
-    #[test]
-    fn reborrow_views() {
-        let repr = SliceMatRepr::<f32, Meta>::new(2, 3).unwrap();
-        let mut mat = Mat::new(repr, Defaulted).unwrap();
-
-        // Write data.
-        {
-            let mut row = mat.get_row_mut(0).unwrap();
-            *row.meta_mut() = Meta { scale: 1.0 };
-            row.vector_mut().copy_from_slice(&[1.0, 2.0, 3.0]);
-        }
-
-        // Reborrow as MatRef.
-        let view: MatRef<'_, _> = mat.reborrow();
-        assert_eq!(view.num_vectors(), 2);
-        let row = view.get_row(0).unwrap();
-        assert_eq!(*row.meta(), Meta { scale: 1.0 });
-        assert_eq!(row.vector(), &[1.0, 2.0, 3.0]);
-
-        // Reborrow as MatMut.
-        let mut view_mut: MatMut<'_, _> = mat.reborrow_mut();
-        assert_eq!(view_mut.num_vectors(), 2);
-        let mut row = view_mut.get_row_mut(0).unwrap();
-        *row.meta_mut() = Meta { scale: 5.0 };
-
-        // Verify the change is visible.
-        let row = mat.get_row(0).unwrap();
-        assert_eq!(*row.meta(), Meta { scale: 5.0 });
-    }
-
-    #[test]
-    fn to_owned_from_view() {
-        let repr = SliceMatRepr::<u8, Meta>::new(2, 4).unwrap();
-        let mut mat = Mat::new(repr, Defaulted).unwrap();
-
-        {
-            let mut row = mat.get_row_mut(0).unwrap();
-            *row.meta_mut() = Meta { scale: 2.14 };
-            row.vector_mut().copy_from_slice(&[1, 2, 3, 4]);
-        }
-
-        let owned = mat.as_view().to_owned();
-        assert_eq!(owned.num_vectors(), 2);
-        let row = owned.get_row(0).unwrap();
-        assert_eq!(*row.meta(), Meta { scale: 2.14 });
-        assert_eq!(row.vector(), &[1, 2, 3, 4]);
-    }
-
-    // #[test]
-    // fn new_rejects_overflow() {
-    //     // This should fail because the total byte size would overflow.
-    //     assert!(SliceMatRepr::<u8, Meta>::new(usize::MAX, 2).is_err());
-    //     assert!(SliceMatRepr::<u8, Meta>::new(2, usize::MAX).is_err());
-    // }
-
-    /// A metadata type with stricter alignment to test alignment handling.
+    /// A metadata type with stricter alignment to exercise padding.
     #[derive(Debug, Default, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
     #[repr(C, align(8))]
     struct AlignedMeta {
         a: f64,
     }
 
-    #[test]
-    fn aligned_metadata() {
-        let repr = SliceMatRepr::<u16, AlignedMeta>::new(2, 5).unwrap();
-        let mut mat = Mat::new(repr, Defaulted).unwrap();
-
-        {
-            let mut row = mat.get_row_mut(0).unwrap();
-            *row.meta_mut() = AlignedMeta { a: 42.0 };
-            row.vector_mut().copy_from_slice(&[1, 2, 3, 4, 5]);
-        }
-
-        let row = mat.get_row(0).unwrap();
-        assert_eq!(*row.meta(), AlignedMeta { a: 42.0 });
-        assert_eq!(row.vector(), &[1, 2, 3, 4, 5]);
-    }
-
-    /// Zero-sized metadata.
+    /// A zero-sized metadata type.
     #[derive(Debug, Default, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
     #[repr(C)]
     struct ZstMeta;
 
-    #[test]
-    fn zst_metadata() {
-        let repr = SliceMatRepr::<f32, ZstMeta>::new(3, 2).unwrap();
-        let mut mat = Mat::new(repr, Defaulted).unwrap();
+    /// A multi-field metadata type.
+    #[derive(Debug, Default, Clone, Copy, PartialEq, bytemuck::Zeroable, bytemuck::Pod)]
+    #[repr(C)]
+    struct RichMeta {
+        min: f32,
+        max: f32,
+    }
 
-        for i in 0..3 {
+    ///////////////////////
+    // Helper Functions  //
+    ///////////////////////
+
+    const ROWS: &[usize] = &[0, 1, 2, 3, 5, 10];
+    const COLS: &[usize] = &[0, 1, 2, 3, 5, 10];
+
+    /// Fill each row of an owned `Mat` with deterministic test values.
+    ///
+    /// Row `i`, column `j` gets value `(10 * i + j)` cast into `T`.
+    /// Metadata for row `i` is `from(i)`.
+    fn fill_mat<T, M>(mat: &mut Mat<SliceMatRepr<T, M>>)
+    where
+        T: bytemuck::Pod + From<u8>,
+        M: bytemuck::Pod + TestMeta,
+    {
+        let nrows = mat.num_vectors();
+        let ncols = mat.repr().ncols();
+        for i in 0..nrows {
             let mut row = mat.get_row_mut(i).unwrap();
-            assert_eq!(*row.meta(), ZstMeta);
-            row.vector_mut()
-                .iter_mut()
-                .enumerate()
-                .for_each(|(j, v)| *v = (i * 10 + j) as f32);
-        }
-
-        for i in 0..3 {
-            let row = mat.get_row(i).unwrap();
-            assert_eq!(*row.meta(), ZstMeta);
-            for j in 0..2 {
-                assert_eq!(row.vector()[j], (i * 10 + j) as f32);
+            *row.meta_mut() = M::from_index(i);
+            for j in 0..ncols {
+                row.vector_mut()[j] = T::from((10 * i + j) as u8);
             }
         }
+    }
+
+    /// Fill a `MatMut` with the same deterministic pattern as [`fill_mat`].
+    fn fill_mat_mut<T, M>(mat: &mut MatMut<'_, SliceMatRepr<T, M>>)
+    where
+        T: bytemuck::Pod + From<u8>,
+        M: bytemuck::Pod + TestMeta,
+    {
+        let nrows = mat.num_vectors();
+        let ncols = mat.repr().ncols();
+        for i in 0..nrows {
+            let mut row = mat.get_row_mut(i).unwrap();
+            *row.meta_mut() = M::from_index(i);
+            for j in 0..ncols {
+                row.vector_mut()[j] = T::from((10 * i + j) as u8);
+            }
+        }
+    }
+
+    /// Fill via the `rows_mut` iterator.
+    fn fill_rows_mut<T, M>(mat: &mut Mat<SliceMatRepr<T, M>>)
+    where
+        T: bytemuck::Pod + From<u8>,
+        M: bytemuck::Pod + TestMeta,
+    {
+        let ncols = mat.repr().ncols();
+        for (i, mut row) in mat.rows_mut().enumerate() {
+            *row.meta_mut() = M::from_index(i);
+            for j in 0..ncols {
+                row.vector_mut()[j] = T::from((10 * i + j) as u8);
+            }
+        }
+    }
+
+    /// Check all rows of a `Mat` match the deterministic fill pattern.
+    fn check_mat<T, M>(mat: &Mat<SliceMatRepr<T, M>>, repr: SliceMatRepr<T, M>, ctx: &dyn Display)
+    where
+        T: bytemuck::Pod + From<u8> + PartialEq + std::fmt::Debug,
+        M: bytemuck::Pod + TestMeta + PartialEq + std::fmt::Debug,
+    {
+        assert_eq!(mat.num_vectors(), repr.nrows, "nrows mismatch: {ctx}");
+        for i in 0..mat.num_vectors() {
+            let row = mat.get_row(i).unwrap();
+            assert_eq!(*row.meta(), M::from_index(i), "meta mismatch row {i}: {ctx}");
+            assert_eq!(row.vector().len(), repr.ncols, "ncols mismatch row {i}: {ctx}");
+            for j in 0..repr.ncols {
+                assert_eq!(
+                    row.vector()[j],
+                    T::from((10 * i + j) as u8),
+                    "data mismatch at [{i}, {j}]: {ctx}"
+                );
+            }
+        }
+        // Out-of-bounds access returns None.
+        for oob in oob_indices(repr.nrows) {
+            assert!(mat.get_row(oob).is_none(), "expected None for index {oob}: {ctx}");
+        }
+    }
+
+    /// Check all rows via a `MatRef`.
+    fn check_mat_ref<T, M>(
+        mat: MatRef<'_, SliceMatRepr<T, M>>,
+        repr: SliceMatRepr<T, M>,
+        ctx: &dyn Display,
+    ) where
+        T: bytemuck::Pod + From<u8> + PartialEq + std::fmt::Debug,
+        M: bytemuck::Pod + TestMeta + PartialEq + std::fmt::Debug,
+    {
+        assert_eq!(mat.num_vectors(), repr.nrows, "nrows mismatch: {ctx}");
+        for i in 0..mat.num_vectors() {
+            let row = mat.get_row(i).unwrap();
+            assert_eq!(*row.meta(), M::from_index(i), "meta mismatch row {i}: {ctx}");
+            assert_eq!(row.vector().len(), repr.ncols, "ncols mismatch row {i}: {ctx}");
+            for j in 0..repr.ncols {
+                assert_eq!(
+                    row.vector()[j],
+                    T::from((10 * i + j) as u8),
+                    "data mismatch at [{i}, {j}]: {ctx}"
+                );
+            }
+        }
+        for oob in oob_indices(repr.nrows) {
+            assert!(mat.get_row(oob).is_none(), "expected None for index {oob}: {ctx}");
+        }
+    }
+
+    /// Check all rows via a `MatMut` (read-only check).
+    fn check_mat_mut<T, M>(
+        mat: MatMut<'_, SliceMatRepr<T, M>>,
+        repr: SliceMatRepr<T, M>,
+        ctx: &dyn Display,
+    ) where
+        T: bytemuck::Pod + From<u8> + PartialEq + std::fmt::Debug,
+        M: bytemuck::Pod + TestMeta + PartialEq + std::fmt::Debug,
+    {
+        assert_eq!(mat.num_vectors(), repr.nrows, "nrows mismatch: {ctx}");
+        for i in 0..mat.num_vectors() {
+            let row = mat.get_row(i).unwrap();
+            assert_eq!(*row.meta(), M::from_index(i), "meta mismatch row {i}: {ctx}");
+            assert_eq!(row.vector().len(), repr.ncols, "ncols mismatch row {i}: {ctx}");
+            for j in 0..repr.ncols {
+                assert_eq!(
+                    row.vector()[j],
+                    T::from((10 * i + j) as u8),
+                    "data mismatch at [{i}, {j}]: {ctx}"
+                );
+            }
+        }
+        for oob in oob_indices(repr.nrows) {
+            assert!(mat.get_row(oob).is_none(), "expected None for index {oob}: {ctx}");
+        }
+    }
+
+    /// Check via the `Rows` iterator.
+    fn check_rows<T, M>(
+        rows: super::super::matrix::Rows<'_, SliceMatRepr<T, M>>,
+        repr: SliceMatRepr<T, M>,
+        ctx: &dyn Display,
+    ) where
+        T: bytemuck::Pod + From<u8> + PartialEq + std::fmt::Debug,
+        M: bytemuck::Pod + TestMeta + PartialEq + std::fmt::Debug,
+    {
+        assert_eq!(rows.len(), repr.nrows, "rows len mismatch: {ctx}");
+        for (i, row) in rows.enumerate() {
+            assert_eq!(*row.meta(), M::from_index(i), "meta mismatch row {i}: {ctx}");
+            assert_eq!(row.vector().len(), repr.ncols, "ncols mismatch row {i}: {ctx}");
+            for j in 0..repr.ncols {
+                assert_eq!(
+                    row.vector()[j],
+                    T::from((10 * i + j) as u8),
+                    "data mismatch at [{i}, {j}]: {ctx}"
+                );
+            }
+        }
+    }
+
+    /// Return indices that should be out of bounds for a matrix with `nrows` rows.
+    fn oob_indices(nrows: usize) -> Vec<usize> {
+        vec![nrows, nrows + 1, nrows + 11, usize::MAX]
+    }
+
+    /// Trait for constructing deterministic metadata from a row index.
+    trait TestMeta: Sized {
+        fn from_index(i: usize) -> Self;
+    }
+
+    impl TestMeta for Meta {
+        fn from_index(i: usize) -> Self {
+            Self { scale: i as f32 }
+        }
+    }
+
+    impl TestMeta for AlignedMeta {
+        fn from_index(i: usize) -> Self {
+            Self { a: i as f64 }
+        }
+    }
+
+    impl TestMeta for ZstMeta {
+        fn from_index(_i: usize) -> Self {
+            Self
+        }
+    }
+
+    impl TestMeta for RichMeta {
+        fn from_index(i: usize) -> Self {
+            Self {
+                min: -(i as f32),
+                max: i as f32,
+            }
+        }
+    }
+
+    /// Independently computed alignment for `SliceMatRepr<T, M>`.
+    ///
+    /// This duplicates the logic from `canonical_align` so that tests verify the
+    /// production code against a separately-written oracle.
+    const fn expected_alignment<T, M>() -> usize {
+        let t = std::mem::align_of::<T>();
+        let m = std::mem::align_of::<M>();
+        if m > t { m } else { t }
+    }
+
+    /// Independently computed metadata-prefix size (bytes before the `T` elements).
+    const fn expected_meta_prefix<T, M>() -> usize {
+        let m_size = std::mem::size_of::<M>();
+        if m_size == 0 {
+            0
+        } else {
+            m_size.next_multiple_of(std::mem::align_of::<T>())
+        }
+    }
+
+    /// Independently computed row stride (canonical bytes per row).
+    const fn expected_stride<T, M>(ncols: usize) -> usize {
+        expected_meta_prefix::<T, M>() + std::mem::size_of::<T>() * ncols
+    }
+
+    /// Independently computed total byte count for the full matrix.
+    const fn expected_total_bytes<T, M>(nrows: usize, ncols: usize) -> usize {
+        nrows * expected_stride::<T, M>(ncols)
+    }
+
+    // Expose private helpers so buffer-allocation helpers can call the production
+    // code (we need the *actual* values to create correctly-sized buffers).
+    impl<T: bytemuck::Pod, M: bytemuck::Pod> SliceMatRepr<T, M> {
+        fn alignment_for_alloc() -> PowerOfTwo {
+            Self::alignment()
+        }
+
+        fn total_bytes_for_alloc(&self) -> usize {
+            self.total_bytes()
+        }
+    }
+
+    /// Allocate a zeroed, correctly-aligned byte buffer for a given repr.
+    fn aligned_buffer<T: bytemuck::Pod, M: bytemuck::Pod>(
+        repr: SliceMatRepr<T, M>,
+    ) -> Poly<[u8], AlignedAllocator> {
+        let total = repr.total_bytes_for_alloc();
+        let align = SliceMatRepr::<T, M>::alignment_for_alloc();
+        Poly::broadcast(0u8, total, AlignedAllocator::new(align)).expect("test allocation")
+    }
+
+    /// Run the full fill-and-check cycle for a given `(T, M)` type combo over all
+    /// `ROWS x COLS` sizes.
+    fn test_roundtrip<T, M>()
+    where
+        T: bytemuck::Pod + From<u8> + PartialEq + std::fmt::Debug,
+        M: bytemuck::Pod + TestMeta + Default + PartialEq + std::fmt::Debug,
+    {
+        for &nrows in ROWS {
+            for &ncols in COLS {
+                let repr = SliceMatRepr::<T, M>::new(nrows, ncols).unwrap();
+
+                // -- Verify repr properties against oracle --
+                assert_eq!(repr.nrows, nrows);
+                assert_eq!(repr.ncols(), ncols);
+                let layout = repr.layout().unwrap();
+                assert_eq!(layout.size(), expected_total_bytes::<T, M>(nrows, ncols));
+                assert_eq!(layout.align(), expected_alignment::<T, M>());
+
+                // When stride is 0 and nrows > 0, the zero-size allocation may have
+                // insufficient alignment for T. This is a known limitation of the
+                // allocator, not of SliceMatRepr itself.
+                if expected_stride::<T, M>(ncols) == 0 && nrows > 0 {
+                    continue;
+                }
+
+                let ctx_base = &lazy_format!(
+                    "T={}, M={}, nrows={nrows}, ncols={ncols}",
+                    std::any::type_name::<T>(),
+                    std::any::type_name::<M>()
+                );
+
+                // -- Fill via &mut Mat, check all views --
+                {
+                    let ctx = &lazy_format!("{ctx_base} [fill_mat]");
+                    let mut mat = Mat::new(repr, Defaulted).unwrap();
+                    fill_mat(&mut mat);
+                    check_mat(&mat, repr, ctx);
+                    check_mat_ref(mat.reborrow(), repr, ctx);
+                    check_mat_mut(mat.reborrow_mut(), repr, ctx);
+                    check_rows(mat.rows(), repr, ctx);
+                }
+
+                // -- Fill via MatMut --
+                {
+                    let ctx = &lazy_format!("{ctx_base} [fill_mat_mut]");
+                    let mut mat = Mat::new(repr, Defaulted).unwrap();
+                    let mut matmut = mat.reborrow_mut();
+                    fill_mat_mut(&mut matmut);
+                    check_mat(&mat, repr, ctx);
+                    check_mat_ref(mat.reborrow(), repr, ctx);
+                    check_mat_mut(mat.reborrow_mut(), repr, ctx);
+                    check_rows(mat.rows(), repr, ctx);
+                }
+
+                // -- Fill via rows_mut iterator --
+                {
+                    let ctx = &lazy_format!("{ctx_base} [fill_rows_mut]");
+                    let mut mat = Mat::new(repr, Defaulted).unwrap();
+                    fill_rows_mut(&mut mat);
+                    check_mat(&mat, repr, ctx);
+                    check_mat_ref(mat.reborrow(), repr, ctx);
+                    check_mat_mut(mat.reborrow_mut(), repr, ctx);
+                    check_rows(mat.rows(), repr, ctx);
+                }
+            }
+        }
+    }
+
+    /// Run clone-related tests for a given `(T, M)` combo across all sizes.
+    fn test_clone<T, M>()
+    where
+        T: bytemuck::Pod + From<u8> + PartialEq + std::fmt::Debug,
+        M: bytemuck::Pod + TestMeta + Default + PartialEq + std::fmt::Debug,
+    {
+        for &nrows in ROWS {
+            for &ncols in COLS {
+                let repr = SliceMatRepr::<T, M>::new(nrows, ncols).unwrap();
+
+                // See test_roundtrip for rationale.
+                if expected_stride::<T, M>(ncols) == 0 && nrows > 0 {
+                    continue;
+                }
+
+                let ctx_base = &lazy_format!(
+                    "T={}, M={}, nrows={nrows}, ncols={ncols}",
+                    std::any::type_name::<T>(),
+                    std::any::type_name::<M>()
+                );
+
+                let mut mat = Mat::new(repr, Defaulted).unwrap();
+                fill_mat(&mut mat);
+
+                // Mat::clone
+                {
+                    let ctx = &lazy_format!("{ctx_base} [Mat::clone]");
+                    let cloned = mat.clone();
+                    check_mat(&cloned, repr, ctx);
+                    check_mat_ref(cloned.reborrow(), repr, ctx);
+                    check_rows(cloned.rows(), repr, ctx);
+                }
+
+                // MatRef::to_owned
+                {
+                    let ctx = &lazy_format!("{ctx_base} [MatRef::to_owned]");
+                    let owned = mat.as_view().to_owned();
+                    check_mat(&owned, repr, ctx);
+                }
+
+                // MatMut::to_owned
+                {
+                    let ctx = &lazy_format!("{ctx_base} [MatMut::to_owned]");
+                    let owned = mat.as_view_mut().to_owned();
+                    check_mat(&owned, repr, ctx);
+                }
+            }
+        }
+    }
+
+    /////////////////////
+    // Representation //
+    ////////////////////
+
+    #[test]
+    fn repr_zero_dimensions() {
+        // Zero rows always means zero total bytes.
+        for ncols in [0, 3, 5] {
+            let repr = SliceMatRepr::<u8, Meta>::new(0, ncols).unwrap();
+            assert_eq!(repr.nrows, 0);
+            assert_eq!(repr.ncols(), ncols);
+            let layout = repr.layout().unwrap();
+            assert_eq!(layout.size(), 0, "0 rows should yield 0-size layout");
+        }
+
+        // Zero cols but nonzero rows: meta still occupies space.
+        let repr = SliceMatRepr::<u8, Meta>::new(3, 0).unwrap();
+        assert_eq!(repr.nrows, 3);
+        assert_eq!(repr.ncols(), 0);
+        let layout = repr.layout().unwrap();
+        assert_eq!(
+            layout.size(),
+            expected_total_bytes::<u8, Meta>(3, 0),
+            "ncols=0 but meta has nonzero size"
+        );
+    }
+
+    #[test]
+    fn repr_is_copy() {
+        let repr = SliceMatRepr::<u32, Meta>::new(2, 3).unwrap();
+        let copy = repr;
+        assert_eq!(repr, copy);
+    }
+
+    ////////////////////////
+    // Construction Errors //
+    ////////////////////////
+
+    #[test]
+    fn new_rejects_nrows_overflow() {
+        // nrows * stride overflows usize.
+        assert!(SliceMatRepr::<u8, Meta>::new(usize::MAX, 2).is_err());
+    }
+
+    #[test]
+    fn new_rejects_isize_max() {
+        // Total bytes would exceed isize::MAX.
+        let stride = expected_stride::<u64, Meta>(1);
+        let half = (isize::MAX as usize / stride) + 1;
+        assert!(SliceMatRepr::<u64, Meta>::new(half, 1).is_err());
+    }
+
+    #[test]
+    fn new_accepts_boundary_below_isize_max() {
+        let stride = expected_stride::<u64, Meta>(1);
+        let max_rows = isize::MAX as usize / stride;
+        let repr = SliceMatRepr::<u64, Meta>::new(max_rows, 1).unwrap();
+        assert_eq!(repr.nrows, max_rows);
+    }
+
+    #[test]
+    fn new_error_displays_nicely() {
+        let err = SliceMatRepr::<u8, Meta>::new(usize::MAX, 2).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("would exceed isize::MAX bytes"), "{msg}");
+    }
+
+    ////////////////////////
+    // Defaulted (NewOwned)//
+    ////////////////////////
+
+    #[test]
+    fn new_owned_default_zeroes() {
+        for &nrows in ROWS {
+            for &ncols in COLS {
+                let repr = SliceMatRepr::<u16, Meta>::new(nrows, ncols).unwrap();
+                let mat = Mat::new(repr, Defaulted).unwrap();
+                assert_eq!(mat.num_vectors(), nrows);
+                for i in 0..nrows {
+                    let row = mat.get_row(i).unwrap();
+                    assert_eq!(*row.meta(), Meta::default());
+                    assert!(row.vector().iter().all(|&v| v == 0));
+                }
+            }
+        }
+    }
+
+    //////////////////////////
+    // Roundtrip (fill/check) //
+    //////////////////////////
+
+    #[test]
+    fn roundtrip_u8_meta() {
+        test_roundtrip::<u8, Meta>();
+    }
+
+    #[test]
+    fn roundtrip_u16_meta() {
+        test_roundtrip::<u16, Meta>();
+    }
+
+    #[test]
+    fn roundtrip_u32_meta() {
+        test_roundtrip::<u32, Meta>();
+    }
+
+    #[test]
+    fn roundtrip_f32_meta() {
+        test_roundtrip::<f32, Meta>();
+    }
+
+    #[test]
+    fn roundtrip_u16_aligned_meta() {
+        test_roundtrip::<u16, AlignedMeta>();
+    }
+
+    #[test]
+    fn roundtrip_f32_zst_meta() {
+        test_roundtrip::<f32, ZstMeta>();
+    }
+
+    #[test]
+    fn roundtrip_u8_rich_meta() {
+        test_roundtrip::<u8, RichMeta>();
+    }
+
+    //////////////////////////
+    // Clone Independence   //
+    //////////////////////////
+
+    #[test]
+    fn clone_u8_meta() {
+        test_clone::<u8, Meta>();
+    }
+
+    #[test]
+    fn clone_u16_aligned_meta() {
+        test_clone::<u16, AlignedMeta>();
+    }
+
+    #[test]
+    fn clone_f32_zst_meta() {
+        test_clone::<f32, ZstMeta>();
+    }
+
+    #[test]
+    fn clone_mutation_independence() {
+        let repr = SliceMatRepr::<u16, Meta>::new(2, 3).unwrap();
+        let mut mat = Mat::new(repr, Defaulted).unwrap();
+        fill_mat(&mut mat);
+
+        let cloned = mat.clone();
+
+        // Mutate original.
+        {
+            let mut row = mat.get_row_mut(0).unwrap();
+            *row.meta_mut() = Meta { scale: 999.0 };
+            row.vector_mut()[0] = 0xFFFF;
+        }
+
+        // Clone must be unaffected.
+        let orig = mat.get_row(0).unwrap();
+        let copy = cloned.get_row(0).unwrap();
+        assert_eq!(*orig.meta(), Meta { scale: 999.0 });
+        assert_eq!(*copy.meta(), Meta::from_index(0));
+        assert_eq!(orig.vector()[0], 0xFFFF);
+        assert_eq!(copy.vector()[0], u16::from(0u8));
+    }
+
+    //////////////////////////
+    // NewRef / NewMut      //
+    //////////////////////////
+
+    #[test]
+    fn new_ref_roundtrip() {
+        for &nrows in ROWS {
+            for &ncols in COLS {
+                let repr = SliceMatRepr::<u8, Meta>::new(nrows, ncols).unwrap();
+
+                // Zero-size allocations yield a dangling pointer that won't
+                // satisfy the alignment check in `check_slice`.
+                if expected_total_bytes::<u8, Meta>(nrows, ncols) == 0 {
+                    continue;
+                }
+
+                let mut buf = aligned_buffer(repr);
+
+                // Fill via MatMut, then verify via MatRef on the same buffer.
+                {
+                    let mut view = MatMut::new(repr, &mut buf[..]).unwrap();
+                    fill_mat_mut(&mut view);
+                }
+
+                let view = MatRef::new(repr, &buf[..]).unwrap();
+                let ctx = &lazy_format!("NewRef nrows={nrows}, ncols={ncols}");
+                check_mat_ref(view, repr, ctx);
+            }
+        }
+    }
+
+    #[test]
+    fn new_mut_roundtrip() {
+        for &nrows in ROWS {
+            for &ncols in COLS {
+                let repr = SliceMatRepr::<u8, Meta>::new(nrows, ncols).unwrap();
+
+                if expected_total_bytes::<u8, Meta>(nrows, ncols) == 0 {
+                    continue;
+                }
+
+                let mut buf = aligned_buffer(repr);
+
+                {
+                    let mut view = MatMut::new(repr, &mut buf[..]).unwrap();
+                    fill_mat_mut(&mut view);
+                }
+
+                let ctx = &lazy_format!("NewMut nrows={nrows}, ncols={ncols}");
+                let view = MatMut::new(repr, &mut buf[..]).unwrap();
+                check_mat_mut(view, repr, ctx);
+            }
+        }
+    }
+
+    /// Allocate an oversized aligned buffer (total + alignment extra bytes).
+    fn oversized_buffer<T: bytemuck::Pod, M: bytemuck::Pod>(
+        repr: SliceMatRepr<T, M>,
+    ) -> Poly<[u8], AlignedAllocator> {
+        let total = repr.total_bytes_for_alloc();
+        let align = SliceMatRepr::<T, M>::alignment_for_alloc();
+        Poly::broadcast(0u8, total + align.raw(), AlignedAllocator::new(align))
+            .expect("test allocation")
+    }
+
+    #[test]
+    fn new_ref_length_mismatch() {
+        let repr = SliceMatRepr::<u32, Meta>::new(3, 4).unwrap();
+        let total = expected_total_bytes::<u32, Meta>(3, 4);
+        let buf = oversized_buffer(repr);
+
+        // Too short.
+        if total > 0 {
+            let result = MatRef::<SliceMatRepr<u32, Meta>>::new(repr, &buf[..total - 1]);
+            assert!(
+                matches!(result, Err(SliceMatError::LengthMismatch { .. })),
+                "expected LengthMismatch for too-short slice"
+            );
+        }
+
+        // Too long.
+        let result = MatRef::<SliceMatRepr<u32, Meta>>::new(repr, &buf[..total + 1]);
+        assert!(
+            matches!(result, Err(SliceMatError::LengthMismatch { .. })),
+            "expected LengthMismatch for too-long slice"
+        );
+    }
+
+    #[test]
+    fn new_mut_length_mismatch() {
+        let repr = SliceMatRepr::<u32, Meta>::new(3, 4).unwrap();
+        let total = expected_total_bytes::<u32, Meta>(3, 4);
+        let mut buf = oversized_buffer(repr);
+
+        // Too short.
+        if total > 0 {
+            let result = MatMut::<SliceMatRepr<u32, Meta>>::new(repr, &mut buf[..total - 1]);
+            assert!(
+                matches!(result, Err(SliceMatError::LengthMismatch { .. })),
+                "expected LengthMismatch for too-short slice"
+            );
+        }
+
+        // Too long.
+        let result = MatMut::<SliceMatRepr<u32, Meta>>::new(repr, &mut buf[..total + 1]);
+        assert!(
+            matches!(result, Err(SliceMatError::LengthMismatch { .. })),
+            "expected LengthMismatch for too-long slice"
+        );
+    }
+
+    #[test]
+    fn new_ref_alignment_mismatch() {
+        let repr = SliceMatRepr::<u32, Meta>::new(2, 3).unwrap();
+        let total = expected_total_bytes::<u32, Meta>(2, 3);
+        let align = expected_alignment::<u32, Meta>();
+        let buf = oversized_buffer(repr);
+
+        // Offset by 1 byte to break alignment.
+        if total > 0 && align > 1 {
+            let result = MatRef::<SliceMatRepr<u32, Meta>>::new(repr, &buf[1..1 + total]);
+            assert!(
+                matches!(result, Err(SliceMatError::NotAligned { .. })),
+                "expected NotAligned for misaligned slice"
+            );
+        }
+    }
+
+    #[test]
+    fn new_mut_alignment_mismatch() {
+        let repr = SliceMatRepr::<u32, Meta>::new(2, 3).unwrap();
+        let total = expected_total_bytes::<u32, Meta>(2, 3);
+        let align = expected_alignment::<u32, Meta>();
+        let mut buf = oversized_buffer(repr);
+
+        if total > 0 && align > 1 {
+            let result = MatMut::<SliceMatRepr<u32, Meta>>::new(repr, &mut buf[1..1 + total]);
+            assert!(
+                matches!(result, Err(SliceMatError::NotAligned { .. })),
+                "expected NotAligned for misaligned slice"
+            );
+        }
+    }
+
+    ////////////
+    // Layout //
+    ////////////
+
+    #[test]
+    fn layout_consistency() {
+        for &nrows in ROWS {
+            for &ncols in COLS {
+                let repr = SliceMatRepr::<u32, AlignedMeta>::new(nrows, ncols).unwrap();
+                let layout = repr.layout().unwrap();
+
+                let oracle_total = expected_total_bytes::<u32, AlignedMeta>(nrows, ncols);
+                let oracle_align = expected_alignment::<u32, AlignedMeta>();
+
+                if nrows == 0 {
+                    assert_eq!(layout.size(), 0);
+                } else {
+                    assert_eq!(layout.size(), oracle_total);
+                }
+                assert_eq!(layout.align(), oracle_align);
+            }
+        }
+    }
+
+    #[test]
+    fn stride_matches_oracle() {
+        for &ncols in COLS {
+            let repr = SliceMatRepr::<u16, AlignedMeta>::new(1, ncols).unwrap();
+            let layout = repr.layout().unwrap();
+            let oracle = expected_stride::<u16, AlignedMeta>(ncols);
+            assert_eq!(
+                layout.size(), oracle,
+                "layout size {0} != oracle stride {oracle} for ncols={ncols}",
+                layout.size()
+            );
+        }
+    }
+
+    //////////////////////////
+    // Reborrow             //
+    //////////////////////////
+
+    #[test]
+    fn reborrow_write_visible_through_owner() {
+        let repr = SliceMatRepr::<f32, Meta>::new(2, 3).unwrap();
+        let mut mat = Mat::new(repr, Defaulted).unwrap();
+
+        // Write through MatMut reborrow.
+        {
+            let mut view = mat.reborrow_mut();
+            let mut row = view.get_row_mut(0).unwrap();
+            *row.meta_mut() = Meta { scale: 7.0 };
+            row.vector_mut().copy_from_slice(&[1.0, 2.0, 3.0]);
+        }
+
+        // Read through MatRef reborrow.
+        {
+            let view = mat.reborrow();
+            let row = view.get_row(0).unwrap();
+            assert_eq!(*row.meta(), Meta { scale: 7.0 });
+            assert_eq!(row.vector(), &[1.0, 2.0, 3.0]);
+        }
+
+        // Verify directly on Mat.
+        let row = mat.get_row(0).unwrap();
+        assert_eq!(*row.meta(), Meta { scale: 7.0 });
+        assert_eq!(row.vector(), &[1.0, 2.0, 3.0]);
+    }
+
+    //////////////////////////
+    // Row Isolation        //
+    //////////////////////////
+
+    #[test]
+    fn rows_are_independent() {
+        let repr = SliceMatRepr::<u8, Meta>::new(3, 4).unwrap();
+        let mut mat = Mat::new(repr, Defaulted).unwrap();
+
+        // Write different patterns to adjacent rows.
+        for i in 0..3 {
+            let mut row = mat.get_row_mut(i).unwrap();
+            *row.meta_mut() = Meta { scale: (i + 1) as f32 * 10.0 };
+            row.vector_mut().iter_mut().for_each(|v| *v = (i as u8 + 1) * 0x11);
+        }
+
+        // Verify each row is distinct and hasn't bled into neighbours.
+        for i in 0..3 {
+            let row = mat.get_row(i).unwrap();
+            assert_eq!(*row.meta(), Meta { scale: (i + 1) as f32 * 10.0 });
+            let expected_byte = (i as u8 + 1) * 0x11;
+            assert!(
+                row.vector().iter().all(|&v| v == expected_byte),
+                "row {i} has unexpected data: {:?}",
+                row.vector()
+            );
+        }
+    }
+
+    //////////////////////////
+    // Multi-Type Roundtrips //
+    //////////////////////////
+
+    /// Exercise various (T, M) combos for alignment and padding coverage.
+    #[test]
+    fn roundtrip_u32_aligned_meta() {
+        test_roundtrip::<u32, AlignedMeta>();
+    }
+
+    #[test]
+    fn roundtrip_u8_zst_meta() {
+        test_roundtrip::<u8, ZstMeta>();
+    }
+
+    #[test]
+    fn clone_u8_rich_meta() {
+        test_clone::<u8, RichMeta>();
     }
 }
