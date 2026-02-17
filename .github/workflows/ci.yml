@@ -234,11 +234,8 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
-<<<<<<< HEAD
           - ubuntu-24.04-arm
-=======
           - macos-latest
->>>>>>> 8729b554 (Add macOS support to diskann-platform and CI)
 
     steps:
       - uses: actions/checkout@v4
