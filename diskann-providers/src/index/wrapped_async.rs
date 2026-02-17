@@ -13,7 +13,7 @@ use diskann::{
             self, AsElement, InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchStrategy,
         },
         index::{DegreeStats, PartitionedNeighbors, SearchState, SearchStats},
-        search::{Knn},
+        search::Knn,
         search_output_buffer,
     },
     neighbor::Neighbor,
@@ -236,10 +236,10 @@ where
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,
     {
-        let mut knn_search = *search_params;
+        let knn_search = *search_params;
         self.handle.block_on(
             self.inner
-                .search(&mut knn_search, strategy, context, query, output),
+                .search(knn_search, strategy, context, query, output),
         )
     }
 

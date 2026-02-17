@@ -70,8 +70,8 @@ impl From<KnnSearchError> for ANNError {
 /// ```ignore
 /// use diskann::graph::{search::Knn, Search};
 ///
-/// let mut params = Knn::new(10, 100, None)?;
-/// let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
+/// let params = Knn::new(10, 100, None)?;
+/// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Knn {
@@ -177,7 +177,7 @@ where
     ///
     /// Returns an error if there is a failure accessing elements or computing distances.
     fn search(
-        &mut self,
+        self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
@@ -257,7 +257,7 @@ where
     type Output = SearchStats;
 
     fn search(
-        &mut self,
+        self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
@@ -322,16 +322,10 @@ mod tests {
         assert!(Knn::new(10, 10, None).is_ok()); // k == l is valid
 
         // Invalid: k = 0
-        assert!(matches!(
-            Knn::new(0, 100, None),
-            Err(KnnSearchError::KZero)
-        ));
+        assert!(matches!(Knn::new(0, 100, None), Err(KnnSearchError::KZero)));
 
         // Invalid: l = 0
-        assert!(matches!(
-            Knn::new(10, 0, None),
-            Err(KnnSearchError::LZero)
-        ));
+        assert!(matches!(Knn::new(10, 0, None), Err(KnnSearchError::LZero)));
 
         // Invalid: l < k
         assert!(matches!(

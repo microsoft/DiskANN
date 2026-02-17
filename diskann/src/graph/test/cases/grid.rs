@@ -9,7 +9,8 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, DiskANNIndex, search::Knn,
+        self, DiskANNIndex,
+        search::Knn,
         test::{provider as test_provider, synthetic::Grid},
     },
     neighbor::Neighbor,
@@ -126,7 +127,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
             // are correct.
             let index = setup_grid_search(grid, size);
 
-            let mut params = Knn::new(10, 10, Some(beam_width)).unwrap();
+            let params = Knn::new(10, 10, Some(beam_width)).unwrap();
             let context = test_provider::Context::new();
 
             let mut neighbors = vec![Neighbor::<u32>::default(); params.k_value().get()];
@@ -137,7 +138,7 @@ fn _grid_search(grid: Grid, size: usize, mut parent: TestPath<'_>) {
                 range_search_second_round,
             } = rt
                 .block_on(index.search(
-                    &mut params,
+                    params,
                     &test_provider::Strategy::new(),
                     &context,
                     query.as_slice(),

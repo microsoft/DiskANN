@@ -177,14 +177,13 @@ where
     type Output = RangeSearchOutput<O>;
 
     fn search(
-        &mut self,
+        self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
         query: &T,
         _output: &mut (),
     ) -> impl SendFuture<ANNResult<Self::Output>> {
-        let search_params = *self;
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -192,11 +191,11 @@ where
             let computer = accessor.build_query_computer(query).into_ann_result()?;
             let start_ids = accessor.starting_points().await?;
 
-            let mut scratch = index.search_scratch(search_params.starting_l(), start_ids.len());
+            let mut scratch = index.search_scratch(self.starting_l(), start_ids.len());
 
             let initial_stats = index
                 .search_internal(
-                    search_params.beam_width(),
+                    self.beam_width(),
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -205,14 +204,10 @@ where
                 )
                 .await?;
 
-            let mut in_range = Vec::with_capacity(search_params.starting_l().into_usize());
+            let mut in_range = Vec::with_capacity(self.starting_l().into_usize());
 
-            for neighbor in scratch
-                .best
-                .iter()
-                .take(search_params.starting_l().into_usize())
-            {
-                if neighbor.distance <= search_params.radius() {
+            for neighbor in scratch.best.iter().take(self.starting_l().into_usize()) {
+                if neighbor.distance <= self.radius() {
                     in_range.push(neighbor);
                 }
             }
@@ -225,12 +220,12 @@ where
             scratch.in_range = in_range;
 
             let stats = if scratch.in_range.len()
-                >= ((search_params.starting_l() as f32) * search_params.initial_slack()) as usize
+                >= ((self.starting_l() as f32) * self.initial_slack()) as usize
             {
                 // Move to range search
                 let range_stats = range_search_internal(
                     index.max_degree_with_slack(),
-                    &search_params,
+                    &self,
                     &mut accessor,
                     &computer,
                     &mut scratch,
@@ -269,7 +264,7 @@ where
                 .into_ann_result()?;
 
             // Filter by inner/outer radius
-            let inner_cutoff = if let Some(inner_radius) = search_params.inner_radius() {
+            let inner_cutoff = if let Some(inner_radius) = self.inner_radius() {
                 result_dists
                     .iter()
                     .position(|dist| *dist > inner_radius)
@@ -280,7 +275,7 @@ where
 
             let outer_cutoff = result_dists
                 .iter()
-                .position(|dist| *dist > search_params.radius())
+                .position(|dist| *dist > self.radius())
                 .unwrap_or(result_dists.len());
 
             result_ids.truncate(outer_cutoff);

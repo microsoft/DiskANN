@@ -2135,24 +2135,24 @@ where
     /// use diskann::graph::{search::{Knn, Range}, Search};
     ///
     /// // Standard k-NN search
-    /// let mut params = Knn::new(10, 100, None)?;
-    /// let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
+    /// let params = Knn::new(10, 100, None)?;
+    /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     ///
     /// // Range search (note: uses () as output buffer, results in Output type)
-    /// let mut params = Range::new(100, 0.5)?;
-    /// let result = index.search(&mut params, &strategy, &context, &query, &mut ()).await?;
+    /// let params = Range::new(100, 0.5)?;
+    /// let result = index.search(params, &strategy, &context, &query, &mut ()).await?;
     /// // result.ids and result.distances contain the matches
     /// ```
     pub fn search<'a, S, T, O: 'a, OB, P>(
         &'a self,
-        search_params: &'a mut P,
+        search_params: P,
         strategy: &'a S,
         context: &'a DP::Context,
         query: &'a T,
         output: &'a mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>> + 'a
     where
-        P: super::search::Search<DP, S, T, O, OB>,
+        P: super::search::Search<DP, S, T, O, OB> + 'a,
         T: ?Sized,
         OB: ?Sized,
     {

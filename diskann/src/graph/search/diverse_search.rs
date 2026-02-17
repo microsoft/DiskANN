@@ -104,7 +104,7 @@ where
     type Output = SearchStats;
 
     fn search(
-        &mut self,
+        self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,

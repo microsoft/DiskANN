@@ -64,14 +64,13 @@ where
     type Output = SearchStats;
 
     fn search(
-        &mut self,
+        self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
-        let params = self.inner;
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -80,11 +79,11 @@ where
 
             let start_ids = accessor.starting_points().await?;
 
-            let mut scratch = index.search_scratch(params.l_value().get(), start_ids.len());
+            let mut scratch = index.search_scratch(self.inner.l_value().get(), start_ids.len());
 
             let stats = multihop_search_internal(
                 index.max_degree_with_slack(),
-                &params,
+                &self.inner,
                 &mut accessor,
                 &computer,
                 &mut scratch,
@@ -99,7 +98,7 @@ where
                     &mut accessor,
                     query,
                     &computer,
-                    scratch.best.iter().take(params.l_value().get()),
+                    scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )
                 .send()

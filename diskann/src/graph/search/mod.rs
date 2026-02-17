@@ -15,12 +15,12 @@
 //! use diskann::graph::{search::{Knn, Range, MultihopSearch}, Search};
 //!
 //! // Standard k-NN search
-//! let mut params = Knn::new(10, 100, None)?;
-//! let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
+//! let params = Knn::new(10, 100, None)?;
+//! let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
 //!
 //! // Range search
-//! let mut params = Range::new(100, 0.5)?;
-//! let result = index.search(&mut params, &strategy, &context, &query, &mut ()).await?;
+//! let params = Range::new(100, 0.5)?;
+//! let result = index.search(params, &strategy, &context, &query, &mut ()).await?;
 //! println!("Found {} points within radius", result.ids.len());
 //! ```
 
@@ -78,7 +78,7 @@ where
     ///
     /// Returns an error if there is a failure accessing elements or computing distances.
     fn search(
-        &mut self,
+        self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
