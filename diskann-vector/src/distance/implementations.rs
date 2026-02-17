@@ -113,7 +113,7 @@ fn fail_length_check<L, R>(x: &[L], y: &[R], len: usize) -> ! {
     );
 }
 
-pub fn test_function(x: &[u8], y: &[u8]) -> f32 {
+pub fn test_function(x: &[i8], y: &[i8]) -> f32 {
     SquaredL2::evaluate(x, y)
 }
 
