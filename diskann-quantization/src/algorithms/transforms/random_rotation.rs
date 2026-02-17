@@ -5,16 +5,16 @@
 
 use std::num::NonZeroUsize;
 
+use diskann_linalg::{self, Transpose};
 #[cfg(feature = "flatbuffers")]
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
-use diskann_linalg::{self, Transpose};
 use rand::Rng;
 #[cfg(feature = "flatbuffers")]
 use thiserror::Error;
 
 use super::{
-    utils::{check_dims, TransformFailed},
     TargetDim,
+    utils::{TransformFailed, check_dims},
 };
 #[cfg(feature = "flatbuffers")]
 use crate::flatbuffers as fb;
@@ -234,11 +234,11 @@ impl RandomRotation {
 #[cfg(test)]
 mod tests {
     use diskann_utils::lazy_format;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::{
-        algorithms::transforms::{test_utils, Transform, TransformFailed, TransformKind},
+        algorithms::transforms::{Transform, TransformFailed, TransformKind, test_utils},
         alloc::GlobalAllocator,
     };
 

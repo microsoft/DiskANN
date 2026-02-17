@@ -78,11 +78,13 @@ where
         let stride = Self::stride(ncols);
 
         // Check that total bytes don't overflow or exceed isize::MAX.
-        let total = nrows.checked_mul(stride).ok_or(SliceMatReprError::Overflow {
-            nrows,
-            ncols,
-            row_stride: stride,
-        })?;
+        let total = nrows
+            .checked_mul(stride)
+            .ok_or(SliceMatReprError::Overflow {
+                nrows,
+                ncols,
+                row_stride: stride,
+            })?;
 
         if total > isize::MAX as usize {
             return Err(SliceMatReprError::Overflow {
@@ -106,7 +108,7 @@ where
     }
 
     /// Returns the cached byte stride per row.
-    const fn stride(ncols : usize) -> usize {
+    const fn stride(ncols: usize) -> usize {
         slice::SliceRef::<T, M>::canonical_bytes(ncols)
     }
 
@@ -120,7 +122,6 @@ where
         // Safe because `new` already checked this doesn't overflow.
         self.nrows * Self::stride(self.ncols)
     }
-
 
     /// Check that `slice` has the correct length and alignment for this representation.
     fn check_slice(&self, slice: &[u8]) -> Result<(), SliceMatError> {
@@ -150,7 +151,7 @@ where
         debug_assert_eq!(b.len(), self.total_bytes(), "safety contract violated");
 
         let (ptr, _allocator) = Poly::into_raw(b);
-        
+
         let ptr = ptr.cast::<u8>();
 
         // SAFETY: `ptr` is properly aligned and points to memory with the required layout.
@@ -195,10 +196,10 @@ where
         let stride = Self::stride(self.ncols());
         let row_ptr = ptr.as_ptr().add(i * stride);
 
-        // SAFETY: 
+        // SAFETY:
         // - Base pointer `ptr` was initialized correctly by `NewRef`
-        //   and so is within bounds. 
-        // - `stride` was computed based on [`SliceRef::<T, M>::canonical_bytes`] and 
+        //   and so is within bounds.
+        // - `stride` was computed based on [`SliceRef::<T, M>::canonical_bytes`] and
         //   was used for initialization also.
         let row_slice = std::slice::from_raw_parts(row_ptr, stride);
 
@@ -230,13 +231,13 @@ where
         debug_assert!(i < self.nrows);
 
         let stride = Self::stride(self.ncols());
-        
+
         let row_ptr = ptr.as_ptr().add(i * stride);
 
-        // SAEFTY: 
-        // - Base pointer `ptr` was initialized correctly by `NewMut` 
-        //   and so is within bounds. 
-        // - `stride` was computed based on [`SliceRef::<T, M>::canonical_bytes`] and 
+        // SAEFTY:
+        // - Base pointer `ptr` was initialized correctly by `NewMut`
+        //   and so is within bounds.
+        // - `stride` was computed based on [`SliceRef::<T, M>::canonical_bytes`] and
         //   was used for initialization also.
         let row_slice = std::slice::from_raw_parts_mut(row_ptr, stride);
 
@@ -261,10 +262,8 @@ where
         let align = Self::alignment();
 
         // Reconstruct the fat pointer for the byte slice.
-        let fat_ptr = NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(
-            ptr.as_ptr(),
-            total,
-        ));
+        let fat_ptr =
+            NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), total));
 
         // SAFETY: The caller guarantees `ptr` was obtained from `NewOwned`, which uses
         // `Poly::broadcast` with `AlignedAllocator::new(align)`. Reconstructing the
@@ -279,8 +278,8 @@ where
 
 // SAFETY: Allocates via `Poly::broadcast` with correct alignment and size, fills with
 // zeros, which is valid for `bytemuck::Pod` types as a default. The resulting pointer
-// is non-null and aligned to `Slice::canonical_align()` for `T` and `M`. 
-// The allocation is valid for `Slice::canonical_bytes() * self.num_rows()` for types `T` and `M`. 
+// is non-null and aligned to `Slice::canonical_align()` for `T` and `M`.
+// The allocation is valid for `Slice::canonical_bytes() * self.num_rows()` for types `T` and `M`.
 unsafe impl<T, M> NewOwned<Defaulted> for SliceMatRepr<T, M>
 where
     T: bytemuck::Pod,
@@ -371,7 +370,7 @@ where
 mod tests {
     use std::fmt::Display;
 
-    use diskann_utils::{lazy_format, Reborrow, ReborrowMut};
+    use diskann_utils::{Reborrow, ReborrowMut, lazy_format};
 
     use super::*;
 
@@ -470,8 +469,16 @@ mod tests {
         assert_eq!(mat.num_vectors(), repr.nrows, "nrows mismatch: {ctx}");
         for i in 0..mat.num_vectors() {
             let row = mat.get_row(i).unwrap();
-            assert_eq!(*row.meta(), M::from_index(i), "meta mismatch row {i}: {ctx}");
-            assert_eq!(row.vector().len(), repr.ncols, "ncols mismatch row {i}: {ctx}");
+            assert_eq!(
+                *row.meta(),
+                M::from_index(i),
+                "meta mismatch row {i}: {ctx}"
+            );
+            assert_eq!(
+                row.vector().len(),
+                repr.ncols,
+                "ncols mismatch row {i}: {ctx}"
+            );
             for j in 0..repr.ncols {
                 assert_eq!(
                     row.vector()[j],
@@ -482,7 +489,10 @@ mod tests {
         }
         // Out-of-bounds access returns None.
         for oob in oob_indices(repr.nrows) {
-            assert!(mat.get_row(oob).is_none(), "expected None for index {oob}: {ctx}");
+            assert!(
+                mat.get_row(oob).is_none(),
+                "expected None for index {oob}: {ctx}"
+            );
         }
     }
 
@@ -498,8 +508,16 @@ mod tests {
         assert_eq!(mat.num_vectors(), repr.nrows, "nrows mismatch: {ctx}");
         for i in 0..mat.num_vectors() {
             let row = mat.get_row(i).unwrap();
-            assert_eq!(*row.meta(), M::from_index(i), "meta mismatch row {i}: {ctx}");
-            assert_eq!(row.vector().len(), repr.ncols, "ncols mismatch row {i}: {ctx}");
+            assert_eq!(
+                *row.meta(),
+                M::from_index(i),
+                "meta mismatch row {i}: {ctx}"
+            );
+            assert_eq!(
+                row.vector().len(),
+                repr.ncols,
+                "ncols mismatch row {i}: {ctx}"
+            );
             for j in 0..repr.ncols {
                 assert_eq!(
                     row.vector()[j],
@@ -509,7 +527,10 @@ mod tests {
             }
         }
         for oob in oob_indices(repr.nrows) {
-            assert!(mat.get_row(oob).is_none(), "expected None for index {oob}: {ctx}");
+            assert!(
+                mat.get_row(oob).is_none(),
+                "expected None for index {oob}: {ctx}"
+            );
         }
     }
 
@@ -525,8 +546,16 @@ mod tests {
         assert_eq!(mat.num_vectors(), repr.nrows, "nrows mismatch: {ctx}");
         for i in 0..mat.num_vectors() {
             let row = mat.get_row(i).unwrap();
-            assert_eq!(*row.meta(), M::from_index(i), "meta mismatch row {i}: {ctx}");
-            assert_eq!(row.vector().len(), repr.ncols, "ncols mismatch row {i}: {ctx}");
+            assert_eq!(
+                *row.meta(),
+                M::from_index(i),
+                "meta mismatch row {i}: {ctx}"
+            );
+            assert_eq!(
+                row.vector().len(),
+                repr.ncols,
+                "ncols mismatch row {i}: {ctx}"
+            );
             for j in 0..repr.ncols {
                 assert_eq!(
                     row.vector()[j],
@@ -536,7 +565,10 @@ mod tests {
             }
         }
         for oob in oob_indices(repr.nrows) {
-            assert!(mat.get_row(oob).is_none(), "expected None for index {oob}: {ctx}");
+            assert!(
+                mat.get_row(oob).is_none(),
+                "expected None for index {oob}: {ctx}"
+            );
         }
     }
 
@@ -551,8 +583,16 @@ mod tests {
     {
         assert_eq!(rows.len(), repr.nrows, "rows len mismatch: {ctx}");
         for (i, row) in rows.enumerate() {
-            assert_eq!(*row.meta(), M::from_index(i), "meta mismatch row {i}: {ctx}");
-            assert_eq!(row.vector().len(), repr.ncols, "ncols mismatch row {i}: {ctx}");
+            assert_eq!(
+                *row.meta(),
+                M::from_index(i),
+                "meta mismatch row {i}: {ctx}"
+            );
+            assert_eq!(
+                row.vector().len(),
+                repr.ncols,
+                "ncols mismatch row {i}: {ctx}"
+            );
             for j in 0..repr.ncols {
                 assert_eq!(
                     row.vector()[j],
@@ -1113,7 +1153,8 @@ mod tests {
             let layout = repr.layout().unwrap();
             let oracle = expected_stride::<u16, AlignedMeta>(ncols);
             assert_eq!(
-                layout.size(), oracle,
+                layout.size(),
+                oracle,
                 "layout size {0} != oracle stride {oracle} for ncols={ncols}",
                 layout.size()
             );
@@ -1163,14 +1204,23 @@ mod tests {
         // Write different patterns to adjacent rows.
         for i in 0..3 {
             let mut row = mat.get_row_mut(i).unwrap();
-            *row.meta_mut() = Meta { scale: (i + 1) as f32 * 10.0 };
-            row.vector_mut().iter_mut().for_each(|v| *v = (i as u8 + 1) * 0x11);
+            *row.meta_mut() = Meta {
+                scale: (i + 1) as f32 * 10.0,
+            };
+            row.vector_mut()
+                .iter_mut()
+                .for_each(|v| *v = (i as u8 + 1) * 0x11);
         }
 
         // Verify each row is distinct and hasn't bled into neighbours.
         for i in 0..3 {
             let row = mat.get_row(i).unwrap();
-            assert_eq!(*row.meta(), Meta { scale: (i + 1) as f32 * 10.0 });
+            assert_eq!(
+                *row.meta(),
+                Meta {
+                    scale: (i + 1) as f32 * 10.0
+                }
+            );
             let expected_byte = (i as u8 + 1) * 0x11;
             assert!(
                 row.vector().iter().all(|&v| v == expected_byte),

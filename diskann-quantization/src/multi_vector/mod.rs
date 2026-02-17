@@ -70,4 +70,4 @@ pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, SliceError, Standard,
 };
-pub use slice_repr::{SliceMatRepr, SliceMatReprError, SliceMatError};
+pub use slice_repr::{SliceMatError, SliceMatRepr, SliceMatReprError};

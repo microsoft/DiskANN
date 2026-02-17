@@ -359,9 +359,9 @@ where
 #[cfg(test)]
 mod tests {
     use rand::{
+        SeedableRng,
         distr::{Distribution, StandardUniform},
         rngs::StdRng,
-        SeedableRng,
     };
 
     use super::*;

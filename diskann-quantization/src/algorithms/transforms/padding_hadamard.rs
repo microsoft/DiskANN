@@ -8,16 +8,16 @@ use std::num::NonZeroUsize;
 #[cfg(feature = "flatbuffers")]
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 use rand::{
-    distr::{Distribution, StandardUniform},
     Rng,
+    distr::{Distribution, StandardUniform},
 };
 use thiserror::Error;
 
 #[cfg(feature = "flatbuffers")]
 use super::utils::{bool_to_sign, sign_to_bool};
 use super::{
-    utils::{check_dims, is_sign, subsample_indices, TransformFailed},
     TargetDim,
+    utils::{TransformFailed, check_dims, is_sign, subsample_indices},
 };
 #[cfg(feature = "flatbuffers")]
 use crate::flatbuffers as fb;
@@ -103,11 +103,7 @@ where
         let signs = Poly::from_iter(
             (0..dim.get()).map(|_| {
                 let sign: bool = StandardUniform {}.sample(rng);
-                if sign {
-                    0x8000_0000
-                } else {
-                    0
-                }
+                if sign { 0x8000_0000 } else { 0 }
             }),
             allocator.clone(),
         )?;
@@ -367,11 +363,11 @@ where
 #[cfg(test)]
 mod tests {
     use diskann_utils::lazy_format;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::{
-        algorithms::transforms::{test_utils, Transform, TransformKind},
+        algorithms::transforms::{Transform, TransformKind, test_utils},
         alloc::GlobalAllocator,
     };
 

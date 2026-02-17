@@ -936,10 +936,10 @@ where
 #[cfg(test)]
 mod tests {
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
         seq::{IndexedRandom, SliceRandom},
-        Rng, SeedableRng,
     };
 
     use super::*;
