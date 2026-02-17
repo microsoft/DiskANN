@@ -194,21 +194,17 @@ where
         debug_assert!(i < self.nrows);
 
         let stride = Self::stride(self.ncols());
-        let row_ptr = ptr.as_ptr().add(i * stride);
 
         // SAFETY:
-        // - Base pointer `ptr` was initialized correctly by `NewRef`
-        //   and so is within bounds.
-        // - `stride` was computed based on [`SliceRef::<T, M>::canonical_bytes`] and
-        //   was used for initialization also.
-        let row_slice = std::slice::from_raw_parts(row_ptr, stride);
-
-        // SAFETY: The row slice has the correct length and alignment for the canonical
-        // layout because:
-        // - The base pointer is aligned to [`SliceRef::canonical_align()`].
-        // - Each row starts at `i * stride`, where `stride` is a multiple of the
-        //   canonical alignment, thus preserving alignment.
-        SliceRef::from_canonical_unchecked(row_slice, self.ncols)
+        // - The caller guarantees `ptr` is valid and `i < self.nrows`.
+        // - `stride` was computed from `canonical_bytes` and used for initialization.
+        // - The base pointer is aligned to `canonical_align()`, and each row starts at
+        //   `i * stride` which preserves alignment.
+        unsafe {
+            let row_ptr = ptr.as_ptr().add(i * stride);
+            let row_slice = std::slice::from_raw_parts(row_ptr, stride);
+            SliceRef::from_canonical_unchecked(row_slice, self.ncols)
+        }
     }
 }
 
@@ -232,20 +228,17 @@ where
 
         let stride = Self::stride(self.ncols());
 
-        let row_ptr = ptr.as_ptr().add(i * stride);
-
-        // SAEFTY:
-        // - Base pointer `ptr` was initialized correctly by `NewMut`
-        //   and so is within bounds.
-        // - `stride` was computed based on [`SliceRef::<T, M>::canonical_bytes`] and
-        //   was used for initialization also.
-        let row_slice = std::slice::from_raw_parts_mut(row_ptr, stride);
-
-        // SAFETY: Same alignment and length guarantees as `get_row`. Additionally,
-        // the caller guarantees exclusive access to row `i`, and disjoint rows do not
-        // overlap because each row occupies its own `stride`-sized region (stride >=
-        // canonical, and rows are at stride-aligned offsets).
-        SliceMut::from_canonical_mut_unchecked(row_slice, self.ncols)
+        // SAFETY:
+        // - The caller guarantees `ptr` is valid, `i < self.nrows`, and exclusive access
+        //   to row `i`.
+        // - `stride` was computed from `canonical_bytes` and used for initialization.
+        // - Disjoint rows do not overlap because each occupies its own `stride`-sized
+        //   region at stride-aligned offsets.
+        unsafe {
+            let row_ptr = ptr.as_ptr().add(i * stride);
+            let row_slice = std::slice::from_raw_parts_mut(row_ptr, stride);
+            SliceMut::from_canonical_mut_unchecked(row_slice, self.ncols)
+        }
     }
 }
 
@@ -261,14 +254,14 @@ where
         let total = self.total_bytes();
         let align = Self::alignment();
 
-        // Reconstruct the fat pointer for the byte slice.
-        let fat_ptr =
-            NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), total));
-
         // SAFETY: The caller guarantees `ptr` was obtained from `NewOwned`, which uses
         // `Poly::broadcast` with `AlignedAllocator::new(align)`. Reconstructing the
         // `Poly` with the same allocator and dropping it is the correct deallocation.
-        let _ = Poly::from_raw(fat_ptr, AlignedAllocator::new(align));
+        unsafe {
+            let fat_ptr =
+                NonNull::new_unchecked(std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), total));
+            let _ = Poly::from_raw(fat_ptr, AlignedAllocator::new(align));
+        }
     }
 }
 
@@ -347,9 +340,16 @@ where
         let total = repr.total_bytes();
         let align = SliceMatRepr::<T, M>::alignment();
 
-        // Allocate a new buffer and copy the raw bytes.
-        let mut buffer = Poly::broadcast(0u8, total, AlignedAllocator::new(align))
-            .expect("allocation failed in NewCloned");
+        // SAFETY: `total` and `align` come from a repr that backs an existing `MatRef`,
+        // so the size/alignment pair is guaranteed valid.
+        let layout = unsafe {
+            std::alloc::Layout::from_size_align_unchecked(total, align.raw())
+        };
+
+        let mut buffer = match Poly::broadcast(u8::default(), total, AlignedAllocator::new(align)) {
+            Ok(buf) => buf,
+            Err(_) => std::alloc::handle_alloc_error(layout),
+        };
 
         // SAFETY: `v.ptr` points to `total` bytes of valid memory, and `buffer` has the
         // same length. The regions do not overlap because `buffer` is freshly allocated.
