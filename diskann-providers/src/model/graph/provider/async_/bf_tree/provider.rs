@@ -2504,12 +2504,19 @@ mod tests {
 
         let storage = FileStorageProvider;
 
-        provider.save_with(&storage, &prefix).await.unwrap();
+        // Save to a different prefix to exercise the snapshot copy logic
+        let save_dir = tempdir().unwrap();
+        let save_prefix = save_dir
+            .path()
+            .join("saved_bf_tree_provider")
+            .to_string_lossy()
+            .to_string();
+        provider.save_with(&storage, &save_prefix).await.unwrap();
 
         // Load using trait method (includes delete bitmap)
         let loaded_provider = BfTreeProvider::<f32, NoStore, TableDeleteProviderAsync>::load_with(
             &storage,
-            &prefix.clone(),
+            &save_prefix,
         )
         .await
         .unwrap();
@@ -2672,13 +2679,20 @@ mod tests {
 
         let storage = FileStorageProvider;
 
-        provider.save_with(&storage, &prefix).await.unwrap();
+        // Save to a different prefix to exercise the snapshot copy logic
+        let save_dir = tempdir().unwrap();
+        let save_prefix = save_dir
+            .path()
+            .join("saved_bf_tree_provider_quant")
+            .to_string_lossy()
+            .to_string();
+        provider.save_with(&storage, &save_prefix).await.unwrap();
 
         // Load using trait method (includes delete bitmap and quantization)
         let loaded_provider =
             BfTreeProvider::<f32, QuantVectorProvider, TableDeleteProviderAsync>::load_with(
                 &storage,
-                &prefix.clone(),
+                &save_prefix,
             )
             .await
             .unwrap();
