@@ -75,6 +75,10 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     _data_store = data_store;
     _pq_data_store = pq_data_store;
     _graph_store = std::move(graph_store);
+    /*if (_filtered_index)
+    {
+        _filter_store = std::make_unique<InMemFilterStore<LabelT>>(total_internal_points);
+    }*/
 
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
     if (_enable_tags)
@@ -154,6 +158,10 @@ Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_point
     {
         _pq_data_store = _data_store;
     }
+    /*if (filtered_index)
+    {
+        _filter_store = std::make_unique<InMemFilterStore<LabelT>>(max_points + num_frozen_pts);
+    }*/
 }
 
 template <typename T, typename TagT, typename LabelT> Index<T, TagT, LabelT>::~Index()
@@ -1767,7 +1775,12 @@ void Index<T, TagT, LabelT>::build(const std::string &data_file, const size_t nu
             LabelT unv_label_as_num = 0;
             this->set_universal_label(unv_label_as_num);
         }
-        this->build_filtered_index(data_file.c_str(), labels_file_to_use, points_to_load);
+        diskann::IndexFilterParams filter_params_build = diskann::IndexFilterParamsBuilder()
+                                                             .with_universal_label(filter_params.universal_label)
+                                                             .with_label_file(labels_file_to_use)
+                                                             .with_save_path_prefix(filter_params.save_path_prefix)
+                                                             .build();
+        this->build_filtered_index(data_file.c_str(), points_to_load, filter_params_build);
     }
     std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - s;
     std::cout << "Indexing time: " << diff.count() << "\n";
@@ -1871,14 +1884,14 @@ void Index<T, TagT, LabelT>::set_universal_label(const LabelT &label)
 }
 
 template <typename T, typename TagT, typename LabelT>
-void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const std::string &label_file,
-                                                  const size_t num_points_to_load, const std::vector<TagT> &tags)
+void Index<T, TagT, LabelT>::build_filtered_index(const char *filename, const size_t num_points_to_load,
+                                                  const IndexFilterParams filter_params, const std::vector<TagT> &tags)
 {
     _filtered_index = true;
     _label_to_start_id.clear();
     size_t num_points_labels = 0;
 
-    parse_label_file(label_file,
+    parse_label_file(filter_params.label_file,
                      num_points_labels); // determines medoid for each label and identifies
                                          // the points to label mapping
 
