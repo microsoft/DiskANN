@@ -2,6 +2,7 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+#![cfg_attr(not(target_arch = "x86_64"), allow(rustdoc::invalid_rust_codeblocks))]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
