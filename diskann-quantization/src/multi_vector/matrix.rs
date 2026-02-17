@@ -420,8 +420,13 @@ unsafe impl<T: Copy> Repr for Standard<T> {
         debug_assert!(ptr.cast::<T>().is_aligned());
         debug_assert!(i < self.nrows);
 
-        let row_ptr = ptr.as_ptr().cast::<T>().add(i * self.ncols);
-        std::slice::from_raw_parts(row_ptr, self.ncols)
+        // SAFETY: The caller asserts that `i` is less than `self.nrows()`. Since this type
+        // audits the constructors for `Mat` and friends, we know that there is room for at
+        // least `self.num_elements()` elements from the base pointer, so this access is safe.
+        let row_ptr = unsafe { ptr.as_ptr().cast::<T>().add(i * self.ncols) };
+
+        // SAFETY: The logic is the same as the previous `unsafe` block.
+        unsafe { std::slice::from_raw_parts(row_ptr, self.ncols) }
     }
 }
 
@@ -437,8 +442,14 @@ unsafe impl<T: Copy> ReprMut for Standard<T> {
         debug_assert!(ptr.cast::<T>().is_aligned());
         debug_assert!(i < self.nrows);
 
-        let row_ptr = ptr.as_ptr().cast::<T>().add(i * self.ncols);
-        std::slice::from_raw_parts_mut(row_ptr, self.ncols)
+        // SAFETY: The caller asserts that `i` is less than `self.nrows()`. Since this type
+        // audits the constructors for `Mat` and friends, we know that there is room for at
+        // least `self.num_elements()` elements from the base pointer, so this access is safe.
+        let row_ptr = unsafe { ptr.as_ptr().cast::<T>().add(i * self.ncols) };
+
+        // SAFETY: The logic is the same as the previous `unsafe` block. Further, the caller
+        // attests that creating a mutable reference is safe.
+        unsafe { std::slice::from_raw_parts_mut(row_ptr, self.ncols) }
     }
 }
 
@@ -655,9 +666,9 @@ impl<T: ReprOwned> Mat<T> {
         Self { ptr, repr }
     }
 
-    #[cfg(test)]
-    fn as_ptr(&self) -> NonNull<u8> {
-        self.ptr
+    /// Return the base pointer for the [`Mat`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -782,6 +793,11 @@ impl<'a, T: Repr> MatRef<'a, T> {
             repr,
             _lifetime: PhantomData,
         }
+    }
+
+    /// Return the base pointer for the [`MatRef`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -960,6 +976,11 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
             repr,
             _lifetime: PhantomData,
         }
+    }
+
+    /// Return the base pointer for the [`MatMut`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -1396,7 +1417,7 @@ mod tests {
     #[test]
     fn mat_new_and_basic_accessors() {
         let mat = Mat::new(Standard::<usize>::new(3, 4).unwrap(), 42usize).unwrap();
-        let base: *const u8 = mat.as_ptr().as_ptr();
+        let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 3);
         assert_eq!(mat.vector_dim(), 4);
@@ -1418,7 +1439,7 @@ mod tests {
     #[test]
     fn mat_new_with_default() {
         let mat = Mat::new(Standard::<usize>::new(2, 3).unwrap(), Defaulted).unwrap();
-        let base: *const u8 = mat.as_ptr().as_ptr();
+        let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 2);
         for (i, row) in mat.rows().enumerate() {
@@ -1456,6 +1477,10 @@ mod tests {
                     check_mat_ref(mat.reborrow(), repr, ctx);
                     check_mat_mut(mat.reborrow_mut(), repr, ctx);
                     check_rows(mat.rows(), repr, ctx);
+
+                    // Check reborrow preserves pointers.
+                    assert_eq!(mat.as_raw_ptr(), mat.reborrow().as_raw_ptr());
+                    assert_eq!(mat.as_raw_ptr(), mat.reborrow_mut().as_raw_ptr());
                 }
 
                 // Populate the matrix using `MatMut`
@@ -1514,7 +1539,7 @@ mod tests {
 
                     // Cloned allocation is independent.
                     if repr.num_elements() > 0 {
-                        assert_ne!(mat.as_ptr(), cloned.as_ptr());
+                        assert_ne!(mat.as_raw_ptr(), cloned.as_raw_ptr());
                     }
                 }
 
@@ -1528,7 +1553,7 @@ mod tests {
                     check_rows(owned.rows(), repr, ctx);
 
                     if repr.num_elements() > 0 {
-                        assert_ne!(mat.as_ptr(), owned.as_ptr());
+                        assert_ne!(mat.as_raw_ptr(), owned.as_raw_ptr());
                     }
                 }
 
@@ -1542,7 +1567,7 @@ mod tests {
                     check_rows(owned.rows(), repr, ctx);
 
                     if repr.num_elements() > 0 {
-                        assert_ne!(mat.as_ptr(), owned.as_ptr());
+                        assert_ne!(mat.as_raw_ptr(), owned.as_raw_ptr());
                     }
                 }
             }
@@ -1560,7 +1585,14 @@ mod tests {
                 {
                     let ctx = &lazy_format!("{ctx} - by matmut");
                     let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
+                    let ptr = b.as_ptr().cast::<u8>();
                     let mut matmut = MatMut::new(repr, &mut b).unwrap();
+
+                    assert_eq!(
+                        ptr,
+                        matmut.as_raw_ptr(),
+                        "underlying memory should be preserved",
+                    );
 
                     fill_mat_mut(matmut.reborrow_mut(), repr);
 
@@ -1579,7 +1611,14 @@ mod tests {
                 {
                     let ctx = &lazy_format!("{ctx} - by rows");
                     let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
+                    let ptr = b.as_ptr().cast::<u8>();
                     let mut matmut = MatMut::new(repr, &mut b).unwrap();
+
+                    assert_eq!(
+                        ptr,
+                        matmut.as_raw_ptr(),
+                        "underlying memory should be preserved",
+                    );
 
                     fill_rows_mut(matmut.rows_mut(), repr);
 

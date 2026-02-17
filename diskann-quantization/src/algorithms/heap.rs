@@ -101,7 +101,9 @@ impl<'a, T: Ord + Copy> SliceHeap<'a, T> {
     /// `pos < self.len()` (checked in debug mode).
     unsafe fn get_unchecked(&self, pos: usize) -> &T {
         debug_assert!(pos < self.len());
-        self.data.get_unchecked(pos)
+
+        // SAFETY: Inherited from caller.
+        unsafe { self.data.get_unchecked(pos) }
     }
 
     /// Swap the two elements as positions `a` and `b`.

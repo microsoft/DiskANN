@@ -165,7 +165,7 @@ impl SIMDPartialOrd for u8x16 {
     fn lt_simd(self, other: Self) -> Self::Mask {
         // Check that each lane in `self` is not equal to the element-wise maximum.
         //
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_max_epu8`, `_mm_cmpeq_epi8`, and `_mm_xor_si128` require SSE2, implied by V3.
         let m = unsafe {
             let max = _mm_max_epu8(self.0, other.0);
             _mm_xor_si128(_mm_cmpeq_epi8(self.0, max), __m128i::all_ones())
@@ -175,7 +175,7 @@ impl SIMDPartialOrd for u8x16 {
 
     #[inline(always)]
     fn le_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_cmpeq_epi8` and `_mm_min_epu8` require SSE2, implied by V3.
         let m = unsafe { _mm_cmpeq_epi8(self.0, _mm_min_epu8(self.0, other.0)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
@@ -184,13 +184,13 @@ impl SIMDPartialOrd for u8x16 {
 impl SIMDPartialEq for u8x16 {
     #[inline(always)]
     fn eq_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_cmpeq_epi8` requires SSE2, implied by V3.
         Self::Mask::from_underlying(self.arch(), unsafe { _mm_cmpeq_epi8(self.0, other.0) })
     }
 
     #[inline(always)]
     fn ne_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_xor_si128` and `_mm_cmpeq_epi8` require SSE2, implied by V3.
         let m = unsafe { _mm_xor_si128(_mm_cmpeq_epi8(self.0, other.0), __m128i::all_ones()) };
         Self::Mask::from_underlying(self.arch(), m)
     }

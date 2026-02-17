@@ -86,7 +86,8 @@ unsafe impl AllocatorCore for ScopedAllocator<'_> {
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<[u8]>, layout: std::alloc::Layout) {
-        self.allocator.deallocate(ptr, layout)
+        // SAFETY: Inherited from caller.
+        unsafe { self.allocator.deallocate(ptr, layout) }
     }
 }
 

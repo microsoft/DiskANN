@@ -42,7 +42,7 @@ impl<T> LoHi<T> {
         U::join(self)
     }
 
-    /// Return a new [`LoHi`] with the function `f` applied to the pairwise members of
+    /// Return a new [`LoHi`] with the function `f` applied to the pairwise members
     /// of `self` and `x`.
     ///
     /// If it does not panic, `f` will be invoked exactly twice, first on `lo`, then on `hi`.

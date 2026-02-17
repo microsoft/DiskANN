@@ -3,16 +3,15 @@
  * Licensed under the MIT license.
  */
 
-use super::vectors::{DataMutRef, MinMaxCompensation, MinMaxIP, MinMaxL2Squared};
+use super::vectors::{DataMutRef, FullQueryMut, MinMaxCompensation, MinMaxIP, MinMaxL2Squared};
 use core::f32;
-use diskann_utils::views::MutDenseData;
 
 use crate::{
     AsFunctor, CompressInto,
     algorithms::Transform,
     alloc::{GlobalAllocator, ScopedAllocator},
     bits::{Representation, Unsigned},
-    minmax::{FullQuery, MinMaxCosine, MinMaxCosineNormalized, vectors::FullQueryMeta},
+    minmax::{MinMaxCosine, MinMaxCosineNormalized, vectors::FullQueryMeta},
     num::Positive,
     scalar::{InputContainsNaN, bit_scale},
 };
@@ -264,7 +263,7 @@ where
     }
 }
 
-impl<T> CompressInto<&[T], &mut FullQuery> for MinMaxQuantizer
+impl<'a, T> CompressInto<&[T], FullQueryMut<'a>> for MinMaxQuantizer
 where
     T: Copy + Into<f32>,
 {
@@ -272,7 +271,7 @@ where
 
     type Output = ();
 
-    /// Compress the input vector `from` into a mutable reference for a [`FullQuery`] `to`.
+    /// Compress the input vector `from` into a [`FullQueryMut`] `to`.
     ///
     /// This method simply applies the transformation to the input without
     /// any compression.
@@ -288,7 +287,7 @@ where
     ///   dimensionality as the quantizer.
     /// * `to.len() != self.output_dim()`: Compressed vector must have the same dimensionality
     ///   as the quantizer.
-    fn compress_into(&self, from: &[T], to: &mut FullQuery) -> Result<(), Self::Error> {
+    fn compress_into(&self, from: &[T], mut to: FullQueryMut<'a>) -> Result<(), Self::Error> {
         assert_eq!(from.len(), self.dim());
         assert_eq!(self.output_dim(), to.len());
 
@@ -301,13 +300,13 @@ where
         // We know vec.len() == self.output_dim() and `from.len() == self.dim`
         #[allow(clippy::unwrap_used)]
         self.transform
-            .transform_into(to.data.as_mut_slice(), &from, ScopedAllocator::global())
+            .transform_into(to.vector_mut(), &from, ScopedAllocator::global())
             .unwrap();
 
-        let norm_squared = to.data.iter().map(|x| *x * *x).sum::<f32>();
-        let sum = to.data.iter().sum::<f32>();
+        let norm_squared = to.vector().iter().map(|x| *x * *x).sum::<f32>();
+        let sum = to.vector().iter().sum::<f32>();
 
-        to.meta = FullQueryMeta { norm_squared, sum };
+        *to.meta_mut() = FullQueryMeta { norm_squared, sum };
 
         Ok(())
     }
@@ -351,7 +350,8 @@ mod minmax_quantizer_tests {
     use super::*;
     use crate::{
         algorithms::transforms::NullTransform,
-        minmax::vectors::{Data, DataRef},
+        alloc::GlobalAllocator,
+        minmax::vectors::{Data, DataRef, FullQuery, FullQueryMut},
     };
 
     fn reconstruct_minmax<const NBITS: usize>(v: DataRef<'_, NBITS>) -> Vec<f32>
@@ -374,7 +374,7 @@ mod minmax_quantizer_tests {
     ) where
         Unsigned: Representation<NBITS>,
         MinMaxQuantizer: for<'a, 'b> CompressInto<&'a [f32], DataMutRef<'b, NBITS>, Output = L2Loss>
-            + for<'a, 'b> CompressInto<&'a [f32], &'b mut FullQuery, Output = ()>,
+            + for<'a, 'b> CompressInto<&'a [f32], FullQueryMut<'b>, Output = ()>,
     {
         let distribution = Uniform::new_inclusive::<f32, f32>(-1.0, 1.0).unwrap();
 
@@ -424,12 +424,12 @@ mod minmax_quantizer_tests {
         assert!((encoded.reborrow().meta().norm_squared - recon_norm_sq).abs() <= 1e-3);
 
         // FullQuery
-        let mut f = FullQuery::empty(dim);
+        let mut f = FullQuery::new_in(dim, GlobalAllocator).unwrap();
         quantizer
             .compress_into(vector.as_slice(), f.reborrow_mut())
             .unwrap();
 
-        f.data
+        f.vector()
             .iter()
             .enumerate()
             .zip(vector.iter())
@@ -443,16 +443,16 @@ mod minmax_quantizer_tests {
             });
 
         assert!(
-            (f.meta.norm_squared - norm).abs() < 1e-10,
+            (f.meta().norm_squared - norm).abs() < 1e-10,
             "Full Query norm in meta should be {norm} but instead got {}",
-            f.meta.norm_squared
+            f.meta().norm_squared
         );
 
         let sum = vector.iter().sum::<f32>();
         assert!(
-            (f.meta.sum - sum) < 1e-10,
+            (f.meta().sum - sum) < 1e-10,
             "Full Query norm in meta should be {sum} but instead got {}",
-            f.meta.sum
+            f.meta().sum
         );
     }
 

@@ -119,7 +119,7 @@ impl X86LoadStore for u8x32 {
     unsafe fn store_simd(self, ptr: *mut u8) {
         // SAFETY: The pointer access is guaranteed by the caller.
         //
-        // `_mm256_storeuu_si256` requires AVX - implied by `V3`.
+        // `_mm256_storeu_si256` requires AVX - implied by `V3`.
         unsafe { _mm256_storeu_si256(ptr.cast::<__m256i>(), self.to_underlying()) }
     }
 
@@ -149,7 +149,7 @@ impl SIMDPartialOrd for u8x32 {
     fn lt_simd(self, other: Self) -> Self::Mask {
         // Check that each lane in `self` is not equal to the element-wise maximum.
         //
-        // SAFETY: The intrinsics `_mm256_max_epu8`, `_mm256_empeq_epi8`, and
+        // SAFETY: The intrinsics `_mm256_max_epu8`, `_mm256_cmpeq_epi8`, and
         // `_mm256_xor_si256` require AVX2 - all of which are implied by `V3`.
         let m = unsafe {
             let max = _mm256_max_epu8(self.0, other.0);
@@ -162,7 +162,7 @@ impl SIMDPartialOrd for u8x32 {
     fn le_simd(self, other: Self) -> Self::Mask {
         // Check that each lane in `self` is not equal to the element-wise maximum.
         //
-        // SAFETY: The intrinsics `_mm256_min_epu8` and `_mm256_empeq_epi8` require AVX2
+        // SAFETY: The intrinsics `_mm256_min_epu8` and `_mm256_cmpeq_epi8` require AVX2
         // - implied by `V3`.
         let m = unsafe { _mm256_cmpeq_epi8(self.0, _mm256_min_epu8(self.0, other.0)) };
         Self::Mask::from_underlying(self.arch(), m)
