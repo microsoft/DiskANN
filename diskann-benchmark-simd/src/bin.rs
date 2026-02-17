@@ -57,9 +57,17 @@ mod tests {
 
     #[test]
     fn integration_test() {
+        // Use architecture-specific test file
+        // On macOS (and other non-x86_64 platforms), use test_mac.json with scalar architecture
+        // On x86_64, use test.json with x86-64-v3 architecture
+        #[cfg(target_arch = "x86_64")]
+        let test_file = "test.json";
+        #[cfg(not(target_arch = "x86_64"))]
+        let test_file = "test_mac.json";
+
         let input_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("examples")
-            .join("test.json");
+            .join(test_file);
 
         let tempdir = tempfile::tempdir().unwrap();
         let output_path = tempdir.path().join("output.json");
