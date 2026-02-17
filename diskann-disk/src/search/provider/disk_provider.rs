@@ -19,7 +19,8 @@ use diskann::{
     graph::{
         self,
         glue::{self, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
-        search_output_buffer, AdjacencyList, DiskANNIndex, Knn, SearchOutputBuffer,
+        search::{Knn},
+        search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider::{
@@ -1043,7 +1044,7 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 #[cfg(test)]
 mod disk_provider_tests {
     use diskann::{
-        graph::{search::record::VisitedSearchRecord, Knn, KnnSearchError},
+        graph::{search::{Knn, record::VisitedSearchRecord}, KnnSearchError},
         utils::IntoUsize,
         ANNErrorKind,
     };
@@ -1756,7 +1757,7 @@ mod disk_provider_tests {
 
         let search_params = Knn::new(10, 20, None).unwrap();
 
-        let mut diverse_search = diskann::graph::Diverse::new(search_params, diverse_params);
+        let mut diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
@@ -1797,7 +1798,7 @@ mod disk_provider_tests {
             Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
         let mut diverse_search2 =
-            diskann::graph::Diverse::new(search_params2, diverse_params);
+            diskann::graph::search::Diverse::new(search_params2, diverse_params);
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(

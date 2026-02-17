@@ -9,7 +9,7 @@ use diskann_vector::distance::Metric;
 
 use crate::{
     graph::{
-        self, DiskANNIndex, Knn,
+        self, DiskANNIndex, search::Knn,
         test::{provider as test_provider, synthetic::Grid},
     },
     neighbor::Neighbor,

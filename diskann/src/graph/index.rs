@@ -24,13 +24,14 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 
 use super::{
-    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Knn,
+    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod,
     glue::{
         self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
         PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
+        Knn,
         record::{NoopSearchRecord, SearchRecord, VisitedSearchRecord},
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
@@ -2131,7 +2132,7 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// use diskann::graph::{Knn, Range, Search};
+    /// use diskann::graph::{search::{Knn, Range}, Search};
     ///
     /// // Standard k-NN search
     /// let mut params = Knn::new(10, 100, None)?;

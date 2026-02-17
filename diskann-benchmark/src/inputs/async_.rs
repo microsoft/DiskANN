@@ -8,7 +8,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use anyhow::{anyhow, Context};
 use diskann::{
-    graph::{self, config, Range, RangeSearchError, StartPointStrategy},
+    graph::{self, config, search::Range, RangeSearchError, StartPointStrategy},
     utils::IntoUsize,
 };
 use diskann_benchmark_core::streaming::executors::bigann;

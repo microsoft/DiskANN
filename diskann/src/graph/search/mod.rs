@@ -12,7 +12,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use diskann::graph::{Knn, Range, MultihopSearch, Search};
+//! use diskann::graph::{search::{Knn, Range, MultihopSearch}, Search};
 //!
 //! // Standard k-NN search
 //! let mut params = Knn::new(10, 100, None)?;

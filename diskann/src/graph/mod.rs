@@ -29,14 +29,9 @@ pub use misc::DiverseSearchParams;
 pub mod glue;
 pub mod search;
 
-// Re-export unified search interface as the primary API.
-pub use search::{
-    Knn, KnnSearchError, MultihopSearch, Range, RangeSearchError, RangeSearchOutput,
-    RecordedKnn, Search,
-};
-
-#[cfg(feature = "experimental_diversity_search")]
-pub use search::Diverse;
+// Re-export the Search trait and error/output types only.
+// Search parameter types (Knn, Range, Diverse, etc.) should be accessed via `graph::search::`.
+pub use search::{KnnSearchError, RangeSearchError, RangeSearchOutput, Search};
 
 mod internal;
 

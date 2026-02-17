@@ -19,11 +19,11 @@ use crate::search::{self, Search, graph::Strategy};
 ///
 /// This is intended to be used in conjunction with [`search::search`] or [`search::search_all`]
 /// and provides some basic additional metrics for the latter. Result aggregation for
-/// [`search::search_all`] is provided by the [`search::graph::knn::Aggregator`] type (same
-/// aggregator as [`search::graph::KNN`]).
+/// [`search::search_all`] is provided by the [`search::graph::search::Knn::Aggregator`] type (same
+/// aggregator as [`search::graph::search::Knn`]).
 ///
-/// The provided implementation of [`Search`] accepts [`graph::Knn`]
-/// and returns [`search::graph::knn::Metrics`] as additional output.
+/// The provided implementation of [`Search`] accepts [`graph::search::Knn`]
+/// and returns [`search::graph::search::Knn::Metrics`] as additional output.
 #[derive(Debug)]
 pub struct MultiHop<DP, T, S>
 where
@@ -90,7 +90,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::Knn;
+    type Parameters = graph::search::Knn;
     type Output = super::knn::Metrics;
 
     fn num_queries(&self) -> usize {
@@ -111,7 +111,7 @@ where
         O: graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let context = DP::Context::default();
-        let mut multihop_search = graph::MultihopSearch::new(*parameters, &*self.labels[index]);
+        let mut multihop_search = graph::search::MultihopSearch::new(*parameters, &*self.labels[index]);
         let stats = self
             .index
             .search(
@@ -181,7 +181,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             multihop.clone(),
-            graph::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
+            graph::search::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -209,11 +209,11 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
+                graph::search::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::Knn::new(nearest_neighbors.get(), 15, None).unwrap(),
+                graph::search::Knn::new(nearest_neighbors.get(), 15, None).unwrap(),
                 setup.clone(),
             ),
         ];

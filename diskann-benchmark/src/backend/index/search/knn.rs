@@ -51,7 +51,7 @@ pub(crate) fn run<I>(
                 .map(|search_l| {
                     let k = run.search_n;
                     let l = *search_l;
-                    let search_params = diskann::graph::Knn::new(k, l, None).unwrap();
+                    let search_params = diskann::graph::search::Knn::new(k, l, None).unwrap();
 
                     core_search::Run::new(search_params, setup.clone())
                 })
@@ -64,7 +64,7 @@ pub(crate) fn run<I>(
     Ok(all)
 }
 
-type Run = core_search::Run<diskann::graph::Knn>;
+type Run = core_search::Run<diskann::graph::search::Knn>;
 pub(crate) trait Knn<I> {
     fn search_all(
         &self,
@@ -84,13 +84,13 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::KNN<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::Knn,
+        Parameters = diskann::graph::search::Knn,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::Knn>>,
+        parameters: Vec<core_search::Run<diskann::graph::search::Knn>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,
@@ -110,13 +110,13 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::MultiHop<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::Knn,
+        Parameters = diskann::graph::search::Knn,
         Output = core_search::graph::knn::Metrics,
     >,
 {
     fn search_all(
         &self,
-        parameters: Vec<core_search::Run<diskann::graph::Knn>>,
+        parameters: Vec<core_search::Run<diskann::graph::search::Knn>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
         recall_k: usize,
         recall_n: usize,

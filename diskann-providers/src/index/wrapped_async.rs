@@ -8,11 +8,12 @@ use std::{num::NonZeroUsize, sync::Arc};
 use diskann::{
     ANNResult,
     graph::{
-        self, ConsolidateKind, InplaceDeleteMethod, Knn,
+        self, ConsolidateKind, InplaceDeleteMethod,
         glue::{
             self, AsElement, InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchStrategy,
         },
         index::{DegreeStats, PartitionedNeighbors, SearchState, SearchStats},
+        search::{Knn},
         search_output_buffer,
     },
     neighbor::Neighbor,
