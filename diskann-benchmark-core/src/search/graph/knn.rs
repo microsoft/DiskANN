@@ -29,7 +29,7 @@ use crate::{
 /// the latter. Result aggregation for [`search::search_all`] is provided
 /// by the [`Aggregator`] type.
 ///
-/// The provided implementation of [`Search`] accepts [`graph::KnnSearch`]
+/// The provided implementation of [`Search`] accepts [`graph::Knn`]
 /// and returns [`Metrics`] as additional output.
 #[derive(Debug)]
 pub struct KNN<DP, T, S>
@@ -92,7 +92,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::KnnSearch;
+    type Parameters = graph::Knn;
     type Output = Metrics;
 
     fn num_queries(&self) -> usize {
@@ -143,7 +143,7 @@ pub struct Summary {
     pub setup: search::Setup,
 
     /// The [`Search::Parameters`] used for the batch of runs.
-    pub parameters: graph::KnnSearch,
+    pub parameters: graph::Knn,
 
     /// The end-to-end latency for each repetition in the batch.
     pub end_to_end_latencies: Vec<MicroSeconds>,
@@ -208,7 +208,7 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I> search::Aggregate<graph::KnnSearch, I, Metrics> for Aggregator<'_, I>
+impl<I> search::Aggregate<graph::Knn, I, Metrics> for Aggregator<'_, I>
 where
     I: crate::recall::RecallCompatible,
 {
@@ -216,7 +216,7 @@ where
 
     fn aggregate(
         &mut self,
-        run: search::Run<graph::KnnSearch>,
+        run: search::Run<graph::Knn>,
         mut results: Vec<search::SearchResults<I, Metrics>>,
     ) -> anyhow::Result<Summary> {
         // Compute the recall using just the first result.
@@ -313,7 +313,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             knn.clone(),
-            graph::KnnSearch::new(nearest_neighbors.get(), 10, None).unwrap(),
+            graph::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -337,11 +337,11 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::KnnSearch::new(nearest_neighbors.get(), 10, None).unwrap(),
+                graph::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::KnnSearch::new(nearest_neighbors.get(), 15, None).unwrap(),
+                graph::Knn::new(nearest_neighbors.get(), 15, None).unwrap(),
                 setup.clone(),
             ),
         ];

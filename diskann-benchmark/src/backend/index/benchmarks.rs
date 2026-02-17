@@ -396,7 +396,7 @@ where
             let groundtruth =
                 datafiles::load_range_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
 
-            let steps = search::range::RangeSearchSteps::new(
+            let steps = search::range::RangeSteps::new(
                 search_phase.reps,
                 &search_phase.num_threads,
                 &search_phase.runs,

@@ -8,7 +8,7 @@
 use diskann_utils::future::{AssertSend, SendFuture};
 use hashbrown::HashSet;
 
-use super::{KnnSearch, Search, record::NoopSearchRecord, scratch::SearchScratch};
+use super::{Knn, Search, record::NoopSearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::IntoANNResult,
@@ -26,22 +26,22 @@ use crate::{
 ///
 /// Returns results that are diverse across a specified attribute.
 #[derive(Debug)]
-pub struct DiverseSearch<P>
+pub struct Diverse<P>
 where
     P: AttributeValueProvider,
 {
     /// Base k-NN search parameters.
-    inner: KnnSearch,
+    inner: Knn,
     /// Diversity-specific parameters.
     diverse_params: DiverseSearchParams<P>,
 }
 
-impl<P> DiverseSearch<P>
+impl<P> Diverse<P>
 where
     P: AttributeValueProvider,
 {
     /// Create new diverse search parameters.
-    pub fn new(inner: KnnSearch, diverse_params: DiverseSearchParams<P>) -> Self {
+    pub fn new(inner: Knn, diverse_params: DiverseSearchParams<P>) -> Self {
         Self {
             inner,
             diverse_params,
@@ -50,7 +50,7 @@ where
 
     /// Returns a reference to the inner k-NN search parameters.
     #[inline]
-    pub fn inner(&self) -> &KnnSearch {
+    pub fn inner(&self) -> &Knn {
         &self.inner
     }
 
@@ -92,7 +92,7 @@ where
     }
 }
 
-impl<DP, S, T, O, OB, P> Search<DP, S, T, O, OB> for DiverseSearch<P>
+impl<DP, S, T, O, OB, P> Search<DP, S, T, O, OB> for Diverse<P>
 where
     DP: DataProvider,
     T: Sync + ?Sized,

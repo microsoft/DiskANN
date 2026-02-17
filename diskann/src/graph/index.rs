@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 
 use super::{
-    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, KnnSearch,
+    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Knn,
     glue::{
         self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
         PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
@@ -2123,22 +2123,22 @@ where
     ///
     /// # Supported Search Types
     ///
-    /// - [`search::KnnSearch`]: Standard k-NN graph-based search
+    /// - [`search::Knn`]: Standard k-NN graph-based search
     /// - [`search::MultihopSearch`]: Label-filtered search with multi-hop expansion
-    /// - [`search::RangeSearch`]: Range-based search within a distance radius
-    /// - [`search::DiverseSearch`]: Diversity-aware search (feature-gated)
+    /// - [`search::Range`]: Range-based search within a distance radius
+    /// - [`search::Diverse`]: Diversity-aware search (feature-gated)
     ///
     /// # Example
     ///
     /// ```ignore
-    /// use diskann::graph::{KnnSearch, RangeSearch, Search};
+    /// use diskann::graph::{Knn, Range, Search};
     ///
     /// // Standard k-NN search
-    /// let mut params = KnnSearch::new(10, 100, None)?;
+    /// let mut params = Knn::new(10, 100, None)?;
     /// let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
     ///
     /// // Range search (note: uses () as output buffer, results in Output type)
-    /// let mut params = RangeSearch::new(100, 0.5)?;
+    /// let mut params = Range::new(100, 0.5)?;
     /// let result = index.search(&mut params, &strategy, &context, &query, &mut ()).await?;
     /// // result.ids and result.distances contain the matches
     /// ```
@@ -2191,7 +2191,7 @@ where
         context: &'a DP::Context,
         query: &T,
         vector_filter: &(dyn Fn(&DP::ExternalId) -> bool + Send + Sync),
-        search_params: &KnnSearch,
+        search_params: &Knn,
         output: &mut OB,
     ) -> ANNResult<SearchStats>
     where

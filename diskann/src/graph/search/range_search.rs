@@ -33,7 +33,7 @@ pub struct RangeSearchOutput<O> {
     pub distances: Vec<f32>,
 }
 
-/// Error type for [`RangeSearch`] parameter validation.
+/// Error type for [`Range`] parameter validation.
 #[derive(Debug, Error)]
 pub enum RangeSearchError {
     #[error("beam width cannot be zero")]
@@ -59,7 +59,7 @@ impl From<RangeSearchError> for ANNError {
 ///
 /// Finds all points within a specified distance radius from the query.
 #[derive(Debug, Clone, Copy)]
-pub struct RangeSearch {
+pub struct Range {
     /// Maximum results to return (None = unlimited).
     max_returned: Option<usize>,
     /// Initial search list size.
@@ -76,7 +76,7 @@ pub struct RangeSearch {
     range_slack: f32,
 }
 
-impl RangeSearch {
+impl Range {
     /// Create range search with default slack values.
     pub fn new(starting_l: usize, radius: f32) -> Result<Self, RangeSearchError> {
         Self::with_options(None, starting_l, None, radius, None, 1.0, 1.0)
@@ -167,7 +167,7 @@ impl RangeSearch {
     }
 }
 
-impl<DP, S, T, O> Search<DP, S, T, O, ()> for RangeSearch
+impl<DP, S, T, O> Search<DP, S, T, O, ()> for Range
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -315,7 +315,7 @@ where
 /// Called after the initial graph search has identified starting candidates.
 pub(crate) async fn range_search_internal<I, A, T>(
     max_degree_with_slack: usize,
-    search_params: &RangeSearch,
+    search_params: &Range,
     accessor: &mut A,
     computer: &A::QueryComputer,
     scratch: &mut SearchScratch<I>,
@@ -388,16 +388,16 @@ mod tests {
     #[test]
     fn test_range_search_validation() {
         // Valid
-        assert!(RangeSearch::new(100, 0.5).is_ok());
+        assert!(Range::new(100, 0.5).is_ok());
 
         // Invalid: zero l
-        assert!(RangeSearch::new(0, 0.5).is_err());
+        assert!(Range::new(0, 0.5).is_err());
 
         // Invalid slack values
-        assert!(RangeSearch::with_options(None, 100, None, 0.5, None, 1.5, 1.0).is_err());
-        assert!(RangeSearch::with_options(None, 100, None, 0.5, None, 1.0, 0.5).is_err());
+        assert!(Range::with_options(None, 100, None, 0.5, None, 1.5, 1.0).is_err());
+        assert!(Range::with_options(None, 100, None, 0.5, None, 1.0, 0.5).is_err());
 
         // Invalid inner radius > radius
-        assert!(RangeSearch::with_options(None, 100, None, 0.5, Some(1.0), 1.0, 1.0).is_err());
+        assert!(Range::with_options(None, 100, None, 0.5, Some(1.0), 1.0, 1.0).is_err());
     }
 }

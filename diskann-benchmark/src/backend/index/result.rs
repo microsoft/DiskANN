@@ -83,7 +83,7 @@ impl std::fmt::Display for QuantBuildResult {
 #[derive(Debug, Serialize)]
 pub(super) enum AggregatedSearchResults {
     Topk(Vec<SearchResults>),
-    Range(Vec<RangeSearchResults>),
+    Range(Vec<RangeResults>),
 }
 
 impl AggregatedSearchResults {
@@ -249,11 +249,11 @@ impl std::fmt::Display for DisplayWrapper<'_, [SearchResults]> {
 }
 
 ////////////////////////
-// RangeSearchResults //
+// RangeResults //
 ////////////////////////
 
 #[derive(Debug, Serialize)]
-pub(super) struct RangeSearchResults {
+pub(super) struct RangeResults {
     pub(super) num_tasks: usize,
     pub(super) initial_l: usize,
     pub(super) qps: Vec<f64>,
@@ -264,7 +264,7 @@ pub(super) struct RangeSearchResults {
     pub(super) average_precision: utils::recall::AveragePrecisionMetrics,
 }
 
-impl RangeSearchResults {
+impl RangeResults {
     pub fn new(summary: benchmark_core::search::graph::range::Summary) -> Self {
         let benchmark_core::search::graph::range::Summary {
             setup,
@@ -297,7 +297,7 @@ impl RangeSearchResults {
 
 fn format_range_search_results_table<F>(
     f: &mut std::fmt::Formatter<'_>,
-    results: &[RangeSearchResults],
+    results: &[RangeResults],
     batch_formatter: Option<F>,
 ) -> std::fmt::Result
 where
@@ -374,7 +374,7 @@ where
     write!(f, "{}", table)
 }
 
-impl std::fmt::Display for DisplayWrapper<'_, [RangeSearchResults]> {
+impl std::fmt::Display for DisplayWrapper<'_, [RangeResults]> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         format_range_search_results_table(f, self, None::<fn(usize) -> String>)
     }

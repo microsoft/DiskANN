@@ -19,7 +19,7 @@ use diskann::{
     graph::{
         self,
         glue::{self, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
-        search_output_buffer, AdjacencyList, DiskANNIndex, KnnSearch, SearchOutputBuffer,
+        search_output_buffer, AdjacencyList, DiskANNIndex, Knn, SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider::{
@@ -991,11 +991,11 @@ where
                 &DefaultContext,
                 strategy.query,
                 vector_filter,
-                &KnnSearch::new(k, l, beam_width)?,
+                &Knn::new(k, l, beam_width)?,
                 &mut result_output_buffer,
             ))?
         } else {
-            let mut knn_search = KnnSearch::new(k, l, beam_width)?;
+            let mut knn_search = Knn::new(k, l, beam_width)?;
             self.runtime.block_on(self.index.search(
                 &mut knn_search,
                 &strategy,
@@ -1043,7 +1043,7 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 #[cfg(test)]
 mod disk_provider_tests {
     use diskann::{
-        graph::{search::record::VisitedSearchRecord, KnnSearch, KnnSearchError},
+        graph::{search::record::VisitedSearchRecord, Knn, KnnSearchError},
         utils::IntoUsize,
         ANNErrorKind,
     };
@@ -1533,14 +1533,14 @@ mod disk_provider_tests {
         );
 
         // Test error case: l < k
-        let res = KnnSearch::new_default(20, 10);
+        let res = Knn::new_default(20, 10);
         assert!(res.is_err());
         assert_eq!(
             <KnnSearchError as std::convert::Into<ANNError>>::into(res.unwrap_err()).kind(),
             ANNErrorKind::IndexError
         );
         // Test error case: beam_width = 0
-        let res = KnnSearch::new(10, 10, Some(0));
+        let res = Knn::new(10, 10, Some(0));
         assert!(res.is_err());
 
         let search_engine =
@@ -1625,9 +1625,9 @@ mod disk_provider_tests {
         );
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
         let mut search_record = VisitedSearchRecord::new(0);
-        let search_params = KnnSearch::new(10, 10, Some(4)).unwrap();
+        let search_params = Knn::new(10, 10, Some(4)).unwrap();
         let mut recorded_search =
-            diskann::graph::search::RecordedKnnSearch::new(search_params, &mut search_record);
+            diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine
             .runtime
             .block_on(search_engine.index.search(
@@ -1754,9 +1754,9 @@ mod disk_provider_tests {
             attribute_provider.clone(),
         );
 
-        let search_params = KnnSearch::new(10, 20, None).unwrap();
+        let search_params = Knn::new(10, 20, None).unwrap();
 
-        let mut diverse_search = diskann::graph::DiverseSearch::new(search_params, diverse_params);
+        let mut diverse_search = diskann::graph::Diverse::new(search_params, diverse_params);
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
@@ -1794,10 +1794,10 @@ mod disk_provider_tests {
         );
         let strategy2 = search_engine.search_strategy(&query_vector, &|_| true);
         let search_params2 =
-            KnnSearch::new(return_list_size as usize, search_list_size as usize, None).unwrap();
+            Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
         let mut diverse_search2 =
-            diskann::graph::DiverseSearch::new(search_params2, diverse_params);
+            diskann::graph::Diverse::new(search_params2, diverse_params);
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
@@ -2080,9 +2080,9 @@ mod disk_provider_tests {
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
 
         let mut search_record = VisitedSearchRecord::new(0);
-        let search_params = KnnSearch::new(10, 10, Some(4)).unwrap();
+        let search_params = Knn::new(10, 10, Some(4)).unwrap();
         let mut recorded_search =
-            diskann::graph::search::RecordedKnnSearch::new(search_params, &mut search_record);
+            diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine
             .runtime
             .block_on(search_engine.index.search(

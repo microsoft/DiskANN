@@ -24,7 +24,7 @@ use crate::{
     utils::IntoUsize,
 };
 
-/// Error type for [`KnnSearch`] parameter validation.
+/// Error type for [`Knn`] parameter validation.
 #[derive(Debug, Error)]
 pub enum KnnSearchError {
     #[error("l_value ({l_value}) cannot be less than k_value ({k_value})")]
@@ -49,7 +49,7 @@ impl From<KnnSearchError> for ANNError {
 /// This is the primary search mode, using the Vamana graph structure for efficient
 /// approximate nearest neighbor traversal.
 #[derive(Debug, Clone, Copy)]
-pub struct KnnSearch {
+pub struct Knn {
     /// Number of results to return (k in k-NN).
     k_value: NonZeroUsize,
     /// Search list size - controls accuracy vs speed tradeoff.
@@ -58,7 +58,7 @@ pub struct KnnSearch {
     beam_width: Option<NonZeroUsize>,
 }
 
-impl KnnSearch {
+impl Knn {
     /// Create new k-NN search parameters.
     ///
     /// # Errors
@@ -141,12 +141,12 @@ impl KnnSearch {
 /// # Example
 ///
 /// ```ignore
-/// use diskann::graph::{search::KnnSearch, Search};
+/// use diskann::graph::{search::Knn, Search};
 ///
-/// let mut params = KnnSearch::new(10, 100, None)?;
+/// let mut params = Knn::new(10, 100, None)?;
 /// let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
 /// ```
-impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for KnnSearch
+impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for Knn
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -228,28 +228,28 @@ where
 }
 
 ////////////////////////
-// Recorded KnnSearch //
+// Recorded Knn //
 ////////////////////////
 
 /// K-NN search with traversal path recording.
 ///
 /// Records the path taken during search for debugging or analysis.
 #[derive(Debug)]
-pub struct RecordedKnnSearch<'r, SR: ?Sized> {
+pub struct RecordedKnn<'r, SR: ?Sized> {
     /// Base k-NN search parameters.
-    pub inner: KnnSearch,
+    pub inner: Knn,
     /// The recorder to capture search path.
     pub recorder: &'r mut SR,
 }
 
-impl<'r, SR: ?Sized> RecordedKnnSearch<'r, SR> {
+impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
     /// Create new recorded search parameters.
-    pub fn new(inner: KnnSearch, recorder: &'r mut SR) -> Self {
+    pub fn new(inner: Knn, recorder: &'r mut SR) -> Self {
         Self { inner, recorder }
     }
 }
 
-impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedKnnSearch<'r, SR>
+impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -321,31 +321,31 @@ mod tests {
     #[test]
     fn test_knn_search_validation() {
         // Valid
-        assert!(KnnSearch::new(10, 100, None).is_ok());
-        assert!(KnnSearch::new(10, 100, Some(4)).is_ok());
-        assert!(KnnSearch::new(10, 10, None).is_ok()); // k == l is valid
+        assert!(Knn::new(10, 100, None).is_ok());
+        assert!(Knn::new(10, 100, Some(4)).is_ok());
+        assert!(Knn::new(10, 10, None).is_ok()); // k == l is valid
 
         // Invalid: k = 0
         assert!(matches!(
-            KnnSearch::new(0, 100, None),
+            Knn::new(0, 100, None),
             Err(KnnSearchError::KZero)
         ));
 
         // Invalid: l = 0
         assert!(matches!(
-            KnnSearch::new(10, 0, None),
+            Knn::new(10, 0, None),
             Err(KnnSearchError::LZero)
         ));
 
         // Invalid: l < k
         assert!(matches!(
-            KnnSearch::new(100, 10, None),
+            Knn::new(100, 10, None),
             Err(KnnSearchError::LLessThanK { .. })
         ));
 
         // Invalid: zero beam_width
         assert!(matches!(
-            KnnSearch::new(10, 100, Some(0)),
+            Knn::new(10, 100, Some(0)),
             Err(KnnSearchError::BeamWidthZero)
         ));
     }

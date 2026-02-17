@@ -31,12 +31,12 @@ pub mod search;
 
 // Re-export unified search interface as the primary API.
 pub use search::{
-    KnnSearch, KnnSearchError, MultihopSearch, RangeSearch, RangeSearchError, RangeSearchOutput,
-    RecordedKnnSearch, Search,
+    Knn, KnnSearchError, MultihopSearch, Range, RangeSearchError, RangeSearchOutput,
+    RecordedKnn, Search,
 };
 
 #[cfg(feature = "experimental_diversity_search")]
-pub use search::DiverseSearch;
+pub use search::Diverse;
 
 mod internal;
 

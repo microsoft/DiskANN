@@ -12,14 +12,14 @@
 //! # Usage
 //!
 //! ```ignore
-//! use diskann::graph::{KnnSearch, RangeSearch, MultihopSearch, Search};
+//! use diskann::graph::{Knn, Range, MultihopSearch, Search};
 //!
 //! // Standard k-NN search
-//! let mut params = KnnSearch::new(10, 100, None)?;
+//! let mut params = Knn::new(10, 100, None)?;
 //! let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
 //!
 //! // Range search
-//! let mut params = RangeSearch::new(100, 0.5)?;
+//! let mut params = Range::new(100, 0.5)?;
 //! let result = index.search(&mut params, &strategy, &context, &query, &mut ()).await?;
 //! println!("Found {} points within radius", result.ids.len());
 //! ```
@@ -80,13 +80,13 @@ where
 }
 
 // Re-export search parameter types.
-pub use knn_search::{KnnSearch, KnnSearchError, RecordedKnnSearch};
+pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
-pub use range_search::{RangeSearch, RangeSearchError, RangeSearchOutput};
+pub use range_search::{Range, RangeSearchError, RangeSearchOutput};
 
 // Feature-gated diverse search.
 #[cfg(feature = "experimental_diversity_search")]
 mod diverse_search;
 
 #[cfg(feature = "experimental_diversity_search")]
-pub use diverse_search::DiverseSearch;
+pub use diverse_search::Diverse;

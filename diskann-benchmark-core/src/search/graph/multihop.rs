@@ -22,7 +22,7 @@ use crate::search::{self, Search, graph::Strategy};
 /// [`search::search_all`] is provided by the [`search::graph::knn::Aggregator`] type (same
 /// aggregator as [`search::graph::KNN`]).
 ///
-/// The provided implementation of [`Search`] accepts [`graph::KnnSearch`]
+/// The provided implementation of [`Search`] accepts [`graph::Knn`]
 /// and returns [`search::graph::knn::Metrics`] as additional output.
 #[derive(Debug)]
 pub struct MultiHop<DP, T, S>
@@ -90,7 +90,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::KnnSearch;
+    type Parameters = graph::Knn;
     type Output = super::knn::Metrics;
 
     fn num_queries(&self) -> usize {
@@ -181,7 +181,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             multihop.clone(),
-            graph::KnnSearch::new(nearest_neighbors.get(), 10, None).unwrap(),
+            graph::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -209,11 +209,11 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::KnnSearch::new(nearest_neighbors.get(), 10, None).unwrap(),
+                graph::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::KnnSearch::new(nearest_neighbors.get(), 15, None).unwrap(),
+                graph::Knn::new(nearest_neighbors.get(), 15, None).unwrap(),
                 setup.clone(),
             ),
         ];

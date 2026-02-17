@@ -10,7 +10,7 @@ use diskann_utils::future::{AssertSend, SendFuture};
 use diskann_vector::PreprocessedDistanceFunction;
 use hashbrown::HashSet;
 
-use super::{KnnSearch, Search, record::SearchRecord, scratch::SearchScratch};
+use super::{Knn, Search, record::SearchRecord, scratch::SearchScratch};
 use crate::{
     ANNResult,
     error::{ErrorExt, IntoANNResult},
@@ -38,14 +38,14 @@ use crate::{
 #[derive(Debug)]
 pub struct MultihopSearch<'q, InternalId> {
     /// Base graph search parameters.
-    pub inner: KnnSearch,
+    pub inner: Knn,
     /// Label evaluator for determining node matches.
     pub label_evaluator: &'q dyn QueryLabelProvider<InternalId>,
 }
 
 impl<'q, InternalId> MultihopSearch<'q, InternalId> {
     /// Create new multihop search parameters.
-    pub fn new(inner: KnnSearch, label_evaluator: &'q dyn QueryLabelProvider<InternalId>) -> Self {
+    pub fn new(inner: Knn, label_evaluator: &'q dyn QueryLabelProvider<InternalId>) -> Self {
         Self {
             inner,
             label_evaluator,
@@ -172,7 +172,7 @@ impl<K> HybridPredicate<K> for NotInMutWithLabelCheck<'_, K> where K: VectorId {
 /// to find matching neighbors within two hops.
 pub(crate) async fn multihop_search_internal<I, A, T, SR>(
     max_degree_with_slack: usize,
-    search_params: &KnnSearch,
+    search_params: &Knn,
     accessor: &mut A,
     computer: &A::QueryComputer,
     scratch: &mut SearchScratch<I>,

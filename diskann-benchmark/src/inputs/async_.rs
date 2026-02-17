@@ -8,7 +8,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use anyhow::{anyhow, Context};
 use diskann::{
-    graph::{self, config, RangeSearch, RangeSearchError, StartPointStrategy},
+    graph::{self, config, Range, RangeSearchError, StartPointStrategy},
     utils::IntoUsize,
 };
 use diskann_benchmark_core::streaming::executors::bigann;
@@ -79,7 +79,7 @@ impl CheckDeserialization for GraphSearch {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct GraphRangeSearch {
+pub(crate) struct GraphRange {
     pub(crate) initial_search_l: Vec<usize>,
     pub(crate) radius: f32,
     pub(crate) inner_radius: Option<f32>,
@@ -89,12 +89,12 @@ pub(crate) struct GraphRangeSearch {
     pub(crate) range_search_slack: f32,
 }
 
-impl GraphRangeSearch {
-    pub(crate) fn construct_params(&self) -> Result<Vec<RangeSearch>, RangeSearchError> {
+impl GraphRange {
+    pub(crate) fn construct_params(&self) -> Result<Vec<Range>, RangeSearchError> {
         self.initial_search_l
             .iter()
             .map(|&l| {
-                RangeSearch::with_options(
+                Range::with_options(
                     self.max_returned,
                     l,
                     self.beam_width,
@@ -108,8 +108,8 @@ impl GraphRangeSearch {
     }
 }
 
-impl CheckDeserialization for GraphRangeSearch {
-    // all necessary checks are carried out when RangeSearch is initialized
+impl CheckDeserialization for GraphRange {
+    // all necessary checks are carried out when Range is initialized
     fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.construct_params()
             .context("invalid range search params")?;
@@ -171,16 +171,16 @@ impl Example for TopkSearchPhase {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct RangeSearchPhase {
+pub(crate) struct RangePhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
     pub(crate) reps: NonZeroUsize,
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
-    pub(crate) runs: Vec<GraphRangeSearch>,
+    pub(crate) runs: Vec<GraphRange>,
 }
 
-impl CheckDeserialization for RangeSearchPhase {
+impl CheckDeserialization for RangePhase {
     fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         // Check the validity of the input files.
         self.queries.check_deserialization(checker)?;
@@ -330,7 +330,7 @@ macro_rules! write_field {
 #[serde(tag = "search-type", rename_all = "kebab-case")]
 pub(crate) enum SearchPhase {
     Topk(TopkSearchPhase),
-    Range(RangeSearchPhase),
+    Range(RangePhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultiHopSearchPhase),
 }

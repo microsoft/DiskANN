@@ -27,7 +27,7 @@ pub struct TruthSetWithAssociatedData<Data: GraphDataType> {
     pub index_dimension: usize,
 }
 
-pub struct RangeSearchTruthSet {
+pub struct RangeTruthSet {
     pub index_nodes: Vec<Vec<u32>>,
     pub distances: Option<Vec<Vec<f32>>>,
     pub index_num_points: usize,
@@ -466,7 +466,7 @@ pub fn load_truthset_with_associated_data<Data: GraphDataType>(
 pub fn load_range_truthset(
     storage_provider: &impl StorageReadProvider,
     bin_file: &str,
-) -> ANNResult<RangeSearchTruthSet> {
+) -> ANNResult<RangeTruthSet> {
     let mut file = storage_provider.open_reader(bin_file)?;
 
     let metadata = read_metadata(&mut file)?;
@@ -491,7 +491,7 @@ pub fn load_range_truthset(
         ids.push(point_ids);
     }
 
-    Ok(RangeSearchTruthSet {
+    Ok(RangeTruthSet {
         index_nodes: ids,
         distances: None,
         index_num_points: npts,
