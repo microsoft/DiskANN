@@ -23,6 +23,7 @@ struct QueryStats
     float total_us = 0; // total time to process query in micros
     float io_us = 0;    // total time spent in IO
     float cpu_us = 0;   // total time spent in CPU
+    float pq_training_us = 0; // total time spent in PQ training
 
     unsigned n_4k = 0;         // # of 4kB reads
     unsigned n_8k = 0;         // # of 8kB reads
