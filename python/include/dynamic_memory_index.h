@@ -18,8 +18,7 @@ namespace py = pybind11;
 namespace diskannpy
 {
 
-template <typename DT>
-class DynamicMemoryIndex
+template <typename DT> class DynamicMemoryIndex
 {
   public:
     DynamicMemoryIndex(diskann::Metric m, size_t dimensions, size_t max_vectors, uint32_t complexity,
@@ -31,18 +30,17 @@ class DynamicMemoryIndex
     void load(const std::string &index_path);
     int insert(const py::array_t<DT, py::array::c_style | py::array::forcecast> &vector, DynamicIdType id);
     py::array_t<int> batch_insert(py::array_t<DT, py::array::c_style | py::array::forcecast> &vectors,
-                                  py::array_t<DynamicIdType, py::array::c_style | py::array::forcecast> &ids, int32_t num_inserts,
-                                  int num_threads = 0);
+                                  py::array_t<DynamicIdType, py::array::c_style | py::array::forcecast> &ids,
+                                  int32_t num_inserts, int num_threads = 0);
     int mark_deleted(DynamicIdType id);
     void save(const std::string &save_path, bool compact_before_save = false);
-    NeighborsAndDistances<DynamicIdType> search(py::array_t<DT, py::array::c_style | py::array::forcecast> &query, uint64_t knn,
-                                      uint64_t complexity);
-    NeighborsAndDistances<DynamicIdType> batch_search(py::array_t<DT, py::array::c_style | py::array::forcecast> &queries,
-                                            uint64_t num_queries, uint64_t knn, uint64_t complexity,
-                                            uint32_t num_threads);
+    NeighborsAndDistances<DynamicIdType> search(py::array_t<DT, py::array::c_style | py::array::forcecast> &query,
+                                                uint64_t knn, uint64_t complexity);
+    NeighborsAndDistances<DynamicIdType> batch_search(
+        py::array_t<DT, py::array::c_style | py::array::forcecast> &queries, uint64_t num_queries, uint64_t knn,
+        uint64_t complexity, uint32_t num_threads);
     void consolidate_delete();
     size_t num_points();
-
 
   private:
     const uint32_t _initial_search_complexity;
