@@ -37,9 +37,17 @@ pub(crate) mod scratch;
 
 /// Trait for search parameter types that execute their own search logic.
 ///
-/// Each search type (graph search, range search, etc.) implements this trait
-/// to define its complete search behavior. The [`DiskANNIndex::search`] method
-/// delegates to the `search` method.
+/// This trait defines the interface for different search modes in DiskANN.
+/// Each implementation encapsulates its own algorithm and parameter handling.
+///
+/// # Implementations
+///
+/// See the specific search types for detailed documentation:
+/// - [`Knn`] - Standard k-nearest neighbor search
+/// - [`Range`] - Range-based search within a distance radius
+/// - [`Diverse`] - Diversity-aware search (feature-gated)
+/// - [`MultihopSearch`] - Label-filtered search with multi-hop expansion
+/// - [`RecordedKnn`] - K-NN search with path recording for debugging
 pub trait Search<DP, S, T: ?Sized, O, OB: ?Sized>
 where
     DP: DataProvider,

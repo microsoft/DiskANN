@@ -44,10 +44,35 @@ impl From<KnnSearchError> for ANNError {
     }
 }
 
-/// Parameters for standard k-NN (k-nearest neighbor) graph-based search.
+/// Standard k-NN (k-nearest neighbor) graph-based search parameters.
 ///
-/// This is the primary search mode, using the Vamana graph structure for efficient
-/// approximate nearest neighbor traversal.
+/// This is the primary search type for approximate nearest neighbor queries. It performs
+/// a greedy beam search over the graph, maintaining a priority queue of the best candidates
+/// found so far. The search explores neighbors of promising candidates until convergence.
+///
+/// # Algorithm
+///
+/// 1. Initialize with starting points
+/// 2. Compute distances from query to starting points
+/// 3. Greedily expand the most promising unexplored candidate
+/// 4. Add the candidate's neighbors to the frontier
+/// 5. Repeat until no unexplored candidates remain within the search list
+/// 6. Return the top-k results from the best candidates found
+///
+/// # Parameters
+///
+/// - `k_value`: Number of nearest neighbors to return
+/// - `l_value`: Search list size (larger values improve recall at cost of latency)
+/// - `beam_width`: Optional parallel exploration width
+///
+/// # Example
+///
+/// ```ignore
+/// use diskann::graph::{search::Knn, Search};
+///
+/// let mut params = Knn::new(10, 100, None)?;
+/// let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Knn {
     /// Number of results to return (k in k-NN).
@@ -117,35 +142,6 @@ impl Knn {
     }
 }
 
-/// Standard k-NN graph-based search implementation.
-///
-/// This is the primary search type for approximate nearest neighbor queries. It performs
-/// a greedy beam search over the graph, maintaining a priority queue of the best candidates
-/// found so far. The search explores neighbors of promising candidates until convergence.
-///
-/// # Algorithm
-///
-/// 1. Initialize with starting points
-/// 2. Compute distances from query to starting points
-/// 3. Greedily expand the most promising unexplored candidate
-/// 4. Add the candidate's neighbors to the frontier
-/// 5. Repeat until no unexplored candidates remain within the search list
-/// 6. Return the top-k results from the best candidates found
-///
-/// # Parameters
-///
-/// - `k_value`: Number of nearest neighbors to return
-/// - `l_value`: Search list size (larger values improve recall at cost of latency)
-/// - `beam_width`: Optional parallel exploration width
-///
-/// # Example
-///
-/// ```ignore
-/// use diskann::graph::{search::Knn, Search};
-///
-/// let mut params = Knn::new(10, 100, None)?;
-/// let stats = index.search(&mut params, &strategy, &context, &query, &mut output).await?;
-/// ```
 impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for Knn
 where
     DP: DataProvider,
