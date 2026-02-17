@@ -19,9 +19,8 @@ env:
   # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
-  # Rust toolchain version is automatically detected from rust-toolchain.toml
-  # When using dtolnay/rust-toolchain@master without an explicit toolchain parameter,
-  # the action automatically installs the version specified in rust-toolchain.toml
+  # Rust toolchain version is extracted from rust-toolchain.toml using a script
+  # The version is then explicitly passed to dtolnay/rust-toolchain for installation
 
 defaults:
   run:
@@ -49,9 +48,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Get Rust version from rust-toolchain.toml
+        id: rust-version
+        run: echo "version=$(bash .github/scripts/get-rust-version.sh)" >> $GITHUB_OUTPUT
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@main
         with:
+          toolchain: ${{ steps.rust-version.outputs.version }}
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
       # Check fmt
@@ -73,9 +76,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - name: Get Rust version from rust-toolchain.toml
+        id: rust-version
+        run: echo "version=$(bash .github/scripts/get-rust-version.sh)" >> $GITHUB_OUTPUT
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@main
         with:
+          toolchain: ${{ steps.rust-version.outputs.version }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
@@ -105,9 +112,13 @@ jobs:
         with:
           lfs: true
 
+      - name: Get Rust version from rust-toolchain.toml
+        id: rust-version
+        run: echo "version=$(bash .github/scripts/get-rust-version.sh)" >> $GITHUB_OUTPUT
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@main
         with:
+          toolchain: ${{ steps.rust-version.outputs.version }}
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -139,8 +150,13 @@ jobs:
         with:
           languages: rust
 
+      - name: Get Rust version from rust-toolchain.toml
+        id: rust-version
+        run: echo "version=$(bash .github/scripts/get-rust-version.sh)" >> $GITHUB_OUTPUT
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@main
+        with:
+          toolchain: ${{ steps.rust-version.outputs.version }}
 
       - uses: Swatinem/rust-cache@v2
 
@@ -158,8 +174,13 @@ jobs:
   #   runs-on: ubuntu-latest
   #   steps:
   #     - uses: actions/checkout@v4
+  #     - name: Get Rust version from rust-toolchain.toml
+  #       id: rust-version
+  #       run: echo "version=$(bash .github/scripts/get-rust-version.sh)" >> $GITHUB_OUTPUT
   #     - name: Install Rust toolchain
-  #       uses: dtolnay/rust-toolchain@master
+  #       uses: dtolnay/rust-toolchain@main
+  #       with:
+  #         toolchain: ${{ steps.rust-version.outputs.version }}
   #     - uses: Swatinem/rust-cache@v2
   #     - name: "doc --workspace --no-deps"
   #       run: cargo doc --workspace --no-deps --document-private-items
@@ -234,8 +255,13 @@ jobs:
         with:
           lfs: true
 
+      - name: Get Rust version from rust-toolchain.toml
+        id: rust-version
+        run: echo "version=$(bash .github/scripts/get-rust-version.sh)" >> $GITHUB_OUTPUT
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@main
+        with:
+          toolchain: ${{ steps.rust-version.outputs.version }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -265,8 +291,13 @@ jobs:
         with:
           lfs: true
 
+      - name: Get Rust version from rust-toolchain.toml
+        id: rust-version
+        run: echo "version=$(bash .github/scripts/get-rust-version.sh)" >> $GITHUB_OUTPUT
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@main
+        with:
+          toolchain: ${{ steps.rust-version.outputs.version }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -297,9 +328,13 @@ jobs:
           lfs: true
           fetch-depth: 0
 
+      - name: Get Rust version from rust-toolchain.toml
+        id: rust-version
+        run: echo "version=$(bash .github/scripts/get-rust-version.sh)" >> $GITHUB_OUTPUT
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@main
         with:
+          toolchain: ${{ steps.rust-version.outputs.version }}
           components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
