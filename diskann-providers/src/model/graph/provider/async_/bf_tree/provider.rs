@@ -1855,17 +1855,21 @@ impl BfTreePaths {
 /// Copy a snapshot file to the target path if they differ.
 /// This handles the case where the index was built with a different prefix
 /// than the one being saved to.
-fn copy_snapshot_if_needed(
-    snapshot_path: &std::path::Path,
-    target_path: &std::path::Path,
+async fn copy_snapshot_if_needed(
+    snapshot_path: std::path::PathBuf,
+    target_path: std::path::PathBuf,
 ) -> ANNResult<()> {
     if snapshot_path != target_path {
-        std::fs::copy(snapshot_path, target_path).map_err(|e| {
-            ANNError::log_index_error(format!(
-                "Failed to copy snapshot from {:?} to {:?}: {}",
-                snapshot_path, target_path, e
-            ))
-        })?;
+        tokio::task::spawn_blocking(move || {
+            std::fs::copy(&snapshot_path, &target_path).map_err(|e| {
+                ANNError::log_index_error(format!(
+                    "Failed to copy snapshot from {:?} to {:?}: {}",
+                    snapshot_path, target_path, e
+                ))
+            })
+        })
+        .await
+        .map_err(|e| ANNError::log_index_error(format!("Blocking copy task failed: {}", e)))??;
     }
     Ok(())
 }
@@ -1920,13 +1924,15 @@ where
 
         // Copy snapshot files to the target prefix location if they differ
         copy_snapshot_if_needed(
-            &vectors_snapshot_path,
-            &BfTreePaths::vectors_bftree(&saved_params.prefix),
-        )?;
+            vectors_snapshot_path,
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+        )
+        .await?;
         copy_snapshot_if_needed(
-            &neighbors_snapshot_path,
-            &BfTreePaths::neighbors_bftree(&saved_params.prefix),
-        )?;
+            neighbors_snapshot_path,
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+        )
+        .await?;
 
         // Save delete bitmap
         {
@@ -2069,17 +2075,20 @@ where
 
         // Copy snapshot files to the target prefix location if they differ
         copy_snapshot_if_needed(
-            &vectors_snapshot_path,
-            &BfTreePaths::vectors_bftree(&saved_params.prefix),
-        )?;
+            vectors_snapshot_path,
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+        )
+        .await?;
         copy_snapshot_if_needed(
-            &neighbors_snapshot_path,
-            &BfTreePaths::neighbors_bftree(&saved_params.prefix),
-        )?;
+            neighbors_snapshot_path,
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+        )
+        .await?;
         copy_snapshot_if_needed(
-            &quant_snapshot_path,
-            &BfTreePaths::quant_bftree(&saved_params.prefix),
-        )?;
+            quant_snapshot_path,
+            BfTreePaths::quant_bftree(&saved_params.prefix),
+        )
+        .await?;
 
         // Save PQ table metadata and data using PQStorage format
         let filename = BfTreePaths::pq_pivots_bin(&saved_params.prefix);
