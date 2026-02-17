@@ -24,7 +24,7 @@ namespace po = boost::program_options;
 
 int main(int argc, char **argv)
 {
-    std::string data_type, dist_fn, data_path, index_path_prefix, label_file, universal_label, label_type;
+    std::string data_type, dist_fn, data_path, index_path_prefix, label_file, codebook_path, universal_label, label_type;
     uint32_t num_threads, R, L, Lf, build_PQ_bytes;
     float alpha;
     bool use_pq_build, use_opq;
@@ -59,13 +59,14 @@ int main(int argc, char **argv)
                                        program_options_utils::GRAPH_BUILD_ALPHA);
         optional_configs.add_options()("build_PQ_bytes", po::value<uint32_t>(&build_PQ_bytes)->default_value(0),
                                        program_options_utils::BUIlD_GRAPH_PQ_BYTES);
+        optional_configs.add_options()("codebook_path", po::value<std::string>(&codebook_path)->default_value(""),
+                                       program_options_utils::CODEBOOK_PATH);
         optional_configs.add_options()("use_opq", po::bool_switch()->default_value(false),
                                        program_options_utils::USE_OPQ);
         optional_configs.add_options()("label_file", po::value<std::string>(&label_file)->default_value(""),
                                        program_options_utils::LABEL_FILE);
         optional_configs.add_options()("universal_label", po::value<std::string>(&universal_label)->default_value(""),
                                        program_options_utils::UNIVERSAL_LABEL);
-
         optional_configs.add_options()("FilteredLbuild", po::value<uint32_t>(&Lf)->default_value(0),
                                        program_options_utils::FILTERED_LBUILD);
         optional_configs.add_options()("label_type", po::value<std::string>(&label_type)->default_value("uint"),
@@ -146,6 +147,7 @@ int main(int argc, char **argv)
                           .is_use_opq(use_opq)
                           .is_pq_dist_build(use_pq_build)
                           .with_num_pq_chunks(build_PQ_bytes)
+                          .with_pq_codebook_path(codebook_path)
                           .build();
 
         auto index_factory = diskann::IndexFactory(config);

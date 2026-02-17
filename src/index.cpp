@@ -29,10 +29,21 @@ namespace diskann
 {
 // Initialize an index with metric m, load the data of type T with filename
 // (bin), and initialize max_points
+
+#ifdef EXEC_ENV_OLS
 template <typename T, typename TagT, typename LabelT>
-Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<AbstractDataStore<T>> data_store,
+Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, MemoryMappedFiles &files,
+                              std::shared_ptr<AbstractDataStore<T>> data_store,
                               std::unique_ptr<AbstractGraphStore> graph_store,
                               std::shared_ptr<AbstractDataStore<T>> pq_data_store)
+#else
+template <typename T, typename TagT, typename LabelT>
+Index<T, TagT, LabelT>::Index(const IndexConfig &index_config,
+                              std::shared_ptr<AbstractDataStore<T>> data_store,
+                              std::unique_ptr<AbstractGraphStore> graph_store,
+                              std::shared_ptr<AbstractDataStore<T>> pq_data_store)
+#endif
+
     : _dist_metric(index_config.metric), _dim(index_config.dimension), _max_points(index_config.max_points),
       _num_frozen_pts(index_config.num_frozen_pts), _dynamic_index(index_config.dynamic_index),
       _enable_tags(index_config.enable_tags), _indexingMaxC(DEFAULT_MAXC), _query_scratch(nullptr),
@@ -45,17 +56,21 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
         throw ANNException("ERROR: Dynamic Indexing must have tags enabled.", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
 
+    _data_store = data_store;
+    _graph_store = std::move(graph_store);
+
     if (_pq_dist)
     {
-        if (_dynamic_index)
-            throw ANNException("ERROR: Dynamic Indexing not supported with PQ distance based "
-                               "index construction",
-                               -1, __FUNCSIG__, __FILE__, __LINE__);
         if (_dist_metric == diskann::Metric::INNER_PRODUCT)
             throw ANNException("ERROR: Inner product metrics not yet supported "
                                "with PQ distance "
                                "base index",
                                -1, __FUNCSIG__, __FILE__, __LINE__);
+        _pq_data_store = pq_data_store;
+    }
+    else
+    {
+        _pq_data_store = _data_store;
     }
 
     if (_dynamic_index && _num_frozen_pts == 0)
@@ -71,11 +86,6 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     const size_t total_internal_points = _max_points + _num_frozen_pts;
 
     _start = (uint32_t)_max_points;
-
-    _data_store = data_store;
-    _pq_data_store = pq_data_store;
-    _graph_store = std::move(graph_store);
-
     _locks = std::vector<non_recursive_mutex>(total_internal_points);
     if (_enable_tags)
     {
@@ -111,44 +121,58 @@ Index<T, TagT, LabelT>::Index(const IndexConfig &index_config, std::shared_ptr<A
     }
 }
 
+
+#ifdef EXEC_ENV_OLS
+DISKANN_DLLEXPORT Index(Metric m, const size_t dim, const size_t max_points,
+                        const std::shared_ptr<IndexWriteParameters> index_parameters,
+                        const std::shared_ptr<IndexSearchParams> index_search_params, MemoryMappedFiles &files,
+                        const std::string &codebook_path = "", const size_t num_frozen_pts = 0,
+                        const bool dynamic_index = false, const bool enable_tags = false,
+                        const bool concurrent_consolidate = false, const bool pq_dist_build = false,
+                        const size_t num_pq_chunks = 0, const bool use_opq = false, const bool filtered_index = false)
+#else
 template <typename T, typename TagT, typename LabelT>
 Index<T, TagT, LabelT>::Index(Metric m, const size_t dim, const size_t max_points,
                               const std::shared_ptr<IndexWriteParameters> index_parameters,
-                              const std::shared_ptr<IndexSearchParams> index_search_params, const size_t num_frozen_pts,
+                              const std::shared_ptr<IndexSearchParams> index_search_params,
+                              const std::string &codebook_path, const size_t num_frozen_pts,
                               const bool dynamic_index, const bool enable_tags, const bool concurrent_consolidate,
                               const bool pq_dist_build, const size_t num_pq_chunks, const bool use_opq,
                               const bool filtered_index)
-    : Index(
-          IndexConfigBuilder()
-              .with_metric(m)
-              .with_dimension(dim)
-              .with_max_points(max_points)
-              .with_index_write_params(index_parameters)
-              .with_index_search_params(index_search_params)
-              .with_num_frozen_pts(num_frozen_pts)
-              .is_dynamic_index(dynamic_index)
-              .is_enable_tags(enable_tags)
-              .is_concurrent_consolidate(concurrent_consolidate)
-              .is_pq_dist_build(pq_dist_build)
-              .with_num_pq_chunks(num_pq_chunks)
-              .is_use_opq(use_opq)
-              .is_filtered(filtered_index)
-              .with_data_type(diskann_type_to_name<T>())
-              .build(),
-          IndexFactory::construct_datastore<T>(DataStoreStrategy::MEMORY,
-                                               (max_points == 0 ? (size_t)1 : max_points) +
-                                                   (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
-                                               dim, m),
-          IndexFactory::construct_graphstore(GraphStoreStrategy::MEMORY,
-                                             (max_points == 0 ? (size_t)1 : max_points) +
-                                                 (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
-                                             (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
-                                                      defaults::GRAPH_SLACK_FACTOR * 1.05)))
+#endif
+    : Index(IndexConfigBuilder()
+                .with_metric(m)
+                .with_dimension(dim)
+                .with_max_points(max_points)
+                .with_index_write_params(index_parameters)
+                .with_index_search_params(index_search_params)
+                .with_num_frozen_pts(num_frozen_pts)
+                .is_dynamic_index(dynamic_index)
+                .is_enable_tags(enable_tags)
+                .is_concurrent_consolidate(concurrent_consolidate)
+                .is_pq_dist_build(pq_dist_build)
+                .with_num_pq_chunks(num_pq_chunks)
+                .is_use_opq(use_opq)
+                .is_filtered(filtered_index)
+                .with_data_type(diskann_type_to_name<T>())
+                .with_pq_codebook_path(codebook_path)
+                .build(),
+#ifdef EXEC_ENV_OLS
+            files,
+#endif
+            IndexFactory::construct_datastore<T>(
+                DataStoreStrategy::MEMORY,
+                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts), dim, m),
+            IndexFactory::construct_graphstore(
+                GraphStoreStrategy::MEMORY,
+                max_points + (dynamic_index && num_frozen_pts == 0 ? (size_t)1 : num_frozen_pts),
+                (size_t)((index_parameters == nullptr ? 0 : index_parameters->max_degree) *
+                         defaults::GRAPH_SLACK_FACTOR * 1.05)))
 {
     if (_pq_dist)
     {
-        _pq_data_store = IndexFactory::construct_pq_datastore<T>(DataStoreStrategy::MEMORY, max_points + num_frozen_pts,
-                                                                 dim, m, num_pq_chunks, use_opq);
+        _pq_data_store = IndexFactory::construct_pq_datastore<T>(
+            DataStoreStrategy::MEMORY, codebook_path, max_points + num_frozen_pts, dim, m, num_pq_chunks, use_opq);
     }
     else
     {
@@ -237,6 +261,8 @@ template <typename T, typename TagT, typename LabelT> size_t Index<T, TagT, Labe
     // Note: at this point, either _nd == _max_points or any frozen points have
     // been temporarily moved to _nd, so _nd + _num_frozen_pts is the valid
     // location limit.
+
+    // ninchen: Save pq vector as well?
     return _data_store->save(data_file, (location_t)(_nd + _num_frozen_pts));
 }
 
@@ -730,6 +756,22 @@ template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>
     return 0;
 }
 
+template <typename T, typename TagT, typename LabelT> int Index<T, TagT, LabelT>::get_pq_vector_by_tag(TagT &tag, T *vec)
+{
+    std::shared_lock<std::shared_timed_mutex> lock(_tag_lock);
+    if (_tag_to_location.find(tag) == _tag_to_location.end())
+    {
+        diskann::cout << "Tag " << get_tag_string(tag) << " does not exist" << std::endl;
+        return -1;
+    }
+
+    location_t location = _tag_to_location[tag];
+    _pq_data_store->get_vector(location, vec);
+
+    return 0;
+}
+
+
 template <typename T, typename TagT, typename LabelT> uint32_t Index<T, TagT, LabelT>::calculate_entry_point()
 {
     // REFACTOR TODO: This function does not support multi-threaded calculation of medoid.
@@ -818,9 +860,7 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
     assert(id_scratch.size() == 0);
 
     T *aligned_query = scratch->aligned_query();
-
     float *pq_dists = nullptr;
-
     _pq_data_store->preprocess_query(aligned_query, scratch);
 
     if (expanded_nodes.size() > 0 || id_scratch.size() > 0)
@@ -1001,7 +1041,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
 
     if (!use_filter)
     {
-        _data_store->get_vector(location, scratch->aligned_query());
+        _pq_data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
     }
     else
@@ -1016,7 +1056,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         if (_dynamic_index)
             tl.unlock();
 
-        _data_store->get_vector(location, scratch->aligned_query());
+        _pq_data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, filteredLindex, filter_specific_start_nodes, true,
                                _location_to_labels[location], false);
 
@@ -1030,7 +1070,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
         // clear scratch for finding unfiltered candidates
         scratch->clear();
 
-        _data_store->get_vector(location, scratch->aligned_query());
+        _pq_data_store->get_vector(location, scratch->aligned_query());
         iterate_to_fixed_point(scratch, Lindex, init_ids, false, unused_filter_label, false);
 
         for (auto unfiltered_neighbour : scratch->pool())
@@ -1597,11 +1637,6 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
     {
         throw ANNException("Do not call build with 0 points", -1, __FUNCSIG__, __FILE__, __LINE__);
     }
-    if (_pq_dist)
-    {
-        throw ANNException("ERROR: DO not use this build interface with PQ distance", -1, __FUNCSIG__, __FILE__,
-                           __LINE__);
-    }
 
     std::unique_lock<std::shared_timed_mutex> ul(_update_lock);
 
@@ -1610,6 +1645,7 @@ void Index<T, TagT, LabelT>::build(const T *data, const size_t num_points_to_loa
         _nd = num_points_to_load;
 
         _data_store->populate_data(data, (location_t)num_points_to_load);
+        _pq_data_store->populate_data(data, (location_t)num_points_to_load);
     }
 
     build_with_data_populated(tags);
@@ -2179,10 +2215,8 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
     std::shared_lock<std::shared_timed_mutex> ul(_update_lock);
 
     const std::vector<uint32_t> init_ids = get_init_ids();
+    _pq_data_store->preprocess_query(query, scratch);
 
-    //_distance->preprocess_query(query, _data_store->get_dims(),
-    // scratch->aligned_query());
-    _data_store->preprocess_query(query, scratch);
     if (!use_filters)
     {
         const std::vector<LabelT> unused_filter_label;
@@ -2213,7 +2247,7 @@ size_t Index<T, TagT, LabelT>::search_with_tags(const T *query, const uint64_t K
 
             if (res_vectors.size() > 0)
             {
-                _data_store->get_vector(node.id, res_vectors[pos]);
+                _pq_data_store->get_vector(node.id, res_vectors[pos]);
             }
 
             if (distances != nullptr)
@@ -2807,6 +2841,12 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     assert(_empty_slots.size() == 0); // should not resize if there are empty slots.
 
     _data_store->resize((location_t)new_internal_points);
+
+    if (_pq_dist)
+    {
+        _pq_data_store->resize((location_t)new_internal_points);
+    }
+
     _graph_store->resize_graph(new_internal_points);
     _locks = std::vector<non_recursive_mutex>(new_internal_points);
 
@@ -2917,6 +2957,12 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
                 _label_to_start_id[label] = (uint32_t)fz_location;
                 _location_to_labels[fz_location] = {label};
                 _data_store->set_vector((location_t)fz_location, point);
+
+                if (_pq_dist)
+                {
+                    _pq_data_store->set_vector((location_t)fz_location, point);
+                }
+
                 _frozen_pts_used++;
             }
         }
@@ -2978,6 +3024,11 @@ int Index<T, TagT, LabelT>::insert_point(const T *point, const TagT tag, const s
     tl.unlock();
 
     _data_store->set_vector(location, point); // update datastore
+
+    if (_pq_dist)
+    {
+        _pq_data_store->set_vector(location, point); // Update PQDataStore
+    }
 
     // Find and add appropriate graph edges
     ScratchStoreManager<InMemQueryScratch<T>> manager(_query_scratch);

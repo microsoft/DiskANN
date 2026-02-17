@@ -55,6 +55,8 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 
 if(NOT PYBIND)
     set(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS ON)
+elseif(MSVS)
+    set(DISKANN_RELEASE_UNUSED_TCMALLOC_MEMORY_AT_CHECKPOINTS OFF)
 endif()
 # It's necessary to include tcmalloc headers only if calling into MallocExtension interface.
 # For using tcmalloc in DiskANN tools, it's enough to just link with tcmalloc.
