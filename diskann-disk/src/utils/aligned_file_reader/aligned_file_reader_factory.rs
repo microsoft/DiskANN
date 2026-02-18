@@ -7,11 +7,14 @@ use diskann::ANNResult;
 
 #[cfg(all(not(miri), target_os = "linux"))]
 use super::LinuxAlignedFileReader;
-#[cfg(miri)]
+#[cfg(any(miri, target_os = "macos"))]
 use super::StorageProviderAlignedFileReader;
 #[cfg(all(not(miri), target_os = "windows"))]
 use super::WindowsAlignedFileReader;
 use crate::utils::aligned_file_reader::traits::AlignedReaderFactory;
+
+#[cfg(any(miri, target_os = "macos"))]
+use diskann_providers::storage::FileStorageProvider;
 
 pub struct AlignedFileReaderFactory {
     pub file_path: String,
@@ -19,7 +22,9 @@ pub struct AlignedFileReaderFactory {
 
 impl AlignedReaderFactory for AlignedFileReaderFactory {
     /*
-        Fall back to the StorageProviderAlignedFileReader when running in miri. Otherwise, miri fails with this error:
+        Fall back to the StorageProviderAlignedFileReader when running in miri or on macOS.
+
+        For miri: Otherwise, miri fails with this error:
        --> C:\Users\<user>\.cargo\registry\src\msdata.pkgs.visualstudio.com-32ec7033fece98f6\io-uring-0.6.3\src\sys\mod.rs:97:15
         |
     97  |     to_result(syscall(SYSCALL_SETUP, entries as c_long, p as c_long) as _)
@@ -35,8 +40,11 @@ impl AlignedReaderFactory for AlignedFileReaderFactory {
        --> diskann\src\model\aligned_file_reader\linux_aligned_file_reader.rs:221:24
         |
     221 |         let mut ring = IoUring::new(MAX_IO_CONCURRENCY as u32)?;
+
+        For macOS: macOS does not support io_uring (Linux-only) or IOCompletionPort (Windows-only).
+        StorageProviderAlignedFileReader provides a cross-platform fallback implementation.
          */
-    #[cfg(miri)]
+    #[cfg(any(miri, target_os = "macos"))]
     type AlignedReaderType = StorageProviderAlignedFileReader;
 
     #[cfg(all(not(miri), target_os = "linux"))]
@@ -46,9 +54,9 @@ impl AlignedReaderFactory for AlignedFileReaderFactory {
     type AlignedReaderType = WindowsAlignedFileReader;
 
     fn build(&self) -> ANNResult<Self::AlignedReaderType> {
-        #[cfg(miri)]
+        #[cfg(any(miri, target_os = "macos"))]
         return StorageProviderAlignedFileReader::new(
-            &crate::storage::FileStorageProvider,
+            &FileStorageProvider,
             self.file_path.as_str(),
         );
 
