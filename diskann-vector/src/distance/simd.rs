@@ -9,7 +9,7 @@ use std::convert::AsRef;
 use diskann_wide::arch::x86_64::{V3, V4};
 
 #[cfg(target_arch = "aarch64")]
-use diskann_wide::{arch::aarch64::Neon, SplitJoin};
+use diskann_wide::arch::aarch64::Neon;
 
 use diskann_wide::{
     arch::Scalar, Architecture, Const, Constant, Emulated, SIMDAbs, SIMDDotProduct, SIMDMulAdd,
@@ -1228,10 +1228,10 @@ impl SIMDSchema<i8, i8, V3> for L2 {
 
 #[cfg(target_arch = "aarch64")]
 impl SIMDSchema<i8, i8, Neon> for L2 {
-    type SIMDWidth = Const<16>;
-    type Accumulator = <Neon as Architecture>::i32x8;
-    type Left = diskann_wide::arch::aarch64::i8x16;
-    type Right = diskann_wide::arch::aarch64::i8x16;
+    type SIMDWidth = Const<8>;
+    type Accumulator = <Neon as Architecture>::i32x4;
+    type Left = diskann_wide::arch::aarch64::i8x8;
+    type Right = diskann_wide::arch::aarch64::i8x8;
     type Return = f32;
     type Main = Strategy4x1;
 
@@ -1247,33 +1247,12 @@ impl SIMDSchema<i8, i8, Neon> for L2 {
         y: Self::Right,
         acc: Self::Accumulator,
     ) -> Self::Accumulator {
-        diskann_wide::alias!(i32s = <Neon>::i32x4);
+        diskann_wide::alias!(i16s = <Neon>::i16x8);
 
-        use std::arch::aarch64::*;
-
-        let arch = x.arch();
-        unsafe {
-            let x = x.to_underlying();
-            let y = y.to_underlying();
-
-            let lo = vsubl_s8(vget_low_s8(x), vget_low_s8(y));
-            let hi = vsubl_high_s8(x, y);
-
-            let mut acc = acc.split();
-            acc.lo = i32s::from_underlying(
-                arch,
-                vmlal_s16(acc.lo.to_underlying(), vget_low_s16(lo), vget_low_s16(lo)),
-            );
-            acc.lo = i32s::from_underlying(arch, vmlal_high_s16(acc.lo.to_underlying(), lo, lo));
-
-            acc.hi = i32s::from_underlying(
-                arch,
-                vmlal_s16(acc.hi.to_underlying(), vget_low_s16(hi), vget_low_s16(hi)),
-            );
-            acc.hi = i32s::from_underlying(arch, vmlal_high_s16(acc.hi.to_underlying(), hi, hi));
-
-            acc.join()
-        }
+        let x: i16s = x.into();
+        let y: i16s = y.into();
+        let c = x - y;
+        acc.dot_simd(c, c)
     }
 
     #[inline(always)]
@@ -1295,7 +1274,7 @@ impl SIMDSchema<i8, i8, Neon> for L2 {
                 acc + c * c
             },
         );
-        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0, 0, 0, 0, 0])
+        acc + Self::Accumulator::from_array(arch, [scalar, 0, 0, 0])
     }
 
     // Perform a final reduction.
