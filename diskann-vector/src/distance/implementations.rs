@@ -113,10 +113,6 @@ fn fail_length_check<L, R>(x: &[L], y: &[R], len: usize) -> ! {
     );
 }
 
-pub fn test_function(x: &[i8], y: &[i8]) -> f32 {
-    SquaredL2::evaluate(x, y)
-}
-
 /// An internal trait to transform the result of the low-level SIMD ops into a value
 /// expected by the rest of DiskANN.
 ///
