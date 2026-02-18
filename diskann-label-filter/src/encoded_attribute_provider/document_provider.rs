@@ -77,7 +77,7 @@ impl<'a, VT, DP, AS> SetElement<Document<'a, VT>> for DocumentProvider<DP, AS>
 where
     DP: DataProvider + Delete + SetElement<VT>,
     AS: AttributeStore<DP::InternalId> + AsyncFriendly,
-    VT: Sync + Send,
+    VT: Sync + Send + ?Sized,
 {
     type SetError = ANNError;
     type Guard = <DP as SetElement<VT>>::Guard;

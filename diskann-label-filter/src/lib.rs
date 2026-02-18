@@ -40,6 +40,7 @@ pub mod encoded_attribute_provider {
     pub(crate) mod ast_id_expr;
     pub(crate) mod ast_label_id_mapper;
     pub(crate) mod attribute_encoder;
+    pub mod document_insert_strategy;
     pub mod document_provider;
     pub mod encoded_attribute_accessor;
     pub(crate) mod encoded_filter_expr;

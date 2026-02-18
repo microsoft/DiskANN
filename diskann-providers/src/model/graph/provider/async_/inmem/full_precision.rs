@@ -321,6 +321,37 @@ where
 {
 }
 
+/// Support for Vec<T> queries that delegates to the [T] impl via deref.
+/// This allows InlineBetaStrategy to use Vec<T> queries with FullAccessor.
+impl<T, Q, D, Ctx> BuildQueryComputer<Vec<T>> for FullAccessor<'_, T, Q, D, Ctx>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type QueryComputerError = Panics;
+    type QueryComputer = T::QueryDistance;
+
+    fn build_query_computer(
+        &self,
+        from: &Vec<T>,
+    ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
+        // Delegate to [T] impl via deref
+        Ok(T::query_distance(from.as_slice(), self.provider.metric))
+    }
+}
+
+/// Support for Vec<T> queries that delegates to the [T] impl.
+impl<T, Q, D, Ctx> ExpandBeam<Vec<T>> for FullAccessor<'_, T, Q, D, Ctx>
+where
+    T: VectorRepr + Clone,
+    Q: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+}
+
 impl<T, Q, D, Ctx> FillSet for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
@@ -474,6 +505,33 @@ where
 impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
 where
     T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    type QueryComputer = T::QueryDistance;
+    type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
+    type SearchAccessorError = Panics;
+    type PostProcessor = glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>;
+
+    fn search_accessor<'a>(
+        &'a self,
+        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
+        _context: &'a Ctx,
+    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+        Ok(FullAccessor::new(provider))
+    }
+
+    fn post_processor(&self) -> Self::PostProcessor {
+        Default::default()
+    }
+}
+
+/// Support for Vec<T> queries that delegates to the [T] impl.
+/// This allows InlineBetaStrategy to use Vec<T> queries with FullPrecision.
+impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, Vec<T>> for FullPrecision
+where
+    T: VectorRepr + Clone,
     Q: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,

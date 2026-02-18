@@ -28,6 +28,13 @@ pub struct InlineBetaStrategy<Strategy> {
     inner: Strategy,
 }
 
+impl<Strategy> InlineBetaStrategy<Strategy> {
+    /// Create a new InlineBetaStrategy with the given beta value and inner strategy.
+    pub fn new(beta: f32, inner: Strategy) -> Self {
+        Self { beta, inner }
+    }
+}
+
 impl<DP, Strategy, Q>
     SearchStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, FilteredQuery<Q>>
     for InlineBetaStrategy<Strategy>
@@ -72,6 +79,7 @@ pub struct InlineBetaComputer<Inner> {
     inner_computer: Inner,
     beta_value: f32,
     filter_expr: EncodedFilterExpr,
+    is_valid_filter: bool, //optimization to avoid evaluating empty predicates.
 }
 
 impl<Inner> InlineBetaComputer<Inner> {
@@ -79,16 +87,22 @@ impl<Inner> InlineBetaComputer<Inner> {
         inner_computer: Inner,
         beta_value: f32,
         filter_expr: EncodedFilterExpr,
+        is_valid_filter: bool,
     ) -> Self {
         Self {
             inner_computer,
             beta_value,
             filter_expr,
+            is_valid_filter,
         }
     }
 
     pub(crate) fn filter_expr(&self) -> &EncodedFilterExpr {
         &self.filter_expr
+    }
+
+    pub(crate) fn is_valid_filter(&self) -> bool {
+        self.is_valid_filter
     }
 }
 
@@ -101,22 +115,35 @@ where
         let (vec, attrs) = changing.destructure();
         let sim = self.inner_computer.evaluate_similarity(vec);
         let pred_eval = PredicateEvaluator::new(attrs);
-        match self.filter_expr.encoded_filter_expr().accept(&pred_eval) {
-            Ok(matched) => {
-                if matched {
-                    sim * self.beta_value
-                } else {
-                    sim
+        if self.is_valid_filter {
+            match self
+                .filter_expr
+                .encoded_filter_expr()
+                .as_ref()
+                .unwrap()
+                .accept(&pred_eval)
+            {
+                Ok(matched) => {
+                    if matched {
+                        return sim * self.beta_value;
+                    } else {
+                        return sim;
+                    }
+                }
+                Err(_) => {
+                    //If predicate evaluation fails for any reason, we simply revert
+                    //to unfiltered search.
+                    tracing::warn!("Predicate evaluation failed");
+                    return sim;
                 }
             }
-            Err(_) => {
-                //TODO: If predicate evaluation fails, we are taking the approach that we will simply
-                //return the score returned by the inner computer, as though no predicate was specified.
-                tracing::warn!(
-                    "Predicate evaluation failed in OnlineBetaComputer::evaluate_similarity()"
-                );
-                sim
-            }
+        } else {
+            //If predicate evaluation fails, we will return the score returned by the
+            //inner computer, as though no predicate was specified.
+            tracing::warn!(
+                "Predicate evaluation failed in OnlineBetaComputer::evaluate_similarity()"
+            );
+            sim
         }
     }
 }
@@ -155,8 +182,16 @@ where
             let doc = accessor.get_element(candidate.id).await?;
             let pe = PredicateEvaluator::new(doc.attributes());
 
-            if computer.filter_expr().encoded_filter_expr().accept(&pe)? {
-                filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
+            if computer.is_valid_filter() {
+                if computer
+                    .filter_expr()
+                    .encoded_filter_expr()
+                    .as_ref()
+                    .unwrap()
+                    .accept(&pe)?
+                {
+                    filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
+                }
             }
         }
 
