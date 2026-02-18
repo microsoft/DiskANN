@@ -11,10 +11,11 @@
 //! | Type | Description |
 //! |------|-------------|
 //! | [`Mat`] | Owning matrix that manages its own memory |
-//! | [`MatRef`] | Immutable borrowed view  |
+//! | [`MatRef`] | Immutable borrowed view |
 //! | [`MatMut`] | Mutable borrowed view |
-//! | [`Repr`] | Trait defining row layout (e.g., [`Standard`]) |
-//! | [`QueryMatRef`] | Query wrapper for asymmetric distances |
+//! | [`Repr`] | Trait defining row layout |
+//! | [`Standard`] | [`Repr`] for rows of full-precision vectors |
+//! | [`SliceMatRepr`] | [`Repr`] for rows with per-row metadata |
 //! | [`MaxSim`] | Per-query-vector max similarity computation |
 //! | [`Chamfer`] | Asymmetric Chamfer distance (sum of MaxSim) |
 //!
@@ -63,11 +64,11 @@
 
 pub mod distance;
 pub(crate) mod matrix;
-mod slice_repr;
+mod slice;
 
 pub use distance::{Chamfer, MaxSim, MaxSimError, QueryMatRef};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
     Repr, ReprMut, ReprOwned, SliceError, Standard,
 };
-pub use slice_repr::{SliceMatError, SliceMatRepr, SliceMatReprError};
+pub use slice::{SliceMatError, SliceMatRepr, SliceMatReprError};

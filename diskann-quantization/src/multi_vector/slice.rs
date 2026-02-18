@@ -1,6 +1,12 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT license.
 
+//! [`Repr`] implementation for matrices whose rows are [`slice::Slice`]
+//! — a vector of `T` elements paired with per-row metadata of type `M`.
+//!
+//! [`SliceMatRepr`] describes the layout; construct matrices with
+//! [`Mat::new`], [`MatRef::new`], or [`MatMut::new`].
+
 use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
 use thiserror::Error;
@@ -21,8 +27,8 @@ use super::matrix::{
 ///
 /// # Layout
 ///
-/// Each row occupies [`SliceRef::<T, M>::canonical_bytes(ncols)`] bytes, with alignment
-/// [`SliceRef::<T, M>::canonical_align()`]. Rows are packed contiguously.
+/// Each row occupies [`SliceRef::canonical_bytes(ncols)`](SliceRef::canonical_bytes) bytes, with alignment
+/// [`SliceRef::canonical_align()`](SliceRef::canonical_align). Rows are packed contiguously.
 ///
 /// # Bounds
 ///
@@ -162,8 +168,9 @@ where
 
 // SAFETY:
 // - `get_row` correctly computes the row offset as `i * row_stride` and constructs a valid
-// - `SliceRef` using the canonical layout. The `layout` method reports the correct memory
-//    layout. `SliceRef` borrows the data immutably, so Send/Sync propagation is correct.
+//   `SliceRef` using the canonical layout.
+// - The `layout` method reports the correct memory layout
+// - `SliceRef` borrows the data immutably, so Send/Sync propagation is correct.
 unsafe impl<T, M> Repr for SliceMatRepr<T, M>
 where
     T: bytemuck::Pod,
@@ -284,7 +291,7 @@ where
         let total = self.total_bytes();
         let align = Self::alignment();
 
-        let buffer = Poly::broadcast(0u8, total, AlignedAllocator::new(align))?;
+        let buffer = Poly::broadcast(u8::default(), total, AlignedAllocator::new(align))?;
 
         // SAFETY: `buffer` has length `self.total_bytes()` and is aligned to
         // `Self::alignment()`. All bytes are zero, which is a valid representation
@@ -313,6 +320,8 @@ where
 }
 
 // SAFETY: Validates that the provided mutable slice has the correct length and alignment.
+// By mutable borrow rules in Rust, we're guaranteed the reference to data is unique until
+// the resulting `MatMut` goes out of scope.
 unsafe impl<T, M> NewMut<u8> for SliceMatRepr<T, M>
 where
     T: bytemuck::Pod,
@@ -355,7 +364,7 @@ where
             std::ptr::copy_nonoverlapping(v.ptr.as_ptr(), buffer.as_mut_ptr(), total);
         }
 
-        // SAFETY: `buffer` has the correct length and alignment.
+        // SAFETY: `buffer` has the correct length and alignment from above cheks.
         unsafe { repr.poly_to_mat(buffer) }
     }
 }
