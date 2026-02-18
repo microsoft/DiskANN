@@ -416,3 +416,129 @@ pub(super) fn test_neon() -> Option<Neon> {
         None => Neon::new_checked(),
     }
 }
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Architecture;
+
+    struct TestOp;
+
+    impl Target<Scalar, &'static str> for TestOp {
+        fn run(self, _: Scalar) -> &'static str {
+            "scalar"
+        }
+    }
+
+    impl Target1<Scalar, String, &str> for TestOp {
+        fn run(self, _: Scalar, x0: &str) -> String {
+            format!("scalar: {}", x0)
+        }
+    }
+
+    impl Target2<Scalar, String, &str, &str> for TestOp {
+        fn run(self, _: Scalar, x0: &str, x1: &str) -> String {
+            format!("scalar: {}, {}", x0, x1)
+        }
+    }
+
+    impl Target3<Scalar, String, &str, &str, &str> for TestOp {
+        fn run(self, _: Scalar, x0: &str, x1: &str, x2: &str) -> String {
+            format!("scalar: {}, {}, {}", x0, x1, x2)
+        }
+    }
+
+    impl Target<Neon, &'static str> for TestOp {
+        fn run(self, _: Neon) -> &'static str {
+            "neon"
+        }
+    }
+
+    impl Target1<Neon, String, &str> for TestOp {
+        fn run(self, _: Neon, x0: &str) -> String {
+            format!("neon: {}", x0)
+        }
+    }
+
+    impl Target2<Neon, String, &str, &str> for TestOp {
+        fn run(self, _: Neon, x0: &str, x1: &str) -> String {
+            format!("neon: {}, {}", x0, x1)
+        }
+    }
+
+    impl Target3<Neon, String, &str, &str, &str> for TestOp {
+        fn run(self, _: Neon, x0: &str, x1: &str, x2: &str) -> String {
+            format!("neon: {}, {}, {}", x0, x1, x2)
+        }
+    }
+
+    #[test]
+    fn test_dispatch() {
+        let expected = if Neon::new_checked().is_some() {
+            "neon"
+        } else {
+            "scalar"
+        };
+
+        assert_eq!(dispatch(TestOp), expected);
+        assert_eq!(dispatch_no_features(TestOp), expected);
+
+        assert_eq!(dispatch1(TestOp, "foo"), format!("{expected}: foo"));
+        assert_eq!(
+            dispatch1_no_features(TestOp, "foo"),
+            format!("{expected}: foo")
+        );
+
+        assert_eq!(
+            dispatch2(TestOp, "foo", "bar"),
+            format!("{expected}: foo, bar")
+        );
+        assert_eq!(
+            dispatch2_no_features(TestOp, "foo", "bar"),
+            format!("{expected}: foo, bar")
+        );
+
+        assert_eq!(
+            dispatch3(TestOp, "foo", "bar", "baz"),
+            format!("{expected}: foo, bar, baz")
+        );
+        assert_eq!(
+            dispatch3_no_features(TestOp, "foo", "bar", "baz"),
+            format!("{expected}: foo, bar, baz"),
+        );
+    }
+
+    #[test]
+    fn test_run() {
+        if let Some(arch) = test_neon() {
+            let mut x = 10;
+            let y: &str = arch.run(|| {
+                x += 10;
+                "foo"
+            });
+            assert_eq!(x, 20);
+            assert_eq!(y, "foo");
+        }
+    }
+
+    #[test]
+    fn test_level_ordering() {
+        let scalar = Scalar::level();
+        let neon = Neon::level();
+
+        // Scalar < Neon
+        assert!(scalar < neon);
+        assert!(neon > scalar);
+
+        // Equality
+        assert_eq!(scalar, Scalar::level());
+        assert_eq!(neon, Neon::level());
+
+        // Not equal across levels
+        assert_ne!(scalar, neon);
+    }
+}

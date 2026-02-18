@@ -234,6 +234,7 @@ mod tests {
 
     // Bit ops
     test_utils::ops::test_bitops!(i32x4, 0xd62d8de09f82ed4e, test_neon());
+    test_utils::ops::test_select!(i32x4, 0xd62d8de09f82ed4e, test_neon());
 
     // Dot Products
     test_utils::dot_product::test_dot_product!(

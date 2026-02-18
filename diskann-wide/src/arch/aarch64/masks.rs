@@ -113,10 +113,7 @@ trait MaskOps: Sized {
     fn to_array(self) -> Self::Array;
 
     /// Construct `Self` by only keeping up to the first `lanes` lanes.
-    #[inline(always)]
-    fn keep_first(arch: Neon, lanes: usize) -> Self {
-        Self::from_mask(Self::BitMask::keep_first(arch, lanes))
-    }
+    fn keep_first(arch: Neon, lanes: usize) -> Self;
 }
 
 // Two approaches are used for `move_mask` depending on lane count:
@@ -743,6 +740,8 @@ mod tests {
                         T::SET,
                         v
                     );
+
+                    assert!(mask.get_unchecked(j));
                 } else {
                     assert_eq!(
                         v,
@@ -752,6 +751,7 @@ mod tests {
                         T::UNSET,
                         v
                     );
+                    assert!(!mask.get_unchecked(j));
                 }
             }
         }

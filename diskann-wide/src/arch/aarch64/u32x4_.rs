@@ -168,6 +168,7 @@ mod tests {
 
     // Bit ops
     test_utils::ops::test_bitops!(u32x4, 0xd62d8de09f82ed4e, test_neon());
+    test_utils::ops::test_select!(u32x4, 0xd62d8de09f82ed4e, test_neon());
 
     // Reductions
     test_utils::ops::test_sumtree!(u32x4, 0xb9ac82ab23a855da, test_neon());

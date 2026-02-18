@@ -114,6 +114,11 @@ mod tests {
     fn test_constructors() {
         if let Some(arch) = test_neon() {
             test_utils::ops::test_splat::<f16, 4, f16x4>(arch);
+
+            assert_eq!(
+                f16x4::default(arch).to_array(),
+                f16x4::splat(arch, f16::default()).to_array(),
+            );
         }
     }
 }

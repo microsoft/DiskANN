@@ -210,6 +210,8 @@ mod tests {
         standard_tests!(f32x8, f32, 8);
         test_utils::ops::test_sumtree!(f32x8, 0x90a59e23ad545de1, test_neon());
         test_utils::ops::test_splitjoin!(f32x8 => f32x4, 0x2e301b7e12090d5c, test_neon());
+        test_utils::ops::test_minmax!(f32x8, 0x6d7fc8ed6d852187, test_neon());
+        test_utils::ops::test_abs!(f32x8, 0xb8f702ba85375041, test_neon());
     }
 
     mod test_f32x16 {
@@ -217,6 +219,8 @@ mod tests {
         standard_tests!(f32x16, f32, 16);
         test_utils::ops::test_sumtree!(f32x16, 0x90a59e23ad545de1, test_neon());
         test_utils::ops::test_splitjoin!(f32x16 => f32x8, 0x2e301b7e12090d5c, test_neon());
+        test_utils::ops::test_minmax!(f32x16, 0x6d7fc8ed6d852187, test_neon());
+        test_utils::ops::test_abs!(f32x16, 0xb8f702ba85375041, test_neon());
     }
 
     // u8s
@@ -275,6 +279,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i8x32, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_abs!(i8x32, 0xd62d8de09f82ed4e, test_neon());
     }
 
     mod test_i8x64 {
@@ -283,6 +288,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i8x64, 0xd62d8de09f82ed4e, test_neon());
+        test_utils::ops::test_abs!(i8x64, 0xd62d8de09f82ed4e, test_neon());
     }
 
     // i16s
@@ -292,6 +298,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i16x16, 0x9167644fc4ad5cfa, test_neon());
+        test_utils::ops::test_abs!(i16x16, 0x9167644fc4ad5cfa, test_neon());
     }
 
     mod test_i16x32 {
@@ -300,6 +307,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i16x32, 0x9167644fc4ad5cfa, test_neon());
+        test_utils::ops::test_abs!(i16x32, 0x9167644fc4ad5cfa, test_neon());
     }
 
     // i32s
@@ -309,6 +317,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i32x8, 0xc4491a44af4aa58e, test_neon());
+        test_utils::ops::test_abs!(i32x8, 0xc4491a44af4aa58e, test_neon());
 
         // Dot Products
         test_utils::dot_product::test_dot_product!(
@@ -339,6 +348,7 @@ mod tests {
 
         // Bit ops
         test_utils::ops::test_bitops!(i32x16, 0xc4491a44af4aa58e, test_neon());
+        test_utils::ops::test_abs!(i32x16, 0xc4491a44af4aa58e, test_neon());
 
         // Dot Products
         test_utils::dot_product::test_dot_product!(
@@ -368,7 +378,9 @@ mod tests {
     test_utils::ops::test_lossless_convert!(f16x16 => f32x16, 0x84c1c6f05b169a20, test_neon());
 
     test_utils::ops::test_lossless_convert!(u8x16 => i16x16, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(u8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
     test_utils::ops::test_lossless_convert!(i8x16 => i16x16, 0x84c1c6f05b169a20, test_neon());
+    test_utils::ops::test_lossless_convert!(i8x32 => i16x32, 0x84c1c6f05b169a20, test_neon());
 
     test_utils::ops::test_cast!(f16x8 => f32x8, 0xba8fe343fc9dbeff, test_neon());
     test_utils::ops::test_cast!(f16x16 => f32x16, 0xba8fe343fc9dbeff, test_neon());

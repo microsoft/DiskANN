@@ -1350,6 +1350,12 @@ mod tests {
             assert_eq!(arch.run(TestOp), expected);
             assert_eq!(arch.run_inline(TestOp), expected);
         }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
+            assert_eq!(arch.run(TestOp), expected);
+            assert_eq!(arch.run_inline(TestOp), expected);
+        }
     }
 
     #[test]
@@ -1368,6 +1374,12 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            assert_eq!(arch.run1(TestOp, &src), sum);
+            assert_eq!(arch.run1_inline(TestOp, &src), sum);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             assert_eq!(arch.run1(TestOp, &src), sum);
             assert_eq!(arch.run1_inline(TestOp, &src), sum);
         }
@@ -1401,6 +1413,11 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            gen_test!(arch);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             gen_test!(arch);
         }
     }
@@ -1437,6 +1454,11 @@ mod tests {
         if let Some(arch) = x86_64::V4::new_checked_miri() {
             gen_test!(arch);
         }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
+            gen_test!(arch);
+        }
     }
 
     //----------------------------//
@@ -1469,6 +1491,12 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            let f: FnPtr = arch.dispatch1::<TestOp, f32, Ref<[f32]>>();
+            assert_eq!(f.call(&src), sum);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             let f: FnPtr = arch.dispatch1::<TestOp, f32, Ref<[f32]>>();
             assert_eq!(f.call(&src), sum);
         }
@@ -1509,6 +1537,14 @@ mod tests {
             assert_eq!(f.call(&mut dst, &src), sum);
             assert_eq!(dst, src);
         }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
+            let mut dst = [0.0f32; 3];
+            let f: FnPtr = arch.dispatch2::<TestOp, f32, Mut<[f32]>, Ref<[f32]>>();
+            assert_eq!(f.call(&mut dst, &src), sum);
+            assert_eq!(dst, src);
+        }
     }
 
     #[test]
@@ -1543,6 +1579,14 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            let mut dst = [0.0f32; 3];
+            let f: FnPtr = arch.dispatch3::<TestOp, f32, Mut<[f32]>, Ref<[f32]>, f32>();
+            assert_eq!(f.call(&mut dst, &src, offset), sum);
+            assert_eq!(dst, expected);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             let mut dst = [0.0f32; 3];
             let f: FnPtr = arch.dispatch3::<TestOp, f32, Mut<[f32]>, Ref<[f32]>, f32>();
             assert_eq!(f.call(&mut dst, &src, offset), sum);
