@@ -7,20 +7,20 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
 
-use crate::{backend::index::result::RangeResults, inputs::async_::GraphRange};
+use crate::{backend::index::result::RangeSearchResults, inputs::async_::GraphRangeSearch};
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RangeSteps<'a> {
+pub(crate) struct RangeSearchSteps<'a> {
     pub(crate) reps: NonZeroUsize,
     pub(crate) num_tasks: &'a [NonZeroUsize],
-    pub(crate) runs: &'a [GraphRange],
+    pub(crate) runs: &'a [GraphRangeSearch],
 }
 
-impl<'a> RangeSteps<'a> {
+impl<'a> RangeSearchSteps<'a> {
     pub(crate) fn new(
         reps: NonZeroUsize,
         num_tasks: &'a [NonZeroUsize],
-        runs: &'a [GraphRange],
+        runs: &'a [GraphRangeSearch],
     ) -> Self {
         Self {
             reps,
@@ -37,14 +37,14 @@ pub(crate) trait Range<I> {
         &self,
         parameters: Vec<Run>,
         groundtruth: &dyn benchmark_core::recall::Rows<I>,
-    ) -> anyhow::Result<Vec<RangeResults>>;
+    ) -> anyhow::Result<Vec<RangeSearchResults>>;
 }
 
 pub(crate) fn run<I>(
     runner: &dyn Range<I>,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
-    steps: RangeSteps<'_>,
-) -> anyhow::Result<Vec<RangeResults>> {
+    steps: RangeSearchSteps<'_>,
+) -> anyhow::Result<Vec<RangeSearchResults>> {
     let mut all = Vec::new();
 
     for threads in steps.num_tasks.iter() {
@@ -87,13 +87,13 @@ where
         &self,
         parameters: Vec<core_search::Run<diskann::graph::search::Range>>,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
-    ) -> anyhow::Result<Vec<RangeResults>> {
+    ) -> anyhow::Result<Vec<RangeSearchResults>> {
         let results = core_search::search_all(
             self.clone(),
             parameters.into_iter(),
             core_search::graph::range::Aggregator::new(groundtruth),
         )?;
 
-        Ok(results.into_iter().map(RangeResults::new).collect())
+        Ok(results.into_iter().map(RangeSearchResults::new).collect())
     }
 }

@@ -79,42 +79,43 @@ pub struct Knn {
     k_value: NonZeroUsize,
     /// Search list size - controls accuracy vs speed tradeoff.
     l_value: NonZeroUsize,
-    /// Optional beam width for parallel graph exploration.
-    beam_width: Option<NonZeroUsize>,
+    /// Beam width for parallel graph exploration (defaults to 1).
+    beam_width: NonZeroUsize,
 }
 
 impl Knn {
     /// Create new k-NN search parameters.
     ///
+    /// If `beam_width` is `None`, it defaults to 1.
+    ///
     /// # Errors
     ///
     /// Returns an error if `k_value` is zero, `l_value` is zero,
-    /// `l_value < k_value`, or if `beam_width` is zero.
+    /// `l_value < k_value`, or if `beam_width` is `Some(0)`.
     pub fn new(
         k_value: usize,
         l_value: usize,
         beam_width: Option<usize>,
     ) -> Result<Self, KnnSearchError> {
-        if k_value == 0 {
-            return Err(KnnSearchError::KZero);
-        }
-        if l_value == 0 {
-            return Err(KnnSearchError::LZero);
-        }
+        let k_value = NonZeroUsize::new(k_value).ok_or(KnnSearchError::KZero)?;
+        let l_value = NonZeroUsize::new(l_value).ok_or(KnnSearchError::LZero)?;
         if k_value > l_value {
-            return Err(KnnSearchError::LLessThanK { l_value, k_value });
-        }
-        if let Some(bw) = beam_width
-            && bw == 0
-        {
-            return Err(KnnSearchError::BeamWidthZero);
+            return Err(KnnSearchError::LLessThanK {
+                l_value: l_value.get(),
+                k_value: k_value.get(),
+            });
         }
 
-        // SAFETY: We've validated k_value != 0 and l_value != 0 above
+        const ONE: NonZeroUsize = NonZeroUsize::new(1).unwrap();
+        let beam_width = match beam_width {
+            Some(bw) => NonZeroUsize::new(bw).ok_or(KnnSearchError::BeamWidthZero)?,
+            None => ONE,
+        };
+
         Ok(Self {
-            k_value: unsafe { NonZeroUsize::new_unchecked(k_value) },
-            l_value: unsafe { NonZeroUsize::new_unchecked(l_value) },
-            beam_width: beam_width.and_then(NonZeroUsize::new),
+            k_value,
+            l_value,
+            beam_width,
         })
     }
 
@@ -135,9 +136,9 @@ impl Knn {
         self.l_value
     }
 
-    /// Returns the optional beam width for parallel graph exploration.
+    /// Returns the beam width for parallel graph exploration.
     #[inline]
-    pub fn beam_width(&self) -> Option<NonZeroUsize> {
+    pub fn beam_width(&self) -> NonZeroUsize {
         self.beam_width
     }
 }
@@ -196,7 +197,7 @@ where
 
             let stats = index
                 .search_internal(
-                    self.beam_width.map(|nz| nz.get()),
+                    Some(self.beam_width.get()),
                     &start_ids,
                     &mut accessor,
                     &computer,
@@ -276,7 +277,7 @@ where
 
             let stats = index
                 .search_internal(
-                    self.inner.beam_width.map(|nz| nz.get()),
+                    Some(self.inner.beam_width.get()),
                     &start_ids,
                     &mut accessor,
                     &computer,

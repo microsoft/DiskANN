@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn test_knn() {
-        let nearest_neighbors = NonZeroUsize::new(5).unwrap();
+        let nearest_neighbors = 5;
 
         let index = search::graph::test_grid_provider();
 
@@ -313,7 +313,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             knn.clone(),
-            graph::search::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
+            graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(*rows.row(0).first().unwrap(), 0);
 
         for r in 0..rows.nrows() {
-            assert_eq!(rows.row(r).len(), nearest_neighbors.get());
+            assert_eq!(rows.row(r).len(), nearest_neighbors);
         }
 
         const TWO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
@@ -337,17 +337,17 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
+                graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors.get(), 15, None).unwrap(),
+                graph::search::Knn::new(nearest_neighbors, 15, None).unwrap(),
                 setup.clone(),
             ),
         ];
 
-        let recall_k = nearest_neighbors.get();
-        let recall_n = nearest_neighbors.get();
+        let recall_k = nearest_neighbors;
+        let recall_n = nearest_neighbors;
 
         let all =
             search::search_all(knn, parameters, Aggregator::new(rows, recall_k, recall_n)).unwrap();

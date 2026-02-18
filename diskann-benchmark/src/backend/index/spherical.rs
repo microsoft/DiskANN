@@ -362,7 +362,7 @@ mod imp {
                                 datafiles::BinFile(&search_phase.groundtruth),
                             )?;
 
-                            let steps = search::range::RangeSteps::new(
+                            let steps = search::range::RangeSearchSteps::new(
                                 search_phase.reps,
                                 &search_phase.num_threads,
                                 &search_phase.runs,

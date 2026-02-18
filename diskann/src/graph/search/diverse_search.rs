@@ -83,7 +83,7 @@ where
                 index.estimate_visited_set_capacity(Some(self.inner.l_value().get())),
             ),
             id_scratch: Vec::with_capacity(index.max_degree_with_slack()),
-            beam_nodes: Vec::with_capacity(self.inner.beam_width().map_or(1, |nz| nz.get())),
+            beam_nodes: Vec::with_capacity(self.inner.beam_width().get()),
             range_frontier: std::collections::VecDeque::new(),
             in_range: Vec::new(),
             hops: 0,
@@ -123,7 +123,7 @@ where
 
             let stats = index
                 .search_internal(
-                    self.inner.beam_width().map(|nz| nz.get()),
+                    Some(self.inner.beam_width().get()),
                     &start_ids,
                     &mut accessor,
                     &computer,

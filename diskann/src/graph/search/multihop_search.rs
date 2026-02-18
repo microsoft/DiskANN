@@ -184,7 +184,7 @@ where
     T: ?Sized,
     SR: SearchRecord<I> + ?Sized,
 {
-    let beam_width = search_params.beam_width().map_or(1, |nz| nz.get());
+    let beam_width = search_params.beam_width().get();
 
     // Helper to build the final stats from scratch state.
     let make_stats = |scratch: &SearchScratch<I>| InternalSearchStats {

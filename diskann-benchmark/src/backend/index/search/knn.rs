@@ -49,9 +49,8 @@ pub(crate) fn run<I>(
                 .search_l
                 .iter()
                 .map(|search_l| {
-                    let k = run.search_n;
-                    let l = *search_l;
-                    let search_params = diskann::graph::search::Knn::new(k, l, None).unwrap();
+                    let search_params =
+                        diskann::graph::search::Knn::new(run.search_n, *search_l, None).unwrap();
 
                     core_search::Run::new(search_params, setup.clone())
                 })

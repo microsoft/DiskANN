@@ -15,15 +15,15 @@ use diskann_utils::{future::AsyncFriendly, views::Matrix};
 use crate::search::{self, Search, graph::Strategy};
 
 /// A built-in helper for benchmarking filtered K-nearest neighbors search
-/// using the [multi-hop](graph::DiskANNIndex::multihop_search) search method.
+/// using the multi-hop search method.
 ///
 /// This is intended to be used in conjunction with [`search::search`] or [`search::search_all`]
 /// and provides some basic additional metrics for the latter. Result aggregation for
-/// [`search::search_all`] is provided by the [`search::graph::search::Knn::Aggregator`] type (same
-/// aggregator as [`search::graph::search::Knn`]).
+/// [`search::search_all`] is provided by the [`search::graph::knn::Aggregator`] type (same
+/// aggregator as [`search::graph::knn::KNN`]).
 ///
 /// The provided implementation of [`Search`] accepts [`graph::search::Knn`]
-/// and returns [`search::graph::search::Knn::Metrics`] as additional output.
+/// and returns [`search::graph::knn::Metrics`] as additional output.
 #[derive(Debug)]
 pub struct MultiHop<DP, T, S>
 where
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn test_multihop() {
-        let nearest_neighbors = NonZeroUsize::new(5).unwrap();
+        let nearest_neighbors = 5;
 
         let index = search::graph::test_grid_provider();
 
@@ -181,7 +181,7 @@ mod tests {
         let rt = crate::tokio::runtime(2).unwrap();
         let results = search::search(
             multihop.clone(),
-            graph::search::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
+            graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
             NonZeroUsize::new(2).unwrap(),
             &rt,
         )
@@ -193,7 +193,7 @@ mod tests {
 
         // Check that only even IDs are returned.
         for r in 0..rows.nrows() {
-            assert_eq!(rows.row(r).len(), nearest_neighbors.get());
+            assert_eq!(rows.row(r).len(), nearest_neighbors);
             for &id in rows.row(r) {
                 assert_eq!(id % 2, 0, "Found odd ID {} in row {}", id, r);
             }
@@ -209,17 +209,17 @@ mod tests {
         // Try the aggregated strategy.
         let parameters = [
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors.get(), 10, None).unwrap(),
+                graph::search::Knn::new(nearest_neighbors, 10, None).unwrap(),
                 setup.clone(),
             ),
             search::Run::new(
-                graph::search::Knn::new(nearest_neighbors.get(), 15, None).unwrap(),
+                graph::search::Knn::new(nearest_neighbors, 15, None).unwrap(),
                 setup.clone(),
             ),
         ];
 
-        let recall_k = nearest_neighbors.get();
-        let recall_n = nearest_neighbors.get();
+        let recall_k = nearest_neighbors;
+        let recall_n = nearest_neighbors;
 
         let all = search::search_all(
             multihop,

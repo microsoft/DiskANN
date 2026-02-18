@@ -215,8 +215,6 @@ pub(crate) mod tests {
     // Callbacks for use with `simplified_builder`.
     fn no_modify(_: &mut diskann::graph::config::Builder) {}
 
-    //////////////////////////
-    // Test helper functions //
     /////////////////////////////////////////
     // Tests from the original async index //
     /////////////////////////////////////////
