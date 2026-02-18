@@ -5,12 +5,16 @@
 
 use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 
+use super::super::vectors::FullQueryMut;
 use super::super::vectors::{DataRef, FullQueryMeta, MinMaxIP};
 use super::meta::MinMaxMeta;
+use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
 use crate::distances::{self, UnequalLengths};
+use crate::minmax::MinMaxQuantizer;
 use crate::multi_vector::distance::QueryMatRef;
-use crate::multi_vector::{Chamfer, MatRef, MaxSim, Repr, SliceMatRepr};
+use crate::multi_vector::{Chamfer, MatMut, MatRef, MaxSim, Repr, SliceMatRepr, Standard};
+use crate::scalar::InputContainsNaN;
 
 //////////////////
 // MinMaxKernel //
@@ -36,7 +40,7 @@ impl MinMaxKernel {
     ///
     /// * `query` - The query multi-vector (wrapped as [`QueryMatRef`])
     /// * `doc` - The document MinMax multi-vector
-    /// * `f` - Callback invoked with `(query_index, min_distance)` for each query vector
+    /// * `f` - Callback invoked with `(index, min_distance)` for each query vector
     #[inline(always)]
     pub(crate) fn max_sim_kernel<'q, 'd, const NBITS: usize, Q, F>(
         query: QueryMatRef<'q, Q>,
@@ -88,9 +92,7 @@ where
         );
 
         let _ = MinMaxKernel::max_sim_kernel(query, doc, |i, score| {
-            // SAFETY: We asserted that self.size() == query.num_vectors(),
-            // and i < query.num_vectors() due to the kernel loop bound.
-            unsafe { *self.scores.get_unchecked_mut(i) = score };
+            let _ = self.set(i, score);
         });
     }
 }
@@ -119,17 +121,82 @@ where
     }
 }
 
-/////////////////////////////////
-// Asymmetric: FullQuery alias //
-/////////////////////////////////
+////////////////////////////
+// FullQuery Multi-vector //
+////////////////////////////
 
 /// Type alias for a full-precision query matrix view using [`SliceMatRepr`].
 ///
 /// Each row is a [`FullQueryRef`](super::super::vectors::FullQueryRef) containing
-/// the full-precision vector elements and precomputed metadata (sum, norm²).
-/// This enables asymmetric distance computation where queries remain in full
-/// precision while documents are MinMax-quantized.
+/// the full-precision vector elements and metadata (sum, norm²).
 pub type FullQueryMatRef<'a> = QueryMatRef<'a, SliceMatRepr<f32, FullQueryMeta>>;
+
+//////////////////
+// CompressInto //
+//////////////////
+
+impl<'a, 'b, T> CompressInto<MatRef<'a, Standard<T>>, MatMut<'b, SliceMatRepr<f32, FullQueryMeta>>>
+    for MinMaxQuantizer
+where
+    T: Copy + Into<f32>,
+{
+    type Error = InputContainsNaN;
+
+    type Output = ();
+
+    /// Compress a multi-vector of full-precision vectors into a multi-vector of
+    /// full-precision query vectors with precomputed metadata.
+    ///
+    /// Each row is compressed using the single-vector
+    /// [`CompressInto<&[T], FullQueryMut>`](CompressInto) implementation,
+    /// which applies the quantizer's transform and stores the sum and norm².
+    ///
+    /// # Error
+    ///
+    /// Returns [`InputContainsNaN`] if any input vector contains `NaN`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    /// * `from.num_vectors() != to.num_vectors()`
+    /// * `from.vector_dim() != self.dim()`
+    /// * `to.repr().ncols() != self.output_dim()`
+    fn compress_into(
+        &self,
+        from: MatRef<'a, Standard<T>>,
+        mut to: MatMut<'b, SliceMatRepr<f32, FullQueryMeta>>,
+    ) -> Result<(), Self::Error> {
+        assert_eq!(
+            from.num_vectors(),
+            to.num_vectors(),
+            "input and output must have the same number of vectors: {} != {}",
+            from.num_vectors(),
+            to.num_vectors()
+        );
+        assert_eq!(
+            from.vector_dim(),
+            self.dim(),
+            "input vectors must match quantizer dimension: {} != {}",
+            from.vector_dim(),
+            self.dim()
+        );
+        assert_eq!(
+            to.repr().ncols(),
+            self.output_dim(),
+            "output vector dimension must match quantizer output dimension: {} != {}",
+            to.repr().ncols(),
+            self.output_dim()
+        );
+
+        for (from_row, to_row) in from.rows().zip(to.rows_mut()) {
+            <MinMaxQuantizer as CompressInto<&[T], FullQueryMut<'_>>>::compress_into(
+                self, from_row, to_row,
+            )?;
+        }
+
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -137,11 +204,13 @@ mod tests {
     use crate::CompressInto;
     use crate::algorithms::Transform;
     use crate::algorithms::transforms::NullTransform;
+    use crate::alloc::GlobalAllocator;
     use crate::bits::{Representation, Unsigned};
+    use crate::minmax::vectors::FullQuery;
     use crate::minmax::{Data, MinMaxQuantizer};
     use crate::multi_vector::{Defaulted, Mat, Standard};
     use crate::num::Positive;
-    use diskann_utils::ReborrowMut;
+    use diskann_utils::{Reborrow, ReborrowMut};
     use std::num::NonZeroUsize;
 
     macro_rules! expand_to_bitrates {
@@ -383,5 +452,75 @@ mod tests {
 
         let result = Chamfer::evaluate(query, doc);
         assert_eq!(result, 0.0);
+    }
+
+    /// Round-trip test: multi-vector `CompressInto` for `SliceMatRepr<f32, FullQueryMeta>`
+    /// must produce the same result as compressing each row individually.
+    #[test]
+    fn full_query_multi_vector_compress_matches_single() {
+        let test_dims = [4, 8, 16, 32, 128];
+        let test_nvecs = [1, 2, 3, 5, 10];
+
+        for &dim in &test_dims {
+            for &num_vectors in &test_nvecs {
+                let quantizer = make_quantizer(dim);
+
+                // Generate deterministic test data
+                let input_data: Vec<f32> = (0..num_vectors * dim)
+                    .map(|idx| {
+                        let row = idx / dim;
+                        let col = idx % dim;
+                        ((row + 1) as f32 * (col as f32 + 0.5)).sin() * 10.0 + (row as f32)
+                    })
+                    .collect();
+
+                // Multi-vector compression
+                let input_view =
+                    MatRef::new(Standard::new(num_vectors, dim).unwrap(), &input_data).unwrap();
+
+                let repr = SliceMatRepr::<f32, FullQueryMeta>::new(num_vectors, dim).unwrap();
+                let mut multi_mat: Mat<SliceMatRepr<f32, FullQueryMeta>> =
+                    Mat::new(repr, Defaulted).unwrap();
+
+                quantizer
+                    .compress_into(input_view, multi_mat.reborrow_mut())
+                    .expect("multi-vector full query compression should succeed");
+
+                // Compare each row with single-vector compression
+                for i in 0..num_vectors {
+                    let row_input = &input_data[i * dim..(i + 1) * dim];
+
+                    let mut single = FullQuery::new_in(dim, GlobalAllocator).unwrap();
+                    quantizer
+                        .compress_into(row_input, single.reborrow_mut())
+                        .expect("single-vector compression should succeed");
+
+                    let multi_row = multi_mat.get_row(i).expect("row should exist");
+
+                    // Compare metadata
+                    assert_eq!(
+                        multi_row.meta().sum,
+                        single.reborrow().meta().sum,
+                        "sum mismatch at row {i}, dim={dim}, nvecs={num_vectors}"
+                    );
+                    assert_eq!(
+                        multi_row.meta().norm_squared,
+                        single.reborrow().meta().norm_squared,
+                        "norm_squared mismatch at row {i}, dim={dim}, nvecs={num_vectors}"
+                    );
+
+                    // Compare vector elements
+                    let multi_vec = multi_row.vector();
+                    let single_ref = single.reborrow();
+                    let single_vec = single_ref.vector();
+                    for j in 0..dim {
+                        assert_eq!(
+                            multi_vec[j], single_vec[j],
+                            "vector element mismatch at row {i}, col {j}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
