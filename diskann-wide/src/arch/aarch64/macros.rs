@@ -60,7 +60,7 @@ macro_rules! aarch64_define_register {
             fn to_array(self) -> [$scalar; $lanes] {
                 // SAFETY: Provided the scalar type is an integer or floating point,
                 // then all bit patterns are valid between source and destination types.
-                // (provided an x86 intrinsic is one of the transmuted types).
+                // (provided a neon intrinsic is one of the transmuted types).
                 //
                 // The source argument is taken by value (no reference conversion) and
                 // as long as `T` is `[repr(C)]`, then `[T; N]` will be `[repr(C)]`.

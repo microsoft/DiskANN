@@ -69,7 +69,7 @@ macro_rules! architecture_hook {
     };
 }
 
-/// A utility for specializing distance computatiosn for fixed-length slices.
+/// A utility for specializing distance computations for fixed-length slices.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Specialize<const N: usize, F>(std::marker::PhantomData<F>);
 
