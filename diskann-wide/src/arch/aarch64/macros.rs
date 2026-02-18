@@ -59,7 +59,7 @@ macro_rules! aarch64_define_register {
 
             fn to_array(self) -> [$scalar; $lanes] {
                 // SAFETY: Provided the scalar type is an integer or floating point,
-                // then all bit pattens are valid between source and destination types.
+                // then all bit patterns are valid between source and destination types.
                 // (provided an x86 intrinsic is one of the transmuted types).
                 //
                 // The source argument is taken by value (no reference conversion) and
@@ -72,7 +72,7 @@ macro_rules! aarch64_define_register {
 
             fn from_array(_: $arch, x: [$scalar; $lanes]) -> Self {
                 // SAFETY: Provided the scalar type is an integer or floating point,
-                // then all bit pattens are valid between source and destination types.
+                // then all bit patterns are valid between source and destination types.
                 // (provided an x86 intrinsic is one of the transmuted types).
                 //
                 // The source argument is taken by value (no reference conversion) and
@@ -351,7 +351,7 @@ macro_rules! aarch64_define_fma {
 /// shifts.
 ///
 /// * Left shifts: We need to clamp the shift amount between 0 and the maximum shift
-///   (inclusive). This is done by first reinrepreting the shift vector as unsigned
+///   (inclusive). This is done by first reinterpreting the shift vector as unsigned
 ///   (`cvtpre`), taking the unsigned `min` with the maximal shift, and then reinterpret
 ///   to signed (`cvtpost`).
 ///
@@ -528,7 +528,7 @@ macro_rules! aarch64_define_bitops {
 }
 
 /// SAFETY: It is the invoker's responsibility to ensure that the provided intrinsics are
-/// safe to call. T hat is - any intrinsics invoked must be compatible with `$type`'s
+/// safe to call. That is - any intrinsics invoked must be compatible with `$type`'s
 /// associated architecture.
 macro_rules! aarch64_splitjoin {
     ($type:path, $half:path, $getlo:ident, $gethi:ident, $join:ident) => {

@@ -410,7 +410,7 @@ cfg_if::cfg_if! {
             }
         }
     } else if #[cfg(target_arch = "aarch64")] {
-        // Delegate to the architecture selection within the `aarch64` module,.
+        // Delegate to the architecture selection within the `aarch64` module.
         pub mod aarch64;
 
         use aarch64::LevelInner;

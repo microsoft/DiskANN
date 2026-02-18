@@ -215,11 +215,11 @@ impl Neon {
 
     /// Construct a new `Neon` architecture if it is safe to do so on the current hardware.
     pub fn new_checked() -> Option<Self> {
-        // This check here ensure that if we ever switch to dynamically dispatching to
+        // This check here ensures that if we ever switch to dynamically dispatching to
         // `Neon` that we do not forget to update `new_checked`.
         if cfg!(all(target_feature = "neon", target_feature = "dotprod")) {
-            // SAFETY: The compile erorr check above ensure we do not accidentally return an
-            // unsafe instance of `Self`.
+            // SAFETY: The compile-time feature check above ensures we do not accidentally
+            // return an unsafe instance of `Self`.
             Some(unsafe { Self::new() })
         } else {
             None
@@ -345,9 +345,9 @@ impl arch::Architecture for Neon {
     {
         let f: unsafe fn(Self, T0::Of<'_>) -> R = Self::run_function_with_1::<F, _, _>;
 
-        // SAFETY: The present of `self` as an argument attests that it is safe to construct
+        // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
-        // it is safe to wink into existence and is ABI compattible with `Hidden`.
+        // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide1(f) }
     }
 
@@ -360,9 +360,9 @@ impl arch::Architecture for Neon {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>) -> R =
             Self::run_function_with_2::<F, _, _, _>;
 
-        // SAFETY: The present of `self` as an argument attests that it is safe to construct
+        // SAFETY: The presence of `self` as an argument attests that it is safe to construct
         // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
-        // it is safe to wink into existence and is ABI compattible with `Hidden`.
+        // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide2(f) }
     }
 
@@ -376,9 +376,9 @@ impl arch::Architecture for Neon {
         let f: unsafe fn(Self, T0::Of<'_>, T1::Of<'_>, T2::Of<'_>) -> R =
             Self::run_function_with_3::<F, _, _, _, _>;
 
-        // SAFETY: The present of `self` as an argument attests that it is safe to construct
-        // A `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
-        // it is safe to wink into existence and is ABI compattible with `Hidden`.
+        // SAFETY: The presence of `self` as an argument attests that it is safe to construct
+        // a `Neon` architecture. Additionally, since `Neon` is a `Copy` zero-sized type,
+        // it is safe to wink into existence and is ABI compatible with `Hidden`.
         unsafe { arch::hide3(f) }
     }
 }

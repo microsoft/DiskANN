@@ -50,7 +50,7 @@ impl AArchLoadStore for f16x4 {
 
     #[inline(always)]
     unsafe fn load_simd_masked_logical(arch: Neon, ptr: *const f16, mask: Self::Mask) -> Self {
-        // SAFETY: Pointer access safety inhereted from the caller.
+        // SAFETY: Pointer access safety inherited from the caller.
         let e = unsafe {
             Emulated::<f16, 4>::load_simd_masked_logical(Scalar, ptr, mask.bitmask().as_scalar())
         };
@@ -66,7 +66,7 @@ impl AArchLoadStore for f16x4 {
 
     #[inline(always)]
     unsafe fn store_simd(self, ptr: *mut <Self as SIMDVector>::Scalar) {
-        // SAFETY: Pointer access safety inhereted from the caller. Use of the instruction
+        // SAFETY: Pointer access safety inherited from the caller. Use of the instruction
         // is allowed by the `Neon` architecture.
         unsafe { vst1_u16(ptr.cast::<u16>(), self.0) }
     }
@@ -74,14 +74,14 @@ impl AArchLoadStore for f16x4 {
     #[inline(always)]
     unsafe fn store_simd_masked_logical(self, ptr: *mut f16, mask: Self::Mask) {
         let e = Emulated::<f16, 4>::from_array(Scalar, self.to_array());
-        // SAFETY: Pointer access safety inhereted from the caller.
+        // SAFETY: Pointer access safety inherited from the caller.
         unsafe { e.store_simd_masked_logical(ptr, mask.bitmask().as_scalar()) }
     }
 
     #[inline(always)]
     unsafe fn store_simd_first(self, ptr: *mut f16, first: usize) {
         let e = Emulated::<f16, 4>::from_array(Scalar, self.to_array());
-        // SAFETY: Pointer access safety inhereted from the caller.
+        // SAFETY: Pointer access safety inherited from the caller.
         unsafe { e.store_simd_first(ptr, first) }
     }
 }

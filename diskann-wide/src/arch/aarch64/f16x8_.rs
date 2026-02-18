@@ -46,14 +46,14 @@ impl AArchSplat for f16x8 {
 impl AArchLoadStore for f16x8 {
     #[inline(always)]
     unsafe fn load_simd(_: Neon, ptr: *const f16) -> Self {
-        // SAFETY: Pointer access safety inhereted from the caller.Allowed by the `Neon`
+        // SAFETY: Pointer access safety inherited from the caller. Allowed by the `Neon`
         // architecture.
         Self(unsafe { vld1q_u16(ptr.cast::<u16>()) })
     }
 
     #[inline(always)]
     unsafe fn load_simd_masked_logical(arch: Neon, ptr: *const f16, mask: Self::Mask) -> Self {
-        // SAFETY: Pointer access safety inhereted from the caller.
+        // SAFETY: Pointer access safety inherited from the caller.
         let e = unsafe {
             Emulated::<f16, 8>::load_simd_masked_logical(Scalar, ptr, mask.bitmask().as_scalar())
         };
@@ -71,7 +71,7 @@ impl AArchLoadStore for f16x8 {
 
     #[inline(always)]
     unsafe fn store_simd(self, ptr: *mut <Self as SIMDVector>::Scalar) {
-        // SAFETY: Pointer access safety inhereted from the caller. Use of the instruction
+        // SAFETY: Pointer access safety inherited from the caller. Use of the instruction
         // is allowed by the `Neon` architecture.
         unsafe { vst1q_u16(ptr.cast::<u16>(), self.0) }
     }
@@ -79,14 +79,14 @@ impl AArchLoadStore for f16x8 {
     #[inline(always)]
     unsafe fn store_simd_masked_logical(self, ptr: *mut f16, mask: Self::Mask) {
         let e = Emulated::<f16, 8>::from_array(Scalar, self.to_array());
-        // SAFETY: Pointer access safety inhereted from the caller.
+        // SAFETY: Pointer access safety inherited from the caller.
         unsafe { e.store_simd_masked_logical(ptr, mask.bitmask().as_scalar()) }
     }
 
     #[inline(always)]
     unsafe fn store_simd_first(self, ptr: *mut f16, first: usize) {
         let e = Emulated::<f16, 8>::from_array(Scalar, self.to_array());
-        // SAFETY: Pointer access safety inhereted from the caller.
+        // SAFETY: Pointer access safety inherited from the caller.
         unsafe { e.store_simd_first(ptr, first) }
     }
 }
