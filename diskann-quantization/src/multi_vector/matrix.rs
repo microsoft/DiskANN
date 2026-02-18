@@ -768,7 +768,7 @@ impl<'a, T: Repr> MatRef<'a, T> {
     }
 
     /// Returns an iterator over immutable row references.
-    pub fn rows(&self) -> Rows<'_, T> {
+    pub fn rows(&self) -> Rows<'a, T> {
         Rows::new(*self)
     }
 

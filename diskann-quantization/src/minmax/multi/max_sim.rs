@@ -5,12 +5,12 @@
 
 use diskann_vector::{DistanceFunctionMut, PureDistanceFunction};
 
-use super::super::vectors::{DataRef, MinMaxIP};
+use super::super::vectors::{DataRef, FullQueryMeta, MinMaxIP};
 use super::meta::MinMaxMeta;
 use crate::bits::{Representation, Unsigned};
 use crate::distances::{self, UnequalLengths};
 use crate::multi_vector::distance::QueryMatRef;
-use crate::multi_vector::{Chamfer, MatRef, MaxSim};
+use crate::multi_vector::{Chamfer, MatRef, MaxSim, Repr, SliceMatRepr};
 
 //////////////////
 // MinMaxKernel //
@@ -28,24 +28,26 @@ impl MinMaxKernel {
     /// For each query vector, computes the maximum similarity (min distance using
     /// MinMax inner product) to any document vector, then calls `f(index, score)` with the result.
     ///
+    /// The query [`Repr`] can differ from the document repr, enabling asymmetric distance
+    /// (e.g. full-precision queries against quantized documents) as long as [`MinMaxIP`]
+    /// is implemented between the query row type and [`DataRef`].
+    ///
     /// # Arguments
     ///
-    /// * `query` - The query MinMax multi-vector (wrapped as [`QueryMatRef`])
+    /// * `query` - The query multi-vector (wrapped as [`QueryMatRef`])
     /// * `doc` - The document MinMax multi-vector
     /// * `f` - Callback invoked with `(query_index, min_distance)` for each query vector
     #[inline(always)]
-    pub(crate) fn max_sim_kernel<const NBITS: usize, F>(
-        query: QueryMatRef<'_, MinMaxMeta<NBITS>>,
-        doc: MatRef<'_, MinMaxMeta<NBITS>>,
+    pub(crate) fn max_sim_kernel<'q, 'd, const NBITS: usize, Q, F>(
+        query: QueryMatRef<'q, Q>,
+        doc: MatRef<'d, MinMaxMeta<NBITS>>,
         mut f: F,
     ) -> Result<(), UnequalLengths>
     where
+        Q: Repr + 'q,
+        Q::Row<'q>: Copy,
         Unsigned: Representation<NBITS>,
-        distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-                crate::bits::BitSlice<'x, NBITS, Unsigned>,
-                crate::bits::BitSlice<'y, NBITS, Unsigned>,
-                distances::MathematicalResult<u32>,
-            >,
+        MinMaxIP: PureDistanceFunction<Q::Row<'q>, DataRef<'d, NBITS>, distances::Result<f32>>,
         F: FnMut(usize, f32),
     {
         for (i, q_ref) in query.rows().enumerate() {
@@ -53,13 +55,7 @@ impl MinMaxKernel {
             let mut min_distance = f32::MAX;
 
             for d_ref in doc.rows() {
-                // Use MinMaxIP to compute negated inner product as distance
-                let dist = <MinMaxIP as PureDistanceFunction<
-                    DataRef<'_, NBITS>,
-                    DataRef<'_, NBITS>,
-                    distances::Result<f32>,
-                >>::evaluate(q_ref, d_ref)?;
-
+                let dist = MinMaxIP::evaluate(q_ref, d_ref)?;
                 min_distance = min_distance.min(dist);
             }
 
@@ -74,23 +70,16 @@ impl MinMaxKernel {
 // MaxSim //
 ////////////
 
-impl<const NBITS: usize>
-    DistanceFunctionMut<QueryMatRef<'_, MinMaxMeta<NBITS>>, MatRef<'_, MinMaxMeta<NBITS>>>
-    for MaxSim<'_>
+impl<'q, 'd, const NBITS: usize, Q>
+    DistanceFunctionMut<QueryMatRef<'q, Q>, MatRef<'d, MinMaxMeta<NBITS>>> for MaxSim<'_>
 where
+    Q: Repr + 'q,
+    Q::Row<'q>: Copy,
     Unsigned: Representation<NBITS>,
-    distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-            crate::bits::BitSlice<'x, NBITS, Unsigned>,
-            crate::bits::BitSlice<'y, NBITS, Unsigned>,
-            distances::MathematicalResult<u32>,
-        >,
+    MinMaxIP: PureDistanceFunction<Q::Row<'q>, DataRef<'d, NBITS>, distances::Result<f32>>,
 {
     #[inline(always)]
-    fn evaluate(
-        &mut self,
-        query: QueryMatRef<'_, MinMaxMeta<NBITS>>,
-        doc: MatRef<'_, MinMaxMeta<NBITS>>,
-    ) {
+    fn evaluate(&mut self, query: QueryMatRef<'q, Q>, doc: MatRef<'d, MinMaxMeta<NBITS>>) {
         assert!(
             self.size() == query.num_vectors(),
             "scores buffer not right size : {} != {}",
@@ -101,7 +90,7 @@ where
         let _ = MinMaxKernel::max_sim_kernel(query, doc, |i, score| {
             // SAFETY: We asserted that self.size() == query.num_vectors(),
             // and i < query.num_vectors() due to the kernel loop bound.
-            let _ = self.set(i, score);
+            unsafe { *self.scores.get_unchecked_mut(i) = score };
         });
     }
 }
@@ -110,22 +99,16 @@ where
 // Chamfer //
 /////////////
 
-impl<const NBITS: usize>
-    PureDistanceFunction<QueryMatRef<'_, MinMaxMeta<NBITS>>, MatRef<'_, MinMaxMeta<NBITS>>, f32>
-    for Chamfer
+impl<'q, 'd, const NBITS: usize, Q>
+    PureDistanceFunction<QueryMatRef<'q, Q>, MatRef<'d, MinMaxMeta<NBITS>>, f32> for Chamfer
 where
+    Q: Repr + 'q,
+    Q::Row<'q>: Copy,
     Unsigned: Representation<NBITS>,
-    distances::InnerProduct: for<'a, 'b> PureDistanceFunction<
-            crate::bits::BitSlice<'a, NBITS, Unsigned>,
-            crate::bits::BitSlice<'b, NBITS, Unsigned>,
-            distances::MathematicalResult<u32>,
-        >,
+    MinMaxIP: PureDistanceFunction<Q::Row<'q>, DataRef<'d, NBITS>, distances::Result<f32>>,
 {
     #[inline(always)]
-    fn evaluate(
-        query: QueryMatRef<'_, MinMaxMeta<NBITS>>,
-        doc: MatRef<'_, MinMaxMeta<NBITS>>,
-    ) -> f32 {
+    fn evaluate(query: QueryMatRef<'q, Q>, doc: MatRef<'d, MinMaxMeta<NBITS>>) -> f32 {
         let mut sum = 0.0f32;
 
         let _ = MinMaxKernel::max_sim_kernel(query, doc, |_i, score| {
@@ -135,6 +118,18 @@ where
         sum
     }
 }
+
+/////////////////////////////////
+// Asymmetric: FullQuery alias //
+/////////////////////////////////
+
+/// Type alias for a full-precision query matrix view using [`SliceMatRepr`].
+///
+/// Each row is a [`FullQueryRef`](super::super::vectors::FullQueryRef) containing
+/// the full-precision vector elements and precomputed metadata (sum, norm²).
+/// This enables asymmetric distance computation where queries remain in full
+/// precision while documents are MinMax-quantized.
+pub type FullQueryMatRef<'a> = QueryMatRef<'a, SliceMatRepr<f32, FullQueryMeta>>;
 
 #[cfg(test)]
 mod tests {
@@ -206,29 +201,57 @@ mod tests {
         output
     }
 
-    /// Naive max-sim for one query vector: min distance to any doc vector.
-    fn naive_max_sim_single<const NBITS: usize>(
-        query: DataRef<'_, NBITS>,
-        doc: &MatRef<'_, MinMaxMeta<NBITS>>,
-    ) -> f32
-    where
+    /// Verify MaxSim, kernel, and Chamfer all agree with a naive per-row computation
+    /// for an arbitrary query repr `Q`.
+    fn verify_case<'q, 'd, const NBITS: usize, Q>(
+        query: QueryMatRef<'q, Q>,
+        doc: MatRef<'d, MinMaxMeta<NBITS>>,
+        nq: usize,
+        nd: usize,
+        dim: usize,
+        label: &str,
+    ) where
+        Q: Repr + 'q,
+        Q::Row<'q>: Copy,
         Unsigned: Representation<NBITS>,
-        distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
-                crate::bits::BitSlice<'x, NBITS, Unsigned>,
-                crate::bits::BitSlice<'y, NBITS, Unsigned>,
-                distances::MathematicalResult<u32>,
-            >,
+        MinMaxIP: PureDistanceFunction<Q::Row<'q>, DataRef<'d, NBITS>, distances::Result<f32>>,
     {
-        doc.rows()
-            .map(|d| {
-                <MinMaxIP as PureDistanceFunction<
-                    DataRef<'_, NBITS>,
-                    DataRef<'_, NBITS>,
-                    distances::Result<f32>,
-                >>::evaluate(query, d)
-                .unwrap()
+        // Naive max-sim: for each query row, find min distance to any doc row.
+        let expected: Vec<f32> = query
+            .rows()
+            .map(|q| {
+                doc.rows()
+                    .map(|d| MinMaxIP::evaluate(q, d).unwrap())
+                    .fold(f32::MAX, f32::min)
             })
-            .fold(f32::MAX, f32::min)
+            .collect();
+
+        // Test MaxSim matches naive
+        let mut scores = vec![0.0f32; nq];
+        MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
+
+        for (i, (&got, &exp)) in scores.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - exp).abs() < 1e-5,
+                "NBITS={NBITS} ({nq},{nd},{dim}) {label} MaxSim[{i}]: {got} != {exp}"
+            );
+        }
+
+        // Test kernel matches MaxSim
+        let mut kernel_scores = vec![0.0f32; nq];
+        MinMaxKernel::max_sim_kernel(query, doc, |i, s| kernel_scores[i] = s).unwrap();
+        assert_eq!(
+            scores, kernel_scores,
+            "NBITS={NBITS} ({nq},{nd},{dim}) {label} kernel mismatch"
+        );
+
+        // Test Chamfer equals sum of MaxSim
+        let chamfer = Chamfer::evaluate(query, doc);
+        let sum: f32 = scores.iter().sum();
+        assert!(
+            (chamfer - sum).abs() < 1e-4,
+            "NBITS={NBITS} ({nq},{nd},{dim}) {label} Chamfer {chamfer} != sum {sum}"
+        );
     }
 
     fn test_matches_naive<const NBITS: usize>()
@@ -252,37 +275,7 @@ mod tests {
             let query: QueryMatRef<_> = query_mat.as_view().into();
             let doc = doc_mat.as_view();
 
-            // Test MaxSim matches naive
-            let expected: Vec<f32> = query
-                .rows()
-                .map(|q| naive_max_sim_single(q, &doc))
-                .collect();
-
-            let mut scores = vec![0.0f32; nq];
-            MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
-
-            for (i, (&got, &exp)) in scores.iter().zip(expected.iter()).enumerate() {
-                assert!(
-                    (got - exp).abs() < 1e-5,
-                    "NBITS={NBITS} ({nq},{nd},{dim}) MaxSim[{i}]: {got} != {exp}"
-                );
-            }
-
-            // Test kernel matches MaxSim
-            let mut kernel_scores = vec![0.0f32; nq];
-            MinMaxKernel::max_sim_kernel(query, doc, |i, s| kernel_scores[i] = s).unwrap();
-            assert_eq!(
-                scores, kernel_scores,
-                "NBITS={NBITS} ({nq},{nd},{dim}) kernel mismatch"
-            );
-
-            // Test Chamfer equals sum of MaxSim
-            let chamfer = Chamfer::evaluate(query, doc);
-            let sum: f32 = scores.iter().sum();
-            assert!(
-                (chamfer - sum).abs() < 1e-4,
-                "NBITS={NBITS} ({nq},{nd},{dim}) Chamfer {chamfer} != sum {sum}"
-            );
+            verify_case(query, doc, nq, nd, dim, "");
         }
     }
 
@@ -303,5 +296,92 @@ mod tests {
 
         let mut scores = vec![0.0f32; 5]; // Wrong size
         MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
+    }
+
+    /////////////////////////////
+    // Asymmetric (full query) //
+    /////////////////////////////
+
+    /// Build an owned `Mat<SliceMatRepr<f32, FullQueryMeta>>` from raw f32 query vectors.
+    ///
+    /// Each row gets a `FullQueryMeta { sum, norm_squared }` computed from its elements.
+    fn build_full_query_mat(
+        data: &[f32],
+        nrows: usize,
+        ncols: usize,
+    ) -> Mat<SliceMatRepr<f32, FullQueryMeta>> {
+        let repr = SliceMatRepr::<f32, FullQueryMeta>::new(nrows, ncols).unwrap();
+        let mut mat = Mat::new(repr, Defaulted).unwrap();
+
+        for i in 0..nrows {
+            let src = &data[i * ncols..(i + 1) * ncols];
+            let sum: f32 = src.iter().sum();
+            let norm_squared: f32 = src.iter().map(|x| x * x).sum();
+
+            let mut row = mat.get_row_mut(i).unwrap();
+            *row.meta_mut() = FullQueryMeta { sum, norm_squared };
+            row.vector_mut().copy_from_slice(src);
+        }
+
+        mat
+    }
+
+    fn test_full_query_matches_naive<const NBITS: usize>()
+    where
+        Unsigned: Representation<NBITS>,
+        distances::InnerProduct: for<'x, 'y> PureDistanceFunction<
+                &'x [f32],
+                crate::bits::BitSlice<'y, NBITS, Unsigned>,
+                distances::MathematicalResult<f32>,
+            >,
+    {
+        for &(nq, nd, dim) in TEST_CASES {
+            let quantizer = make_quantizer(dim);
+
+            let query_data = generate_input_mat(nq, dim, 0);
+            let doc_data = generate_input_mat(nd, dim, nq);
+
+            let query_mat = build_full_query_mat(&query_data, nq, dim);
+            let doc_mat = compress_mat::<NBITS>(&quantizer, &doc_data, nd, dim);
+
+            let query: FullQueryMatRef<'_> = query_mat.as_view().into();
+            let doc = doc_mat.as_view();
+
+            verify_case(query, doc, nq, nd, dim, "FullQuery");
+        }
+    }
+
+    expand_to_bitrates!(full_query_matches_naive, test_full_query_matches_naive);
+
+    #[test]
+    #[should_panic(expected = "scores buffer not right size")]
+    fn full_query_max_sim_panics_on_size_mismatch() {
+        let dim = 4;
+        let query_data = vec![1.0f32; 2 * dim];
+        let query_mat = build_full_query_mat(&query_data, 2, dim);
+        let query: FullQueryMatRef<'_> = query_mat.as_view().into();
+
+        let quantizer = make_quantizer(dim);
+        let doc_data = vec![1.0f32; 3 * dim];
+        let doc_mat = compress_mat::<8>(&quantizer, &doc_data, 3, dim);
+        let doc = doc_mat.as_view();
+
+        let mut scores = vec![0.0f32; 5]; // Wrong size (should be 2)
+        MaxSim::new(&mut scores).unwrap().evaluate(query, doc);
+    }
+
+    #[test]
+    fn full_query_chamfer_with_zero_queries_returns_zero() {
+        let dim = 4;
+        let query_mat = build_full_query_mat(&[], 0, dim);
+        let query: FullQueryMatRef<'_> = query_mat.as_view().into();
+
+        let quantizer = make_quantizer(dim);
+        let doc_data = vec![1.0f32; 2 * dim];
+        let doc_mat = compress_mat::<8>(&quantizer, &doc_data, 2, dim);
+        let doc = doc_mat.as_view();
+
+        let result = Chamfer::evaluate(query, doc);
+        assert_eq!(result, 0.0);
     }
 }

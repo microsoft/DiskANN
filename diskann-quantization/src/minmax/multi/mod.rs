@@ -74,15 +74,16 @@
 //!
 //! // Compute MaxSim: per-query-vector max similarities
 //! let mut scores = vec![0.0f32; num_query_vectors];
-//! MaxSim::new(&mut scores).unwrap().evaluate(query_mv.into(), doc_mv);
+//! let query_ref: QueryMatRef<'_, MinMaxMeta<NBITS>> = query_mv.into();
+//! MaxSim::new(&mut scores).unwrap().evaluate(query_ref, doc_mv);
 //! // scores[i] = min over all doc vectors of distance(query[i], doc[j])
 //!
 //! // Compute Chamfer distance (sum of MaxSim scores)
-//! let chamfer = Chamfer::evaluate(query_mv.into(), doc_mv);
+//! let chamfer = Chamfer::evaluate(query_ref, doc_mv);
 //! ```
 
 mod max_sim;
 mod meta;
 
-pub use max_sim::MinMaxKernel;
+pub use max_sim::{FullQueryMatRef, MinMaxKernel};
 pub use meta::MinMaxMeta;

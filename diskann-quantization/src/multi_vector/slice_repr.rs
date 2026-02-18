@@ -342,9 +342,7 @@ where
 
         // SAFETY: `total` and `align` come from a repr that backs an existing `MatRef`,
         // so the size/alignment pair is guaranteed valid.
-        let layout = unsafe {
-            std::alloc::Layout::from_size_align_unchecked(total, align.raw())
-        };
+        let layout = unsafe { std::alloc::Layout::from_size_align_unchecked(total, align.raw()) };
 
         let mut buffer = match Poly::broadcast(u8::default(), total, AlignedAllocator::new(align)) {
             Ok(buf) => buf,
