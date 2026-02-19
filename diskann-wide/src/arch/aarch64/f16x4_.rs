@@ -14,7 +14,7 @@ use half::f16;
 
 // AArch64 masks
 use super::{
-    Neon, algorithms,
+    Neon, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask16x4,
 };
@@ -61,7 +61,7 @@ impl AArchLoadStore for f16x4 {
     unsafe fn load_simd_first(arch: Neon, ptr: *const f16, first: usize) -> Self {
         // SAFETY: f16 and u16 share the same 2-byte representation. Pointer access
         // inherited from caller.
-        Self(unsafe { algorithms::load_first::u16x4(arch, ptr.cast::<u16>(), first) })
+        Self(unsafe { internal::load_first::u16x4(arch, ptr.cast::<u16>(), first) })
     }
 
     #[inline(always)]

@@ -13,7 +13,7 @@ use crate::{
 
 // AArch64 masks
 use super::{
-    Neon, algorithms,
+    Neon, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask64x2,
 };
@@ -46,13 +46,7 @@ pub(super) unsafe fn emulated_vminq_u64(x: uint64x2_t, y: uint64x2_t) -> uint64x
 
 macros::aarch64_define_register!(u64x2, uint64x2_t, mask64x2, u64, 2, Neon);
 macros::aarch64_define_splat!(u64x2, vmovq_n_u64);
-macros::aarch64_define_loadstore!(
-    u64x2,
-    vld1q_u64,
-    algorithms::load_first::u64x2,
-    vst1q_u64,
-    2
-);
+macros::aarch64_define_loadstore!(u64x2, vld1q_u64, internal::load_first::u64x2, vst1q_u64, 2);
 
 helpers::unsafe_map_binary_op!(u64x2, std::ops::Add, add, vaddq_u64, "neon");
 helpers::unsafe_map_binary_op!(u64x2, std::ops::Sub, sub, vsubq_u64, "neon");

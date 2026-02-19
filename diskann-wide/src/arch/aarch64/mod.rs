@@ -11,7 +11,9 @@ use crate::{
     },
 };
 
-mod algorithms;
+pub mod algorithms;
+
+mod internal;
 
 pub mod f16x4_;
 pub use f16x4_::f16x4;

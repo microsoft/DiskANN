@@ -10,7 +10,7 @@ use crate::{
 
 // AArch64 masks
 use super::{
-    Neon, algorithms,
+    Neon, internal,
     macros::{self, AArchLoadStore, AArchSplat},
     masks::mask64x2,
     u64x2_::{emulated_vminq_u64, emulated_vmvnq_u64},
@@ -34,13 +34,7 @@ pub(super) unsafe fn emulated_vmvnq_s64(x: int64x2_t) -> int64x2_t {
 
 macros::aarch64_define_register!(i64x2, int64x2_t, mask64x2, i64, 2, Neon);
 macros::aarch64_define_splat!(i64x2, vmovq_n_s64);
-macros::aarch64_define_loadstore!(
-    i64x2,
-    vld1q_s64,
-    algorithms::load_first::i64x2,
-    vst1q_s64,
-    2
-);
+macros::aarch64_define_loadstore!(i64x2, vld1q_s64, internal::load_first::i64x2, vst1q_s64, 2);
 
 helpers::unsafe_map_binary_op!(i64x2, std::ops::Add, add, vaddq_s64, "neon");
 helpers::unsafe_map_binary_op!(i64x2, std::ops::Sub, sub, vsubq_s64, "neon");
