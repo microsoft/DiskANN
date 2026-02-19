@@ -1233,7 +1233,7 @@ impl SIMDSchema<i8, i8, Neon> for L2 {
     type Left = diskann_wide::arch::aarch64::i8x16;
     type Right = diskann_wide::arch::aarch64::i8x16;
     type Return = f32;
-    type Main = Strategy4x1;
+    type Main = Strategy2x1;
 
     #[inline(always)]
     fn init(&self, arch: Neon) -> Self::Accumulator {
@@ -1411,7 +1411,7 @@ impl SIMDSchema<u8, u8, Neon> for L2 {
     type Left = diskann_wide::arch::aarch64::u8x16;
     type Right = diskann_wide::arch::aarch64::u8x16;
     type Return = f32;
-    type Main = Strategy4x1;
+    type Main = Strategy2x1;
 
     #[inline(always)]
     fn init(&self, arch: Neon) -> Self::Accumulator {
@@ -1987,7 +1987,7 @@ impl SIMDSchema<i8, i8, Neon> for IP {
     type Left = <Neon as Architecture>::i8x16;
     type Right = <Neon as Architecture>::i8x16;
     type Return = f32;
-    type Main = Strategy4x1;
+    type Main = Strategy2x1;
 
     #[inline(always)]
     fn init(&self, arch: Neon) -> Self::Accumulator {
@@ -2151,7 +2151,7 @@ impl SIMDSchema<u8, u8, Neon> for IP {
     type Left = <Neon as Architecture>::u8x16;
     type Right = <Neon as Architecture>::u8x16;
     type Return = f32;
-    type Main = Strategy4x2;
+    type Main = Strategy2x1;
 
     #[inline(always)]
     fn init(&self, arch: Neon) -> Self::Accumulator {
@@ -2835,7 +2835,7 @@ impl SIMDSchema<i8, i8, Neon> for CosineStateless {
     type Left = <Neon as Architecture>::i8x16;
     type Right = <Neon as Architecture>::i8x16;
     type Return = f32;
-    type Main = Strategy4x1;
+    type Main = Strategy2x1;
 
     #[inline(always)]
     fn init(&self, arch: Neon) -> Self::Accumulator {
@@ -3041,7 +3041,7 @@ impl SIMDSchema<u8, u8, Neon> for CosineStateless {
     type Left = <Neon as Architecture>::u8x16;
     type Right = <Neon as Architecture>::u8x16;
     type Return = f32;
-    type Main = Strategy4x1;
+    type Main = Strategy2x1;
 
     #[inline(always)]
     fn init(&self, arch: Neon) -> Self::Accumulator {
