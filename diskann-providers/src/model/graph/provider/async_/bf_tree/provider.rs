@@ -137,6 +137,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     vector_provider_config: Config::default(),
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
+///     graph_params: None,
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
@@ -186,6 +187,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     vector_provider_config: Config::default(),
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
+///     graph_params: None,
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
@@ -234,6 +236,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     vector_provider_config: Config::default(),
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
+///     graph_params: None,
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
@@ -271,6 +274,10 @@ where
     // The metric to use for distances
     //
     pub(super) metric: Metric,
+
+    // Graph configuration parameters for persistence
+    //
+    pub(crate) graph_params: Option<GraphParams>,
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +309,9 @@ pub struct BfTreeProviderParameters {
 
     // bf-tree config for neighbor list provider
     pub neighbor_list_provider_config: Config,
+
+    // Optional graph configuration parameters for persistence
+    pub graph_params: Option<GraphParams>,
 }
 
 pub type Index<T, D = NoDeletes> = Arc<DiskANNIndex<BfTreeProvider<T, NoStore, D>>>;
@@ -351,6 +361,7 @@ where
             deleted: delete_precursor.create(params.max_points + num_start_points),
             max_fp_vecs_per_fill: params.max_fp_vecs_per_fill.unwrap_or(usize::MAX),
             metric: params.metric,
+            graph_params: params.graph_params,
         })
     }
 
@@ -1814,6 +1825,17 @@ pub struct SavedParams {
     pub params_vector: BfTreeParams,
     pub params_neighbor: BfTreeParams,
     pub quant_params: Option<QuantParams>,
+    pub graph_params: Option<GraphParams>,
+}
+
+/// Graph configuration parameters persisted alongside the index.
+/// These are needed to reconstruct the `DiskANNIndex` config on load.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GraphParams {
+    pub l_build: usize,
+    pub alpha: f32,
+    pub backedge_ratio: f32,
+    pub vector_dtype: String,
 }
 
 /// Helper struct for generating consistent file paths for BfTreeProvider persistence.
@@ -1906,6 +1928,7 @@ where
                 leaf_page_size: self.neighbor_provider.config().get_leaf_page_size(),
             },
             quant_params: None, // No quantization parameters
+            graph_params: self.graph_params.clone(),
         };
 
         // Save only essential parameters as JSON
@@ -2014,6 +2037,7 @@ where
             deleted,
             max_fp_vecs_per_fill: 0,
             metric,
+            graph_params: saved_params.graph_params,
         })
     }
 }
@@ -2056,6 +2080,7 @@ where
                     leaf_page_size: self.quant_vectors.config().get_leaf_page_size(),
                 },
             }),
+            graph_params: self.graph_params.clone(),
         };
 
         // Save only essential parameters as JSON
@@ -2207,6 +2232,7 @@ where
             deleted,
             max_fp_vecs_per_fill: quant_params.max_fp_vecs_per_fill,
             metric,
+            graph_params: saved_params.graph_params,
         })
     }
 }
@@ -2243,6 +2269,7 @@ mod tests {
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
+                graph_params: None,
             },
             NoStore,
             TableBasedDeletes,
@@ -2351,6 +2378,7 @@ mod tests {
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
+                graph_params: None,
             },
             NoStore,
             TableBasedDeletes,
@@ -2460,6 +2488,7 @@ mod tests {
             vector_provider_config: vector_config.clone(),
             quant_vector_provider_config: Config::default(),
             neighbor_list_provider_config: neighbor_config.clone(),
+            graph_params: None,
         };
 
         // Create provider
@@ -2637,6 +2666,7 @@ mod tests {
             vector_provider_config: vector_config.clone(),
             quant_vector_provider_config: quant_config.clone(),
             neighbor_list_provider_config: neighbor_config.clone(),
+            graph_params: None,
         };
 
         // Create provider with quantization

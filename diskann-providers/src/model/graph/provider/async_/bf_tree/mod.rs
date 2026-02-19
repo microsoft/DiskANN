@@ -11,7 +11,7 @@ mod vector_provider;
 // Accessors
 pub use provider::{
     BfTreePaths, BfTreeProvider, BfTreeProviderParameters, CreateQuantProvider, FullAccessor,
-    Hidden, Index, QuantAccessor, QuantIndex, StartPoint,
+    GraphParams, Hidden, Index, QuantAccessor, QuantIndex, StartPoint,
 };
 
 pub use bf_tree::Config;
