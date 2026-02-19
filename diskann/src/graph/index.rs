@@ -2143,16 +2143,16 @@ where
     /// let result = index.search(params, &strategy, &context, &query, &mut ()).await?;
     /// // result.ids and result.distances contain the matches
     /// ```
-    pub fn search<'a, S, T, O: 'a, OB, P>(
-        &'a self,
+    pub fn search<S, T, O, OB, P>(
+        &self,
         search_params: P,
-        strategy: &'a S,
-        context: &'a DP::Context,
-        query: &'a T,
-        output: &'a mut OB,
-    ) -> impl SendFuture<ANNResult<P::Output>> + 'a
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: super::search::Search<DP, S, T, O, OB> + 'a,
+        P: super::search::Search<DP, S, T, O, OB>,
         T: ?Sized,
         OB: ?Sized,
     {
