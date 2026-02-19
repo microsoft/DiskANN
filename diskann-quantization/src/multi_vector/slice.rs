@@ -364,7 +364,7 @@ where
             std::ptr::copy_nonoverlapping(v.ptr.as_ptr(), buffer.as_mut_ptr(), total);
         }
 
-        // SAFETY: `buffer` has the correct length and alignment from above cheks.
+        // SAFETY: `buffer` has the correct length and alignment from above checks.
         unsafe { repr.poly_to_mat(buffer) }
     }
 }
