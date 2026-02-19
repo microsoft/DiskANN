@@ -441,6 +441,8 @@ where
     /// This invariant is checked in debug builds and will panic if not satisfied.
     pub unsafe fn from_canonical_mut_unchecked(data: &'a mut [u8], dim: usize) -> Self {
         debug_assert_eq!(data.len(), Self::canonical_bytes(dim));
+        debug_assert!((data.as_ptr() as usize).is_multiple_of(Self::canonical_align().raw()));
+
         let offset = canonical_metadata_bytes::<T, M>();
 
         // SAFETY: `offset < expected_len` and `data.len() == expected_len`, so `offset`

@@ -498,7 +498,7 @@ mod tests {
                 let row = mat.repr().get_row(ptr, i);
                 let meta_ptr = std::ptr::from_ref(row.meta()) as usize;
                 assert!(
-                    meta_ptr % align == 0,
+                    meta_ptr.is_multiple_of(align),
                     "row {i} meta not {align}-aligned (ptr=0x{meta_ptr:x}): {ctx}"
                 );
             }
