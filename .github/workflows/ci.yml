@@ -234,6 +234,7 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -267,6 +268,7 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -295,6 +297,43 @@ jobs:
               virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search
 
           cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
+
+  # Test that diskann-benchmark compiles and runs on macOS
+  # This specifically verifies the io_uring macOS compatibility fix
+  test-benchmark-macos:
+    needs: basics
+    name: test benchmark on macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build diskann-benchmark
+        run: |
+          set -euxo pipefail
+          cargo build --locked --package diskann-benchmark --release --config "$RUST_CONFIG"
+
+      - name: Test benchmark help command
+        run: |
+          set -euxo pipefail
+          cargo run --locked --package diskann-benchmark --release -- --help
+
+      - name: Test benchmark dry-run with example config
+        run: |
+          set -euxo pipefail
+          # Verify it can load the config file and validate it without running
+          cargo run --locked --package diskann-benchmark --release -- run \
+            --input-file ./diskann-benchmark/example/async.json \
+            --output-file /tmp/output.json \
+            --dry-run
 
   coverage:
     needs: basics

@@ -9,8 +9,8 @@ pub mod win;
 #[cfg(windows)]
 pub use win::*;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub mod linux;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub use linux::*;
