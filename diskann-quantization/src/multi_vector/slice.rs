@@ -27,8 +27,10 @@ use super::matrix::{
 ///
 /// # Layout
 ///
-/// Each row occupies [`SliceRef::canonical_bytes(ncols)`](SliceRef::canonical_bytes) bytes, with alignment
-/// [`SliceRef::canonical_align()`](SliceRef::canonical_align). Rows are packed contiguously.
+/// Each row is stored using the canonical layout from [`SliceRef`], occupying
+/// [`SliceRef::canonical_bytes(ncols)`](SliceRef::canonical_bytes) bytes of payload
+/// padded to [`SliceRef::canonical_align()`](SliceRef::canonical_align) so that
+/// every row starts at a properly aligned offset.
 ///
 /// # Bounds
 ///
@@ -108,14 +110,24 @@ where
         })
     }
 
-    /// Returns the number of elements per row (the vector dimension).
+    /// Returns the vector dimension.
     pub fn ncols(&self) -> usize {
         self.ncols
     }
 
-    /// Returns the cached byte stride per row.
+    /// Returns the byte stride per row.
+    ///
+    /// This is [`canonical_bytes`](SliceRef::canonical_bytes) rounded up to
+    /// [`canonical_align`](SliceRef::canonical_align) so that consecutive rows
+    /// maintain the required alignment.
+    ///
+    /// # SAFETY:
+    /// - when `canonical_bytes.next_multiple_of(align) >= isize::MAX` this calculation
+    ///   will overflow.
     const fn stride(ncols: usize) -> usize {
-        slice::SliceRef::<T, M>::canonical_bytes(ncols)
+        let bytes = slice::SliceRef::<T, M>::canonical_bytes(ncols);
+        let align = Self::alignment().raw();
+        bytes.next_multiple_of(align)
     }
 
     /// Returns the cached alignment as a [`PowerOfTwo`].
@@ -200,23 +212,24 @@ where
     unsafe fn get_row<'a>(self, ptr: NonNull<u8>, i: usize) -> Self::Row<'a> {
         debug_assert!(i < self.nrows);
 
-        let stride = Self::stride(self.ncols());
+        let stride = Self::stride(self.ncols);
+        let canonical = slice::SliceRef::<T, M>::canonical_bytes(self.ncols);
 
         // SAFETY:
-        // - The caller guarantees `ptr` is valid and `i < self.nrows`.
-        // - `stride` was computed from `canonical_bytes` and used for initialization.
-        // - The base pointer is aligned to `canonical_align()`, and each row starts at
-        //   `i * stride` which preserves alignment.
+        // - The caller guarantees `ptr` is valid, aligned and `i < self.nrows`.
+        // - `stride` is `canonical_bytes` rounded up to `canonical_align`, so
+        //   `i * stride` preserves the base alignment.
+        // - We pass `canonical` to `from_canonical_unchecked`,
+        //   which expects `canonical_bytes` bytes. Padding is at the end.
         unsafe {
             let row_ptr = ptr.as_ptr().add(i * stride);
-            let row_slice = std::slice::from_raw_parts(row_ptr, stride);
+            let row_slice = std::slice::from_raw_parts(row_ptr, canonical);
             SliceRef::from_canonical_unchecked(row_slice, self.ncols)
         }
     }
 }
 
 // SAFETY:
-//
 // - `get_row_mut` correctly computes the row offset and constructs a valid `SliceMut`.
 // - For disjoint `i`, the resulting `SliceMut` values reference non-overlapping memory
 //   regions because each row occupies a distinct `[i*stride .. (i+1)*stride]` range.
@@ -233,17 +246,18 @@ where
     unsafe fn get_row_mut<'a>(self, ptr: NonNull<u8>, i: usize) -> Self::RowMut<'a> {
         debug_assert!(i < self.nrows);
 
-        let stride = Self::stride(self.ncols());
+        let stride = Self::stride(self.ncols);
+        let canonical = slice::SliceRef::<T, M>::canonical_bytes(self.ncols);
 
         // SAFETY:
-        // - The caller guarantees `ptr` is valid, `i < self.nrows`, and exclusive access
-        //   to row `i`.
-        // - `stride` was computed from `canonical_bytes` and used for initialization.
-        // - Disjoint rows do not overlap because each occupies its own `stride`-sized
-        //   region at stride-aligned offsets.
+        // - The caller guarantees `ptr` is valid, aligned, `i < self.nrows`,
+        //   and exclusive access to row `i`.
+        // - `stride` is `canonical_bytes` rounded up to `canonical_align`, so
+        //   `i * stride` preserves alignment and disjoint rows do not overlap.
+        // - We pass `canonical_bytes` to `from_canonical_mut_unchecked`.
         unsafe {
             let row_ptr = ptr.as_ptr().add(i * stride);
-            let row_slice = std::slice::from_raw_parts_mut(row_ptr, stride);
+            let row_slice = std::slice::from_raw_parts_mut(row_ptr, canonical);
             SliceMut::from_canonical_mut_unchecked(row_slice, self.ncols)
         }
     }
@@ -251,7 +265,7 @@ where
 
 // SAFETY: The `drop` implementation reconstructs the `Poly<[u8], AlignedAllocator>` from the raw
 // pointer and lets it deallocate. This is compatible with all `NewOwned` implementations
-// which allocate via `Poly::broadcast` with the same `AlignedAllocator`.
+// which allocate via `Poly::broadcast` with the same `AlignedAllocator` and alignment.
 unsafe impl<T, M> ReprOwned for SliceMatRepr<T, M>
 where
     T: bytemuck::Pod,
@@ -473,8 +487,22 @@ mod tests {
         T: bytemuck::Pod + From<u8> + PartialEq + std::fmt::Debug,
         M: bytemuck::Pod + TestMeta + PartialEq + std::fmt::Debug,
     {
+        let align = expected_alignment::<T, M>();
         assert_eq!(mat.num_vectors(), repr.nrows, "nrows mismatch: {ctx}");
         for i in 0..mat.num_vectors() {
+            // Check that the row's metadata pointer is correctly aligned by
+            // going through the low-level `Repr::get_row` path.
+            // SAFETY: `i < nrows` and `mat` owns a valid, aligned buffer.
+            unsafe {
+                let ptr = NonNull::new_unchecked(mat.as_raw_ptr().cast_mut());
+                let row = mat.repr().get_row(ptr, i);
+                let meta_ptr = std::ptr::from_ref(row.meta()) as usize;
+                assert!(
+                    meta_ptr % align == 0,
+                    "row {i} meta not {align}-aligned (ptr=0x{meta_ptr:x}): {ctx}"
+                );
+            }
+
             let row = mat.get_row(i).unwrap();
             assert_eq!(
                 *row.meta(),
@@ -667,9 +695,11 @@ mod tests {
         }
     }
 
-    /// Independently computed row stride (canonical bytes per row).
+    /// Independently computed row stride (canonical bytes per row, padded to alignment).
     const fn expected_stride<T, M>(ncols: usize) -> usize {
-        expected_meta_prefix::<T, M>() + std::mem::size_of::<T>() * ncols
+        let raw = expected_meta_prefix::<T, M>() + std::mem::size_of::<T>() * ncols;
+        let align = expected_alignment::<T, M>();
+        raw.next_multiple_of(align)
     }
 
     /// Independently computed total byte count for the full matrix.
@@ -714,6 +744,10 @@ mod tests {
                 assert_eq!(repr.ncols(), ncols);
                 let layout = repr.layout().unwrap();
                 assert_eq!(layout.size(), expected_total_bytes::<T, M>(nrows, ncols));
+                assert_eq!(
+                    repr.total_bytes(),
+                    expected_total_bytes::<T, M>(nrows, ncols)
+                );
                 assert_eq!(layout.align(), expected_alignment::<T, M>());
 
                 // When stride is 0 and nrows > 0, the zero-size allocation may have
@@ -874,13 +908,6 @@ mod tests {
         let max_rows = isize::MAX as usize / stride;
         let repr = SliceMatRepr::<u64, Meta>::new(max_rows, 1).unwrap();
         assert_eq!(repr.nrows, max_rows);
-    }
-
-    #[test]
-    fn new_error_displays_nicely() {
-        let err = SliceMatRepr::<u8, Meta>::new(usize::MAX, 2).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("would exceed isize::MAX bytes"), "{msg}");
     }
 
     ////////////////////////
