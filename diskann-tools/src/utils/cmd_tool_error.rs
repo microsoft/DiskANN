@@ -140,12 +140,18 @@ mod tests {
 
     #[test]
     fn test_from_config_error() {
-        // We can't easily construct a ConfigError directly, so we test the conversion
-        // by testing that a string error message can be converted
-        let io_error = std::io::Error::other("config error");
-        let ann_error = diskann::ANNError::new(diskann::ANNErrorKind::IndexConfigError, io_error);
-        let cmd_error: CMDToolError = ann_error.into();
-        assert!(cmd_error.details.contains("config error"));
+        // Construct an invalid graph config to trigger a real ConfigError
+        let config_error = diskann::graph::config::Builder::new(
+            10,
+            diskann::graph::config::MaxDegree::new(0),
+            50,
+            diskann::graph::config::PruneKind::TriangleInequality,
+        )
+        .build()
+        .unwrap_err();
+        let cmd_error: CMDToolError = config_error.into();
+        // Just verify the error was converted and has some details
+        assert!(!cmd_error.details.is_empty());
     }
 
     #[test]
