@@ -1838,19 +1838,26 @@ pub enum VectorDtype {
     I8,
 }
 
-impl VectorDtype {
-    /// Derive the `VectorDtype` from a concrete [`VectorRepr`] type parameter.
-    #[allow(clippy::panic)]
-    pub fn from_type<T: VectorRepr>() -> Self {
-        let name = std::any::type_name::<T>();
-        match name {
-            "f32" => Self::F32,
-            "half::f16" | "f16" => Self::F16,
-            "i8" => Self::I8,
-            "u8" => Self::U8,
-            _ => panic!("unsupported VectorRepr type: {}", name),
-        }
-    }
+/// A trait for mapping concrete vector element types to their [`VectorDtype`]
+/// discriminant at compile time.
+pub trait AsVectorDtype {
+    const DATA_TYPE: VectorDtype;
+}
+
+impl AsVectorDtype for f32 {
+    const DATA_TYPE: VectorDtype = VectorDtype::F32;
+}
+
+impl AsVectorDtype for half::f16 {
+    const DATA_TYPE: VectorDtype = VectorDtype::F16;
+}
+
+impl AsVectorDtype for i8 {
+    const DATA_TYPE: VectorDtype = VectorDtype::I8;
+}
+
+impl AsVectorDtype for u8 {
+    const DATA_TYPE: VectorDtype = VectorDtype::U8;
 }
 
 /// Graph configuration parameters persisted alongside the index.
