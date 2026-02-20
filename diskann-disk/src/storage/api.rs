@@ -19,19 +19,7 @@ pub struct AsyncDiskLoadContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn test_async_disk_load_context_field_types() {
-        // Verify field types are correct via type checking
-        fn check_fields(ctx: &AsyncDiskLoadContext) {
-            let _: &AsyncQuantLoadContext = &ctx.quant_load_context;
-            let _: usize = ctx.num_nodes_to_cache;
-            let _: usize = ctx.search_io_limit;
-            let _: usize = ctx.num_points;
-        }
-
-        // Type checking function compiles, which verifies the struct definition
-        let _ = check_fields;
-    }
+    // Tests for AsyncDiskLoadContext can be added here when behavioral
+    // requirements are defined. The previous test only re-asserted type
+    // checks that the Rust compiler already enforces.
 }
