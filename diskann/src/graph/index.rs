@@ -2045,39 +2045,65 @@ where
                 }
             }
 
-            let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
-            while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
-                scratch.beam_nodes.clear();
+            scratch.neighbors.clear();
 
-                // In this loop we are going to find the beam_width number of nodes that are closest to the query.
-                // Each of these nodes will be a frontier node.
-                while scratch.beam_nodes.len() < beam_width
-                    && let Some(closest_node) = scratch.best.closest_notvisited()
-                {
-                    search_record.record(closest_node, scratch.hops, scratch.cmps);
-                    scratch.beam_nodes.push(closest_node.id);
-                }
+            let mut expanded_ids = Vec::new();
+            let mut rejected_ids = Vec::new();
 
-                neighbors.clear();
+            while (scratch.best.has_notvisited_node()
+                || scratch.best.peek_best_unsubmitted().is_some()
+                || accessor.has_pending())
+                && !accessor.terminate_early()
+            {
+                // Phase 1: Expand nodes whose data is available.
+                // Non-pipelined: synchronously expands beam_nodes from previous submit.
+                // Pipelined: polls IO completions and expands one loaded node.
+                // On the first iteration beam_nodes is empty — a no-op for both paths.
+                scratch.neighbors.clear();
                 accessor
-                    .expand_beam(
+                    .expand_available(
                         scratch.beam_nodes.iter().copied(),
                         computer,
                         glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
+                        |distance, id| scratch.neighbors.push(Neighbor::new(id, distance)),
+                        &mut expanded_ids,
                     )
                     .await?;
 
-                // The predicate ensures that the contents of `neighbors` are unique.
-                //
-                // We insert into the priority queue outside of the expansion for
-                // code-locality purposes.
-                neighbors
+                for &id in &expanded_ids {
+                    scratch.best.mark_visited_by_id(&id);
+                }
+
+                scratch
+                    .neighbors
                     .iter()
                     .for_each(|neighbor| scratch.best.insert(*neighbor));
+                scratch.cmps += scratch.neighbors.len() as u32;
+                scratch.hops += expanded_ids.len() as u32;
 
-                scratch.cmps += neighbors.len() as u32;
-                scratch.hops += scratch.beam_nodes.len() as u32;
+                // Phase 2: Select and submit candidates to fill the pipeline.
+                // Non-pipelined: inflight is always 0, so this submits beam_width nodes.
+                // Pipelined: submits enough to keep beam_width IOs in flight.
+                scratch.beam_nodes.clear();
+                let slots = beam_width.saturating_sub(accessor.inflight_count());
+                while scratch.beam_nodes.len() < slots {
+                    if let Some(closest_node) = scratch.best.pop_best_unsubmitted() {
+                        search_record.record(closest_node, scratch.hops, scratch.cmps);
+                        scratch.beam_nodes.push(closest_node.id);
+                    } else {
+                        break;
+                    }
+                }
+                rejected_ids.clear();
+                accessor.submit_expand(scratch.beam_nodes.iter().copied(), &mut rejected_ids);
+                for &id in &rejected_ids {
+                    scratch.best.revert_submitted(&id);
+                }
+
+                // Phase 3: Block only when no progress was made but IOs are pending.
+                if expanded_ids.is_empty() && accessor.has_pending() {
+                    accessor.wait_for_io()?;
+                }
             }
 
             Ok(InternalSearchStats {

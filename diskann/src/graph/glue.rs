@@ -255,6 +255,86 @@ pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized
 where
     T: ?Sized,
 {
+    /// Submit IDs for expansion.
+    ///
+    /// For non-pipelined providers (default), this is a no-op — IDs are passed
+    /// directly to [`expand_beam`] in [`expand_available`]. For pipelined providers,
+    /// this submits non-blocking IO requests. Any IDs that could not be submitted
+    /// (e.g., no free IO slots) are appended to `rejected` so the caller can revert
+    /// their state.
+    fn submit_expand(
+        &mut self,
+        _ids: impl Iterator<Item = Self::Id> + Send,
+        _rejected: &mut Vec<Self::Id>,
+    ) {
+        // Default: all accepted, nothing rejected
+    }
+
+    /// Expand nodes whose data is available, invoking `on_neighbors` for each discovered
+    /// neighbor.
+    ///
+    /// For non-pipelined providers (default), this expands all the `ids` passed in
+    /// synchronously via [`expand_beam`]. For pipelined providers, this polls for
+    /// completed IO operations and expands only the nodes whose data has arrived,
+    /// returning immediately without blocking.
+    ///
+    /// The IDs of nodes actually expanded are written into `expanded_ids`.
+    fn expand_available<P, F>(
+        &mut self,
+        ids: impl Iterator<Item = Self::Id> + Send,
+        computer: &Self::QueryComputer,
+        pred: P,
+        on_neighbors: F,
+        expanded_ids: &mut Vec<Self::Id>,
+    ) -> impl std::future::Future<Output = ANNResult<()>> + Send
+    where
+        P: HybridPredicate<Self::Id> + Send + Sync,
+        F: FnMut(f32, Self::Id) + Send,
+    {
+        async move {
+            expanded_ids.clear();
+            expanded_ids.extend(ids);
+            self.expand_beam(expanded_ids.iter().copied(), computer, pred, on_neighbors)
+                .await?;
+            Ok(())
+        }
+    }
+
+    /// Returns true if there are submitted but not-yet-expanded nodes pending.
+    ///
+    /// For non-pipelined providers (default), this always returns `false` since
+    /// [`expand_available`] processes everything synchronously. Pipelined providers
+    /// return `true` when IO operations are in-flight.
+    fn has_pending(&self) -> bool {
+        false
+    }
+
+    /// Returns the number of IOs currently in-flight (submitted but not completed).
+    ///
+    /// The search loop uses this to cap submissions at `beam_width`.
+    /// Default: 0 (non-pipelined providers have no in-flight IO).
+    fn inflight_count(&self) -> usize {
+        0
+    }
+
+    /// Block until at least one IO completes, then eagerly drain all available.
+    ///
+    /// Called by the search loop only when it cannot make progress: nothing was
+    /// submitted (no candidates or inflight cap reached) AND nothing was expanded
+    /// (no completions available). Blocking here yields the CPU thread instead of
+    /// spin-polling, while the eager drain ensures we process bursts efficiently.
+    ///
+    /// Default: no-op (non-pipelined providers never need to wait).
+    fn wait_for_io(&mut self) -> ANNResult<()> {
+        Ok(())
+    }
+
+    /// Expand all `ids` synchronously: load data, get neighbors, compute distances.
+    ///
+    /// This is the original single-shot expansion method. For non-pipelined providers,
+    /// the default [`expand_available`] delegates to this. Pipelined providers may
+    /// override [`submit_expand`] and [`expand_available`] instead and leave this as
+    /// the default.
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,

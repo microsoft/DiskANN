@@ -71,6 +71,39 @@ pub(crate) struct DiskIndexBuild {
     pub(crate) save_path: String,
 }
 
+/// Search algorithm to use for disk index search.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "mode")]
+#[derive(Default)]
+pub(crate) enum SearchMode {
+    /// Standard beam search (default, current behavior).
+    #[default]
+    BeamSearch,
+    /// Pipelined search through the generic search loop (queue-based ExpandBeam).
+    /// Overlaps IO and compute using io_uring on Linux.
+    #[serde(alias = "UnifiedPipeSearch")]
+    PipeSearch {
+        /// Enable kernel-side SQ polling (ms idle timeout). None = disabled.
+        #[serde(default)]
+        sqpoll_idle_ms: Option<u32>,
+    },
+}
+
+impl fmt::Display for SearchMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SearchMode::BeamSearch => write!(f, "BeamSearch"),
+            SearchMode::PipeSearch { sqpoll_idle_ms } => {
+                write!(f, "PipeSearch")?;
+                if let Some(sq) = sqpoll_idle_ms {
+                    write!(f, "(sqpoll={}ms)", sq)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Search phase configuration
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct DiskSearchPhase {
@@ -85,6 +118,9 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
     pub(crate) search_io_limit: Option<usize>,
+    /// Search algorithm to use (defaults to BeamSearch).
+    #[serde(default)]
+    pub(crate) search_mode: SearchMode,
 }
 
 /////////
@@ -234,6 +270,10 @@ impl CheckDeserialization for DiskSearchPhase {
                 anyhow::bail!("search_io_limit must be positive if specified");
             }
         }
+        match &self.search_mode {
+            SearchMode::BeamSearch => {}
+            SearchMode::PipeSearch { .. } => {}
+        }
         Ok(())
     }
 }
@@ -272,6 +312,7 @@ impl Example for DiskIndexOperation {
             vector_filters_file: None,
             num_nodes_to_cache: None,
             search_io_limit: None,
+            search_mode: SearchMode::default(),
         };
 
         Self {
@@ -397,6 +438,7 @@ impl DiskSearchPhase {
             Some(lim) => write_field!(f, "Search IO Limit", format!("{lim}"))?,
             None => write_field!(f, "Search IO Limit", "none (defaults to `usize::MAX`)")?,
         }
+        write_field!(f, "Search Mode", format!("{:?}", self.search_mode))?;
         Ok(())
     }
 }

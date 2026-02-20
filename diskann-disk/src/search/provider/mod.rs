@@ -13,3 +13,6 @@ pub mod disk_provider;
 pub mod disk_sector_graph;
 pub mod disk_vertex_provider;
 pub mod disk_vertex_provider_factory;
+
+#[cfg(target_os = "linux")]
+pub mod pipelined_accessor;

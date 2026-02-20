@@ -12,6 +12,7 @@ use thiserror::Error;
 use super::{GraphLayoutVersion, GraphMetadata};
 
 /// GraphHeader. The header is stored in the first sector of the disk index file, or the first segment of the JET stream.
+#[derive(Clone)]
 pub struct GraphHeader {
     // Graph metadata.
     metadata: GraphMetadata,
@@ -83,6 +84,28 @@ impl GraphHeader {
 
     pub fn layout_version(&self) -> &GraphLayoutVersion {
         &self.layout_version
+    }
+
+    /// Returns the effective block size, falling back to the default (4096) for
+    /// legacy (v0.0) layouts or when the stored value is zero.
+    pub fn effective_block_size(&self) -> usize {
+        let bs = self.block_size as usize;
+        if (self.layout_version.major_version() == 0 && self.layout_version.minor_version() == 0)
+            || bs == 0
+        {
+            4096
+        } else {
+            bs
+        }
+    }
+
+    /// Returns the number of disk sectors required to store a single graph node.
+    pub fn num_sectors_per_node(&self) -> usize {
+        if self.metadata.num_nodes_per_block > 0 {
+            1
+        } else {
+            (self.metadata.node_len as usize).div_ceil(self.effective_block_size())
+        }
     }
 
     /// Returns the maximum degree of the graph

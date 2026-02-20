@@ -8,17 +8,39 @@ use std::marker::PhantomData;
 
 use super::Neighbor;
 
+/// Tri-state for nodes in the priority queue.
+///
+/// - `Unvisited`: candidate not yet selected for expansion.
+/// - `Submitted`: selected and submitted for IO (pipelined) or expansion, but not yet expanded.
+/// - `Visited`: fully expanded — neighbors have been processed.
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum NodeState {
+    #[default]
+    Unvisited = 0,
+    Submitted = 1,
+    Visited = 2,
+}
+
 /// Shared trait for type the generic `I` parameter used by the
 /// `NeighborPeriorityQueue`.
 pub trait NeighborPriorityQueueIdType:
-    Default + Eq + Clone + Copy + std::fmt::Debug + std::fmt::Display + Send + Sync
+    Default + Eq + Clone + Copy + std::fmt::Debug + std::fmt::Display + std::hash::Hash + Send + Sync
 {
 }
 
 /// Any type that implements all the individual requirements for
 /// `NeighborPriorityQueueIdType` implements the full trait.
 impl<T> NeighborPriorityQueueIdType for T where
-    T: Default + Eq + Clone + Copy + std::fmt::Debug + std::fmt::Display + Send + Sync
+    T: Default
+        + Eq
+        + Clone
+        + Copy
+        + std::fmt::Debug
+        + std::fmt::Display
+        + std::hash::Hash
+        + Send
+        + Sync
 {
 }
 
@@ -59,6 +81,38 @@ pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: std::fmt::Debug + Send 
 
     /// Return an iterator over the best candidates.
     fn iter(&self) -> Self::Iter<'_>;
+
+    /// Return the first node that is `Unvisited` (not `Submitted` or `Visited`),
+    /// scanning from the cursor. Does not modify any state.
+    fn peek_best_unsubmitted(&self) -> Option<Neighbor<I>> {
+        None
+    }
+
+    /// Find the first `Unvisited` node, mark it `Submitted`, and return it — single pass.
+    ///
+    /// Default delegates to `closest_notvisited()` so that implementations which
+    /// only provide the base methods still make progress in `search_internal`.
+    fn pop_best_unsubmitted(&mut self) -> Option<Neighbor<I>> {
+        self.closest_notvisited()
+    }
+
+    /// Find the node with matching `id`, mark it visited, and advance the cursor if needed.
+    /// Returns true if found and marked, false otherwise.
+    fn mark_visited_by_id(&mut self, _id: &I) -> bool {
+        false
+    }
+
+    /// Transition a node from `Unvisited` to `Submitted`.
+    /// Returns true if found and transitioned, false otherwise.
+    fn mark_submitted(&mut self, _id: &I) -> bool {
+        false
+    }
+
+    /// Transition a node from `Submitted` back to `Unvisited` (for rejected submissions).
+    /// Returns true if found and reverted, false otherwise.
+    fn revert_submitted(&mut self, _id: &I) -> bool {
+        false
+    }
 }
 
 /// Neighbor priority Queue based on the distance to the query node
@@ -76,11 +130,11 @@ pub struct NeighborPriorityQueue<I: NeighborPriorityQueueIdType> {
     capacity: usize,
 
     /// The current notvisited neighbor whose distance is smallest among all notvisited neighbor
-    cursor: usize,
+    pub(crate) cursor: usize,
 
-    /// The neighbor (id, visited) collection.
+    /// The neighbor (id, state) collection.
     /// These are stored together to make inserts cheaper.
-    id_visiteds: Vec<(I, bool)>,
+    id_states: Vec<(I, NodeState)>,
 
     /// The neighbor distance collection
     distances: Vec<f32>,
@@ -101,7 +155,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             size: 0,
             capacity: search_param_l,
             cursor: 0,
-            id_visiteds: Vec::with_capacity(search_param_l),
+            id_states: Vec::with_capacity(search_param_l),
             distances: Vec::with_capacity(search_param_l),
             auto_resizable: false,
             search_param_l,
@@ -114,7 +168,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             size: 0,
             capacity: search_param_l,
             cursor: 0,
-            id_visiteds: Vec::with_capacity(search_param_l),
+            id_states: Vec::with_capacity(search_param_l),
             distances: Vec::with_capacity(search_param_l),
             auto_resizable: true,
             search_param_l,
@@ -148,17 +202,18 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         };
 
         if self.size == self.capacity {
-            self.id_visiteds.truncate(self.size - 1);
+            self.id_states.truncate(self.size - 1);
             self.distances.truncate(self.size - 1);
             self.size -= 1;
         }
 
-        self.id_visiteds.insert(insert_idx, (nbr.id, false));
+        self.id_states
+            .insert(insert_idx, (nbr.id, NodeState::Unvisited));
         self.distances.insert(insert_idx, nbr.distance);
 
         self.size += 1;
 
-        debug_assert!(self.size == self.id_visiteds.len());
+        debug_assert!(self.size == self.id_states.len());
         debug_assert!(self.size == self.distances.len());
 
         if insert_idx < self.cursor {
@@ -175,11 +230,11 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
 
         // Copy the first L best candidates to the result vector
         for (i, res) in result.iter_mut().enumerate().take(extract_size) {
-            *res = Neighbor::new(self.id_visiteds[i].0, self.distances[i]);
+            *res = Neighbor::new(self.id_states[i].0, self.distances[i]);
         }
 
         // Remove the first L best candidates from the priority queue
-        self.id_visiteds.drain(0..extract_size);
+        self.id_states.drain(0..extract_size);
         self.distances.drain(0..extract_size);
 
         // Update the size and cursor of the priority queue
@@ -192,7 +247,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Drain candidates from the front, signaling that they have been consumed.
     pub fn drain_best(&mut self, count: usize) {
         let count = count.min(self.size);
-        self.id_visiteds.drain(0..count);
+        self.id_states.drain(0..count);
         self.distances.drain(0..count);
         self.size -= count;
         self.cursor = 0;
@@ -224,7 +279,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         // Check if we found the exact neighbor (both id and distance must match)
         if index < self.size && self.get_unchecked(index).id == nbr.id {
             // Remove the neighbor from both collections
-            self.id_visiteds.remove(index);
+            self.id_states.remove(index);
             self.distances.remove(index);
             self.size -= 1;
 
@@ -233,7 +288,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
                 self.cursor -= 1;
             }
 
-            debug_assert!(self.size == self.id_visiteds.len());
+            debug_assert!(self.size == self.id_states.len());
             debug_assert!(self.size == self.distances.len());
 
             return true;
@@ -301,7 +356,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Get the neighbor at index - SAFETY: index must be less than size
     fn get_unchecked(&self, index: usize) -> Neighbor<I> {
         debug_assert!(index < self.size);
-        let id = unsafe { self.id_visiteds.get_unchecked(index).0 };
+        let id = unsafe { self.id_states.get_unchecked(index).0 };
         let distance = unsafe { *self.distances.get_unchecked(index) };
         Neighbor::new(id, distance)
     }
@@ -320,11 +375,11 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         }
 
         let current = self.cursor;
-        self.set_visited(current, true);
+        self.set_state(current, NodeState::Visited);
 
-        // Look for the next notvisited neighbor
+        // Advance cursor past Visited nodes (stop at Submitted or Unvisited)
         self.cursor += 1;
-        while self.cursor < self.size && self.get_visited(self.cursor) {
+        while self.cursor < self.size && self.get_state(self.cursor) == NodeState::Visited {
             self.cursor += 1;
         }
 
@@ -358,14 +413,14 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     pub fn reconfigure(&mut self, search_param_l: usize) {
         self.search_param_l = search_param_l;
         if search_param_l < self.size {
-            self.id_visiteds.truncate(search_param_l);
+            self.id_states.truncate(search_param_l);
             self.distances.truncate(search_param_l);
             self.size = search_param_l;
             self.cursor = self.cursor.min(search_param_l);
         } else if search_param_l > self.capacity {
             // Grow the backing store.
             let additional = search_param_l - self.size;
-            self.id_visiteds.reserve(additional);
+            self.id_states.reserve(additional);
             self.distances.reserve(additional);
         }
         self.capacity = search_param_l;
@@ -379,7 +434,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     ///
     /// Most of the time, you want `reconfigure`.
     fn reserve(&mut self, additional: usize) {
-        self.id_visiteds.reserve(additional);
+        self.id_states.reserve(additional);
         self.distances.reserve(additional);
         self.capacity += additional;
     }
@@ -387,23 +442,21 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Set size (and cursor) to 0. This must be called to reset the queue when reusing
     /// between searched.
     pub fn clear(&mut self) {
-        self.id_visiteds.clear();
+        self.id_states.clear();
         self.distances.clear();
         self.size = 0;
         self.cursor = 0;
     }
 
-    fn set_visited(&mut self, index: usize, flag: bool) {
-        // SAFETY: index must be less than size
+    pub(crate) fn set_state(&mut self, index: usize, state: NodeState) {
         assert!(index < self.size);
         assert!(self.size <= self.capacity);
-        unsafe { self.id_visiteds.get_unchecked_mut(index) }.1 = flag;
+        unsafe { self.id_states.get_unchecked_mut(index) }.1 = state;
     }
 
-    fn get_visited(&self, index: usize) -> bool {
-        // SAFETY: index must be less than size
+    pub(crate) fn get_state(&self, index: usize) -> NodeState {
         assert!(index < self.size);
-        unsafe { self.id_visiteds.get_unchecked(index).1 }
+        unsafe { self.id_states.get_unchecked(index).1 }
     }
 
     /// Return whether or not the queue is auto resizeable (for paged search).
@@ -420,7 +473,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     fn dbgassert_unique_insert(&self, id: I) {
         for i in 0..self.size {
             debug_assert!(
-                self.id_visiteds[i].0 != id,
+                self.id_states[i].0 != id,
                 "Neighbor with ID {} already exists in the priority queue",
                 id
             );
@@ -461,11 +514,11 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             // If this item should be kept, move it to write position
             if f(&neighbor) {
                 if write_idx != read_idx {
-                    self.id_visiteds[write_idx] = self.id_visiteds[read_idx];
+                    self.id_states[write_idx] = self.id_states[read_idx];
                     self.distances[write_idx] = self.distances[read_idx];
                 }
-                // Reset visited state since compaction invalidates previous state
-                self.id_visiteds[write_idx].1 = false;
+                // Reset state since compaction invalidates previous state
+                self.id_states[write_idx].1 = NodeState::Unvisited;
                 write_idx += 1;
             }
         }
@@ -485,11 +538,83 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     pub fn truncate(&mut self, len: usize) {
         let new_size = len;
         if new_size < self.size {
-            self.id_visiteds.truncate(new_size);
+            self.id_states.truncate(new_size);
             self.distances.truncate(new_size);
             self.size = new_size;
             self.cursor = 0;
         }
+    }
+
+    /// Return the first `Unvisited` node, scanning from cursor.
+    /// Does not modify any state.
+    pub fn peek_best_unsubmitted(&self) -> Option<Neighbor<I>> {
+        let limit = self.search_param_l.min(self.size);
+        for i in self.cursor..limit {
+            if self.id_states[i].1 == NodeState::Unvisited {
+                return Some(Neighbor::new(self.id_states[i].0, self.distances[i]));
+            }
+        }
+        None
+    }
+
+    /// Find the first `Unvisited` node, mark it `Submitted`, and return it — single pass.
+    pub fn pop_best_unsubmitted(&mut self) -> Option<Neighbor<I>> {
+        let limit = self.search_param_l.min(self.size);
+        for i in self.cursor..limit {
+            if self.id_states[i].1 == NodeState::Unvisited {
+                self.id_states[i].1 = NodeState::Submitted;
+                return Some(Neighbor::new(self.id_states[i].0, self.distances[i]));
+            }
+        }
+        None
+    }
+
+    /// Find the node with matching `id`, mark it `Visited`, and advance the cursor if needed.
+    /// Returns true if found and marked, false otherwise.
+    pub fn mark_visited_by_id(&mut self, id: &I) -> bool {
+        for i in self.cursor..self.size {
+            if self.id_states[i].0 == *id {
+                self.id_states[i].1 = NodeState::Visited;
+                // If the cursor was pointing at this node, advance past Visited nodes
+                if self.cursor == i {
+                    self.cursor += 1;
+                    while self.cursor < self.size
+                        && self.get_state(self.cursor) == NodeState::Visited
+                    {
+                        self.cursor += 1;
+                    }
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Transition a node from `Unvisited` to `Submitted`.
+    /// Returns true if found and transitioned, false otherwise.
+    pub fn mark_submitted(&mut self, id: &I) -> bool {
+        let limit = self.search_param_l.min(self.size);
+        for i in self.cursor..limit {
+            if self.id_states[i].0 == *id && self.id_states[i].1 == NodeState::Unvisited {
+                self.id_states[i].1 = NodeState::Submitted;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Transition a node from `Submitted` back to `Unvisited`.
+    /// Used when submit_expand rejects an ID (no free IO slots).
+    /// Returns true if found and reverted, false otherwise.
+    pub fn revert_submitted(&mut self, id: &I) -> bool {
+        for i in self.cursor..self.size {
+            if self.id_states[i].0 == *id && self.id_states[i].1 == NodeState::Submitted {
+                debug_assert!(i >= self.cursor);
+                self.id_states[i].1 = NodeState::Unvisited;
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -534,6 +659,26 @@ impl<I: NeighborPriorityQueueIdType> NeighborQueue<I> for NeighborPriorityQueue<
 
     fn iter(&self) -> Self::Iter<'_> {
         self.iter()
+    }
+
+    fn peek_best_unsubmitted(&self) -> Option<Neighbor<I>> {
+        self.peek_best_unsubmitted()
+    }
+
+    fn pop_best_unsubmitted(&mut self) -> Option<Neighbor<I>> {
+        self.pop_best_unsubmitted()
+    }
+
+    fn mark_visited_by_id(&mut self, id: &I) -> bool {
+        self.mark_visited_by_id(id)
+    }
+
+    fn mark_submitted(&mut self, id: &I) -> bool {
+        self.mark_submitted(id)
+    }
+
+    fn revert_submitted(&mut self, id: &I) -> bool {
+        self.revert_submitted(id)
     }
 }
 
@@ -698,23 +843,23 @@ mod neighbor_priority_queue_test {
         let mut queue = NeighborPriorityQueue::new(3);
         queue.insert(Neighbor::new(1, 1.0));
         queue.insert(Neighbor::new(2, 0.5));
-        assert!(!queue.get_visited(0));
+        assert!(queue.get_state(0) != NodeState::Visited);
         queue.insert(Neighbor::new(3, 1.5)); // node id in queue should be [2,1,3]
         assert!(queue.has_notvisited_node());
         let nbr = queue.closest_notvisited().unwrap();
         assert_eq!(nbr.id, 2);
         assert_eq!(nbr.distance, 0.5);
-        assert!(queue.get_visited(0)); // super unfortunate test. We know based on above id 2 should be 0th index
+        assert!(queue.get_state(0) == NodeState::Visited); // super unfortunate test. We know based on above id 2 should be 0th index
         assert!(queue.has_notvisited_node());
         let nbr = queue.closest_notvisited().unwrap();
         assert_eq!(nbr.id, 1);
         assert_eq!(nbr.distance, 1.0);
-        assert!(queue.get_visited(1));
+        assert!(queue.get_state(1) == NodeState::Visited);
         assert!(queue.has_notvisited_node());
         let nbr = queue.closest_notvisited().unwrap();
         assert_eq!(nbr.id, 3);
         assert_eq!(nbr.distance, 1.5);
-        assert!(queue.get_visited(2));
+        assert!(queue.get_state(2) == NodeState::Visited);
         assert!(!queue.has_notvisited_node());
         assert!(queue.closest_notvisited().is_none());
     }
@@ -743,7 +888,7 @@ mod neighbor_priority_queue_test {
     fn test_reserve() {
         let mut queue = NeighborPriorityQueue::<u32>::new(5);
         queue.reconfigure(10);
-        assert_eq!(queue.id_visiteds.len(), 0);
+        assert_eq!(queue.id_states.len(), 0);
         assert_eq!(queue.distances.len(), 0);
         assert_eq!(queue.capacity, 10);
     }
@@ -753,7 +898,7 @@ mod neighbor_priority_queue_test {
         let mut queue = NeighborPriorityQueue::<u32>::new(10);
         queue.reconfigure(5);
         assert_eq!(queue.capacity, 5);
-        assert_eq!(queue.id_visiteds.len(), 0);
+        assert_eq!(queue.id_states.len(), 0);
         assert_eq!(queue.distances.len(), 0);
 
         queue.reconfigure(11);
@@ -767,7 +912,7 @@ mod neighbor_priority_queue_test {
         assert_eq!(resizable_queue.capacity(), 10);
         assert_eq!(resizable_queue.size(), 0);
         assert!(resizable_queue.auto_resizable);
-        assert_eq!(resizable_queue.id_visiteds.len(), 0);
+        assert_eq!(resizable_queue.id_states.len(), 0);
         assert_eq!(resizable_queue.distances.len(), 0);
     }
 
@@ -1441,5 +1586,231 @@ mod neighbor_priority_queue_test {
 
         assert_eq!(queue.size(), 1);
         assert_eq!(queue.cursor, 0); // cursor is always reset to 0
+    }
+
+    #[test]
+    fn test_peek_best_unsubmitted_basic() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5)]
+
+        let result = queue.peek_best_unsubmitted();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().id, 2); // closest unvisited, unsubmitted
+    }
+
+    #[test]
+    fn test_peek_best_unsubmitted_skips_submitted() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5)]
+
+        queue.mark_submitted(&2);
+        let result = queue.peek_best_unsubmitted();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().id, 1); // 2 is submitted, so next is 1
+    }
+
+    #[test]
+    fn test_peek_best_unsubmitted_skips_visited() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5)]
+
+        queue.closest_notvisited(); // visits 2
+
+        let result = queue.peek_best_unsubmitted();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().id, 1); // 2 is visited, so next is 1
+    }
+
+    #[test]
+    fn test_peek_best_unsubmitted_none_when_all_excluded() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+
+        queue.mark_submitted(&1);
+        queue.mark_submitted(&2);
+        let result = queue.peek_best_unsubmitted();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_peek_best_unsubmitted_respects_search_l() {
+        let mut queue = NeighborPriorityQueue::auto_resizable_with_search_param_l(2);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        queue.insert(Neighbor::new(4, 2.0));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5), 4(2.0)], search_l=2
+
+        queue.mark_submitted(&2);
+        queue.mark_submitted(&1);
+        // Both nodes within search_l window are submitted
+        let result = queue.peek_best_unsubmitted();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_peek_best_unsubmitted_does_not_modify_state() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+
+        let _ = queue.peek_best_unsubmitted();
+        let _ = queue.peek_best_unsubmitted();
+
+        // Cursor should still be at 0 (no state modification)
+        assert_eq!(queue.cursor, 0);
+        assert!(queue.has_notvisited_node());
+    }
+
+    #[test]
+    fn test_peek_best_unsubmitted_empty_queue() {
+        let queue = NeighborPriorityQueue::<u32>::new(5);
+        assert!(queue.peek_best_unsubmitted().is_none());
+    }
+
+    #[test]
+    fn test_mark_visited_by_id_basic() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5)]
+
+        assert!(queue.mark_visited_by_id(&1));
+        assert_eq!(queue.get_state(1), NodeState::Visited); // id=1 is at index 1
+    }
+
+    #[test]
+    fn test_mark_visited_by_id_not_found() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+
+        assert!(!queue.mark_visited_by_id(&99));
+    }
+
+    #[test]
+    fn test_mark_visited_by_id_advances_cursor() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5)], cursor=0
+
+        // Mark the node at cursor (id=2 at index 0)
+        assert!(queue.mark_visited_by_id(&2));
+        // Cursor should advance past this visited node to index 1
+        assert_eq!(queue.cursor, 1);
+    }
+
+    #[test]
+    fn test_mark_visited_by_id_cursor_skips_consecutive_visited() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5)], cursor=0
+
+        // Visit id=1 (index 1) first - cursor stays at 0
+        assert!(queue.mark_visited_by_id(&1));
+        assert_eq!(queue.cursor, 0);
+
+        // Now visit id=2 (index 0, where cursor is) - cursor should skip past both visited nodes
+        assert!(queue.mark_visited_by_id(&2));
+        assert_eq!(queue.cursor, 2); // skips index 0 (visited) and index 1 (visited)
+    }
+
+    #[test]
+    fn test_mark_visited_by_id_does_not_move_cursor_for_non_cursor_node() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5)], cursor=0
+
+        // Mark id=3 (index 2) as visited - cursor should stay at 0
+        assert!(queue.mark_visited_by_id(&3));
+        assert_eq!(queue.cursor, 0);
+    }
+
+    #[test]
+    fn test_peek_and_mark_workflow() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5)]
+
+        // Peek - should return id=2
+        let node = queue.peek_best_unsubmitted().unwrap();
+        assert_eq!(node.id, 2);
+        queue.mark_submitted(&node.id);
+
+        // Peek again - should return id=1 (2 is submitted)
+        let node = queue.peek_best_unsubmitted().unwrap();
+        assert_eq!(node.id, 1);
+        queue.mark_submitted(&node.id);
+
+        // Mark id=2 as visited (IO completed)
+        assert!(queue.mark_visited_by_id(&2));
+
+        // Peek - should return id=3 (2 visited, 1 submitted)
+        let node = queue.peek_best_unsubmitted().unwrap();
+        assert_eq!(node.id, 3);
+    }
+
+    #[test]
+    fn test_mark_submitted_and_revert() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        // Queue sorted: [2(0.5), 1(1.0)]
+
+        // Mark id=2 as submitted
+        assert!(queue.mark_submitted(&2));
+        assert_eq!(queue.get_state(0), NodeState::Submitted);
+
+        // peek should skip submitted
+        let node = queue.peek_best_unsubmitted().unwrap();
+        assert_eq!(node.id, 1);
+
+        // Revert id=2 back to unvisited
+        assert!(queue.revert_submitted(&2));
+        assert_eq!(queue.get_state(0), NodeState::Unvisited);
+
+        // Now peek should return id=2 again
+        let node = queue.peek_best_unsubmitted().unwrap();
+        assert_eq!(node.id, 2);
+    }
+
+    #[test]
+    fn test_cursor_stops_at_submitted() {
+        let mut queue = NeighborPriorityQueue::new(5);
+        queue.insert(Neighbor::new(1, 1.0));
+        queue.insert(Neighbor::new(2, 0.5));
+        queue.insert(Neighbor::new(3, 1.5));
+        // Queue sorted: [2(0.5), 1(1.0), 3(1.5)], cursor=0
+
+        // Mark id=2 as submitted, then visited — cursor should advance past it
+        // but stop at id=1 (Unvisited)
+        queue.mark_submitted(&2);
+        queue.mark_visited_by_id(&2);
+        assert_eq!(queue.cursor, 1);
+
+        // Mark id=1 as submitted — cursor should NOT advance (Submitted ≠ Visited)
+        queue.mark_submitted(&1);
+        assert_eq!(queue.cursor, 1);
+
+        // has_notvisited_node still true (cursor < limit and id=1 is Submitted, not Visited)
+        assert!(queue.has_notvisited_node());
     }
 }
