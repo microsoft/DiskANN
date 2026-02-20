@@ -243,8 +243,8 @@ unsafe fn error_drop<T>(object: *mut MaybeUninit<u8>) {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     };
 
     use thiserror::Error;

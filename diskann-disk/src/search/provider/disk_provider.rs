@@ -19,7 +19,8 @@ use diskann::{
     graph::{
         self,
         glue::{self, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
-        search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer, SearchParams,
+        search::Knn,
+        search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider::{
@@ -965,84 +966,6 @@ where
         Ok(search_result)
     }
 
-    /// Perform a search with explicit [`SearchParams`] for full control over
-    /// adaptive beam width, relaxed monotonicity, etc.
-    pub fn search_with_params(
-        &self,
-        query: &[Data::VectorDataType],
-        search_params: &SearchParams,
-        vector_filter: Option<VectorFilter<Data>>,
-        is_flat_search: bool,
-    ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
-        let k_value = search_params.k_value;
-        let mut query_stats = QueryStatistics::default();
-        let mut indices = vec![0u32; k_value];
-        let mut distances = vec![0f32; k_value];
-        let mut associated_data = vec![Data::AssociatedDataType::default(); k_value];
-
-        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
-            &mut indices[..k_value],
-            &mut distances[..k_value],
-            &mut associated_data[..k_value],
-        );
-
-        let filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
-        let strategy = self.search_strategy(query, &filter);
-        let timer = Instant::now();
-        let stats = if is_flat_search {
-            self.runtime.block_on(self.index.flat_search(
-                &strategy,
-                &DefaultContext,
-                strategy.query,
-                &filter,
-                search_params,
-                &mut result_output_buffer,
-            ))?
-        } else {
-            self.runtime.block_on(self.index.search(
-                &strategy,
-                &DefaultContext,
-                strategy.query,
-                search_params,
-                &mut result_output_buffer,
-            ))?
-        };
-        query_stats.total_comparisons = stats.cmps;
-        query_stats.search_hops = stats.hops;
-        query_stats.total_execution_time_us = timer.elapsed().as_micros();
-        query_stats.io_time_us = IOTracker::time(&strategy.io_tracker.io_time_us) as u128;
-        query_stats.total_io_operations = strategy.io_tracker.io_count() as u32;
-        query_stats.total_vertices_loaded = strategy.io_tracker.io_count() as u32;
-        query_stats.query_pq_preprocess_time_us =
-            IOTracker::time(&strategy.io_tracker.preprocess_time_us) as u128;
-        query_stats.cpu_time_us = query_stats.total_execution_time_us
-            - query_stats.io_time_us
-            - query_stats.query_pq_preprocess_time_us;
-
-        let mut search_result = SearchResult {
-            results: Vec::with_capacity(k_value),
-            stats: SearchResultStats {
-                cmps: query_stats.total_comparisons,
-                result_count: stats.result_count,
-                query_statistics: query_stats,
-            },
-        };
-
-        for ((vertex_id, distance), associated_data) in indices
-            .into_iter()
-            .zip(distances.into_iter())
-            .zip(associated_data.into_iter())
-        {
-            search_result.results.push(SearchResultItem {
-                vertex_id,
-                distance,
-                data: associated_data,
-            });
-        }
-
-        Ok(search_result)
-    }
-
     /// Perform a raw search on the disk index.
     /// This is a lower-level API that allows more control over the search parameters and output buffers.
     #[allow(clippy::too_many_arguments)]
@@ -1067,21 +990,24 @@ where
 
         let strategy = self.search_strategy(query, vector_filter);
         let timer = Instant::now();
+        let k = k_value;
+        let l = search_list_size as usize;
         let stats = if is_flat_search {
             self.runtime.block_on(self.index.flat_search(
                 &strategy,
                 &DefaultContext,
                 strategy.query,
                 vector_filter,
-                &SearchParams::new(k_value, search_list_size as usize, beam_width)?,
+                &Knn::new(k, l, beam_width)?,
                 &mut result_output_buffer,
             ))?
         } else {
+            let knn_search = Knn::new(k, l, beam_width)?;
             self.runtime.block_on(self.index.search(
+                knn_search,
                 &strategy,
                 &DefaultContext,
                 strategy.query,
-                &SearchParams::new(k_value, search_list_size as usize, beam_width)?,
                 &mut result_output_buffer,
             ))?
         };
@@ -1124,7 +1050,10 @@ fn ensure_vertex_loaded<Data: GraphDataType, V: VertexProvider<Data>>(
 #[cfg(test)]
 mod disk_provider_tests {
     use diskann::{
-        graph::{search::record::VisitedSearchRecord, SearchParamsError},
+        graph::{
+            search::{record::VisitedSearchRecord, Knn},
+            KnnSearchError,
+        },
         utils::IntoUsize,
         ANNErrorKind,
     };
@@ -1613,17 +1542,15 @@ mod disk_provider_tests {
             "index_path is not correct"
         );
 
-        let res = SearchParams::new_default(0, 10);
+        // Test error case: l < k
+        let res = Knn::new_default(20, 10);
         assert!(res.is_err());
         assert_eq!(
-            <SearchParamsError as std::convert::Into<ANNError>>::into(res.unwrap_err()).kind(),
+            <KnnSearchError as std::convert::Into<ANNError>>::into(res.unwrap_err()).kind(),
             ANNErrorKind::IndexError
         );
-        let res = SearchParams::new_default(20, 10);
-        assert!(res.is_err());
-        let res = SearchParams::new_default(10, 0);
-        assert!(res.is_err());
-        let res = SearchParams::new(10, 10, Some(0));
+        // Test error case: beam_width = 0
+        let res = Knn::new(10, 10, Some(0));
         assert!(res.is_err());
 
         let search_engine =
@@ -1708,15 +1635,17 @@ mod disk_provider_tests {
         );
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
         let mut search_record = VisitedSearchRecord::new(0);
+        let search_params = Knn::new(10, 10, Some(4)).unwrap();
+        let recorded_search =
+            diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine
             .runtime
-            .block_on(search_engine.index.search_recorded(
+            .block_on(search_engine.index.search(
+                recorded_search,
                 &strategy,
                 &DefaultContext,
-                &query_vector,
-                &SearchParams::new(10, 10, Some(4)).unwrap(),
+                query_vector.as_slice(),
                 &mut result_output_buffer,
-                &mut search_record,
             ))
             .unwrap();
 
@@ -1827,7 +1756,6 @@ mod disk_provider_tests {
             &mut associated_data,
         );
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
-        let mut search_record = VisitedSearchRecord::new(0);
 
         // Create diverse search parameters with attribute provider
         let diverse_params = DiverseSearchParams::new(
@@ -1836,31 +1764,24 @@ mod disk_provider_tests {
             attribute_provider.clone(),
         );
 
-        let search_params = SearchParams::new(10, 20, None).unwrap();
+        let search_params = Knn::new(10, 20, None).unwrap();
 
-        search_engine
+        let diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
+        let stats = search_engine
             .runtime
-            .block_on(search_engine.index.diverse_search_experimental(
+            .block_on(search_engine.index.search(
+                diverse_search,
                 &strategy,
                 &DefaultContext,
-                &query_vector,
-                &search_params,
-                &diverse_params,
+                query_vector.as_slice(),
                 &mut result_output_buffer,
-                &mut search_record,
             ))
             .unwrap();
 
-        let ids = search_record
-            .visited
-            .iter()
-            .map(|n| n.id)
-            .collect::<Vec<_>>();
-
-        // Verify that search was performed and visited some nodes
+        // Verify that search was performed and returned some results
         assert!(
-            !ids.is_empty(),
-            "Expected to visit some nodes during diversity search"
+            stats.result_count > 0,
+            "Expected to get some results during diversity search"
         );
 
         let return_list_size = 10;
@@ -1872,7 +1793,7 @@ mod disk_provider_tests {
             attribute_provider.clone(),
         );
 
-        // Test diverse search using the experimental API
+        // Test diverse search using the search API
         let mut indices2 = vec![0u32; return_list_size as usize];
         let mut distances2 = vec![0f32; return_list_size as usize];
         let mut associated_data2 = vec![(); return_list_size as usize];
@@ -1882,20 +1803,18 @@ mod disk_provider_tests {
             &mut associated_data2,
         );
         let strategy2 = search_engine.search_strategy(&query_vector, &|_| true);
-        let mut search_record2 = VisitedSearchRecord::new(0);
         let search_params2 =
-            SearchParams::new(return_list_size as usize, search_list_size as usize, None).unwrap();
+            Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
+        let diverse_search2 = diskann::graph::search::Diverse::new(search_params2, diverse_params);
         let stats = search_engine
             .runtime
-            .block_on(search_engine.index.diverse_search_experimental(
+            .block_on(search_engine.index.search(
+                diverse_search2,
                 &strategy2,
                 &DefaultContext,
-                &query_vector,
-                &search_params2,
-                &diverse_params,
+                query_vector.as_slice(),
                 &mut result_output_buffer2,
-                &mut search_record2,
             ))
             .unwrap();
 
@@ -2170,15 +2089,17 @@ mod disk_provider_tests {
         let strategy = search_engine.search_strategy(&query_vector, &|_| true);
 
         let mut search_record = VisitedSearchRecord::new(0);
+        let search_params = Knn::new(10, 10, Some(4)).unwrap();
+        let recorded_search =
+            diskann::graph::search::RecordedKnn::new(search_params, &mut search_record);
         search_engine
             .runtime
-            .block_on(search_engine.index.search_recorded(
+            .block_on(search_engine.index.search(
+                recorded_search,
                 &strategy,
                 &DefaultContext,
-                &query_vector,
-                &SearchParams::new(10, 10, Some(4)).unwrap(),
+                query_vector.as_slice(),
                 &mut result_output_buffer,
-                &mut search_record,
             ))
             .unwrap();
         let visited_ids = search_record

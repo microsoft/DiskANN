@@ -474,9 +474,7 @@ fn write_ground_truth<Data: GraphDataType>(
 
     // In the file, we write the neighbor IDs array first, then write the distances array.
     for mut query_neighbors in ground_truth {
-        while query_neighbors.has_notvisited_node() {
-            let closest_node = query_neighbors.closest_notvisited();
-
+        while let Some(closest_node) = query_neighbors.closest_notvisited() {
             gt_ids.push(closest_node.id);
             gt_distances.push(closest_node.distance);
         }

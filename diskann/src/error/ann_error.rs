@@ -718,17 +718,6 @@ where
     }
 }
 
-pub(crate) fn ensure_positive<T, E>(value: T, error: E) -> Result<T, E>
-where
-    T: PartialOrd + Default + Debug,
-{
-    if value > T::default() {
-        Ok(value)
-    } else {
-        Err(error)
-    }
-}
-
 // /// An internal macro for creating opaque, adhoc errors to help when debugging.
 // macro_rules! ann_error {
 //     ($($arg:tt)+) => {{

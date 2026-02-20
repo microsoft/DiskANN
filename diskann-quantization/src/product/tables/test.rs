@@ -6,9 +6,9 @@
 // A collection of test helpers to ensure uniformity across tables.
 use diskann_utils::views::{Matrix, MatrixView, MutMatrixView};
 use rand::{
+    Rng, SeedableRng,
     distr::{Distribution, Uniform},
     seq::IndexedRandom,
-    Rng, SeedableRng,
 };
 
 use crate::traits::CompressInto;

@@ -300,7 +300,7 @@ impl SIMDMask for mask32x4 {
 
     #[inline(always)]
     fn arch(self) -> V3 {
-        // SAFETY: The existence `Self` proves its architecture is safe.
+        // SAFETY: The existence of `Self` proves its architecture is safe.
         unsafe { V3::new() }
     }
 
@@ -392,7 +392,7 @@ impl SIMDMask for mask32x8 {
 
     #[inline(always)]
     fn arch(self) -> V3 {
-        // SAFETY: The existence `Self` proves its architecture is safe.
+        // SAFETY: The existence of `Self` proves its architecture is safe.
         unsafe { V3::new() }
     }
 
@@ -495,7 +495,7 @@ impl SIMDMask for mask64x2 {
 
     #[inline(always)]
     fn arch(self) -> V3 {
-        // SAFETY: The existence `Self` proves its architecture is safe.
+        // SAFETY: The existence of `Self` proves its architecture is safe.
         unsafe { V3::new() }
     }
 
@@ -586,7 +586,7 @@ impl SIMDMask for mask64x4 {
 
     #[inline(always)]
     fn arch(self) -> V3 {
-        // SAFETY: The existence `Self` proves its architecture is safe.
+        // SAFETY: The existence of `Self` proves its architecture is safe.
         unsafe { V3::new() }
     }
 

@@ -96,11 +96,16 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
             .collect()
     }
 
+    /// Access the BfTree config
+    pub(crate) fn config(&self) -> &Config {
+        self.vector_index.config()
+    }
+
     /// Create a snapshot of the vector index
     ///
     #[inline(always)]
-    pub fn snapshot(&self) {
-        self.vector_index.snapshot();
+    pub fn snapshot(&self) -> std::path::PathBuf {
+        self.vector_index.snapshot()
     }
 
     /// Set vector with Id, `i``, to `v`

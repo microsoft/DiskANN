@@ -26,7 +26,7 @@ where
     V: SIMDVector<Scalar = T, ConstLanes = Const<N>>,
 {
     // Test stores for all alignments.
-    // Our strategy to to create an array of twice the underlying vector width and perform a
+    // Our strategy is to create an array of twice the underlying vector width and perform a
     // full-width stores on each offset.
     let mut output = vec![T::default(); 2 * N];
 

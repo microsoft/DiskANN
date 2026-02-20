@@ -5,8 +5,9 @@
 
 use std::ptr::NonNull;
 
-use super::super::vectors::DataMutRef;
 use super::super::MinMaxQuantizer;
+use super::super::vectors::DataMutRef;
+use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
 use crate::minmax::{self, Data};
 use crate::multi_vector::matrix::{
@@ -15,7 +16,6 @@ use crate::multi_vector::matrix::{
 use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Standard};
 use crate::scalar::InputContainsNaN;
 use crate::utils;
-use crate::CompressInto;
 
 ////////////////
 // MinMaxMeta //
@@ -155,7 +155,10 @@ where
     /// - The caller guarantees that `ptr` was allocated with the correct layout.
     unsafe fn drop(self, ptr: NonNull<u8>) {
         let slice_ptr = std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), self.bytes());
-        let _ = Box::from_raw(slice_ptr);
+
+        // SAFETY: inherited from caller. All implementations that create a new owned
+        // `Mat<Self>` are compatible with `Box` deallocation.
+        let _ = unsafe { Box::from_raw(slice_ptr) };
     }
 }
 
@@ -294,8 +297,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithms::transforms::NullTransform;
     use crate::algorithms::Transform;
+    use crate::algorithms::transforms::NullTransform;
     use crate::minmax::vectors::DataRef;
     use crate::num::Positive;
     use diskann_utils::{Reborrow, ReborrowMut};
@@ -529,8 +532,9 @@ mod tests {
                     let input_data = generate_test_data(num_vectors, dim);
 
                     // Multi-vector compression
-                    let input_view = MatRef::new(Standard::new(num_vectors, dim), &input_data)
-                        .expect("input view creation");
+                    let input_view =
+                        MatRef::new(Standard::new(num_vectors, dim).unwrap(), &input_data)
+                            .expect("input view creation");
 
                     let mut multi_mat: Mat<MinMaxMeta<NBITS>> =
                         Mat::new(MinMaxMeta::new(num_vectors, dim), Defaulted)
@@ -584,8 +588,8 @@ mod tests {
             let quantizer = make_quantizer(dim);
             let input_data = generate_test_data(num_vectors, dim);
 
-            let input_view =
-                MatRef::new(Standard::new(num_vectors, dim), &input_data).expect("input view");
+            let input_view = MatRef::new(Standard::new(num_vectors, dim).unwrap(), &input_data)
+                .expect("input view");
 
             let mut mat: Mat<MinMaxMeta<NBITS>> =
                 Mat::new(MinMaxMeta::new(num_vectors, dim), Defaulted).expect("mat creation");
@@ -623,7 +627,8 @@ mod tests {
 
             // Input has 3 vectors
             let input_data = generate_test_data(3, dim);
-            let input_view = MatRef::new(Standard::new(3, dim), &input_data).expect("input view");
+            let input_view =
+                MatRef::new(Standard::new(3, dim).unwrap(), &input_data).expect("input view");
 
             // Output has 2 vectors (mismatch)
             let mut mat: Mat<MinMaxMeta<NBITS>> =
@@ -640,7 +645,8 @@ mod tests {
 
             // Input has dim=8 (mismatch)
             let input_data = generate_test_data(2, 8);
-            let input_view = MatRef::new(Standard::new(2, 8), &input_data).expect("input view");
+            let input_view =
+                MatRef::new(Standard::new(2, 8).unwrap(), &input_data).expect("input view");
 
             // Output correctly has dim=4
             let mut mat: Mat<MinMaxMeta<NBITS>> =
@@ -659,7 +665,8 @@ mod tests {
 
             // Input correctly has dim=4
             let input_data = generate_test_data(2, 4);
-            let input_view = MatRef::new(Standard::new(2, 4), &input_data).expect("input view");
+            let input_view =
+                MatRef::new(Standard::new(2, 4).unwrap(), &input_data).expect("input view");
 
             // Output has intrinsic_dim=8 (mismatch)
             let row_bytes = Data::<NBITS>::canonical_bytes(8);

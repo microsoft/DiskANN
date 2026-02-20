@@ -234,13 +234,21 @@ pub unsafe trait NewOwned<T>: ReprOwned {
 ///
 /// ```rust
 /// use diskann_quantization::multi_vector::{Mat, Standard, Defaulted};
-/// let mat = Mat::new(Standard::<f32>::new(4, 3), Defaulted).unwrap();
+/// let mat = Mat::new(Standard::<f32>::new(4, 3).unwrap(), Defaulted).unwrap();
 /// for i in 0..4 {
 ///     assert!(mat.get_row(i).unwrap().iter().all(|&x| x == 0.0f32));
 /// }
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Defaulted;
+
+/// Create a new [`Mat`] cloned from a view.
+pub trait NewCloned: ReprOwned {
+    /// Clone the contents behind `v`, returning a new owning [`Mat`].
+    ///
+    /// Implementations should ensure the returned [`Mat`] is "semantically the same" as `v`.
+    fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self>;
+}
 
 //////////////
 // Standard //
@@ -264,18 +272,31 @@ pub struct Standard<T> {
 
 impl<T: Copy> Standard<T> {
     /// Create a new `Standard` for data of type `T`.
-    pub fn new(nrows: usize, ncols: usize) -> Self {
-        Self {
+    ///
+    /// Successful construction requires:
+    ///
+    /// * The total number of elements determined by `nrows * ncols` does not exceed
+    ///   `usize::MAX`.
+    /// * The total memory footprint defined by `ncols * nrows * size_of::<T>()` does not
+    ///   exceed `isize::MAX`.
+    pub fn new(nrows: usize, ncols: usize) -> Result<Self, Overflow> {
+        Overflow::check::<T>(nrows, ncols)?;
+        Ok(Self {
             nrows,
             ncols,
             _elem: PhantomData,
-        }
+        })
     }
 
-    /// Returns the number of total elements (`rows x cols`) in this matrix, returning `None`
-    /// if this computation overflows.
-    pub fn num_elements(&self) -> Option<usize> {
-        self.nrows.checked_mul(self.ncols())
+    /// Returns the number of total elements (`rows x cols`) in this matrix.
+    pub fn num_elements(&self) -> usize {
+        // Since we've constructed `self` - we know we cannot overflow.
+        self.nrows() * self.ncols()
+    }
+
+    /// Returns `rows`, the number of rows in this matrix.
+    fn nrows(&self) -> usize {
+        self.nrows
     }
 
     /// Returns `ncols`, the number of elements in a row of this matrix.
@@ -288,7 +309,7 @@ impl<T: Copy> Standard<T> {
     /// 1. Computation of the number of elements in `self` does not overflow.
     /// 2. Argument `slice` has the expected number of elements.
     fn check_slice(&self, slice: &[T]) -> Result<(), SliceError> {
-        let len = self.num_elements().ok_or(SliceError::Overflow)?;
+        let len = self.num_elements();
 
         if slice.len() != len {
             Err(SliceError::LengthMismatch {
@@ -299,7 +320,76 @@ impl<T: Copy> Standard<T> {
             Ok(())
         }
     }
+
+    /// Create a new [`Mat`] around the contents of `b` **without** any checks.
+    ///
+    /// # Safety
+    ///
+    /// The length of `b` must be exactly [`Standard::num_elements`].
+    unsafe fn box_to_mat(self, b: Box<[T]>) -> Mat<Self> {
+        debug_assert_eq!(b.len(), self.num_elements(), "safety contract violated");
+
+        // SAFETY: Box [guarantees](https://doc.rust-lang.org/std/boxed/struct.Box.html#method.into_raw)
+        // the returned pointer is non-null.
+        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(b)) }.cast::<u8>();
+
+        // SAFETY: `ptr` is properly aligned and points to a slice of the required length.
+        // Additionally, it is dropped via `Box::from_raw`, which is compatible with obtaining
+        // it from `Box::into_raw`.
+        unsafe { Mat::from_raw_parts(self, ptr) }
+    }
 }
+
+/// Error for [`Standard::new`].
+#[derive(Debug, Clone, Copy)]
+pub struct Overflow {
+    nrows: usize,
+    ncols: usize,
+    elsize: usize,
+}
+
+impl Overflow {
+    fn check<T>(nrows: usize, ncols: usize) -> Result<(), Self> {
+        let elsize = std::mem::size_of::<T>();
+        // Guard the element count itself so that `num_elements()` can never overflow.
+        let elements = nrows.checked_mul(ncols).ok_or(Self {
+            nrows,
+            ncols,
+            elsize,
+        })?;
+
+        let bytes = elsize.saturating_mul(elements);
+        if bytes <= isize::MAX as usize {
+            Ok(())
+        } else {
+            Err(Self {
+                nrows,
+                ncols,
+                elsize,
+            })
+        }
+    }
+}
+
+impl std::fmt::Display for Overflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.elsize == 0 {
+            write!(
+                f,
+                "ZST matrix with dimensions {} x {} has more than `usize::MAX` elements",
+                self.nrows, self.ncols,
+            )
+        } else {
+            write!(
+                f,
+                "a matrix of size {} x {} with element size {} would exceed isize::MAX bytes",
+                self.nrows, self.ncols, self.elsize,
+            )
+        }
+    }
+}
+
+impl std::error::Error for Overflow {}
 
 /// Error types for [`Standard`].
 #[derive(Debug, Clone, Copy, Error)]
@@ -307,8 +397,6 @@ impl<T: Copy> Standard<T> {
 pub enum SliceError {
     #[error("Length mismatch: expected {expected}, found {found}")]
     LengthMismatch { expected: usize, found: usize },
-    #[error("Computing slice length overflowed.")]
-    Overflow,
 }
 
 // SAFETY: The implementation correctly computes row offsets as `i * ncols` and
@@ -325,16 +413,20 @@ unsafe impl<T: Copy> Repr for Standard<T> {
     }
 
     fn layout(&self) -> Result<Layout, LayoutError> {
-        let elements = self.num_elements().ok_or(LayoutError::new())?;
-        Ok(Layout::array::<T>(elements)?)
+        Ok(Layout::array::<T>(self.num_elements())?)
     }
 
     unsafe fn get_row<'a>(self, ptr: NonNull<u8>, i: usize) -> Self::Row<'a> {
         debug_assert!(ptr.cast::<T>().is_aligned());
         debug_assert!(i < self.nrows);
 
-        let row_ptr = ptr.as_ptr().cast::<T>().add(i * self.ncols);
-        std::slice::from_raw_parts(row_ptr, self.ncols)
+        // SAFETY: The caller asserts that `i` is less than `self.nrows()`. Since this type
+        // audits the constructors for `Mat` and friends, we know that there is room for at
+        // least `self.num_elements()` elements from the base pointer, so this access is safe.
+        let row_ptr = unsafe { ptr.as_ptr().cast::<T>().add(i * self.ncols) };
+
+        // SAFETY: The logic is the same as the previous `unsafe` block.
+        unsafe { std::slice::from_raw_parts(row_ptr, self.ncols) }
     }
 }
 
@@ -350,8 +442,14 @@ unsafe impl<T: Copy> ReprMut for Standard<T> {
         debug_assert!(ptr.cast::<T>().is_aligned());
         debug_assert!(i < self.nrows);
 
-        let row_ptr = ptr.as_ptr().cast::<T>().add(i * self.ncols);
-        std::slice::from_raw_parts_mut(row_ptr, self.ncols)
+        // SAFETY: The caller asserts that `i` is less than `self.nrows()`. Since this type
+        // audits the constructors for `Mat` and friends, we know that there is room for at
+        // least `self.num_elements()` elements from the base pointer, so this access is safe.
+        let row_ptr = unsafe { ptr.as_ptr().cast::<T>().add(i * self.ncols) };
+
+        // SAFETY: The logic is the same as the previous `unsafe` block. Further, the caller
+        // attests that creating a mutable reference is safe.
+        unsafe { std::slice::from_raw_parts_mut(row_ptr, self.ncols) }
     }
 }
 
@@ -383,15 +481,10 @@ where
 {
     type Error = crate::error::Infallible;
     fn new_owned(self, value: T) -> Result<Mat<Self>, Self::Error> {
-        let b: Box<[T]> = (0..self.nrows() * self.ncols()).map(|_| value).collect();
-        // SAFETY: Box [guarantees](https://doc.rust-lang.org/std/boxed/struct.Box.html#method.into_raw)
-        // the returned pointer is non-null.
-        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(b)) }.cast::<u8>();
+        let b: Box<[T]> = (0..self.num_elements()).map(|_| value).collect();
 
-        // SAFETY: `ptr` is properly aligned and points to a slice of the required length.
-        // Additionally, it is dropped via `Box::from_raw`, which is compatible with obtaining
-        // it from `Box::into_raw`.
-        Ok(unsafe { Mat::from_raw_parts(self, ptr) })
+        // SAFETY: By construction, `b` has length `self.num_elements()`.
+        Ok(unsafe { self.box_to_mat(b) })
     }
 }
 
@@ -439,6 +532,18 @@ where
         //
         // We've properly checked that the underlying pointer is okay.
         Ok(unsafe { MatMut::from_raw_parts(self, utils::as_nonnull_mut(data).cast::<u8>()) })
+    }
+}
+
+impl<T> NewCloned for Standard<T>
+where
+    T: Copy,
+{
+    fn new_cloned(v: MatRef<'_, Self>) -> Mat<Self> {
+        let b: Box<[T]> = v.rows().flatten().copied().collect();
+
+        // SAFETY: By construction, `b` has length `v.repr().num_elements()`.
+        unsafe { v.repr().box_to_mat(b) }
     }
 }
 
@@ -561,9 +666,9 @@ impl<T: ReprOwned> Mat<T> {
         Self { ptr, repr }
     }
 
-    #[cfg(test)]
-    fn as_ptr(&self) -> NonNull<u8> {
-        self.ptr
+    /// Return the base pointer for the [`Mat`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -572,6 +677,12 @@ impl<T: ReprOwned> Drop for Mat<T> {
         // SAFETY: `ptr` was correctly initialized according to `layout`
         // and we are guaranteed exclusive access to the data due to Rust borrow rules.
         unsafe { self.repr.drop(self.ptr) };
+    }
+}
+
+impl<T: NewCloned> Clone for Mat<T> {
+    fn clone(&self) -> Self {
+        T::new_cloned(self.as_view())
     }
 }
 
@@ -661,6 +772,14 @@ impl<'a, T: Repr> MatRef<'a, T> {
         Rows::new(*self)
     }
 
+    /// Return a [`Mat`] with the same contents as `self`.
+    pub fn to_owned(&self) -> Mat<T>
+    where
+        T: NewCloned,
+    {
+        T::new_cloned(*self)
+    }
+
     /// Construct a new [`MatRef`] over the raw pointer and representation without performing
     /// any validity checks.
     ///
@@ -674,6 +793,11 @@ impl<'a, T: Repr> MatRef<'a, T> {
             repr,
             _lifetime: PhantomData,
         }
+    }
+
+    /// Return the base pointer for the [`MatRef`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -832,6 +956,14 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
         RowsMut::new(self.reborrow_mut())
     }
 
+    /// Return a [`Mat`] with the same contents as `self`.
+    pub fn to_owned(&self) -> Mat<T>
+    where
+        T: NewCloned,
+    {
+        T::new_cloned(self.as_view())
+    }
+
     /// Construct a new [`MatMut`] over the raw pointer and representation without performing
     /// any validity checks.
     ///
@@ -844,6 +976,11 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
             repr,
             _lifetime: PhantomData,
         }
+    }
+
+    /// Return the base pointer for the [`MatMut`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
     }
 }
 
@@ -1168,7 +1305,7 @@ mod tests {
 
     #[test]
     fn standard_representation() {
-        let repr = Standard::<f32>::new(4, 3);
+        let repr = Standard::<f32>::new(4, 3).unwrap();
         assert_eq!(repr.nrows(), 4);
         assert_eq!(repr.ncols(), 3);
 
@@ -1180,7 +1317,7 @@ mod tests {
     #[test]
     fn standard_zero_dimensions() {
         for (nrows, ncols) in [(0, 0), (0, 5), (5, 0)] {
-            let repr = Standard::<u8>::new(nrows, ncols);
+            let repr = Standard::<u8>::new(nrows, ncols).unwrap();
             assert_eq!(repr.nrows(), nrows);
             assert_eq!(repr.ncols(), ncols);
             let layout = repr.layout().unwrap();
@@ -1190,7 +1327,7 @@ mod tests {
 
     #[test]
     fn standard_check_slice() {
-        let repr = Standard::<u32>::new(3, 4);
+        let repr = Standard::<u32>::new(3, 4).unwrap();
 
         // Correct length succeeds
         let data = vec![0u32; 12];
@@ -1217,24 +1354,60 @@ mod tests {
         ));
 
         // Overflow case
-        let overflow_repr = Standard::<u8>::new(usize::MAX, 2);
-        assert!(matches!(
-            overflow_repr.check_slice(&[]),
-            Err(SliceError::Overflow)
-        ));
+        let overflow_repr = Standard::<u8>::new(usize::MAX, 2).unwrap_err();
+        assert!(matches!(overflow_repr, Overflow { .. }));
     }
 
     #[test]
-    fn standard_layout_errors() {
-        // Error path 1: num_elements() overflows (nrows * ncols > usize::MAX)
-        let overflow_repr = Standard::<u8>::new(usize::MAX, 2);
-        assert!(overflow_repr.layout().is_err());
+    fn standard_new_rejects_element_count_overflow() {
+        // nrows * ncols overflows usize even though per-element size is small.
+        assert!(Standard::<u8>::new(usize::MAX, 2).is_err());
+        assert!(Standard::<u8>::new(2, usize::MAX).is_err());
+        assert!(Standard::<u8>::new(usize::MAX, usize::MAX).is_err());
+    }
 
-        // Error path 2: Layout::array fails (total byte size overflows)
-        // For a u64, we need elements * 8 > isize::MAX to trigger Layout::array error
-        // Using isize::MAX / 4 elements of u64 (8 bytes each) will overflow
-        let large_repr = Standard::<u64>::new(isize::MAX as usize / 4, 2);
-        assert!(large_repr.layout().is_err());
+    #[test]
+    fn standard_new_rejects_byte_count_exceeding_isize_max() {
+        // Element count fits in usize, but total bytes exceed isize::MAX.
+        let half = (isize::MAX as usize / std::mem::size_of::<u64>()) + 1;
+        assert!(Standard::<u64>::new(half, 1).is_err());
+        assert!(Standard::<u64>::new(1, half).is_err());
+    }
+
+    #[test]
+    fn standard_new_accepts_boundary_below_isize_max() {
+        // Largest allocation that still fits in isize::MAX bytes.
+        let max_elems = isize::MAX as usize / std::mem::size_of::<u64>();
+        let repr = Standard::<u64>::new(max_elems, 1).unwrap();
+        assert_eq!(repr.num_elements(), max_elems);
+    }
+
+    #[test]
+    fn standard_new_zst_rejects_element_count_overflow() {
+        // For ZSTs the byte count is always 0, but element-count overflow
+        // must still be caught so that `num_elements()` never wraps.
+        assert!(Standard::<()>::new(usize::MAX, 2).is_err());
+        assert!(Standard::<()>::new(usize::MAX / 2 + 1, 3).is_err());
+    }
+
+    #[test]
+    fn standard_new_zst_accepts_large_non_overflowing() {
+        // Large-but-valid ZST matrix: element count fits in usize.
+        let repr = Standard::<()>::new(usize::MAX, 1).unwrap();
+        assert_eq!(repr.num_elements(), usize::MAX);
+        assert_eq!(repr.layout().unwrap().size(), 0);
+    }
+
+    #[test]
+    fn standard_new_overflow_error_display() {
+        let err = Standard::<u32>::new(usize::MAX, 2).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("would exceed isize::MAX bytes"), "{msg}");
+
+        let zst_err = Standard::<()>::new(usize::MAX, 2).unwrap_err();
+        let zst_msg = zst_err.to_string();
+        assert!(zst_msg.contains("ZST matrix"), "{zst_msg}");
+        assert!(zst_msg.contains("usize::MAX"), "{zst_msg}");
     }
 
     /////////
@@ -1243,8 +1416,8 @@ mod tests {
 
     #[test]
     fn mat_new_and_basic_accessors() {
-        let mat = Mat::new(Standard::<usize>::new(3, 4), 42usize).unwrap();
-        let base: *const u8 = mat.as_ptr().as_ptr();
+        let mat = Mat::new(Standard::<usize>::new(3, 4).unwrap(), 42usize).unwrap();
+        let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 3);
         assert_eq!(mat.vector_dim(), 4);
@@ -1265,8 +1438,8 @@ mod tests {
 
     #[test]
     fn mat_new_with_default() {
-        let mat = Mat::new(Standard::<usize>::new(2, 3), Defaulted).unwrap();
-        let base: *const u8 = mat.as_ptr().as_ptr();
+        let mat = Mat::new(Standard::<usize>::new(2, 3).unwrap(), Defaulted).unwrap();
+        let base: *const u8 = mat.as_raw_ptr();
 
         assert_eq!(mat.num_vectors(), 2);
         for (i, row) in mat.rows().enumerate() {
@@ -1287,7 +1460,7 @@ mod tests {
     fn test_mat() {
         for nrows in ROWS {
             for ncols in COLS {
-                let repr = Standard::<usize>::new(*nrows, *ncols);
+                let repr = Standard::<usize>::new(*nrows, *ncols).unwrap();
                 let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
 
                 // Populate the matrix using `&mut Mat`
@@ -1304,6 +1477,10 @@ mod tests {
                     check_mat_ref(mat.reborrow(), repr, ctx);
                     check_mat_mut(mat.reborrow_mut(), repr, ctx);
                     check_rows(mat.rows(), repr, ctx);
+
+                    // Check reborrow preserves pointers.
+                    assert_eq!(mat.as_raw_ptr(), mat.reborrow().as_raw_ptr());
+                    assert_eq!(mat.as_raw_ptr(), mat.reborrow_mut().as_raw_ptr());
                 }
 
                 // Populate the matrix using `MatMut`
@@ -1339,18 +1516,83 @@ mod tests {
     }
 
     #[test]
+    fn test_mat_clone() {
+        for nrows in ROWS {
+            for ncols in COLS {
+                let repr = Standard::<usize>::new(*nrows, *ncols).unwrap();
+                let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
+
+                let mut mat = Mat::new(repr, Defaulted).unwrap();
+                fill_mat(&mut mat, repr);
+
+                // Clone via Mat::clone
+                {
+                    let ctx = &lazy_format!("{ctx} - Mat::clone");
+                    let cloned = mat.clone();
+
+                    assert_eq!(cloned.num_vectors(), *nrows);
+                    assert_eq!(cloned.vector_dim(), *ncols);
+
+                    check_mat(&cloned, repr, ctx);
+                    check_mat_ref(cloned.reborrow(), repr, ctx);
+                    check_rows(cloned.rows(), repr, ctx);
+
+                    // Cloned allocation is independent.
+                    if repr.num_elements() > 0 {
+                        assert_ne!(mat.as_raw_ptr(), cloned.as_raw_ptr());
+                    }
+                }
+
+                // Clone via MatRef::to_owned
+                {
+                    let ctx = &lazy_format!("{ctx} - MatRef::to_owned");
+                    let owned = mat.as_view().to_owned();
+
+                    check_mat(&owned, repr, ctx);
+                    check_mat_ref(owned.reborrow(), repr, ctx);
+                    check_rows(owned.rows(), repr, ctx);
+
+                    if repr.num_elements() > 0 {
+                        assert_ne!(mat.as_raw_ptr(), owned.as_raw_ptr());
+                    }
+                }
+
+                // Clone via MatMut::to_owned
+                {
+                    let ctx = &lazy_format!("{ctx} - MatMut::to_owned");
+                    let owned = mat.as_view_mut().to_owned();
+
+                    check_mat(&owned, repr, ctx);
+                    check_mat_ref(owned.reborrow(), repr, ctx);
+                    check_rows(owned.rows(), repr, ctx);
+
+                    if repr.num_elements() > 0 {
+                        assert_ne!(mat.as_raw_ptr(), owned.as_raw_ptr());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_mat_refmut() {
         for nrows in ROWS {
             for ncols in COLS {
-                let repr = Standard::<usize>::new(*nrows, *ncols);
+                let repr = Standard::<usize>::new(*nrows, *ncols).unwrap();
                 let ctx = &lazy_format!("nrows = {}, ncols = {}", nrows, ncols);
 
                 // Populate the matrix using `&mut Mat`
                 {
                     let ctx = &lazy_format!("{ctx} - by matmut");
-                    let mut b: Box<[_]> =
-                        (0..repr.num_elements().unwrap()).map(|_| 0usize).collect();
+                    let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
+                    let ptr = b.as_ptr().cast::<u8>();
                     let mut matmut = MatMut::new(repr, &mut b).unwrap();
+
+                    assert_eq!(
+                        ptr,
+                        matmut.as_raw_ptr(),
+                        "underlying memory should be preserved",
+                    );
 
                     fill_mat_mut(matmut.reborrow_mut(), repr);
 
@@ -1368,9 +1610,15 @@ mod tests {
                 // Populate the matrix using `RowsMut`
                 {
                     let ctx = &lazy_format!("{ctx} - by rows");
-                    let mut b: Box<[_]> =
-                        (0..repr.num_elements().unwrap()).map(|_| 0usize).collect();
+                    let mut b: Box<[_]> = (0..repr.num_elements()).map(|_| 0usize).collect();
+                    let ptr = b.as_ptr().cast::<u8>();
                     let mut matmut = MatMut::new(repr, &mut b).unwrap();
+
+                    assert_eq!(
+                        ptr,
+                        matmut.as_raw_ptr(),
+                        "underlying memory should be preserved",
+                    );
 
                     fill_rows_mut(matmut.rows_mut(), repr);
 
@@ -1399,7 +1647,7 @@ mod tests {
 
         for nrows in rows {
             for ncols in cols {
-                let m = Mat::new(Standard::new(nrows, ncols), 1usize).unwrap();
+                let m = Mat::new(Standard::new(nrows, ncols).unwrap(), 1usize).unwrap();
                 let rows_iter = m.rows();
                 let len = <_ as ExactSizeIterator>::len(&rows_iter);
                 assert_eq!(len, nrows);
@@ -1413,7 +1661,7 @@ mod tests {
 
     #[test]
     fn matref_new_slice_length_error() {
-        let repr = Standard::<u32>::new(3, 4);
+        let repr = Standard::<u32>::new(3, 4).unwrap();
 
         // Correct length succeeds
         let data = vec![0u32; 12];
@@ -1442,7 +1690,7 @@ mod tests {
 
     #[test]
     fn matmut_new_slice_length_error() {
-        let repr = Standard::<u32>::new(3, 4);
+        let repr = Standard::<u32>::new(3, 4).unwrap();
 
         // Correct length succeeds
         let mut data = vec![0u32; 12];

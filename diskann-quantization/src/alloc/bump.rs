@@ -7,8 +7,8 @@ use std::{
     cell::UnsafeCell,
     ptr::NonNull,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -172,9 +172,9 @@ unsafe impl AllocatorCore for BumpAllocator {
 #[cfg(test)]
 mod tests {
     use rand::{
+        SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        SeedableRng,
     };
 
     use super::*;

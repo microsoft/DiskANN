@@ -290,7 +290,7 @@ mod file_util_test {
 
     #[test]
     fn get_file_size_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let file_name = "/test_get_file_size_test.bin";
 
         storage_provider
@@ -321,8 +321,7 @@ mod file_util_test {
 
     #[test]
     fn load_metadata_test() {
-        let filesystem = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_memory();
         let file_name = "/test_load_metadata_test.bin";
         let data = [200, 0, 0, 0, 128, 0, 0, 0]; // 200 and 128 in little endian bytes
         {
@@ -345,8 +344,7 @@ mod file_util_test {
 
     #[test]
     fn load_data_test() {
-        let filesystem = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let file_name = "/test_load_data_test.bin";
         //npoints=2, dim=8, 2 vectors [1.0;8] [2.0;8]
@@ -409,7 +407,7 @@ mod file_util_test {
 
     #[test]
     fn open_file_to_write_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let file_name = "/test_open_file_to_write_test.bin";
         {
             let mut writer: Box<dyn SeekAndWrite + Send> =
@@ -426,7 +424,7 @@ mod file_util_test {
 
     #[test]
     fn load_bin_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let file_name = "/load_bin_test";
         let data = vec![0u64, 1u64, 2u64];
@@ -452,7 +450,7 @@ mod file_util_test {
 
     #[test]
     fn load_bin_offset_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let offset: usize = 32;
         let file_name = "/load_bin_offset_test";
@@ -480,7 +478,7 @@ mod file_util_test {
 
     #[test]
     fn load_multivec_bin_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let file_name = "/load_multivec_bin_test";
         let data = vec![0u64, 1u64, 2u64];
@@ -536,7 +534,7 @@ mod file_util_test {
 
     #[test]
     fn load_multivec_bin_zero_vector_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::new());
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         let file_name = "/load_multivec_bin_zero_vector_test";
         let data = vec![0u64, 1u64, 2u64];

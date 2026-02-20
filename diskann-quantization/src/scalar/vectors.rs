@@ -8,7 +8,7 @@ use diskann_vector::{DistanceFunction, PureDistanceFunction};
 use super::inverse_bit_scale;
 use crate::{
     bits::{BitSlice, Dense, Representation, Unsigned},
-    distances::{self, check_lengths, InnerProduct, SquaredL2, MV},
+    distances::{self, InnerProduct, MV, SquaredL2, check_lengths},
     meta,
 };
 
@@ -212,10 +212,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     SquaredL2: for<'a, 'b> PureDistanceFunction<
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     fn evaluate_similarity(
         &self,
@@ -257,10 +257,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     Self: for<'a, 'b> DistanceFunction<
-        CompensatedVectorRef<'a, NBITS>,
-        CompensatedVectorRef<'b, NBITS>,
-        distances::MathematicalResult<f32>,
-    >,
+            CompensatedVectorRef<'a, NBITS>,
+            CompensatedVectorRef<'b, NBITS>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate_similarity(
         &self,
@@ -316,10 +316,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     fn evaluate_similarity(
         &self,
@@ -360,10 +360,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     Self: for<'a, 'b> DistanceFunction<
-        CompensatedVectorRef<'a, NBITS>,
-        CompensatedVectorRef<'b, NBITS>,
-        distances::MathematicalResult<f32>,
-    >,
+            CompensatedVectorRef<'a, NBITS>,
+            CompensatedVectorRef<'b, NBITS>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate_similarity(
         &self,
@@ -416,10 +416,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     SquaredL2: for<'a, 'b> PureDistanceFunction<
-        BitSlice<'a, NBITS, Unsigned>,
-        BitSlice<'b, NBITS, Unsigned>,
-        distances::MathematicalResult<u32>,
-    >,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, NBITS, Unsigned>,
+            distances::MathematicalResult<u32>,
+        >,
 {
     fn evaluate_similarity(
         &self,
@@ -447,10 +447,10 @@ impl<const NBITS: usize>
 where
     Unsigned: Representation<NBITS>,
     Self: for<'a, 'b> DistanceFunction<
-        CompensatedVectorRef<'a, NBITS>,
-        CompensatedVectorRef<'b, NBITS>,
-        distances::MathematicalResult<f32>,
-    >,
+            CompensatedVectorRef<'a, NBITS>,
+            CompensatedVectorRef<'b, NBITS>,
+            distances::MathematicalResult<f32>,
+        >,
 {
     fn evaluate_similarity(
         &self,
@@ -470,9 +470,9 @@ where
 mod tests {
     use diskann_utils::{Reborrow, ReborrowMut};
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        Rng, SeedableRng,
     };
 
     use super::*;
@@ -518,35 +518,35 @@ mod tests {
         Unsigned: Representation<NBITS>,
         R: Rng,
         CompensatedSquaredL2: for<'a, 'b> DistanceFunction<
-            CompensatedVectorRef<'a, NBITS>,
-            CompensatedVectorRef<'b, NBITS>,
-            distances::MathematicalResult<f32>,
-        >,
+                CompensatedVectorRef<'a, NBITS>,
+                CompensatedVectorRef<'b, NBITS>,
+                distances::MathematicalResult<f32>,
+            >,
         CompensatedSquaredL2: for<'a, 'b> DistanceFunction<
-            CompensatedVectorRef<'a, NBITS>,
-            CompensatedVectorRef<'b, NBITS>,
-            distances::Result<f32>,
-        >,
+                CompensatedVectorRef<'a, NBITS>,
+                CompensatedVectorRef<'b, NBITS>,
+                distances::Result<f32>,
+            >,
         CompensatedIP: for<'a, 'b> DistanceFunction<
-            CompensatedVectorRef<'a, NBITS>,
-            CompensatedVectorRef<'b, NBITS>,
-            distances::MathematicalResult<f32>,
-        >,
+                CompensatedVectorRef<'a, NBITS>,
+                CompensatedVectorRef<'b, NBITS>,
+                distances::MathematicalResult<f32>,
+            >,
         CompensatedIP: for<'a, 'b> DistanceFunction<
-            CompensatedVectorRef<'a, NBITS>,
-            CompensatedVectorRef<'b, NBITS>,
-            distances::Result<f32>,
-        >,
+                CompensatedVectorRef<'a, NBITS>,
+                CompensatedVectorRef<'b, NBITS>,
+                distances::Result<f32>,
+            >,
         CompensatedCosineNormalized: for<'a, 'b> DistanceFunction<
-            CompensatedVectorRef<'a, NBITS>,
-            CompensatedVectorRef<'b, NBITS>,
-            distances::MathematicalResult<f32>,
-        >,
+                CompensatedVectorRef<'a, NBITS>,
+                CompensatedVectorRef<'b, NBITS>,
+                distances::MathematicalResult<f32>,
+            >,
         CompensatedCosineNormalized: for<'a, 'b> DistanceFunction<
-            CompensatedVectorRef<'a, NBITS>,
-            CompensatedVectorRef<'b, NBITS>,
-            distances::Result<f32>,
-        >,
+                CompensatedVectorRef<'a, NBITS>,
+                CompensatedVectorRef<'b, NBITS>,
+                distances::Result<f32>,
+            >,
     {
         // The distributions we use for `a` and `B` are taken from integer distributions,
         // which we then convert to `f32` and divide by a power of 2.

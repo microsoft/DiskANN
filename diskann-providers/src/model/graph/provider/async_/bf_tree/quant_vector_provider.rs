@@ -69,10 +69,15 @@ impl QuantVectorProvider {
         self.metric
     }
 
+    /// Access the BfTree config
+    pub(crate) fn config(&self) -> &Config {
+        self.quant_vector_index.config()
+    }
+
     /// Create a snapshot of the quant vector index
     ///
-    pub fn snapshot(&self) {
-        self.quant_vector_index.snapshot();
+    pub fn snapshot(&self) -> std::path::PathBuf {
+        self.quant_vector_index.snapshot()
     }
 
     /// Create a new instance from an existing BfTree (for loading from snapshot)

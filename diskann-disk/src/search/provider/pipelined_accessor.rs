@@ -22,7 +22,8 @@ use diskann::{
         glue::{
             ExpandBeam, HybridPredicate, IdIterator, SearchExt, SearchPostProcess, SearchStrategy,
         },
-        search_output_buffer, AdjacencyList, SearchOutputBuffer, SearchParams,
+        search::Knn,
+        search_output_buffer, AdjacencyList, SearchOutputBuffer,
     },
     neighbor::Neighbor,
     provider::{
@@ -945,7 +946,7 @@ where
             io_stats: io_stats.clone(),
         };
 
-        let search_params = SearchParams::new(
+        let knn_params = Knn::new(
             return_list_size as usize,
             search_list_size as usize,
             Some(beam_width),
@@ -967,10 +968,10 @@ where
         // Preprocess PQ distance table: the accessor's build_query_computer relies
         // on the pq_scratch having been preprocessed for this query.
         let stats = self.runtime.block_on(self.index.search(
+            knn_params,
             &strategy,
             &DefaultContext,
             query,
-            &search_params,
             &mut result_output_buffer,
         ))?;
 

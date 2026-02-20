@@ -45,7 +45,7 @@
 //!     0.0, 1.0, 0.0, 0.0,  // query vector 1
 //! ];
 //! let query_input = MatRef::new(
-//!     Standard::new(num_query_vectors, dim), &query_data
+//!     Standard::new(num_query_vectors, dim).unwrap(), &query_data
 //! ).unwrap();
 //!
 //! // Full-precision document multi-vector (3 vectors × 4 dimensions)
@@ -55,7 +55,7 @@
 //!     0.0, 0.0, 1.0, 0.0,  // doc vector 2
 //! ];
 //! let doc_input = MatRef::new(
-//!     Standard::new(num_doc_vectors, dim), &doc_data
+//!     Standard::new(num_doc_vectors, dim).unwrap(), &doc_data
 //! ).unwrap();
 //!
 //! // Create owned matrices for quantized output using Mat::new

@@ -173,11 +173,11 @@ pub(crate) mod tests {
     use crate::storage::VirtualStorageProvider;
     use diskann::{
         graph::{
-            self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, RangeSearchParams,
-            SearchParams, StartPointStrategy,
+            self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
             glue::{AsElement, InplaceDeleteStrategy, InsertStrategy, SearchStrategy, aliases},
             index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
+            search::{Knn, Range},
             search_output_buffer,
         },
         neighbor::Neighbor,
@@ -188,7 +188,7 @@ pub(crate) mod tests {
         utils::{IntoUsize, ONE, async_tools::VectorIdBoxSlice},
     };
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
-    use diskann_utils::views::Matrix;
+    use diskann_utils::{test_data_root, views::Matrix};
     use diskann_vector::{
         DistanceFunction, PureDistanceFunction,
         distance::{Metric, SquaredL2},
@@ -354,12 +354,14 @@ pub(crate) mod tests {
         let mut distances = vec![0.0; parameters.search_k];
         let mut result_output_buffer =
             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+        let graph_search =
+            graph::search::Knn::new_default(parameters.search_k, parameters.search_l).unwrap();
         index
             .search(
+                graph_search,
                 &strategy,
                 &parameters.context,
                 query,
-                &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
                 &mut result_output_buffer,
             )
             .await
@@ -400,14 +402,15 @@ pub(crate) mod tests {
         let mut distances = vec![0.0; parameters.search_k];
         let mut result_output_buffer =
             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+        let search_params = Knn::new_default(parameters.search_k, parameters.search_l).unwrap();
+        let multihop = graph::search::MultihopSearch::new(search_params, filter);
         index
-            .multihop_search(
+            .search(
+                multihop,
                 strategy,
                 &parameters.context,
                 query,
-                &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
                 &mut result_output_buffer,
-                filter,
             )
             .await
             .unwrap();
@@ -1443,14 +1446,15 @@ pub(crate) mod tests {
 
         let filter = CallbackFilter::new(blocked, adjusted, 0.5);
 
+        let search_params = Knn::new_default(parameters.search_k, parameters.search_l).unwrap();
+        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
         let stats = index
-            .multihop_search(
+            .search(
+                multihop,
                 &FullPrecision,
                 &parameters.context,
                 query.as_slice(),
-                &SearchParams::new_default(parameters.search_k, parameters.search_l).unwrap(),
                 &mut result_output_buffer,
-                &filter,
             )
             .await
             .unwrap();
@@ -2130,7 +2134,7 @@ pub(crate) mod tests {
         }
     }
 
-    const SIFTSMALL: &str = "/test_data/sift/siftsmall_learn_256pts.fbin";
+    const SIFTSMALL: &str = "/sift/siftsmall_learn_256pts.fbin";
 
     #[rstest]
     #[tokio::test]
@@ -2190,13 +2194,14 @@ pub(crate) mod tests {
             {
                 let mut result_output_buffer =
                     search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
                 // Full Precision Search.
                 index
                     .search(
+                        graph_search,
                         &FullPrecision,
                         ctx,
                         query,
-                        &SearchParams::new_default(top_k, search_l).unwrap(),
                         &mut result_output_buffer,
                     )
                     .await
@@ -2207,13 +2212,14 @@ pub(crate) mod tests {
             {
                 let mut result_output_buffer =
                     search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
                 // Quantized Search
                 index
                     .search(
+                        graph_search,
                         &Hybrid::new(None),
                         ctx,
                         query,
-                        &SearchParams::new_default(top_k, search_l).unwrap(),
                         &mut result_output_buffer,
                     )
                     .await
@@ -2272,76 +2278,60 @@ pub(crate) mod tests {
             let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             {
                 // Full Precision Search.
-                let (_, ids, _) = index
-                    .range_search(
-                        &FullPrecision,
-                        ctx,
-                        query,
-                        &RangeSearchParams::new_default(starting_l_value, radius).unwrap(),
-                    )
+                let range_search = Range::new(starting_l_value, radius).unwrap();
+                let result = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut ())
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
+                assert_range_results_exactly_match(q, &gt, &result.ids, radius, None);
             }
 
             {
                 // Quantized Search
-                let (_, ids, _) = index
-                    .range_search(
-                        &Hybrid::new(None),
-                        ctx,
-                        query,
-                        &RangeSearchParams::new_default(starting_l_value, radius).unwrap(),
-                    )
+                let range_search = Range::new(starting_l_value, radius).unwrap();
+                let result = index
+                    .search(range_search, &Hybrid::new(None), ctx, query, &mut ())
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
+                assert_range_results_exactly_match(q, &gt, &result.ids, radius, None);
             }
 
             {
                 // Test with an inner radius
 
                 assert!(inner_radius <= radius);
-                let (_, ids, _) = index
-                    .range_search(
-                        &FullPrecision,
-                        ctx,
-                        query,
-                        &RangeSearchParams::new(
-                            None,
-                            starting_l_value,
-                            None,
-                            radius,
-                            Some(inner_radius),
-                            1.0,
-                            1.0,
-                        )
-                        .unwrap(),
-                    )
+                let range_search = Range::with_options(
+                    None,
+                    starting_l_value,
+                    None,
+                    radius,
+                    Some(inner_radius),
+                    1.0,
+                    1.0,
+                )
+                .unwrap();
+                let result = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut ())
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &ids, radius, Some(inner_radius));
+                assert_range_results_exactly_match(q, &gt, &result.ids, radius, Some(inner_radius));
             }
 
             {
                 // Test with a lower initial beam to trigger more two-round searches
                 // We don't expect results to exactly match here
-                let (_, ids, _) = index
-                    .range_search(
-                        &FullPrecision,
-                        ctx,
-                        query,
-                        &RangeSearchParams::new_default(lower_l_value, radius).unwrap(),
-                    )
+                let range_search = Range::new(lower_l_value, radius).unwrap();
+                let result = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut ())
                     .await
                     .unwrap();
 
                 // check that ids don't have duplicates
                 let mut ids_set = std::collections::HashSet::new();
-                for id in &ids {
+                for id in &result.ids {
                     assert!(ids_set.insert(*id));
                 }
             }
@@ -2363,11 +2353,7 @@ pub(crate) mod tests {
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
             + diskann::provider::SetElement<[f32]>,
     {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let (data_vec, npoints, dim) = file_util::load_bin(&storage, file, 0).unwrap();
         let data =
             Arc::new(Matrix::<f32>::try_from(data_vec.into_boxed_slice(), npoints, dim).unwrap());
@@ -2460,13 +2446,15 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                        let graph_search =
+                            graph::search::Knn::new_default(top_k, search_l).unwrap();
                         // Full Precision Search.
                         index
                             .search(
+                                graph_search,
                                 &FullPrecision,
                                 ctx,
                                 query,
-                                &SearchParams::new_default(top_k, search_l).unwrap(),
                                 &mut result_output_buffer,
                             )
                             .await
@@ -2477,13 +2465,15 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                        let graph_search =
+                            graph::search::Knn::new_default(top_k, search_l).unwrap();
                         // Quantized Search
                         index
                             .search(
+                                graph_search,
                                 &Quantized,
                                 ctx,
                                 query,
-                                &SearchParams::new_default(top_k, search_l).unwrap(),
                                 &mut result_output_buffer,
                             )
                             .await
@@ -2563,13 +2553,14 @@ pub(crate) mod tests {
                     {
                         let mut result_output_buffer =
                             search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+                        let graph_search = graph::search::Knn::new_default(top_k, top_k).unwrap();
                         // Quantized Search
                         index
                             .search(
+                                graph_search,
                                 &Quantized,
                                 ctx,
                                 query,
-                                &SearchParams::new_default(top_k, top_k).unwrap(),
                                 &mut result_output_buffer,
                             )
                             .await
@@ -2676,14 +2667,9 @@ pub(crate) mod tests {
 
             // Full Precision Search.
             let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
             index
-                .search(
-                    &FullPrecision,
-                    ctx,
-                    query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
-                    &mut output,
-                )
+                .search(graph_search, &FullPrecision, ctx, query, &mut output)
                 .await
                 .unwrap();
             assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
@@ -2693,15 +2679,10 @@ pub(crate) mod tests {
             let strategy = inmem::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
+            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
 
             index
-                .search(
-                    &strategy,
-                    ctx,
-                    query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
-                    &mut output,
-                )
+                .search(graph_search, &strategy, ctx, query, &mut output)
                 .await
                 .unwrap();
             assert_top_k_exactly_match(q, &gt, &ids, &distances, top_k);
@@ -2801,15 +2782,10 @@ pub(crate) mod tests {
             let strategy = inmem::spherical::Quantized::search(
                 diskann_quantization::spherical::iface::QueryLayout::FourBitTransposed,
             );
+            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
 
             index
-                .search(
-                    &strategy,
-                    ctx,
-                    query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
-                    &mut output,
-                )
+                .search(graph_search, &strategy, ctx, query, &mut output)
                 .await
                 .unwrap();
 
@@ -2893,13 +2869,14 @@ pub(crate) mod tests {
 
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
+                    graph_search,
                     &Quantized,
                     ctx,
                     query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
                     &mut result_output_buffer,
                 )
                 .await
@@ -2989,11 +2966,7 @@ pub(crate) mod tests {
         S::PruneStrategy: Clone,
     {
         let ctx = &DefaultContext;
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage = VirtualStorageProvider::new_overlay(test_data_root());
 
         let mut iter = VectorDataIterator::<_, crate::model::graph::traits::AdHoc<f32>>::new(
             file, None, &storage,
@@ -3047,11 +3020,7 @@ pub(crate) mod tests {
         for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
         S::PruneStrategy: Clone,
     {
-        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .to_path_buf();
-        let storage = VirtualStorageProvider::new_overlay(workspace_root);
+        let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let (train_data, npoints, dim) = file_util::load_bin(&storage, file, 0).unwrap();
 
         let train_data_view =
@@ -3481,13 +3450,14 @@ pub(crate) mod tests {
             let gt = groundtruth(queries.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
+                    graph_search,
                     &Hybrid::new(max_fp_vecs_per_prune),
                     ctx,
                     query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
                     &mut result_output_buffer,
                 )
                 .await
@@ -3627,13 +3597,14 @@ pub(crate) mod tests {
             let gt = groundtruth(data.as_view(), query, |a, b| SquaredL2::evaluate(a, b));
             let mut result_output_buffer =
                 search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let graph_search = graph::search::Knn::new_default(top_k, search_l).unwrap();
             // Full Precision Search.
             index
                 .search(
+                    graph_search,
                     &FullPrecision,
                     ctx,
                     query,
-                    &SearchParams::new_default(top_k, search_l).unwrap(),
                     &mut result_output_buffer,
                 )
                 .await
@@ -3895,25 +3866,22 @@ pub(crate) mod tests {
             attribute_provider.clone(),
         );
 
-        let search_params = diskann::graph::SearchParams::new(
+        let search_params = diskann::graph::search::Knn::new(
             return_list_size,
             search_list_size,
             None, // beam_width
         )
         .unwrap();
 
-        use diskann::graph::search::record::NoopSearchRecord;
-        let mut search_record = NoopSearchRecord::new();
+        let diverse_search = diskann::graph::search::Diverse::new(search_params, diverse_params);
 
         let result = index
-            .diverse_search_experimental(
+            .search(
+                diverse_search,
                 &FullPrecision,
                 &DefaultContext,
-                &query,
-                &search_params,
-                &diverse_params,
+                query.as_slice(),
                 &mut result_output_buffer,
-                &mut search_record,
             )
             .await;
 
@@ -4116,14 +4084,15 @@ pub(crate) mod tests {
         // but reject everything via on_visit
         let filter = RejectAllFilter::only([0_u32]);
 
+        let search_params = Knn::new_default(10, 20).unwrap();
+        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
         let stats = index
-            .multihop_search(
+            .search(
+                multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &SearchParams::new_default(10, 20).unwrap(),
                 &mut result_output_buffer,
-                &filter,
             )
             .await
             .unwrap();
@@ -4178,14 +4147,15 @@ pub(crate) mod tests {
         let target = (num_points / 2) as u32;
         let filter = TerminatingFilter::new(target);
 
+        let search_params = Knn::new_default(10, 40).unwrap();
+        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
         let stats = index
-            .multihop_search(
+            .search(
+                multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &SearchParams::new_default(10, 40).unwrap(),
                 &mut result_output_buffer,
-                &filter,
             )
             .await
             .unwrap();
@@ -4242,14 +4212,15 @@ pub(crate) mod tests {
         let mut baseline_buffer =
             search_output_buffer::IdDistance::new(&mut baseline_ids, &mut baseline_distances);
 
+        let search_params = Knn::new_default(10, 20).unwrap();
+        let multihop = graph::search::MultihopSearch::new(search_params, &EvenFilter);
         let baseline_stats = index
-            .multihop_search(
+            .search(
+                multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &SearchParams::new_default(10, 20).unwrap(),
                 &mut baseline_buffer,
-                &EvenFilter, // Just filter to even IDs
             )
             .await
             .unwrap();
@@ -4263,14 +4234,15 @@ pub(crate) mod tests {
         let mut adjusted_buffer =
             search_output_buffer::IdDistance::new(&mut adjusted_ids, &mut adjusted_distances);
 
+        let search_params = Knn::new_default(10, 20).unwrap();
+        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
         let adjusted_stats = index
-            .multihop_search(
+            .search(
+                multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &SearchParams::new_default(10, 20).unwrap(),
                 &mut adjusted_buffer,
-                &filter,
             )
             .await
             .unwrap();
@@ -4389,14 +4361,15 @@ pub(crate) mod tests {
         let max_visits = 5;
         let filter = TerminateAfterN::new(max_visits);
 
+        let search_params = Knn::new_default(10, 100).unwrap(); // Large L to ensure we'd visit more without termination
+        let multihop = graph::search::MultihopSearch::new(search_params, &filter);
         let _stats = index
-            .multihop_search(
+            .search(
+                multihop,
                 &FullPrecision,
                 &DefaultContext,
                 query.as_slice(),
-                &SearchParams::new_default(10, 100).unwrap(), // Large L to ensure we'd visit more without termination
                 &mut result_output_buffer,
-                &filter,
             )
             .await
             .unwrap();
