@@ -121,8 +121,8 @@
 //!
 //! ## Graph Index
 //!
-//! * [`graph::KNN`]: K-nearest neighbors search for [`diskann::graph::DiskANNIndex`].
-//! * [`graph::Range`]: Range search for [`diskann::graph::DiskANNIndex`].
+//! * [`graph::search::Knn`]: K-nearest neighbors search for [`diskann::graph::DiskANNIndex`].
+//! * [`graph::search::Range`]: Range search for [`diskann::graph::DiskANNIndex`].
 //! * [`graph::MultiHop`]: Multi-hop filtered search for [`diskann::graph::DiskANNIndex`].
 
 pub(crate) mod ids;

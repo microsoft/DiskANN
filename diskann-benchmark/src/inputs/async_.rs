@@ -8,7 +8,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use anyhow::{anyhow, Context};
 use diskann::{
-    graph::{self, config, RangeSearchParams, RangeSearchParamsError, StartPointStrategy},
+    graph::{self, config, search::Range, RangeSearchError, StartPointStrategy},
     utils::IntoUsize,
 };
 use diskann_benchmark_core::streaming::executors::bigann;
@@ -90,13 +90,11 @@ pub(crate) struct GraphRangeSearch {
 }
 
 impl GraphRangeSearch {
-    pub(crate) fn construct_params(
-        &self,
-    ) -> Result<Vec<RangeSearchParams>, RangeSearchParamsError> {
+    pub(crate) fn construct_params(&self) -> Result<Vec<Range>, RangeSearchError> {
         self.initial_search_l
             .iter()
             .map(|&l| {
-                RangeSearchParams::new(
+                Range::with_options(
                     self.max_returned,
                     l,
                     self.beam_width,
@@ -111,7 +109,7 @@ impl GraphRangeSearch {
 }
 
 impl CheckDeserialization for GraphRangeSearch {
-    // all necessary checks are carried out when RangeSearchParams is initialized
+    // all necessary checks are carried out when Range is initialized
     fn check_deserialization(&mut self, _checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.construct_params()
             .context("invalid range search params")?;

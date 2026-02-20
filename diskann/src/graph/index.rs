@@ -24,22 +24,19 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 
 use super::{
-    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, RangeSearchParams, SearchParams,
+    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod,
     glue::{
-        self, AsElement, ExpandBeam, FillSet, HybridPredicate, IdIterator, InplaceDeleteStrategy,
-        InsertStrategy, Predicate, PredicateMut, PruneStrategy, SearchExt, SearchPostProcess,
-        SearchStrategy, aliases,
+        self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
+        PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
+        Knn,
         record::{NoopSearchRecord, SearchRecord, VisitedSearchRecord},
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
     search_output_buffer,
 };
-
-#[cfg(feature = "experimental_diversity_search")]
-use super::DiverseSearchParams;
 
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
@@ -110,6 +107,7 @@ pub struct DegreeStats {
 /// This struct provides detailed metrics about the search process, including
 /// the number of nodes visited, the number of distance computations performed,
 /// the number of hops taken during the search, and the total number of results returned.
+#[derive(Debug, Clone, Copy)]
 pub struct SearchStats {
     /// The total number of distance computations performed during the search.
     pub cmps: u32,
@@ -220,53 +218,6 @@ struct SetBatchElements<G, I, T> {
     batch: Arc<[VectorIdBoxSlice<I, T>]>,
 }
 
-pub struct NotInMutWithLabelCheck<'a, K>
-where
-    K: VectorId,
-{
-    visited_set: &'a mut hashbrown::HashSet<K>,
-    query_label_evaluator: &'a dyn QueryLabelProvider<K>,
-}
-
-impl<'a, K> NotInMutWithLabelCheck<'a, K>
-where
-    K: VectorId,
-{
-    /// Construct a new `NotInMutWithLabelCheck` around `visited_set`.
-    pub fn new(
-        visited_set: &'a mut hashbrown::HashSet<K>,
-        query_label_evaluator: &'a dyn QueryLabelProvider<K>,
-    ) -> Self {
-        Self {
-            visited_set,
-            query_label_evaluator,
-        }
-    }
-}
-
-impl<K> Predicate<K> for NotInMutWithLabelCheck<'_, K>
-where
-    K: VectorId,
-{
-    fn eval(&self, item: &K) -> bool {
-        !self.visited_set.contains(item) && self.query_label_evaluator.is_match(*item)
-    }
-}
-
-impl<K> PredicateMut<K> for NotInMutWithLabelCheck<'_, K>
-where
-    K: VectorId,
-{
-    fn eval_mut(&mut self, item: &K) -> bool {
-        if self.query_label_evaluator.is_match(*item) {
-            return self.visited_set.insert(*item);
-        }
-        false
-    }
-}
-
-impl<K> HybridPredicate<K> for NotInMutWithLabelCheck<'_, K> where K: VectorId {}
-
 impl<DP> DiskANNIndex<DP>
 where
     DP: DataProvider,
@@ -296,7 +247,7 @@ where
     /// * `l`: The default window size to use.
     /// * `additional`: Extra capacity, usually to allow start points to be filtered from
     ///   the result.
-    fn search_scratch(
+    pub(crate) fn search_scratch(
         &self,
         l: usize,
         additional: usize,
@@ -2061,7 +2012,7 @@ where
     }
 
     // A is the accessor type, T is the query type used for BuildQueryComputer
-    fn search_internal<A, T, SR, Q>(
+    pub(crate) fn search_internal<A, T, SR, Q>(
         &self,
         beam_width: Option<usize>,
         start_ids: &[DP::InternalId],
@@ -2137,205 +2088,6 @@ where
         }
     }
 
-    // A is the accessor type, T is the query type used for BuildQueryComputer
-    // scratch.in_range is guaranteed to include the starting points
-    fn range_search_internal<A, T>(
-        &self,
-        search_params: &RangeSearchParams,
-        accessor: &mut A,
-        computer: &A::QueryComputer,
-        scratch: &mut SearchScratch<DP::InternalId>,
-    ) -> impl SendFuture<ANNResult<InternalSearchStats>>
-    where
-        A: ExpandBeam<T, Id = DP::InternalId> + SearchExt,
-        T: ?Sized,
-    {
-        async move {
-            let beam_width = search_params.beam_width.unwrap_or(1);
-
-            for neighbor in &scratch.in_range {
-                scratch.range_frontier.push_back(neighbor.id);
-            }
-
-            let mut neighbors = Vec::with_capacity(self.max_degree_with_slack());
-
-            let max_returned = search_params.max_returned.unwrap_or(usize::MAX);
-
-            while !scratch.range_frontier.is_empty() {
-                scratch.beam_nodes.clear();
-
-                // In this loop we are going to find the beam_width number of remaining nodes within the radius
-                // Each of these nodes will be a frontier node.
-                while !scratch.range_frontier.is_empty() && scratch.beam_nodes.len() < beam_width {
-                    let next = scratch.range_frontier.pop_front();
-                    if let Some(next_node) = next {
-                        scratch.beam_nodes.push(next_node);
-                    }
-                }
-
-                neighbors.clear();
-                accessor
-                    .expand_beam(
-                        scratch.beam_nodes.iter().copied(),
-                        computer,
-                        glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| neighbors.push(Neighbor::new(id, distance)),
-                    )
-                    .await?;
-
-                // The predicate ensure that the contents of `neighbors` are unique.
-                for neighbor in neighbors.iter() {
-                    if neighbor.distance <= search_params.radius * search_params.range_search_slack
-                        && scratch.in_range.len() < max_returned
-                    {
-                        scratch.in_range.push(*neighbor);
-                        scratch.range_frontier.push_back(neighbor.id);
-                    }
-                }
-                scratch.cmps += neighbors.len() as u32;
-                scratch.hops += scratch.beam_nodes.len() as u32;
-            }
-
-            Ok(InternalSearchStats {
-                cmps: scratch.cmps,
-                hops: scratch.hops,
-                range_search_second_round: true,
-            })
-        }
-    }
-
-    // A is the accessor type, T is the query type used for BuildQueryComputer
-    fn multihop_search_internal<A, T, SR>(
-        &self,
-        search_params: &SearchParams,
-        accessor: &mut A,
-        computer: &A::QueryComputer,
-        scratch: &mut SearchScratch<DP::InternalId>,
-        search_record: &mut SR,
-        query_label_evaluator: &dyn QueryLabelProvider<DP::InternalId>,
-    ) -> impl SendFuture<ANNResult<InternalSearchStats>>
-    where
-        A: ExpandBeam<T, Id = DP::InternalId> + SearchExt,
-        T: ?Sized,
-        SR: SearchRecord<DP::InternalId> + ?Sized,
-    {
-        async move {
-            let beam_width = search_params.beam_width.unwrap_or(1);
-
-            // Helper to build the final stats from scratch state.
-            let make_stats = |scratch: &SearchScratch<DP::InternalId>| InternalSearchStats {
-                cmps: scratch.cmps,
-                hops: scratch.hops,
-                range_search_second_round: false,
-            };
-
-            // Initialize search state if not already initialized.
-            // This allows paged search to call multihop_search_internal multiple times
-            if scratch.visited.is_empty() {
-                let start_ids = accessor.starting_points().await?;
-
-                for id in start_ids {
-                    scratch.visited.insert(id);
-                    let element = accessor
-                        .get_element(id)
-                        .await
-                        .escalate("start point retrieval must succeed")?;
-                    let dist = computer.evaluate_similarity(element.reborrow());
-                    scratch.best.insert(Neighbor::new(id, dist));
-                }
-            }
-
-            // Pre-allocate with good capacity to avoid repeated allocations
-            let mut one_hop_neighbors = Vec::with_capacity(self.max_degree_with_slack());
-            let mut two_hop_neighbors = Vec::with_capacity(self.max_degree_with_slack());
-            let mut candidates_two_hop_expansion = Vec::with_capacity(self.max_degree_with_slack());
-
-            while scratch.best.has_notvisited_node() && !accessor.terminate_early() {
-                scratch.beam_nodes.clear();
-                one_hop_neighbors.clear();
-                candidates_two_hop_expansion.clear();
-                two_hop_neighbors.clear();
-
-                // In this loop we are going to find the beam_width number of nodes that are closest to the query.
-                // Each of these nodes will be a frontier node.
-                while scratch.beam_nodes.len() < beam_width
-                    && let Some(closest_node) = scratch.best.closest_notvisited()
-                {
-                    search_record.record(closest_node, scratch.hops, scratch.cmps);
-                    scratch.beam_nodes.push(closest_node.id);
-                }
-
-                // compute distances from query to one-hop neighbors, and mark them visited
-                accessor
-                    .expand_beam(
-                        scratch.beam_nodes.iter().copied(),
-                        computer,
-                        glue::NotInMut::new(&mut scratch.visited),
-                        |distance, id| one_hop_neighbors.push(Neighbor::new(id, distance)),
-                    )
-                    .await?;
-
-                // Process one-hop neighbors based on on_visit() decision
-                for neighbor in one_hop_neighbors.iter().copied() {
-                    match query_label_evaluator.on_visit(neighbor) {
-                        QueryVisitDecision::Accept(accepted) => {
-                            scratch.best.insert(accepted);
-                        }
-                        QueryVisitDecision::Reject => {
-                            // Rejected nodes: still add to two-hop expansion so we can traverse through them
-                            candidates_two_hop_expansion.push(neighbor);
-                        }
-                        QueryVisitDecision::Terminate => {
-                            scratch.cmps += one_hop_neighbors.len() as u32;
-                            scratch.hops += scratch.beam_nodes.len() as u32;
-                            return Ok(make_stats(scratch));
-                        }
-                    }
-                }
-
-                scratch.cmps += one_hop_neighbors.len() as u32;
-                scratch.hops += scratch.beam_nodes.len() as u32;
-
-                // sort the candidates for two-hop expansion by distance to query point
-                candidates_two_hop_expansion.sort_unstable_by(|a, b| {
-                    a.distance
-                        .partial_cmp(&b.distance)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-
-                // limit the number of two-hop candidates to avoid too many expansions
-                candidates_two_hop_expansion.truncate(self.max_degree_with_slack() / 2);
-
-                // Expand each two-hop candidate: if its neighbor is a match, compute its distance
-                // to the query and insert into `scratch.visited`
-                // If it is not a match, do nothing
-                let two_hop_expansion_candidate_ids: Vec<DP::InternalId> =
-                    candidates_two_hop_expansion.iter().map(|n| n.id).collect();
-
-                accessor
-                    .expand_beam(
-                        two_hop_expansion_candidate_ids.iter().copied(),
-                        computer,
-                        NotInMutWithLabelCheck::new(&mut scratch.visited, query_label_evaluator),
-                        |distance, id| {
-                            two_hop_neighbors.push(Neighbor::new(id, distance));
-                        },
-                    )
-                    .await?;
-
-                // Next, insert the new matches into `scratch.best` and increment stats counters
-                two_hop_neighbors
-                    .iter()
-                    .for_each(|neighbor| scratch.best.insert(*neighbor));
-
-                scratch.cmps += two_hop_neighbors.len() as u32;
-                scratch.hops += two_hop_expansion_candidate_ids.len() as u32;
-            }
-
-            Ok(make_stats(scratch))
-        }
-    }
-
     /// Filter out start nodes from the best candidates in the scratch.
     fn filter_search_candidates(
         &self,
@@ -2365,136 +2117,47 @@ where
         }
     }
 
-    /// Performs a graph-based search towards a target query vector recording the path taken.
+    /// Execute a search using the unified search interface.
     ///
-    /// This method executes a search using the provided `strategy` to access and process elements.
-    /// It computes the similarity between the query vector and the elements in the index, moving towards the
-    /// nearest neighbors according to the search parameters.
-    /// The path taken is recorded according to the search_record object passed in.
+    /// This method provides a single entry point for all search types. The `search_params` argument
+    /// implements [`search::Search`], which defines the complete search behavior including
+    /// algorithm selection and post-processing.
     ///
-    /// # Arguments
+    /// # Supported Search Types
     ///
-    /// * `strategy` - The search strategy to use for accessing and processing elements.
-    /// * `context` - The context to pass through to providers.
-    /// * `query` - The query vector for which nearest neighbors are sought.
-    /// * `search_params` - Parameters controlling the search behavior, such as search depth (`l_value`) and beam width.
-    /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
-    /// * `search_record` - A mutable reference to a search record object that will record the path taken during the search.
+    /// - [`search::Knn`]: Standard k-NN graph-based search
+    /// - [`search::MultihopSearch`]: Label-filtered search with multi-hop expansion
+    /// - [`search::Range`]: Range-based search within a distance radius
+    /// - [`search::Diverse`]: Diversity-aware search (feature-gated)
     ///
-    /// # Returns
+    /// # Example
     ///
-    /// Returns a tuple containing:
-    /// - An optional vector of visited nodes (if requested in `search_params`).
-    /// - The number of distance computations performed.
-    /// - The number of hops (always zero for flat search, as no graph traversal occurs).
+    /// ```ignore
+    /// use diskann::graph::{search::{Knn, Range}, Search};
     ///
-    /// # Errors
+    /// // Standard k-NN search
+    /// let params = Knn::new(10, 100, None)?;
+    /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     ///
-    /// Returns an error if there is a failure accessing elements or if the provided parameters are invalid.
-    #[allow(clippy::too_many_arguments)]
-    pub fn search_recorded<S, T, O, OB, SR>(
+    /// // Range search (note: uses () as output buffer, results in Output type)
+    /// let params = Range::new(100, 0.5)?;
+    /// let result = index.search(params, &strategy, &context, &query, &mut ()).await?;
+    /// // result.ids and result.distances contain the matches
+    /// ```
+    pub fn search<S, T, O, OB, P>(
         &self,
+        search_params: P,
         strategy: &S,
         context: &DP::Context,
         query: &T,
-        search_params: &SearchParams,
         output: &mut OB,
-        search_record: &mut SR,
-    ) -> impl SendFuture<ANNResult<SearchStats>>
+    ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        T: Sync + ?Sized,
-        S: SearchStrategy<DP, T, O>,
-        O: Send,
-        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
-        SR: SearchRecord<DP::InternalId> + ?Sized,
+        P: super::search::Search<DP, S, T, O, OB>,
+        T: ?Sized,
+        OB: ?Sized,
     {
-        async move {
-            let mut accessor = strategy
-                .search_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = self.search_scratch(search_params.l_value, start_ids.len());
-
-            let stats = self
-                .search_internal(
-                    search_params.beam_width,
-                    &start_ids,
-                    &mut accessor,
-                    &computer,
-                    &mut scratch,
-                    search_record,
-                )
-                .await?;
-
-            let result_count = strategy
-                .post_processor()
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    scratch.best.iter().take(search_params.l_value.into_usize()),
-                    output,
-                )
-                .send()
-                .await
-                .into_ann_result()?;
-
-            Ok(stats.finish(result_count as u32))
-        }
-    }
-
-    /// Performs a graph-based search towards a target query vector.
-    ///
-    /// This method executes a search using the provided `strategy` to access and process elements.
-    /// It computes the similarity between the query vector and the elements in the index, moving towards the
-    /// nearest neighbors according to the search parameters.
-    ///
-    /// # Arguments
-    ///
-    /// * `strategy` - The search strategy to use for accessing and processing elements.
-    /// * `context` - The context to pass through to providers.
-    /// * `query` - The query vector for which nearest neighbors are sought.
-    /// * `search_params` - Parameters controlling the search behavior, such as search depth (`l_value`) and beam width.
-    /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
-    ///
-    /// # Returns
-    ///
-    /// Returns a tuple containing:
-    /// - An optional vector of visited nodes (if requested in `search_params`).
-    /// - The number of distance computations performed.
-    /// - The number of hops (always zero for flat search, as no graph traversal occurs).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if there is a failure accessing elements or if the provided parameters are invalid.
-    pub fn search<S, T, O, OB>(
-        &self,
-        strategy: &S,
-        context: &DP::Context,
-        query: &T,
-        search_params: &SearchParams,
-        output: &mut OB,
-    ) -> impl SendFuture<ANNResult<SearchStats>>
-    where
-        T: Sync + ?Sized,
-        S: SearchStrategy<DP, T, O>,
-        O: Send,
-        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
-    {
-        async move {
-            self.search_recorded(
-                strategy,
-                context,
-                query,
-                search_params,
-                output,
-                &mut NoopSearchRecord::new(),
-            )
-            .await
-        }
+        search_params.search(self, strategy, context, query, output)
     }
 
     /// Performs a brute-force flat search over the points matching a provided filter function.
@@ -2509,15 +2172,12 @@ where
     /// * `context` - The context to pass through to providers.
     /// * `query` - The query vector for which nearest neighbors are sought.
     /// * `vector_filter` - A predicate function used to filter candidate vectors based on their external IDs.
-    /// * `search_params` - Parameters controlling the search behavior, such as search depth (`l_value`) and beam width.
+    /// * `search_params` - Parameters controlling the search behavior, such as search depth (`l_value`).
     /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
     ///
     /// # Returns
     ///
-    /// Returns a tuple containing:
-    /// - An optional vector of visited nodes (if requested in `search_params`).
-    /// - The number of distance computations performed.
-    /// - The number of hops (always zero for flat search, as no graph traversal occurs).
+    /// Returns search statistics including the number of distance computations performed.
     ///
     /// # Errors
     ///
@@ -2533,7 +2193,7 @@ where
         context: &'a DP::Context,
         query: &T,
         vector_filter: &(dyn Fn(&DP::ExternalId) -> bool + Send + Sync),
-        search_params: &SearchParams,
+        search_params: &Knn,
         output: &mut OB,
     ) -> ANNResult<SearchStats>
     where
@@ -2550,7 +2210,7 @@ where
 
         let mut scratch = {
             let num_start_points = accessor.starting_points().await?.len();
-            self.search_scratch(search_params.l_value, num_start_points)
+            self.search_scratch(search_params.l_value().get(), num_start_points)
         };
 
         let id_iterator = accessor.id_iterator().await?;
@@ -2578,7 +2238,7 @@ where
                 &mut accessor,
                 query,
                 &computer,
-                scratch.best.iter().take(search_params.l_value.into_usize()),
+                scratch.best.iter().take(search_params.l_value().get()),
                 output,
             )
             .send()
@@ -2591,229 +2251,6 @@ where
             result_count: result_count as u32,
             range_search_second_round: false,
         })
-    }
-
-    /// A helper function for range search that allows an external application
-    /// to perform their own post-processing on the raw in-range results
-    #[allow(clippy::type_complexity)]
-    pub fn range_search_raw<S, T, O>(
-        &self,
-        strategy: &S,
-        context: &DP::Context,
-        query: &T,
-        search_params: &RangeSearchParams,
-    ) -> impl SendFuture<ANNResult<(SearchStats, Vec<Neighbor<DP::InternalId>>)>>
-    where
-        T: Sync + ?Sized,
-        S: SearchStrategy<DP, T, O>,
-        O: Send + Default + Clone,
-    {
-        async move {
-            let mut accessor = strategy
-                .search_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = self.search_scratch(search_params.starting_l_value, start_ids.len());
-
-            let initial_stats = self
-                .search_internal(
-                    search_params.beam_width,
-                    &start_ids,
-                    &mut accessor,
-                    &computer,
-                    &mut scratch,
-                    &mut NoopSearchRecord::new(),
-                )
-                .await?;
-
-            let mut in_range = Vec::with_capacity(search_params.starting_l_value.into_usize());
-
-            for neighbor in scratch
-                .best
-                .iter()
-                .take(search_params.starting_l_value.into_usize())
-            {
-                if neighbor.distance <= search_params.radius {
-                    in_range.push(neighbor);
-                }
-            }
-
-            // clear the visited set and repopulate it with just the in-range points
-            scratch.visited.clear();
-            for neighbor in in_range.iter() {
-                scratch.visited.insert(neighbor.id);
-            }
-            scratch.in_range = in_range;
-
-            let stats = if scratch.in_range.len()
-                >= ((search_params.starting_l_value as f32) * search_params.initial_search_slack)
-                    as usize
-            {
-                // Move to range search
-                let range_stats = self
-                    .range_search_internal(search_params, &mut accessor, &computer, &mut scratch)
-                    .await?;
-
-                InternalSearchStats {
-                    cmps: initial_stats.cmps,
-                    hops: initial_stats.hops + range_stats.hops,
-                    range_search_second_round: true,
-                }
-            } else {
-                initial_stats
-            };
-
-            Ok((
-                stats.finish(scratch.in_range.len() as u32),
-                scratch.in_range.to_vec(),
-            ))
-        }
-    }
-
-    /// Given a `query` vector, search for all results within a specified radius
-    /// `l_value` is the search depth of the initial search phase
-    ///
-    /// Note that the radii in `search_params` are raw distances, not similarity scores;
-    /// the user is expected to execute any necessary transformations to their desired
-    /// radius before calling this function.
-    ///
-    /// We allow complicated types here to avoid needing an entirely new type definition
-    /// for just one function
-    #[allow(clippy::type_complexity)]
-    pub fn range_search<S, T, O>(
-        &self,
-        strategy: &S,
-        context: &DP::Context,
-        query: &T,
-        search_params: &RangeSearchParams,
-    ) -> impl SendFuture<ANNResult<(SearchStats, Vec<O>, Vec<f32>)>>
-    where
-        T: Sync + ?Sized,
-        S: SearchStrategy<DP, T, O>,
-        O: Send + Default + Clone,
-    {
-        async move {
-            let mut accessor = strategy
-                .search_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-
-            let (mut stats, in_range) = self
-                .range_search_raw(strategy, context, query, search_params)
-                .await?;
-            // create a new output buffer for the range search
-            // need to initialize distance buffer to max value because of later filtering step
-            let mut result_ids: Vec<O> = vec![O::default(); in_range.len()];
-            let mut result_dists: Vec<f32> = vec![f32::MAX; in_range.len()];
-
-            let mut output_buffer = search_output_buffer::IdDistance::new(
-                result_ids.as_mut_slice(),
-                result_dists.as_mut_slice(),
-            );
-
-            let _ = strategy
-                .post_processor()
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    in_range.into_iter(),
-                    &mut output_buffer,
-                )
-                .send()
-                .await
-                .into_ann_result()?;
-
-            // Filter the output buffer for points with distance between inner and outer radius
-            // Note this takes a dependency on the output of `post_process` being sorted by distance
-
-            let inner_cutoff = if let Some(inner_radius) = search_params.inner_radius {
-                result_dists
-                    .iter()
-                    .position(|dist| *dist > inner_radius)
-                    .unwrap_or(result_dists.len())
-            } else {
-                0
-            };
-
-            let outer_cutoff = result_dists
-                .iter()
-                .position(|dist| *dist > search_params.radius)
-                .unwrap_or(result_dists.len());
-
-            result_ids.truncate(outer_cutoff);
-            result_ids.drain(0..inner_cutoff);
-
-            result_dists.truncate(outer_cutoff);
-            result_dists.drain(0..inner_cutoff);
-
-            let result_count = result_ids.len();
-
-            stats.result_count = result_count as u32;
-
-            Ok((stats, result_ids, result_dists))
-        }
-    }
-
-    /// Graph search that takes into account label filter matching by expanding
-    /// each non-matching neighborhood to search for matching nodes
-    /// Label provider must be included as a function argument
-    /// Note that if the Strategy is of type BetaFilter, this function assumes
-    /// but does not enforce that the label provider used in the strategy
-    /// is the same as the one in the function argument
-    pub fn multihop_search<S, T, O, OB>(
-        &self,
-        strategy: &S,
-        context: &DP::Context,
-        query: &T,
-        search_params: &SearchParams,
-        output: &mut OB,
-        query_label_evaluator: &dyn QueryLabelProvider<DP::InternalId>,
-    ) -> impl SendFuture<ANNResult<SearchStats>>
-    where
-        T: Sync + ?Sized,
-        S: SearchStrategy<DP, T, O>,
-        O: Send,
-        OB: search_output_buffer::SearchOutputBuffer<O> + Send,
-    {
-        async move {
-            let mut accessor = strategy
-                .search_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = self.search_scratch(search_params.l_value, start_ids.len());
-
-            let stats = self
-                .multihop_search_internal(
-                    search_params,
-                    &mut accessor,
-                    &computer,
-                    &mut scratch,
-                    &mut NoopSearchRecord::new(),
-                    query_label_evaluator,
-                )
-                .await?;
-
-            let result_count = strategy
-                .post_processor()
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    scratch.best.iter().take(search_params.l_value.into_usize()),
-                    output,
-                )
-                .send()
-                .await
-                .into_ann_result()?;
-
-            Ok(stats.finish(result_count as u32))
-        }
     }
 
     //////////////////
@@ -3597,154 +3034,20 @@ struct InplaceDeleteWorkList<I> {
     in_neighbors: Vec<I>,
 }
 
-/// Private internal struct for recording search statistics.
-struct InternalSearchStats {
-    cmps: u32,
-    hops: u32,
-    range_search_second_round: bool,
+/// Internal struct for recording search statistics.
+pub(crate) struct InternalSearchStats {
+    pub(crate) cmps: u32,
+    pub(crate) hops: u32,
+    pub(crate) range_search_second_round: bool,
 }
 
 impl InternalSearchStats {
-    fn finish(self, result_count: u32) -> SearchStats {
+    pub(crate) fn finish(self, result_count: u32) -> SearchStats {
         SearchStats {
             cmps: self.cmps,
             hops: self.hops,
             result_count,
             range_search_second_round: self.range_search_second_round,
-        }
-    }
-}
-
-#[cfg(feature = "experimental_diversity_search")]
-impl<DP> DiskANNIndex<DP>
-where
-    DP: DataProvider,
-{
-    /// Create a diverse search scratch with DiverseNeighborQueue
-    fn create_diverse_scratch<P>(
-        &self,
-        l_value: usize,
-        beam_width: Option<usize>,
-        diverse_params: &DiverseSearchParams<P>,
-        k_value: usize,
-    ) -> SearchScratch<DP::InternalId, crate::neighbor::DiverseNeighborQueue<P>>
-    where
-        P: crate::neighbor::AttributeValueProvider<Id = DP::InternalId>,
-    {
-        use crate::neighbor::DiverseNeighborQueue;
-
-        let attribute_provider = diverse_params.attribute_provider.clone();
-        let diverse_queue = DiverseNeighborQueue::new(
-            l_value,
-            // SAFETY: k_value is guaranteed to be non-zero by SearchParams validation by caller
-            #[allow(clippy::expect_used)]
-            NonZeroUsize::new(k_value).expect("k_value must be non-zero"),
-            diverse_params.diverse_results_k,
-            attribute_provider,
-        );
-
-        SearchScratch {
-            best: diverse_queue,
-            visited: HashSet::with_capacity(self.estimate_visited_set_capacity(Some(l_value))),
-            id_scratch: Vec::with_capacity(self.max_degree_with_slack()),
-            beam_nodes: Vec::with_capacity(beam_width.unwrap_or(1)),
-            range_frontier: std::collections::VecDeque::new(),
-            in_range: Vec::new(),
-            hops: 0,
-            cmps: 0,
-        }
-    }
-
-    /// Experimental diverse search implementation using DiverseNeighborQueue.
-    ///
-    /// This method performs a graph-based search with diversity constraints, using the provided
-    /// diverse search parameters to filter results based on attribute values.
-    ///
-    /// # Arguments
-    ///
-    /// * `strategy` - The search strategy to use for accessing and processing elements.
-    /// * `context` - The context to pass through to providers.
-    /// * `query` - The query vector for which nearest neighbors are sought.
-    /// * `search_params` - Parameters controlling the search behavior, including l_value, beam width, and k_value.
-    /// * `diverse_params` - Diversity parameters including attribute provider and alpha value.
-    /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
-    /// * `search_record` - A mutable reference to a search record object that will record the path taken during the search.
-    ///
-    /// # Returns
-    ///
-    /// Returns search statistics including comparisons and hops performed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if there is a failure accessing elements or if the provided parameters are invalid.
-    #[allow(clippy::too_many_arguments)]
-    pub fn diverse_search_experimental<S, T, O, OB, SR, P>(
-        &self,
-        strategy: &S,
-        context: &DP::Context,
-        query: &T,
-        search_params: &SearchParams,
-        diverse_params: &DiverseSearchParams<P>,
-        output: &mut OB,
-        search_record: &mut SR,
-    ) -> impl SendFuture<ANNResult<SearchStats>>
-    where
-        T: Sync + ?Sized,
-        S: glue::SearchStrategy<DP, T, O>,
-        O: Send,
-        OB: search_output_buffer::SearchOutputBuffer<O> + Send,
-        SR: super::search::record::SearchRecord<DP::InternalId> + ?Sized,
-        P: crate::neighbor::AttributeValueProvider<Id = DP::InternalId>,
-    {
-        async move {
-            let mut accessor = strategy
-                .search_accessor(&self.data_provider, context)
-                .into_ann_result()?;
-
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            // Use diverse search with DiverseNeighborQueue
-            // TODO: Use scratch pool in future PRs to avoid allocation.
-            let mut diverse_scratch = self.create_diverse_scratch(
-                search_params.l_value,
-                search_params.beam_width,
-                diverse_params,
-                search_params.k_value,
-            );
-
-            let stats = self
-                .search_internal(
-                    search_params.beam_width,
-                    &start_ids,
-                    &mut accessor,
-                    &computer,
-                    &mut diverse_scratch,
-                    search_record,
-                )
-                .await?;
-
-            // Post-process diverse results to keep only diverse_results_k items
-            diverse_scratch.best.post_process();
-
-            // TODO: Post processing will change for diverse search in future PRs
-            let result_count = strategy
-                .post_processor()
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    diverse_scratch
-                        .best
-                        .iter()
-                        .take(search_params.l_value.into_usize()),
-                    output,
-                )
-                .send()
-                .await
-                .into_ann_result()?;
-
-            Ok(stats.finish(result_count as u32))
         }
     }
 }
