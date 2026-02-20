@@ -1800,8 +1800,7 @@ mod disk_provider_tests {
         let search_params2 =
             Knn::new(return_list_size as usize, search_list_size as usize, None).unwrap();
 
-        let mut diverse_search2 =
-            diskann::graph::search::Diverse::new(search_params2, diverse_params);
+        let diverse_search2 = diskann::graph::search::Diverse::new(search_params2, diverse_params);
         let stats = search_engine
             .runtime
             .block_on(search_engine.index.search(
