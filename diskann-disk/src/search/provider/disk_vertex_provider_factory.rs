@@ -228,15 +228,15 @@ pub(crate) mod tests {
     use super::*;
     use crate::utils::VirtualAlignedReaderFactory;
     use diskann_providers::{
-        storage::{get_disk_index_file, DynWriteProvider, VirtualStorageProvider},
+        storage::{VirtualStorageProvider},
         test_utils::graph_data_type_utils::GraphDataF32VectorU32Data,
     };
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
 
     // Use existing test data instead of generating new indices
-    const TEST_INDEX_PATH: &str = "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_disk.index";
-    const TEST_INDEX_PREFIX: &str = "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search";
+    const TEST_INDEX_PATH: &str =
+        "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_disk.index";
 
     #[test]
     fn test_disk_vertex_provider_factory_new_with_no_cache() {
@@ -246,10 +246,7 @@ pub(crate) mod tests {
             GraphDataF32VectorU32Data,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
-            VirtualAlignedReaderFactory::new(
-                TEST_INDEX_PATH.to_string(),
-                storage_provider.clone(),
-            ),
+            VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
             CachingStrategy::None,
         )
         .unwrap();
@@ -267,10 +264,7 @@ pub(crate) mod tests {
             GraphDataF32VectorU32Data,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
-            VirtualAlignedReaderFactory::new(
-                TEST_INDEX_PATH.to_string(),
-                storage_provider.clone(),
-            ),
+            VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
             CachingStrategy::StaticCacheWithBfsNodes(num_nodes_to_cache),
         )
         .unwrap();
@@ -278,7 +272,7 @@ pub(crate) mod tests {
         // Verify cache was created
         assert!(factory.cache.is_some());
         let cache = factory.cache.as_ref().unwrap();
-        assert!(cache.len() > 0);
+        assert!(!cache.is_empty());
         assert!(cache.len() <= num_nodes_to_cache);
     }
 
@@ -293,10 +287,7 @@ pub(crate) mod tests {
             GraphDataF32VectorU32Data,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
-            VirtualAlignedReaderFactory::new(
-                TEST_INDEX_PATH.to_string(),
-                storage_provider.clone(),
-            ),
+            VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
             CachingStrategy::StaticCacheWithBfsNodes(num_nodes_to_cache),
         )
         .unwrap();
@@ -316,10 +307,7 @@ pub(crate) mod tests {
             GraphDataF32VectorU32Data,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
-            VirtualAlignedReaderFactory::new(
-                TEST_INDEX_PATH.to_string(),
-                storage_provider.clone(),
-            ),
+            VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
             CachingStrategy::None,
         )
         .unwrap();
@@ -340,10 +328,7 @@ pub(crate) mod tests {
             GraphDataF32VectorU32Data,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
-            VirtualAlignedReaderFactory::new(
-                TEST_INDEX_PATH.to_string(),
-                storage_provider.clone(),
-            ),
+            VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
             CachingStrategy::StaticCacheWithBfsNodes(10),
         )
         .unwrap();
@@ -360,7 +345,7 @@ pub(crate) mod tests {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         // Create a factory with a caching strategy but manually set cache to None
-        let mut factory = DiskVertexProviderFactory::<
+        let factory = DiskVertexProviderFactory::<
             GraphDataF32VectorU32Data,
             VirtualAlignedReaderFactory<OverlayFS>,
         > {
@@ -387,10 +372,7 @@ pub(crate) mod tests {
             GraphDataF32VectorU32Data,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
-            VirtualAlignedReaderFactory::new(
-                TEST_INDEX_PATH.to_string(),
-                storage_provider.clone(),
-            ),
+            VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
             CachingStrategy::None,
         )
         .unwrap();

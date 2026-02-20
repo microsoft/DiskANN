@@ -16,10 +16,3 @@ pub struct AsyncDiskLoadContext {
     /// Number of vectors in the index.
     pub num_points: usize,
 }
-
-#[cfg(test)]
-mod tests {
-    // Tests for AsyncDiskLoadContext can be added here when behavioral
-    // requirements are defined. The previous test only re-asserted type
-    // checks that the Rust compiler already enforces.
-}
