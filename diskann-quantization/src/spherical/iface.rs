@@ -138,8 +138,8 @@ use std::marker::PhantomData;
 use diskann_utils::{Reborrow, ReborrowMut};
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 use diskann_wide::{
-    arch::{Scalar, Target1, Target2},
     Architecture,
+    arch::{Scalar, Target1, Target2},
 };
 #[cfg(feature = "flatbuffers")]
 use flatbuffers::FlatBufferBuilder;
@@ -149,13 +149,12 @@ use thiserror::Error;
 use diskann_wide::arch::x86_64::{V3, V4};
 
 use super::{
-    quantizer, CompensatedCosine, CompensatedIP, CompensatedSquaredL2, Data, DataMut, DataRef,
-    FullQuery, FullQueryMut, FullQueryRef, Query, QueryMut, QueryRef, SphericalQuantizer,
-    SupportedMetric,
+    CompensatedCosine, CompensatedIP, CompensatedSquaredL2, Data, DataMut, DataRef, FullQuery,
+    FullQueryMut, FullQueryRef, Query, QueryMut, QueryRef, SphericalQuantizer, SupportedMetric,
+    quantizer,
 };
-#[cfg(feature = "flatbuffers")]
-use crate::{alloc::CompoundError, flatbuffers as fb};
 use crate::{
+    AsFunctor, CompressIntoWith,
     alloc::{
         Allocator, AllocatorCore, AllocatorError, GlobalAllocator, Poly, ScopedAllocator, TryClone,
     },
@@ -164,8 +163,10 @@ use crate::{
     error::InlineError,
     meta,
     num::PowerOfTwo,
-    poly, AsFunctor, CompressIntoWith,
+    poly,
 };
+#[cfg(feature = "flatbuffers")]
+use crate::{alloc::CompoundError, flatbuffers as fb};
 
 // A convenience definition to shorten the extensive where-clauses present in this file.
 type Rf32 = distances::Result<f32>;
@@ -1096,12 +1097,7 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
         scratch: ScopedAllocator<'a>,
     ) -> Result<(), QueryCompressionError>
     where
-        SphericalQuantizer<A>: CompressIntoWith<
-            &'a [f32],
-            T,
-            ScopedAllocator<'a>,
-            Error = quantizer::CompressionError,
-        >,
+        SphericalQuantizer<A>: CompressIntoWith<&'a [f32], T, ScopedAllocator<'a>, Error = quantizer::CompressionError>,
     {
         self.quantizer
             .compress_into_with(query, storage, scratch)
@@ -1127,11 +1123,11 @@ impl<const NBITS: usize, A: Allocator> Impl<NBITS, A> {
             + 'static,
         B: AllocatorCore,
         SphericalQuantizer<A>: for<'a> CompressIntoWith<
-            &'a [f32],
-            <T as ReborrowMut<'a>>::Target,
-            ScopedAllocator<'a>,
-            Error = quantizer::CompressionError,
-        >,
+                &'a [f32],
+                <T as ReborrowMut<'a>>::Target,
+                ScopedAllocator<'a>,
+                Error = quantizer::CompressionError,
+            >,
         SphericalQuantizer<A>: Dispatchable<Q, NBITS>,
     {
         if let Err(err) = self
@@ -2020,11 +2016,11 @@ where
 #[cfg(test)]
 mod tests {
     use diskann_utils::views::{Matrix, MatrixView};
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::{
-        algorithms::{transforms::TargetDim, TransformKind},
+        algorithms::{TransformKind, transforms::TargetDim},
         alloc::{AlignedAllocator, GlobalAllocator, Poly},
         num::PowerOfTwo,
         spherical::PreScale,
@@ -2276,31 +2272,35 @@ mod tests {
 
             // Errors
             let too_small = &dataset.row(0)[..dataset.ncols() - 1];
-            assert!(plan
-                .fused_query_computer(too_small, layout, false, GlobalAllocator, scoped_global)
-                .is_err());
+            assert!(
+                plan.fused_query_computer(too_small, layout, false, GlobalAllocator, scoped_global)
+                    .is_err()
+            );
         }
 
         // Errors
         {
             let mut too_small = vec![u8::default(); plan.bytes() - 1];
-            assert!(plan
-                .compress(dataset.row(0), OpaqueMut(&mut too_small), scoped_global)
-                .is_err());
+            assert!(
+                plan.compress(dataset.row(0), OpaqueMut(&mut too_small), scoped_global)
+                    .is_err()
+            );
 
             let mut too_big = vec![u8::default(); plan.bytes() + 1];
-            assert!(plan
-                .compress(dataset.row(0), OpaqueMut(&mut too_big), scoped_global)
-                .is_err());
+            assert!(
+                plan.compress(dataset.row(0), OpaqueMut(&mut too_big), scoped_global)
+                    .is_err()
+            );
 
             let mut just_right = vec![u8::default(); plan.bytes()];
-            assert!(plan
-                .compress(
+            assert!(
+                plan.compress(
                     &dataset.row(0)[..dataset.ncols() - 1],
                     OpaqueMut(&mut just_right),
                     scoped_global
                 )
-                .is_err());
+                .is_err()
+            );
         }
     }
 
@@ -2536,8 +2536,8 @@ mod tests {
     #[cfg(feature = "flatbuffers")]
     mod serialization {
         use std::sync::{
-            atomic::{AtomicBool, Ordering},
             Arc,
+            atomic::{AtomicBool, Ordering},
         };
 
         use super::*;

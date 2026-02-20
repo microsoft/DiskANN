@@ -1852,6 +1852,28 @@ impl BfTreePaths {
     }
 }
 
+/// Copy a snapshot file to the target path if they differ.
+/// This handles the case where the index was built with a different prefix
+/// than the one being saved to.
+async fn copy_snapshot_if_needed(
+    snapshot_path: std::path::PathBuf,
+    target_path: std::path::PathBuf,
+) -> ANNResult<()> {
+    if snapshot_path != target_path {
+        tokio::task::spawn_blocking(move || {
+            std::fs::copy(&snapshot_path, &target_path).map_err(|e| {
+                ANNError::log_index_error(format!(
+                    "Failed to copy snapshot from {:?} to {:?}: {}",
+                    snapshot_path, target_path, e
+                ))
+            })
+        })
+        .await
+        .map_err(|e| ANNError::log_index_error(format!("Blocking copy task failed: {}", e)))??;
+    }
+    Ok(())
+}
+
 // SaveWith/LoadWith for BfTreeProvider with TableDeleteProviderAsync
 
 impl<T> SaveWith<String> for BfTreeProvider<T, NoStore, TableDeleteProviderAsync>
@@ -1897,8 +1919,20 @@ where
         }
 
         // Save vectors and neighbors
-        self.full_vectors.snapshot();
-        self.neighbor_provider.snapshot();
+        let vectors_snapshot_path = self.full_vectors.snapshot();
+        let neighbors_snapshot_path = self.neighbor_provider.snapshot();
+
+        // Copy snapshot files to the target prefix location if they differ
+        copy_snapshot_if_needed(
+            vectors_snapshot_path,
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+        )
+        .await?;
+        copy_snapshot_if_needed(
+            neighbors_snapshot_path,
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+        )
+        .await?;
 
         // Save delete bitmap
         {
@@ -2035,9 +2069,26 @@ where
         }
 
         // Save vectors, neighbors, and quant vectors
-        self.full_vectors.snapshot();
-        self.neighbor_provider.snapshot();
-        self.quant_vectors.snapshot();
+        let vectors_snapshot_path = self.full_vectors.snapshot();
+        let neighbors_snapshot_path = self.neighbor_provider.snapshot();
+        let quant_snapshot_path = self.quant_vectors.snapshot();
+
+        // Copy snapshot files to the target prefix location if they differ
+        copy_snapshot_if_needed(
+            vectors_snapshot_path,
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+        )
+        .await?;
+        copy_snapshot_if_needed(
+            neighbors_snapshot_path,
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+        )
+        .await?;
+        copy_snapshot_if_needed(
+            quant_snapshot_path,
+            BfTreePaths::quant_bftree(&saved_params.prefix),
+        )
+        .await?;
 
         // Save PQ table metadata and data using PQStorage format
         let filename = BfTreePaths::pq_pivots_bin(&saved_params.prefix);
@@ -2455,12 +2506,19 @@ mod tests {
 
         let storage = FileStorageProvider;
 
-        provider.save_with(&storage, &prefix).await.unwrap();
+        // Save to a different prefix to exercise the snapshot copy logic
+        let save_dir = tempdir().unwrap();
+        let save_prefix = save_dir
+            .path()
+            .join("saved_bf_tree_provider")
+            .to_string_lossy()
+            .to_string();
+        provider.save_with(&storage, &save_prefix).await.unwrap();
 
         // Load using trait method (includes delete bitmap)
         let loaded_provider = BfTreeProvider::<f32, NoStore, TableDeleteProviderAsync>::load_with(
             &storage,
-            &prefix.clone(),
+            &save_prefix,
         )
         .await
         .unwrap();
@@ -2623,13 +2681,20 @@ mod tests {
 
         let storage = FileStorageProvider;
 
-        provider.save_with(&storage, &prefix).await.unwrap();
+        // Save to a different prefix to exercise the snapshot copy logic
+        let save_dir = tempdir().unwrap();
+        let save_prefix = save_dir
+            .path()
+            .join("saved_bf_tree_provider_quant")
+            .to_string_lossy()
+            .to_string();
+        provider.save_with(&storage, &save_prefix).await.unwrap();
 
         // Load using trait method (includes delete bitmap and quantization)
         let loaded_provider =
             BfTreeProvider::<f32, QuantVectorProvider, TableDeleteProviderAsync>::load_with(
                 &storage,
-                &prefix.clone(),
+                &save_prefix,
             )
             .await
             .unwrap();

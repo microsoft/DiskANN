@@ -65,7 +65,7 @@ macro_rules! x86_define_register {
             #[inline(always)]
             fn to_array(self) -> [$scalar; $lanes] {
                 // SAFETY: Provided the scalar type is an integer or floating point,
-                // then all bit pattens are valid between source and destination types.
+                // then all bit patterns are valid between source and destination types.
                 // (provided an x86 intrinsic is one of the transmuted types).
                 //
                 // The source argument is taken by value (no reference conversion) and
@@ -79,7 +79,7 @@ macro_rules! x86_define_register {
             #[inline(always)]
             fn from_array(_: $arch, x: [$scalar; $lanes]) -> Self {
                 // SAFETY: Provided the scalar type is an integer or floating point,
-                // then all bit pattens are valid between source and destination types.
+                // then all bit patterns are valid between source and destination types.
                 // (provided an x86 intrinsic is one of the transmuted types).
                 //
                 // The source argument is taken by value (no reference conversion) and
@@ -208,7 +208,7 @@ macro_rules! x86_retarget {
 /// Utility macro for defining `X86Splat`.
 ///
 /// SAFETY: It is the invoker's responsibility to ensure that the intrinsic is safe to call.
-/// That is - any intrinsics invoked must be compatbiel with `$type`'s associated architecture.
+/// That is - any intrinsics invoked must be compatible with `$type`'s associated architecture.
 macro_rules! x86_define_splat {
     ($type:ty, $intrinsic:expr, $requires:literal) => {
         impl X86Splat for $type {
@@ -241,7 +241,7 @@ macro_rules! x86_define_splat {
 /// Utility macro for defining `X86Default`.
 ///
 /// SAFETY: It is the invoker's responsibility to ensure that the intrinsic is safe to call.
-/// That is - any intrinsics invoked must be compatbiel with `$type`'s associated architecture.
+/// That is - any intrinsics invoked must be compatible with `$type`'s associated architecture.
 macro_rules! x86_define_default {
     ($type:ty, $intrinsic:expr, $requires:literal) => {
         impl X86Default for $type {
@@ -258,9 +258,9 @@ macro_rules! x86_define_default {
 }
 
 /// SAFETY: It is the invoker's responsibility to ensure that the provided intrinsics are
-/// safe to call. T
+/// safe to call.
 ///
-/// hat is - any intrinsics invoked must be compatbiel with `$type`'s associated architecture.
+/// That is - any intrinsics invoked must be compatible with `$type`'s associated architecture.
 macro_rules! x86_splitjoin {
     (__m512i, $type:path, $half:path) => {
         impl $crate::SplitJoin for $type {

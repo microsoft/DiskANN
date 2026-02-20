@@ -5,8 +5,9 @@
 
 use std::ptr::NonNull;
 
-use super::super::vectors::DataMutRef;
 use super::super::MinMaxQuantizer;
+use super::super::vectors::DataMutRef;
+use crate::CompressInto;
 use crate::bits::{Representation, Unsigned};
 use crate::minmax::{self, Data};
 use crate::multi_vector::matrix::{
@@ -15,7 +16,6 @@ use crate::multi_vector::matrix::{
 use crate::multi_vector::{LayoutError, Mat, MatMut, MatRef, Standard};
 use crate::scalar::InputContainsNaN;
 use crate::utils;
-use crate::CompressInto;
 
 ////////////////
 // MinMaxMeta //
@@ -155,7 +155,10 @@ where
     /// - The caller guarantees that `ptr` was allocated with the correct layout.
     unsafe fn drop(self, ptr: NonNull<u8>) {
         let slice_ptr = std::ptr::slice_from_raw_parts_mut(ptr.as_ptr(), self.bytes());
-        let _ = Box::from_raw(slice_ptr);
+
+        // SAFETY: inherited from caller. All implementations that create a new owned
+        // `Mat<Self>` are compatible with `Box` deallocation.
+        let _ = unsafe { Box::from_raw(slice_ptr) };
     }
 }
 
@@ -294,8 +297,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithms::transforms::NullTransform;
     use crate::algorithms::Transform;
+    use crate::algorithms::transforms::NullTransform;
     use crate::minmax::vectors::DataRef;
     use crate::num::Positive;
     use diskann_utils::{Reborrow, ReborrowMut};

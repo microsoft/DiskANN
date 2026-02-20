@@ -833,7 +833,6 @@ mod tests {
     use diskann_utils::views::MatrixView;
     use diskann_vector::distance::Metric;
     use rstest::rstest;
-    use vfs::MemoryFS;
 
     use super::*;
 
@@ -989,7 +988,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_with_and_load_with() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         let store = make_store(Metric::InnerProduct);
 
         // Save to our memory provider

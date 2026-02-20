@@ -104,7 +104,7 @@
 //!    invokes the reference implementation may be all that's needed.
 //!
 //!    More complicated operations may require their own test harness (see
-//!    `test_tuils/dot_product.rs`).
+//!    `test_utils/dot_product.rs`).
 //!
 //!    Tests should go through the utilities in `test_utils::driver` to ensure adequate
 //!    coverage and low compile time.
@@ -170,8 +170,6 @@ pub mod arch;
 pub use arch::Architecture;
 
 /// The current architecture that is the closest fit for the current compilation target.
-///
-/// The type [`Wide`] is always configured to use this as its associated architecture type.
 pub const ARCH: arch::Current = arch::current();
 
 ///////////////////////

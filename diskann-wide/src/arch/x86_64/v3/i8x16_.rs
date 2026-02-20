@@ -33,7 +33,7 @@ macros::x86_define_default!(i8x16, _mm_setzero_si128, "sse2");
 
 helpers::unsafe_map_binary_op!(i8x16, std::ops::Add, add, _mm_add_epi8, "sse2");
 helpers::unsafe_map_binary_op!(i8x16, std::ops::Sub, sub, _mm_sub_epi8, "sse2");
-helpers::unsafe_map_unary_op!(i8x16, SIMDAbs, abs_simd, _mm_abs_epi8, "sse3");
+helpers::unsafe_map_unary_op!(i8x16, SIMDAbs, abs_simd, _mm_abs_epi8, "ssse3");
 
 impl std::ops::Mul for i8x16 {
     type Output = Self;
@@ -147,13 +147,13 @@ impl X86LoadStore for i8x16 {
 impl SIMDPartialEq for i8x16 {
     #[inline(always)]
     fn eq_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: The presence of `Self` attest the intrinsic can be used.
+        // SAFETY: The presence of `Self` attests the intrinsic can be used.
         Self::Mask::from_underlying(self.arch(), unsafe { _mm_cmpeq_epi8(self.0, other.0) })
     }
 
     #[inline(always)]
     fn ne_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: The presence of `Self` attest the intrinsic can be used.
+        // SAFETY: The presence of `Self` attests the intrinsic can be used.
         let m = unsafe { _mm_xor_si128(_mm_cmpeq_epi8(self.0, other.0), __m128i::all_ones()) };
         Self::Mask::from_underlying(self.arch(), m)
     }
@@ -162,13 +162,13 @@ impl SIMDPartialEq for i8x16 {
 impl SIMDPartialOrd for i8x16 {
     #[inline(always)]
     fn lt_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: The presence of `Self` attest the intrinsic can be used.
+        // SAFETY: The presence of `Self` attests the intrinsic can be used.
         Self::Mask::from_underlying(self.arch(), unsafe { _mm_cmpgt_epi8(other.0, self.0) })
     }
 
     #[inline(always)]
     fn le_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: The presence of `Self` attest the intrinsic can be used.
+        // SAFETY: The presence of `Self` attests the intrinsic can be used.
         let m = unsafe { _mm_cmpeq_epi8(self.0, _mm_min_epi8(self.0, other.0)) };
         Self::Mask::from_underlying(self.arch(), m)
     }

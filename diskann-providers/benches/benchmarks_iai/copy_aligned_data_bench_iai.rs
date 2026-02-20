@@ -14,7 +14,6 @@ use diskann_providers::{
 use iai_callgrind::black_box;
 use rand::Rng;
 use tempfile::TempDir;
-use vfs::PhysicalFS;
 
 pub const TEST_DATA_PATH: &str = "test_aligned_data.bin";
 pub const BENCHMARK_ID: &str = "copy_aligned_data";
@@ -31,7 +30,7 @@ pub fn benchmark_copy_aligned_data_iai() {
         clippy::disallowed_methods,
         reason = "Use physical file system rather than memory for testing the actual disk read/write"
     )]
-    let storage_provider = VirtualStorageProvider::new(PhysicalFS::new(tmp_dir.path()));
+    let storage_provider = VirtualStorageProvider::new_physical(tmp_dir.path());
 
     let num_points = 1_000_000;
     let num_pq_chunks = 192;

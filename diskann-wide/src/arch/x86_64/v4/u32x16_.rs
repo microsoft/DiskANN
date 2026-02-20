@@ -20,7 +20,7 @@ use crate::{
 };
 
 /////
-///// 32-bit floating point
+///// 32-bit unsigned integer
 /////
 
 macros::x86_define_register!(u32x16, __m512i, BitMask<16, V4>, u32, 16, V4);
@@ -89,7 +89,7 @@ impl SIMDSumTree for u32x16 {
 impl SIMDSelect<u32x16> for BitMask<16, V4> {
     #[inline(always)]
     fn select(self, x: u32x16, y: u32x16) -> u32x16 {
-        // SAFETY: `_mm512_mask_blend_epi32` requires AVX512F + AVX512VL - implied by V4
+        // SAFETY: `_mm512_mask_blend_epi32` requires AVX512F - implied by V4
         u32x16::from_underlying(self.arch(), unsafe {
             _mm512_mask_blend_epi32(self.to_underlying(), y.to_underlying(), x.to_underlying())
         })
