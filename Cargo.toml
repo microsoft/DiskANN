@@ -22,6 +22,7 @@ members = [
     "diskann-benchmark-simd",
     "diskann-benchmark",
     "diskann-tools",
+    "vectorset",
 ]
 
 default-members = [
@@ -34,7 +35,7 @@ default-members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.46.0"      # Obeying semver
+version = "0.46.0"                                                                                      # Obeying semver
 description = "DiskANN is a fast approximate nearest neighbor search library for high dimensional data"
 authors = ["Microsoft"]
 documentation = "https://github.com/microsoft/DiskANN"

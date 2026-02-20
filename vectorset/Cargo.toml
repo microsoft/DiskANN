@@ -1,0 +1,28 @@
+[package]
+name = "vectorset"
+version = "1.0.0"
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+azure_core = "0.28.0"
+azure_identity = "0.28.0"
+bytemuck.workspace = true
+clap = { workspace = true, features = ["derive"] }
+indicatif = "0.18.3"
+rand.workspace = true
+redis = { version = "0.32.5", features = [
+    "tokio-native-tls-comp",
+    "vector-sets",
+] }
+serde.workspace = true
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "net",
+    "macros",
+    "fs",
+    "sync",
+] }
+toml = "0.9.7"

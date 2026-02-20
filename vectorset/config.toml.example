@@ -1,0 +1,6 @@
+# first IP listed is the primary; writes will go only to primary
+ips = ["127.0.0.1"]
+port = 6379
+secure = false
+# scope = "some-scope-here"
+# username = "someuser"
