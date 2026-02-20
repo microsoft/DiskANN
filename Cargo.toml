@@ -16,6 +16,7 @@ members = [
     "diskann-providers",
     "diskann-disk",
     "diskann-label-filter",
+    "diskann-garnet",
     # Infrastructure
     "diskann-benchmark-runner",
     "diskann-benchmark-core",
@@ -35,7 +36,7 @@ default-members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.47.0"      # Obeying semver
+version = "0.47.0"
 description = "DiskANN is a fast approximate nearest neighbor search library for high dimensional data"
 authors = ["Microsoft"]
 documentation = "https://github.com/microsoft/DiskANN"
