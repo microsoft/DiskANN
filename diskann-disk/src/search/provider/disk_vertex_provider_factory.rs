@@ -228,7 +228,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::utils::VirtualAlignedReaderFactory;
     use diskann_providers::{
-        storage::{VirtualStorageProvider},
+        storage::VirtualStorageProvider,
         test_utils::graph_data_type_utils::GraphDataF32VectorU32Data,
     };
     use diskann_utils::test_data_root;
