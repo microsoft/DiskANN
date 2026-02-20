@@ -437,12 +437,62 @@ macro_rules! impl_simd_dot_product_iu8_to_i32 {
                 self.dot_simd(right, left)
             }
         }
+
+        impl<A> SIMDDotProduct<Emulated<u8, $TwoN, A>, Emulated<u8, $TwoN, A>>
+            for Emulated<u32, $N, A>
+        where
+            A: arch::Sealed,
+        {
+            fn dot_simd(self, left: Emulated<u8, $TwoN, A>, right: Emulated<u8, $TwoN, A>) -> Self {
+                self + Self::from_arch_fn(self.1, |i| {
+                    let l0: u32 = left.0[4 * i].into();
+                    let l1: u32 = left.0[4 * i + 1].into();
+                    let l2: u32 = left.0[4 * i + 2].into();
+                    let l3: u32 = left.0[4 * i + 3].into();
+
+                    let r0: u32 = right.0[4 * i].into();
+                    let r1: u32 = right.0[4 * i + 1].into();
+                    let r2: u32 = right.0[4 * i + 2].into();
+                    let r3: u32 = right.0[4 * i + 3].into();
+
+                    let a = l0.expected_fma_(r0, l1.expected_mul_(r1));
+                    let b = l2.expected_fma_(r2, l3.expected_mul_(r3));
+                    a + b
+                })
+            }
+        }
+
+        impl<A> SIMDDotProduct<Emulated<i8, $TwoN, A>, Emulated<i8, $TwoN, A>>
+            for Emulated<i32, $N, A>
+        where
+            A: arch::Sealed,
+        {
+            fn dot_simd(self, left: Emulated<i8, $TwoN, A>, right: Emulated<i8, $TwoN, A>) -> Self {
+                self + Self::from_arch_fn(self.1, |i| {
+                    let l0: i32 = left.0[4 * i].into();
+                    let l1: i32 = left.0[4 * i + 1].into();
+                    let l2: i32 = left.0[4 * i + 2].into();
+                    let l3: i32 = left.0[4 * i + 3].into();
+
+                    let r0: i32 = right.0[4 * i].into();
+                    let r1: i32 = right.0[4 * i + 1].into();
+                    let r2: i32 = right.0[4 * i + 2].into();
+                    let r3: i32 = right.0[4 * i + 3].into();
+
+                    let a = l0.expected_fma_(r0, l1.expected_mul_(r1));
+                    let b = l2.expected_fma_(r2, l3.expected_mul_(r3));
+                    a + b
+                })
+            }
+        }
     };
 }
 
+impl_simd_dot_product_i16_to_i32!(4, 8);
 impl_simd_dot_product_i16_to_i32!(8, 16);
 impl_simd_dot_product_i16_to_i32!(16, 32);
 
+impl_simd_dot_product_iu8_to_i32!(4, 16);
 impl_simd_dot_product_iu8_to_i32!(8, 32);
 impl_simd_dot_product_iu8_to_i32!(16, 64);
 
@@ -815,10 +865,24 @@ mod test_emulated {
         (Emulated<i8, 32>, Emulated<u8, 32>) => Emulated<i32, 8>, 0x3001f05604e96289, SC
     );
     test_utils::dot_product::test_dot_product!(
+        (Emulated<i8, 32>, Emulated<i8, 32>) => Emulated<i32, 8>, 0x3001f05604e96289, SC
+    );
+
+    test_utils::dot_product::test_dot_product!(
         (Emulated<u8, 64>, Emulated<i8, 64>) => Emulated<i32, 16>, 0x3001f05604e96289, SC
     );
     test_utils::dot_product::test_dot_product!(
         (Emulated<i8, 64>, Emulated<u8, 64>) => Emulated<i32, 16>, 0x3001f05604e96289, SC
+    );
+    test_utils::dot_product::test_dot_product!(
+        (Emulated<i8, 64>, Emulated<i8, 64>) => Emulated<i32, 16>, 0x3001f05604e96289, SC
+    );
+
+    test_utils::dot_product::test_dot_product!(
+        (Emulated<u8, 32>, Emulated<u8, 32>) => Emulated<u32, 8>, 0x3001f05604e96289, SC
+    );
+    test_utils::dot_product::test_dot_product!(
+        (Emulated<u8, 64>, Emulated<u8, 64>) => Emulated<u32, 16>, 0x3001f05604e96289, SC
     );
 
     // reductions

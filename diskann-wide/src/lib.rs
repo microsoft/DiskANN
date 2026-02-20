@@ -154,7 +154,6 @@ pub use splitjoin::{LoHi, SplitJoin};
 mod bitmask;
 pub use bitmask::{BitMask, FromInt};
 
-#[cfg(target_arch = "x86_64")]
 pub(crate) mod doubled;
 
 mod emulated;
@@ -218,10 +217,10 @@ macro_rules! alias {
 // Internal //
 //////////////
 
-#[cfg(all(test, target_arch = "x86_64"))]
+#[cfg(all(test, any(target_arch = "x86_64", target_arch = "aarch64")))]
 const TEST_MIN_ARCH: &str = "WIDE_TEST_MIN_ARCH";
 
-#[cfg(all(test, target_arch = "x86_64"))]
+#[cfg(all(test, any(target_arch = "x86_64", target_arch = "aarch64")))]
 fn get_test_arch() -> Option<String> {
     match std::env::var(TEST_MIN_ARCH) {
         Ok(v) => Some(v),
@@ -232,7 +231,6 @@ fn get_test_arch() -> Option<String> {
     }
 }
 
-#[cfg(not(target_arch = "aarch64"))]
 pub(crate) mod helpers;
 
 #[cfg(test)]

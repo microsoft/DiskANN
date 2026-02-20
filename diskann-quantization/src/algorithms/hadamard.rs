@@ -81,6 +81,24 @@ impl
     }
 }
 
+#[cfg(target_arch = "aarch64")]
+impl
+    diskann_wide::arch::Target1<
+        diskann_wide::arch::aarch64::Neon,
+        Result<(), NotPowerOfTwo>,
+        &mut [f32],
+    > for HadamardTransform
+{
+    #[inline(never)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::aarch64::Neon,
+        x: &mut [f32],
+    ) -> Result<(), NotPowerOfTwo> {
+        arch.retarget().run1(HadamardTransformOuter, x)
+    }
+}
+
 ////////////////////
 // Implementation //
 ////////////////////
@@ -473,7 +491,10 @@ mod tests {
         // Queue up a list of implementations.
         type Implementation = Box<dyn Fn(&mut [f32])>;
 
-        #[cfg_attr(not(target_arch = "x86_64"), expect(unused_mut))]
+        #[cfg_attr(
+            not(any(target_arch = "x86_64", target_arch = "aarch64")),
+            expect(unused_mut)
+        )]
         let mut impls: Vec<(Implementation, &'static str)> = vec![
             (
                 Box::new(|x| hadamard_transform(x).unwrap()),
@@ -494,6 +515,14 @@ mod tests {
             impls.push((
                 Box::new(move |x| arch.run1(HadamardTransform, x).unwrap()),
                 "x86-64-v3",
+            ));
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+            impls.push((
+                Box::new(move |x| arch.run1(HadamardTransform, x).unwrap()),
+                "neon",
             ));
         }
 
