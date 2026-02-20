@@ -334,3 +334,6 @@ target/
 
 # ignore VS Code local history
 .history/
+
+# Ignore local settings for claude code AI agent
+.claude/settings.local.json
