@@ -1828,6 +1828,31 @@ pub struct SavedParams {
     pub graph_params: Option<GraphParams>,
 }
 
+/// The element type of the full-precision vectors stored in the index.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorDtype {
+    F32,
+    F16,
+    U8,
+    I8,
+}
+
+impl VectorDtype {
+    /// Derive the `VectorDtype` from a concrete [`VectorRepr`] type parameter.
+    #[allow(clippy::panic)]
+    pub fn from_type<T: VectorRepr>() -> Self {
+        let name = std::any::type_name::<T>();
+        match name {
+            "f32" => Self::F32,
+            "half::f16" | "f16" => Self::F16,
+            "i8" => Self::I8,
+            "u8" => Self::U8,
+            _ => panic!("unsupported VectorRepr type: {}", name),
+        }
+    }
+}
+
 /// Graph configuration parameters persisted alongside the index.
 /// These are needed to reconstruct the `DiskANNIndex` config on load.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1835,7 +1860,7 @@ pub struct GraphParams {
     pub l_build: usize,
     pub alpha: f32,
     pub backedge_ratio: f32,
-    pub vector_dtype: String,
+    pub vector_dtype: VectorDtype,
 }
 
 /// Helper struct for generating consistent file paths for BfTreeProvider persistence.
