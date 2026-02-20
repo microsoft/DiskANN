@@ -2048,6 +2048,7 @@ where
             scratch.neighbors.clear();
 
             let mut expanded_ids = Vec::new();
+            let mut rejected_ids = Vec::new();
 
             while (scratch.best.has_notvisited_node()
                 || scratch.best.peek_best_unsubmitted().is_some()
@@ -2093,8 +2094,9 @@ where
                         break;
                     }
                 }
-                let rejected = accessor.submit_expand(scratch.beam_nodes.iter().copied());
-                for id in rejected {
+                rejected_ids.clear();
+                accessor.submit_expand(scratch.beam_nodes.iter().copied(), &mut rejected_ids);
+                for &id in &rejected_ids {
                     scratch.best.revert_submitted(&id);
                 }
 

@@ -170,15 +170,24 @@ impl TryAsPooled<PipelinedScratchArgs> for PipelinedScratch {
             args.num_pq_chunks,
             args.num_pq_centers,
         )?;
+        let fp_vector_capacity = args.dims * std::mem::size_of::<f32>();
+        let mut node_pool = Vec::with_capacity(args.max_slots);
+        for _ in 0..args.max_slots {
+            node_pool.push(LoadedNode {
+                fp_vector: Vec::with_capacity(fp_vector_capacity),
+                adjacency_list: Vec::with_capacity(args.graph_degree),
+                rank: 0,
+            });
+        }
         Ok(Self {
             reader,
             pq_scratch,
-            in_flight_ios: VecDeque::new(),
-            loaded_nodes: HashMap::new(),
-            distance_cache: HashMap::new(),
-            neighbor_buf: Vec::new(),
-            node_pool: Vec::new(),
-            completed_buf: Vec::new(),
+            in_flight_ios: VecDeque::with_capacity(args.max_slots),
+            loaded_nodes: HashMap::with_capacity(args.max_slots),
+            distance_cache: HashMap::with_capacity(args.max_slots * 4),
+            neighbor_buf: Vec::with_capacity(args.graph_degree),
+            node_pool,
+            completed_buf: Vec::with_capacity(args.max_slots),
         })
     }
 
@@ -561,10 +570,13 @@ where
 {
     /// Submit non-blocking io_uring reads for the given node IDs.
     /// Nodes found in the node cache are placed directly into `loaded_nodes`,
-    /// skipping disk IO entirely. Returns IDs that could not be submitted.
-    fn submit_expand(&mut self, ids: impl Iterator<Item = Self::Id> + Send) -> Vec<Self::Id> {
+    /// skipping disk IO entirely. Rejected IDs are appended to `rejected`.
+    fn submit_expand(
+        &mut self,
+        ids: impl Iterator<Item = Self::Id> + Send,
+        rejected: &mut Vec<Self::Id>,
+    ) {
         let io_start = Instant::now();
-        let mut rejected = Vec::new();
         let mut hit_slot_limit = false;
         let mut enqueued = 0u32;
         for id in ids {
@@ -626,11 +638,10 @@ where
                 // Slots remain InFlight; they'll be drained on drop/reset.
                 self.io_time += io_start.elapsed();
                 tracing::warn!("PipelinedReader::flush failed: {e}");
-                return rejected;
+                return;
             }
         }
         self.io_time += io_start.elapsed();
-        rejected
     }
 
     /// Poll for completed reads and expand the best loaded node.
