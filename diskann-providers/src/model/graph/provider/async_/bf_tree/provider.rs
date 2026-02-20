@@ -1857,9 +1857,20 @@ impl VectorDtype {
 /// These are needed to reconstruct the `DiskANNIndex` config on load.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GraphParams {
+    /// l_build is the search list size used during index construction. 
+    /// When inserting a new vector into the DiskANN graph, the algorithm 
+    /// performs a greedy search to find the best neighbors to connect to. 
+    /// l_build controls how many candidate nodes are tracked during that search.
     pub l_build: usize,
+    /// alpha is the pruning aggressiveness parameter used during graph 
+    /// construction. During pruning, when deciding whether to keep a candidate 
+    /// neighbor k for node i, the algorithm checks if there's already a 
+    /// closer neighbor j that "occludes" k. The occlusion test is is governed by alpha.
     pub alpha: f32,
+    /// backedge_ratio controls how many reverse (back) edges are added after 
+    /// pruning during graph construction.
     pub backedge_ratio: f32,
+    /// vector_dtype indicates the data type of the vectors stored in the index, which is necessary for correctly interpreting the raw bytes of the vectors when loading the index from disk.
     pub vector_dtype: VectorDtype,
 }
 
