@@ -51,7 +51,7 @@ mod tests {
         let tracker = NaiveContinuationTracker::default();
         // Verify it always returns Continue
         match tracker.get_continuation_grant() {
-            ContinuationGrant::Continue => assert!(true),
+            ContinuationGrant::Continue => {}
             _ => panic!("Expected Continue"),
         }
     }
@@ -63,7 +63,7 @@ mod tests {
 
         // The boxed version should also return Continue
         match boxed.get_continuation_grant() {
-            ContinuationGrant::Continue => assert!(true),
+            ContinuationGrant::Continue => {}
             _ => panic!("Expected Continue"),
         }
     }

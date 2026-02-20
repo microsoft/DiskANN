@@ -37,7 +37,7 @@ mod tests {
         let progress = Progress::Completed;
         let mapped = progress.map(|n| n * 2);
         match mapped {
-            Progress::Completed => assert!(true),
+            Progress::Completed => {}
             _ => panic!("Expected Completed variant"),
         }
     }

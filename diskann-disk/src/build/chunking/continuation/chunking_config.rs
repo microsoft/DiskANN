@@ -81,9 +81,11 @@ mod tests {
 
     #[test]
     fn test_chunking_config_custom_values() {
-        let mut config = ChunkingConfig::default();
-        config.data_compression_chunk_vector_count = 10000;
-        config.inmemory_build_chunk_vector_count = 20000;
+        let config = ChunkingConfig {
+            data_compression_chunk_vector_count: 10000,
+            inmemory_build_chunk_vector_count: 20000,
+            ..Default::default()
+        };
 
         assert_eq!(config.data_compression_chunk_vector_count, 10000);
         assert_eq!(config.inmemory_build_chunk_vector_count, 20000);

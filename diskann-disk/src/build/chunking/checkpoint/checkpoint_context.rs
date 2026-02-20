@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint_context_new() {
-        let manager = NaiveCheckpointRecordManager::default();
+        let manager = NaiveCheckpointRecordManager;
         let context = CheckpointContext::new(&manager, WorkStage::Start, WorkStage::End);
 
         assert_eq!(context.current_stage(), WorkStage::Start);
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint_context_current_stage() {
-        let manager = NaiveCheckpointRecordManager::default();
+        let manager = NaiveCheckpointRecordManager;
         let context =
             CheckpointContext::new(&manager, WorkStage::QuantizeFPV, WorkStage::InMemIndexBuild);
 
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint_context_get_resumption_point() {
-        let manager = NaiveCheckpointRecordManager::default();
+        let manager = NaiveCheckpointRecordManager;
         let context = CheckpointContext::new(&manager, WorkStage::Start, WorkStage::End);
 
         let result = context.get_resumption_point();
@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint_context_to_owned() {
-        let manager = NaiveCheckpointRecordManager::default();
+        let manager = NaiveCheckpointRecordManager;
         let context = CheckpointContext::new(&manager, WorkStage::Start, WorkStage::End);
 
         let owned = context.to_owned();
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_owned_checkpoint_context_new() {
-        let manager = Box::new(NaiveCheckpointRecordManager::default());
+        let manager = Box::new(NaiveCheckpointRecordManager);
         let context = OwnedCheckpointContext::new(
             manager,
             WorkStage::TrainBuildQuantizer,
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn test_owned_checkpoint_context_update() {
-        let manager = Box::new(NaiveCheckpointRecordManager::default());
+        let manager = Box::new(NaiveCheckpointRecordManager);
         let mut context = OwnedCheckpointContext::new(manager, WorkStage::Start, WorkStage::End);
 
         let result = context.update(Progress::Completed);
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_owned_checkpoint_context_mark_as_invalid() {
-        let manager = Box::new(NaiveCheckpointRecordManager::default());
+        let manager = Box::new(NaiveCheckpointRecordManager);
         let mut context = OwnedCheckpointContext::new(manager, WorkStage::Start, WorkStage::End);
 
         let result = context.mark_as_invalid();

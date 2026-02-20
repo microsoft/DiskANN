@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint_manager_ext_execute_stage_with_resumption() {
-        let mut manager = NaiveCheckpointRecordManager::default();
+        let mut manager = NaiveCheckpointRecordManager;
         let mut executed = false;
 
         let result = manager.execute_stage(
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn test_checkpoint_manager_clone_box() {
-        let manager = NaiveCheckpointRecordManager::default();
+        let manager = NaiveCheckpointRecordManager;
         let boxed = manager.clone_box();
 
         // The boxed version should work the same

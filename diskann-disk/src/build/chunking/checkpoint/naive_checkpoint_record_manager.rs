@@ -39,7 +39,7 @@ mod tests {
 
     #[test]
     fn test_naive_checkpoint_record_manager_default() {
-        let manager = NaiveCheckpointRecordManager::default();
+        let manager = NaiveCheckpointRecordManager;
         // Test get_resumption_point always returns Some(0)
         let result = manager.get_resumption_point(WorkStage::Start);
         assert!(result.is_ok());
@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn test_naive_checkpoint_record_manager_get_resumption_point() {
-        let manager = NaiveCheckpointRecordManager::default();
+        let manager = NaiveCheckpointRecordManager;
 
         // Test with various stages
         for stage in [WorkStage::Start, WorkStage::End, WorkStage::QuantizeFPV] {
@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn test_naive_checkpoint_record_manager_update() {
-        let mut manager = NaiveCheckpointRecordManager::default();
+        let mut manager = NaiveCheckpointRecordManager;
 
         // Update should always succeed
         let result = manager.update(Progress::Completed, WorkStage::End);
@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn test_naive_checkpoint_record_manager_mark_as_invalid() {
-        let mut manager = NaiveCheckpointRecordManager::default();
+        let mut manager = NaiveCheckpointRecordManager;
 
         // mark_as_invalid should always succeed
         let result = manager.mark_as_invalid();

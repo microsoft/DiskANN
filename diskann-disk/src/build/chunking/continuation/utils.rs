@@ -145,7 +145,7 @@ mod tests {
 
         assert!(result.is_ok());
         match result.unwrap() {
-            Progress::Completed => assert!(true),
+            Progress::Completed => {}
             _ => panic!("Expected Completed"),
         }
     }
