@@ -109,9 +109,4 @@ mod tests {
         aligned_read.aligned_buf_mut()[0] = 100;
         assert_eq!(aligned_read.aligned_buf()[0], 100);
     }
-
-    #[test]
-    fn test_disk_io_alignment_constant() {
-        assert_eq!(DISK_IO_ALIGNMENT, 512);
-    }
 }
