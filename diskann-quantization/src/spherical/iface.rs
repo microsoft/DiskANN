@@ -148,6 +148,9 @@ use thiserror::Error;
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::{V3, V4};
 
+#[cfg(target_arch = "aarch64")]
+use diskann_wide::arch::aarch64::Neon;
+
 use super::{
     CompensatedCosine, CompensatedIP, CompensatedSquaredL2, Data, DataMut, DataRef, FullQuery,
     FullQueryMut, FullQueryRef, Query, QueryMut, QueryRef, SphericalQuantizer, SupportedMetric,
@@ -1382,6 +1385,25 @@ cfg_if::cfg_if! {
         dispatch_map!(2, AsQuery<2>, V4); // specialized
         dispatch_map!(4, AsQuery<4>, V4, downcast_to_v3);
         dispatch_map!(8, AsQuery<8>, V4, downcast_to_v3);
+    } else if #[cfg(target_arch = "aarch64")] {
+        fn downcast(arch: Neon) -> Scalar {
+            arch.retarget()
+        }
+
+        dispatch_map!(1, AsFull, Neon, downcast);
+        dispatch_map!(2, AsFull, Neon, downcast);
+        dispatch_map!(4, AsFull, Neon, downcast);
+        dispatch_map!(8, AsFull, Neon, downcast);
+
+        dispatch_map!(1, AsData<1>, Neon, downcast);
+        dispatch_map!(2, AsData<2>, Neon, downcast);
+        dispatch_map!(4, AsData<4>, Neon, downcast);
+        dispatch_map!(8, AsData<8>, Neon, downcast);
+
+        dispatch_map!(1, AsQuery<4, bits::BitTranspose>, Neon, downcast);
+        dispatch_map!(2, AsQuery<2>, Neon, downcast);
+        dispatch_map!(4, AsQuery<4>, Neon, downcast);
+        dispatch_map!(8, AsQuery<8>, Neon, downcast);
     }
 }
 
@@ -1476,14 +1498,29 @@ where
 {
 }
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(target_arch = "aarch64")]
+trait Dispatchable<Q, const N: usize>: BuildComputer<Scalar, Q, N> + BuildComputer<Neon, Q, N>
+where
+    Q: FromOpaque,
+{
+}
+
+#[cfg(target_arch = "aarch64")]
+impl<Q, const N: usize, T> Dispatchable<Q, N> for T
+where
+    Q: FromOpaque,
+    T: BuildComputer<Scalar, Q, N> + BuildComputer<Neon, Q, N>,
+{
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 trait Dispatchable<Q, const N: usize>: BuildComputer<Scalar, Q, N>
 where
     Q: FromOpaque,
 {
 }
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 impl<Q, const N: usize, T> Dispatchable<Q, N> for T
 where
     Q: FromOpaque,
