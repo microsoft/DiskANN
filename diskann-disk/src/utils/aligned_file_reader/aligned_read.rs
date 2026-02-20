@@ -64,7 +64,7 @@ mod tests {
     fn test_aligned_read_valid() {
         let mut buffer = vec![0u8; 512];
         let aligned_read = AlignedRead::new(0, &mut buffer);
-        
+
         assert!(aligned_read.is_ok());
         let aligned_read = aligned_read.unwrap();
         assert_eq!(aligned_read.offset(), 0);
@@ -75,7 +75,7 @@ mod tests {
     fn test_aligned_read_valid_offset() {
         let mut buffer = vec![0u8; 1024];
         let aligned_read = AlignedRead::new(512, &mut buffer);
-        
+
         assert!(aligned_read.is_ok());
         let aligned_read = aligned_read.unwrap();
         assert_eq!(aligned_read.offset(), 512);
@@ -85,7 +85,7 @@ mod tests {
     fn test_aligned_read_invalid_offset() {
         let mut buffer = vec![0u8; 512];
         let aligned_read = AlignedRead::new(100, &mut buffer);
-        
+
         assert!(aligned_read.is_err());
     }
 
@@ -93,7 +93,7 @@ mod tests {
     fn test_aligned_read_invalid_buffer_size() {
         let mut buffer = vec![0u8; 100];
         let aligned_read = AlignedRead::new(0, &mut buffer);
-        
+
         assert!(aligned_read.is_err());
     }
 
@@ -101,10 +101,10 @@ mod tests {
     fn test_aligned_read_buffer_access() {
         let mut buffer = vec![42u8; 512];
         let mut aligned_read = AlignedRead::new(0, &mut buffer).unwrap();
-        
+
         // Test immutable access
         assert_eq!(aligned_read.aligned_buf()[0], 42);
-        
+
         // Test mutable access
         aligned_read.aligned_buf_mut()[0] = 100;
         assert_eq!(aligned_read.aligned_buf()[0], 100);

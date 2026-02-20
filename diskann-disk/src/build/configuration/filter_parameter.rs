@@ -21,8 +21,6 @@ pub fn default_vector_filter<Data: GraphDataType>() -> VectorFilter<'static, Dat
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_default_associated_data_filter() {
         // Test with a simple generic type

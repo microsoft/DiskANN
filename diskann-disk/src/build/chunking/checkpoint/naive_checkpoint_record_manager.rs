@@ -34,8 +34,8 @@ impl CheckpointManager for NaiveCheckpointRecordManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::Progress;
+    use super::*;
 
     #[test]
     fn test_naive_checkpoint_record_manager_default() {
@@ -49,7 +49,7 @@ mod tests {
     #[test]
     fn test_naive_checkpoint_record_manager_get_resumption_point() {
         let manager = NaiveCheckpointRecordManager::default();
-        
+
         // Test with various stages
         for stage in [WorkStage::Start, WorkStage::End, WorkStage::QuantizeFPV] {
             let result = manager.get_resumption_point(stage);
@@ -61,11 +61,11 @@ mod tests {
     #[test]
     fn test_naive_checkpoint_record_manager_update() {
         let mut manager = NaiveCheckpointRecordManager::default();
-        
+
         // Update should always succeed
         let result = manager.update(Progress::Completed, WorkStage::End);
         assert!(result.is_ok());
-        
+
         let result = manager.update(Progress::Processed(100), WorkStage::InMemIndexBuild);
         assert!(result.is_ok());
     }
@@ -73,7 +73,7 @@ mod tests {
     #[test]
     fn test_naive_checkpoint_record_manager_mark_as_invalid() {
         let mut manager = NaiveCheckpointRecordManager::default();
-        
+
         // mark_as_invalid should always succeed
         let result = manager.mark_as_invalid();
         assert!(result.is_ok());

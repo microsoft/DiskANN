@@ -30,7 +30,7 @@ mod tests {
             let _: usize = ctx.search_io_limit;
             let _: usize = ctx.num_points;
         }
-        
+
         // Type checking function compiles, which verifies the struct definition
         let _ = check_fields;
     }

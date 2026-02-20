@@ -60,7 +60,7 @@ mod tests {
     fn test_naive_continuation_tracker_clone_box() {
         let tracker = NaiveContinuationTracker::default();
         let boxed = tracker.clone_box();
-        
+
         // The boxed version should also return Continue
         match boxed.get_continuation_grant() {
             ContinuationGrant::Continue => assert!(true),

@@ -41,10 +41,10 @@ mod tests {
 
     #[test]
     fn test_virtual_aligned_reader_factory_new() {
-        let fs = Arc::new(VirtualStorageProvider::new(MemoryFS::new()));
+        let fs = Arc::new(VirtualStorageProvider::new_memory());
         let path = "/test.bin".to_string();
         let factory = VirtualAlignedReaderFactory::new(path.clone(), fs.clone());
-        
+
         assert_eq!(factory.file_path, path);
     }
 }

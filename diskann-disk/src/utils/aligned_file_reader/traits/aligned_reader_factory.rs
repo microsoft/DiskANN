@@ -41,7 +41,7 @@ mod tests {
     fn test_aligned_reader_factory_trait() {
         let factory = MockAlignedReaderFactory;
         let reader = factory.build();
-        
+
         assert!(reader.is_ok());
     }
 }

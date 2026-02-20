@@ -31,7 +31,7 @@ mod tests {
         let mut buffer = vec![0u8; 512];
         let read_request = AlignedRead::new(0, &mut buffer).unwrap();
         let mut requests = [read_request];
-        
+
         assert!(reader.read(&mut requests).is_ok());
     }
 }

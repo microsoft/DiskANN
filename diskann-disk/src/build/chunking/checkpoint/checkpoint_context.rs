@@ -84,22 +84,23 @@ impl OwnedCheckpointContext {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::NaiveCheckpointRecordManager;
+    use super::*;
 
     #[test]
     fn test_checkpoint_context_new() {
         let manager = NaiveCheckpointRecordManager::default();
         let context = CheckpointContext::new(&manager, WorkStage::Start, WorkStage::End);
-        
+
         assert_eq!(context.current_stage(), WorkStage::Start);
     }
 
     #[test]
     fn test_checkpoint_context_current_stage() {
         let manager = NaiveCheckpointRecordManager::default();
-        let context = CheckpointContext::new(&manager, WorkStage::QuantizeFPV, WorkStage::InMemIndexBuild);
-        
+        let context =
+            CheckpointContext::new(&manager, WorkStage::QuantizeFPV, WorkStage::InMemIndexBuild);
+
         assert_eq!(context.current_stage(), WorkStage::QuantizeFPV);
     }
 
@@ -107,7 +108,7 @@ mod tests {
     fn test_checkpoint_context_get_resumption_point() {
         let manager = NaiveCheckpointRecordManager::default();
         let context = CheckpointContext::new(&manager, WorkStage::Start, WorkStage::End);
-        
+
         let result = context.get_resumption_point();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Some(0));
@@ -117,7 +118,7 @@ mod tests {
     fn test_checkpoint_context_to_owned() {
         let manager = NaiveCheckpointRecordManager::default();
         let context = CheckpointContext::new(&manager, WorkStage::Start, WorkStage::End);
-        
+
         let owned = context.to_owned();
         assert_eq!(owned.current_stage(), WorkStage::Start);
     }
@@ -125,8 +126,12 @@ mod tests {
     #[test]
     fn test_owned_checkpoint_context_new() {
         let manager = Box::new(NaiveCheckpointRecordManager::default());
-        let context = OwnedCheckpointContext::new(manager, WorkStage::TrainBuildQuantizer, WorkStage::PartitionData);
-        
+        let context = OwnedCheckpointContext::new(
+            manager,
+            WorkStage::TrainBuildQuantizer,
+            WorkStage::PartitionData,
+        );
+
         assert_eq!(context.current_stage(), WorkStage::TrainBuildQuantizer);
     }
 
@@ -134,7 +139,7 @@ mod tests {
     fn test_owned_checkpoint_context_update() {
         let manager = Box::new(NaiveCheckpointRecordManager::default());
         let mut context = OwnedCheckpointContext::new(manager, WorkStage::Start, WorkStage::End);
-        
+
         let result = context.update(Progress::Completed);
         assert!(result.is_ok());
     }
@@ -143,7 +148,7 @@ mod tests {
     fn test_owned_checkpoint_context_mark_as_invalid() {
         let manager = Box::new(NaiveCheckpointRecordManager::default());
         let mut context = OwnedCheckpointContext::new(manager, WorkStage::Start, WorkStage::End);
-        
+
         let result = context.mark_as_invalid();
         assert!(result.is_ok());
     }
