@@ -89,8 +89,11 @@ pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: std::fmt::Debug + Send 
     }
 
     /// Find the first `Unvisited` node, mark it `Submitted`, and return it — single pass.
+    ///
+    /// Default delegates to `closest_notvisited()` so that implementations which
+    /// only provide the base methods still make progress in `search_internal`.
     fn pop_best_unsubmitted(&mut self) -> Option<Neighbor<I>> {
-        None
+        self.closest_notvisited()
     }
 
     /// Find the node with matching `id`, mark it visited, and advance the cursor if needed.
