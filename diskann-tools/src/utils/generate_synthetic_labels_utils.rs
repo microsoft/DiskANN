@@ -3,9 +3,10 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashMap, fs::File, io::Write};
+use std::{collections::HashMap, io::Write};
 
 use diskann::ANNResult;
+use diskann_providers::storage::DynWriteProvider;
 use rand::{
     distr::{Bernoulli, Distribution},
     Rng,
@@ -80,12 +81,13 @@ impl ZipfDistribution {
 }
 
 pub fn generate_labels(
+    storage_provider: &dyn DynWriteProvider,
     output_file: &str,
     distribution_type: &str,
     num_points: usize,
     num_labels: u32,
 ) -> ANNResult<()> {
-    let mut file = File::create(output_file)?;
+    let mut file = storage_provider.create_for_write(output_file)?;
 
     let rng = &mut diskann_providers::utils::create_rnd_from_seed(42);
     if distribution_type == "zipf" {
@@ -128,98 +130,110 @@ pub fn generate_labels(
 
 #[cfg(test)]
 mod test {
-    use std::fs;
     use std::io::BufRead;
+
+    use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider, VirtualStorageProvider};
 
     use super::generate_labels;
 
     #[test]
     fn generate_label_test() {
-        let label_file1: &str = "rand_labels_50_10K_zipf.txt";
-        let _ = generate_labels(label_file1, "zipf", 10000, 50);
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let label_file1: &str = "/rand_labels_50_10K_zipf.txt";
+        let _ = generate_labels(&storage_provider, label_file1, "zipf", 10000, 50);
 
         assert!(
-            fs::metadata(label_file1).is_ok(),
+            storage_provider.exists(label_file1),
             "zipf file not found: {}",
             label_file1
         );
 
-        let label_file2: &str = "rand_labels_50_10K_random.txt";
-        let _ = generate_labels(label_file2, "random", 10000, 50);
+        let label_file2: &str = "/rand_labels_50_10K_random.txt";
+        let _ = generate_labels(&storage_provider, label_file2, "random", 10000, 50);
 
         assert!(
-            fs::metadata(label_file2).is_ok(),
+            storage_provider.exists(label_file2),
             "random file not found: {}",
             label_file2
         );
 
-        let label_file3: &str = "rand_labels_50_10K_one_per_point.txt";
-        let _ = generate_labels(label_file3, "one_per_point", 10000, 50);
+        let label_file3: &str = "/rand_labels_50_10K_one_per_point.txt";
+        let _ = generate_labels(
+            &storage_provider,
+            label_file3,
+            "one_per_point",
+            10000,
+            50,
+        );
 
         assert!(
-            fs::metadata(label_file3).is_ok(),
+            storage_provider.exists(label_file3),
             "one_per_point file not found: {}",
             label_file3
         );
 
-        fs::remove_file(label_file1).expect("Failed to delete file");
-        fs::remove_file(label_file2).expect("Failed to delete file");
-        fs::remove_file(label_file3).expect("Failed to delete file");
+        storage_provider.delete(label_file1).expect("Failed to delete file");
+        storage_provider.delete(label_file2).expect("Failed to delete file");
+        storage_provider.delete(label_file3).expect("Failed to delete file");
     }
 
     #[test]
     fn test_generate_labels_small_dataset() {
-        let label_file = "/tmp/test_labels_small.txt";
-        let result = generate_labels(label_file, "zipf", 10, 5);
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let label_file = "/test_labels_small.txt";
+        let result = generate_labels(&storage_provider, label_file, "zipf", 10, 5);
 
         assert!(result.is_ok());
-        assert!(fs::metadata(label_file).is_ok());
+        assert!(storage_provider.exists(label_file));
 
         // Verify we have 10 lines
-        let file = fs::File::open(label_file).unwrap();
+        let file = storage_provider.open_reader(label_file).unwrap();
         let reader = std::io::BufReader::new(file);
         let lines: Vec<_> = reader.lines().collect();
         assert_eq!(lines.len(), 10);
 
-        fs::remove_file(label_file).ok();
+        storage_provider.delete(label_file).ok();
     }
 
     #[test]
     fn test_generate_labels_random_distribution() {
-        let label_file = "/tmp/test_labels_random.txt";
-        let result = generate_labels(label_file, "random", 100, 10);
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let label_file = "/test_labels_random.txt";
+        let result = generate_labels(&storage_provider, label_file, "random", 100, 10);
 
         assert!(result.is_ok());
-        assert!(fs::metadata(label_file).is_ok());
+        assert!(storage_provider.exists(label_file));
 
-        fs::remove_file(label_file).ok();
+        storage_provider.delete(label_file).ok();
     }
 
     #[test]
     fn test_generate_labels_one_per_point() {
-        let label_file = "/tmp/test_labels_one_per_point.txt";
-        let result = generate_labels(label_file, "one_per_point", 50, 20);
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let label_file = "/test_labels_one_per_point.txt";
+        let result = generate_labels(&storage_provider, label_file, "one_per_point", 50, 20);
 
         assert!(result.is_ok());
-        assert!(fs::metadata(label_file).is_ok());
+        assert!(storage_provider.exists(label_file));
 
         // Verify we have 50 lines
-        let file = fs::File::open(label_file).unwrap();
+        let file = storage_provider.open_reader(label_file).unwrap();
         let reader = std::io::BufReader::new(file);
         let lines: Vec<_> = reader.lines().collect();
         assert_eq!(lines.len(), 50);
 
-        fs::remove_file(label_file).ok();
+        storage_provider.delete(label_file).ok();
     }
 
     #[test]
     fn test_generate_labels_single_point() {
-        let label_file = "/tmp/test_labels_single.txt";
-        let result = generate_labels(label_file, "zipf", 1, 5);
+        let storage_provider = VirtualStorageProvider::new_memory();
+        let label_file = "/test_labels_single.txt";
+        let result = generate_labels(&storage_provider, label_file, "zipf", 1, 5);
 
         assert!(result.is_ok());
-        assert!(fs::metadata(label_file).is_ok());
+        assert!(storage_provider.exists(label_file));
 
-        fs::remove_file(label_file).ok();
+        storage_provider.delete(label_file).ok();
     }
 }
