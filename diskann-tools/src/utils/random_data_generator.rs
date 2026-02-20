@@ -31,8 +31,7 @@ pub fn write_random_data<StorageProvider: StorageWriteProvider>(
     radius: f32,
 ) -> CMDResult<()> {
     if (data_type == DataType::Int8 || data_type == DataType::Uint8)
-        && radius > 127.0
-        && radius <= 0.0
+        && (radius > 127.0 || radius <= 0.0)
     {
         return Err(CMDToolError {
             details:
@@ -67,8 +66,7 @@ pub fn write_random_data_writer<T: Sized + Write>(
     radius: f32,
 ) -> CMDResult<()> {
     if (data_type == DataType::Int8 || data_type == DataType::Uint8)
-        && radius > 127.0
-        && radius <= 0.0
+        && (radius > 127.0 || radius <= 0.0)
     {
         return Err(CMDToolError {
             details:
@@ -246,12 +244,22 @@ mod tests {
         let random_data_path = "/mydatafile.bin";
         let num_dimensions = TEST_NUM_DIMENSIONS_RECOMMENDED;
 
-        let expected = Err(CMDToolError {
-            details: format!(
-                "Generated all-zero vectors with radius {}. Try increasing radius",
-                radius
-            ),
-        });
+        let expected = if (data_type == DataType::Int8 || data_type == DataType::Uint8)
+            && radius <= 0.0
+        {
+            Err(CMDToolError {
+                details:
+                    "Error: for int8/uint8 datatypes, radius (L2 norm) cannot be greater than 127 and less than or equal to 0"
+                        .to_string(),
+            })
+        } else {
+            Err(CMDToolError {
+                details: format!(
+                    "Generated all-zero vectors with radius {}. Try increasing radius",
+                    radius
+                ),
+            })
+        };
 
         let storage_provider = VirtualStorageProvider::new_overlay(".");
         let result = write_random_data(
@@ -290,11 +298,11 @@ mod tests {
         let random_data_path = "/invalid_int8.bin";
         let storage_provider = VirtualStorageProvider::new_overlay(".");
 
-        // Note: There's a bug in the validation logic at lines 33-36 where the condition is:
-        // `radius > 127.0 && radius <= 0.0` which can never be true.
-        // It should likely be `radius > 127.0 || radius <= 0.0`
-        // For now, we test the actual behavior (no validation error)
-        // TODO: Fix validation logic and update this test
+        let expected = Err(CMDToolError {
+            details:
+                "Error: for int8/uint8 datatypes, radius (L2 norm) cannot be greater than 127 and less than or equal to 0"
+                    .to_string(),
+        });
         let result = write_random_data(
             &storage_provider,
             random_data_path,
@@ -304,7 +312,7 @@ mod tests {
             128.0,
         );
 
-        assert!(result.is_ok());
+        assert_eq!(expected, result);
     }
 
     #[test]
@@ -312,8 +320,11 @@ mod tests {
         let random_data_path = "/invalid_uint8.bin";
         let storage_provider = VirtualStorageProvider::new_overlay(".");
 
-        // Note: Same validation bug as above
-        // TODO: Fix validation logic and update this test
+        let expected = Err(CMDToolError {
+            details:
+                "Error: for int8/uint8 datatypes, radius (L2 norm) cannot be greater than 127 and less than or equal to 0"
+                    .to_string(),
+        });
         let result = write_random_data(
             &storage_provider,
             random_data_path,
@@ -323,7 +334,7 @@ mod tests {
             150.0,
         );
 
-        assert!(result.is_ok());
+        assert_eq!(expected, result);
     }
 
     #[test]

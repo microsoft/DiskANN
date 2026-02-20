@@ -132,7 +132,9 @@ pub fn generate_labels(
 mod test {
     use std::io::BufRead;
 
-    use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider, VirtualStorageProvider};
+    use diskann_providers::storage::{
+        StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
+    };
 
     use super::generate_labels;
 
@@ -158,13 +160,7 @@ mod test {
         );
 
         let label_file3: &str = "/rand_labels_50_10K_one_per_point.txt";
-        let _ = generate_labels(
-            &storage_provider,
-            label_file3,
-            "one_per_point",
-            10000,
-            50,
-        );
+        let _ = generate_labels(&storage_provider, label_file3, "one_per_point", 10000, 50);
 
         assert!(
             storage_provider.exists(label_file3),
@@ -172,9 +168,15 @@ mod test {
             label_file3
         );
 
-        storage_provider.delete(label_file1).expect("Failed to delete file");
-        storage_provider.delete(label_file2).expect("Failed to delete file");
-        storage_provider.delete(label_file3).expect("Failed to delete file");
+        storage_provider
+            .delete(label_file1)
+            .expect("Failed to delete file");
+        storage_provider
+            .delete(label_file2)
+            .expect("Failed to delete file");
+        storage_provider
+            .delete(label_file3)
+            .expect("Failed to delete file");
     }
 
     #[test]
