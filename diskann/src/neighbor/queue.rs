@@ -804,10 +804,10 @@ mod neighbor_priority_queue_test {
         queue.insert(Neighbor::new(1, 0.1));
         queue.insert(Neighbor::new(3, 0.3));
 
-        let _: Neighbor<u32> = queue.closest_notvisited().unwrap();
-        let _: Neighbor<u32> = queue.closest_notvisited().unwrap();
-        let _: Neighbor<u32> = queue.closest_notvisited().unwrap();
-        let _: Neighbor<u32> = queue.closest_notvisited().unwrap();
+        assert!(queue.closest_notvisited().is_some());
+        assert!(queue.closest_notvisited().is_some());
+        assert!(queue.closest_notvisited().is_some());
+        assert!(queue.closest_notvisited().is_some());
 
         assert_eq!(queue.capacity(), 5);
         assert_eq!(queue.size(), 5);
