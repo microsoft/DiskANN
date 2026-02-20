@@ -154,12 +154,15 @@ mod tests {
     async fn test_process_while_resource_is_available_async_completes() {
         let checker = Box::new(NaiveContinuationTracker::default());
         let items = vec![1, 2, 3];
-        let mut processed = Vec::new();
+        let processed = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
         let result = process_while_resource_is_available_async(
             |item| {
-                processed.push(item);
-                async { Ok::<(), TestError>(()) }
+                let processed = processed.clone();
+                async move {
+                    processed.lock().await.push(item);
+                    Ok::<(), TestError>(())
+                }
             },
             items.into_iter(),
             checker,
@@ -168,7 +171,10 @@ mod tests {
 
         assert!(result.is_ok());
         match result.unwrap() {
-            Progress::Completed => assert_eq!(processed, vec![1, 2, 3]),
+            Progress::Completed => {
+                let processed = processed.lock().await;
+                assert_eq!(*processed, vec![1, 2, 3]);
+            }
             _ => panic!("Expected Completed"),
         }
     }

@@ -46,5 +46,6 @@ mod tests {
         let factory = VirtualAlignedReaderFactory::new(path.clone(), fs.clone());
 
         assert_eq!(factory.file_path, path);
+        assert!(Arc::ptr_eq(&factory.storage_provider, &fs));
     }
 }
