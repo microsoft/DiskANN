@@ -222,8 +222,9 @@ where
 
         // In this loop we are going to find the beam_width number of nodes that are closest to the query.
         // Each of these nodes will be a frontier node.
-        while scratch.best.has_notvisited_node() && scratch.beam_nodes.len() < beam_width {
-            let closest_node = scratch.best.closest_notvisited();
+        while scratch.beam_nodes.len() < beam_width
+            && let Some(closest_node) = scratch.best.closest_notvisited()
+        {
             search_record.record(closest_node, scratch.hops, scratch.cmps);
             scratch.beam_nodes.push(closest_node.id);
         }
