@@ -115,7 +115,6 @@ mod relative_contrast_tests {
     use diskann_vector::distance::Metric;
     use half::f16;
     use rand::Rng;
-    use vfs::MemoryFS;
 
     use super::*;
     use crate::utils::{ground_truth::compute_ground_truth_from_datafiles, GraphDataHalfVector};
@@ -125,8 +124,7 @@ mod relative_contrast_tests {
     /// Expectation: relative contrast < 1.2
     #[test]
     fn test_compute_relative_contrast_with_random_data() {
-        let filesystem = MemoryFS::new();
-        let storage_provider = VirtualStorageProvider::new(filesystem);
+        let storage_provider = VirtualStorageProvider::new_memory();
 
         // Generate 1000 random vectors of fp16 data type with 384 dimensions
         let num_vectors = 1000;

@@ -1036,7 +1036,7 @@ mod pq_test {
 
     #[test]
     fn generate_pq_pivots_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         type ReaderType = <VirtualStorageProvider<MemoryFS> as StorageReadProvider>::Reader;
 
         let pivot_file_name = "/generate_pq_pivots_test3.bin";
@@ -1113,7 +1113,7 @@ mod pq_test {
 
     #[test]
     fn generate_optimized_pq_pivots_test() {
-        let storage_provider = VirtualStorageProvider::new(MemoryFS::default());
+        let storage_provider = VirtualStorageProvider::new_memory();
         type ReaderType = <VirtualStorageProvider<MemoryFS> as StorageReadProvider>::Reader;
 
         let pivot_file_name = "/generate_pq_pivots_test3.bin";
@@ -1271,8 +1271,7 @@ mod pq_test {
 
     #[test]
     fn generate_pq_data_from_pivots_test() {
-        let file_system = MemoryFS::new(); // Assuming you have a FileSystem struct
-        let storage_provider = VirtualStorageProvider::new(file_system);
+        let storage_provider = VirtualStorageProvider::new_memory();
         let data_file = "/generate_pq_data_from_pivots_test_data.bin";
         //npoints=5, dim=8, 5 vectors [1.0;8] [2.0;8] [2.1;8] [2.2;8] [100.0;8]
         let mut train_data: Vec<f32> = vec![

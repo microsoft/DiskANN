@@ -503,11 +503,11 @@ where
 mod test_compression {
     use std::collections::HashSet;
 
-    use diskann_vector::{distance, PureDistanceFunction};
+    use diskann_vector::{PureDistanceFunction, distance};
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, StandardUniform, Uniform},
         rngs::StdRng,
-        Rng, SeedableRng,
     };
 
     use super::*;

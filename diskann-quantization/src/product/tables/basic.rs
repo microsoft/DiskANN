@@ -6,7 +6,7 @@
 use crate::traits::CompressInto;
 use crate::views::{ChunkOffsetsBase, ChunkOffsetsView};
 use diskann_utils::views::{DenseData, MatrixBase, MatrixView};
-use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
+use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
 use thiserror::Error;
 
 /// A basic PQ table that stores the pivot table in the following dense, row-major form:
@@ -202,8 +202,8 @@ where
 mod tests {
     use diskann_utils::{lazy_format, views};
     use rand::{
-        distr::{Distribution, StandardUniform},
         SeedableRng,
+        distr::{Distribution, StandardUniform},
     };
 
     use super::*;

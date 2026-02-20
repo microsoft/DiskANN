@@ -227,7 +227,6 @@ mod tests {
         views::{Matrix, MatrixView},
     };
     use diskann_vector::distance::Metric;
-    use vfs::MemoryFS;
 
     use super::*;
     use crate::{
@@ -318,7 +317,7 @@ mod tests {
         }
 
         // Save the resulting index.
-        let provider = VirtualStorageProvider::new(MemoryFS::new());
+        let provider = VirtualStorageProvider::new_memory();
         index
             .save_with(&provider, &AsyncIndexMetadata::new(save_path.to_string()))
             .await
