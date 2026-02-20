@@ -222,3 +222,180 @@ impl<Data: GraphDataType<VectorIdType = u32>, ReaderFactory: AlignedReaderFactor
         cache.insert(node, vector, adjacency_list.clone(), *associated_data)
     }
 }
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::utils::VirtualAlignedReaderFactory;
+    use diskann_providers::{
+        storage::{get_disk_index_file, DynWriteProvider, VirtualStorageProvider},
+        test_utils::graph_data_type_utils::GraphDataF32VectorU32Data,
+    };
+    use diskann_utils::test_data_root;
+    use vfs::OverlayFS;
+
+    // Use existing test data instead of generating new indices
+    const TEST_INDEX_PATH: &str = "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search_disk.index";
+    const TEST_INDEX_PREFIX: &str = "/disk_index_search/disk_index_sift_learn_R4_L50_A1.2_truth_search";
+
+    #[test]
+    fn test_disk_vertex_provider_factory_new_with_no_cache() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        let factory = DiskVertexProviderFactory::<
+            GraphDataF32VectorU32Data,
+            VirtualAlignedReaderFactory<OverlayFS>,
+        >::new(
+            VirtualAlignedReaderFactory::new(
+                TEST_INDEX_PATH.to_string(),
+                storage_provider.clone(),
+            ),
+            CachingStrategy::None,
+        )
+        .unwrap();
+
+        assert!(factory.cache.is_none());
+    }
+
+    #[test]
+    #[ignore = "Requires test data with associated data - pending proper test fixture"]
+    fn test_disk_vertex_provider_factory_with_static_cache() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        let num_nodes_to_cache = 10;
+        let factory = DiskVertexProviderFactory::<
+            GraphDataF32VectorU32Data,
+            VirtualAlignedReaderFactory<OverlayFS>,
+        >::new(
+            VirtualAlignedReaderFactory::new(
+                TEST_INDEX_PATH.to_string(),
+                storage_provider.clone(),
+            ),
+            CachingStrategy::StaticCacheWithBfsNodes(num_nodes_to_cache),
+        )
+        .unwrap();
+
+        // Verify cache was created
+        assert!(factory.cache.is_some());
+        let cache = factory.cache.as_ref().unwrap();
+        assert!(cache.len() > 0);
+        assert!(cache.len() <= num_nodes_to_cache);
+    }
+
+    #[test]
+    #[ignore = "Requires test data with associated data - pending proper test fixture"]
+    fn test_disk_vertex_provider_factory_cache_limit_exceeds_total_nodes() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        // Request to cache more nodes than exist in the index
+        let num_nodes_to_cache = 100000;
+        let factory = DiskVertexProviderFactory::<
+            GraphDataF32VectorU32Data,
+            VirtualAlignedReaderFactory<OverlayFS>,
+        >::new(
+            VirtualAlignedReaderFactory::new(
+                TEST_INDEX_PATH.to_string(),
+                storage_provider.clone(),
+            ),
+            CachingStrategy::StaticCacheWithBfsNodes(num_nodes_to_cache),
+        )
+        .unwrap();
+
+        // Verify cache was created but limited to actual number of nodes
+        assert!(factory.cache.is_some());
+        let cache = factory.cache.as_ref().unwrap();
+        // The test index has 256 nodes
+        assert!(cache.len() <= 256);
+    }
+
+    #[test]
+    fn test_create_vertex_provider_with_no_cache() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        let factory = DiskVertexProviderFactory::<
+            GraphDataF32VectorU32Data,
+            VirtualAlignedReaderFactory<OverlayFS>,
+        >::new(
+            VirtualAlignedReaderFactory::new(
+                TEST_INDEX_PATH.to_string(),
+                storage_provider.clone(),
+            ),
+            CachingStrategy::None,
+        )
+        .unwrap();
+
+        let header = factory.get_header().unwrap();
+        let vertex_provider = factory.create_vertex_provider(32, &header).unwrap();
+
+        // Verify the provider was created successfully
+        assert_eq!(vertex_provider.io_operations(), 0);
+    }
+
+    #[test]
+    #[ignore = "Requires test data with associated data - pending proper test fixture"]
+    fn test_create_vertex_provider_with_cache() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        let factory = DiskVertexProviderFactory::<
+            GraphDataF32VectorU32Data,
+            VirtualAlignedReaderFactory<OverlayFS>,
+        >::new(
+            VirtualAlignedReaderFactory::new(
+                TEST_INDEX_PATH.to_string(),
+                storage_provider.clone(),
+            ),
+            CachingStrategy::StaticCacheWithBfsNodes(10),
+        )
+        .unwrap();
+
+        let header = factory.get_header().unwrap();
+        let vertex_provider = factory.create_vertex_provider(32, &header).unwrap();
+
+        // Verify the provider was created successfully with a cache
+        assert_eq!(vertex_provider.io_operations(), 0);
+    }
+
+    #[test]
+    fn test_create_vertex_provider_with_cache_but_none_initialized_should_error() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        // Create a factory with a caching strategy but manually set cache to None
+        let mut factory = DiskVertexProviderFactory::<
+            GraphDataF32VectorU32Data,
+            VirtualAlignedReaderFactory<OverlayFS>,
+        > {
+            aligned_reader_factory: VirtualAlignedReaderFactory::new(
+                TEST_INDEX_PATH.to_string(),
+                storage_provider.clone(),
+            ),
+            caching_strategy: CachingStrategy::StaticCacheWithBfsNodes(10),
+            cache: None, // Intentionally None despite caching strategy requiring it
+        };
+
+        let header = factory.get_header().unwrap();
+        let result = factory.create_vertex_provider(32, &header);
+
+        // Should error because cache is required but not initialized
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_header() {
+        let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
+
+        let factory = DiskVertexProviderFactory::<
+            GraphDataF32VectorU32Data,
+            VirtualAlignedReaderFactory<OverlayFS>,
+        >::new(
+            VirtualAlignedReaderFactory::new(
+                TEST_INDEX_PATH.to_string(),
+                storage_provider.clone(),
+            ),
+            CachingStrategy::None,
+        )
+        .unwrap();
+
+        let header = factory.get_header().unwrap();
+        assert_eq!(header.metadata().num_pts, 256);
+    }
+}
