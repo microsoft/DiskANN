@@ -92,3 +92,90 @@ where
 
     Ok(Progress::Completed)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::continuation_tracker::NaiveContinuationTracker;
+    use super::*;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct TestError;
+
+    impl fmt::Display for TestError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "TestError")
+        }
+    }
+
+    impl Error for TestError {}
+
+    #[test]
+    fn test_process_while_resource_is_available_completes() {
+        let checker = Box::new(NaiveContinuationTracker::default());
+        let items = vec![1, 2, 3, 4, 5];
+        let mut processed = Vec::new();
+
+        let result = process_while_resource_is_available(
+            |item| {
+                processed.push(item);
+                Ok::<(), TestError>(())
+            },
+            items.into_iter(),
+            checker,
+        );
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Progress::Completed => assert_eq!(processed, vec![1, 2, 3, 4, 5]),
+            _ => panic!("Expected Completed"),
+        }
+    }
+
+    #[test]
+    fn test_process_while_resource_is_available_empty_iter() {
+        let checker = Box::new(NaiveContinuationTracker::default());
+        let items: Vec<i32> = vec![];
+
+        let result = process_while_resource_is_available(
+            |_item| Ok::<(), TestError>(()),
+            items.into_iter(),
+            checker,
+        );
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Progress::Completed => {}
+            _ => panic!("Expected Completed"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_while_resource_is_available_async_completes() {
+        let checker = Box::new(NaiveContinuationTracker::default());
+        let items = vec![1, 2, 3];
+        let processed = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+        let result = process_while_resource_is_available_async(
+            |item| {
+                let processed = processed.clone();
+                async move {
+                    processed.lock().await.push(item);
+                    Ok::<(), TestError>(())
+                }
+            },
+            items.into_iter(),
+            checker,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        match result.unwrap() {
+            Progress::Completed => {
+                let processed = processed.lock().await;
+                assert_eq!(*processed, vec![1, 2, 3]);
+            }
+            _ => panic!("Expected Completed"),
+        }
+    }
+}
