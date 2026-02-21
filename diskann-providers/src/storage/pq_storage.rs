@@ -14,13 +14,8 @@ use rand::Rng;
 use tracing::info;
 
 use crate::{
-    model::{
-        FixedChunkPQTable, NUM_PQ_CENTROIDS, PQCompressedData,
-        pq::METADATA_SIZE,
-    },
-    utils::{
-        copy_aligned_data, gen_random_slice, load_bin, save_bin,
-    },
+    model::{FixedChunkPQTable, NUM_PQ_CENTROIDS, PQCompressedData, pq::METADATA_SIZE},
+    utils::{copy_aligned_data, gen_random_slice, load_bin, save_bin},
 };
 
 // Create types to make return values easier to understand
@@ -104,15 +99,25 @@ impl PQStorage {
         cumul_bytes[1] = cumul_bytes[0] + save_bin(pivot_view, writer, cumul_bytes[0])?;
 
         // Write THE CENTROID of PQ CENTROID vectors at offset METADATA_SIZE(4096) + size of centroids vectors.
-        cumul_bytes[2] = cumul_bytes[1] + save_bin(MatrixView::column_vector(centroid), writer, cumul_bytes[1])?;
+        cumul_bytes[2] =
+            cumul_bytes[1] + save_bin(MatrixView::column_vector(centroid), writer, cumul_bytes[1])?;
 
         // Write PQ chunk offsets
         let chunk_offsets_u32: Vec<u32> = chunk_offsets.iter().map(|&x| x as u32).collect();
-        cumul_bytes[3] = cumul_bytes[2] + save_bin(MatrixView::column_vector(chunk_offsets_u32.as_slice()), writer, cumul_bytes[2])?;
+        cumul_bytes[3] = cumul_bytes[2]
+            + save_bin(
+                MatrixView::column_vector(chunk_offsets_u32.as_slice()),
+                writer,
+                cumul_bytes[2],
+            )?;
 
         // Write metadata at offset 0.
         let cumul_bytes_u64: Vec<u64> = cumul_bytes.iter().map(|&x| x as u64).collect();
-        save_bin(MatrixView::column_vector(cumul_bytes_u64.as_slice()), writer, 0)?;
+        save_bin(
+            MatrixView::column_vector(cumul_bytes_u64.as_slice()),
+            writer,
+            0,
+        )?;
 
         writer.flush()?;
         Ok(())
