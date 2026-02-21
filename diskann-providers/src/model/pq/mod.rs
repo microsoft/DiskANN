@@ -36,12 +36,3 @@ pub use generate_pivot_arguments::{GeneratePivotArguments, GeneratePivotArgument
 
 pub mod quantizer_preprocess;
 pub use quantizer_preprocess::quantizer_preprocess;
-
-/// Convert all types within `src` using the provided closure.
-pub(crate) fn convert_types<F, T, U>(src: &[T], max: usize, f: F) -> Vec<U>
-where
-    T: Copy,
-    F: Fn(T) -> U,
-{
-    src.iter().copied().take(max).map(f).collect()
-}

@@ -4,8 +4,9 @@
  */
 
 use diskann::{utils::VectorRepr, ANNError};
+use diskann_providers::model::graph::traits::GraphDataType;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::{model::graph::traits::GraphDataType, utils::file_util::load_bin};
+use diskann_utils::io::read_bin;
 use rand::Rng;
 
 use crate::utils::{CMDResult, CMDToolError};
@@ -57,9 +58,16 @@ pub fn compute_relative_contrast<
     rng: &mut R,
 ) -> CMDResult<f32> {
     // Load base, query, and ground truth data
-    let (base_flat, nb, dim) = load_bin::<Data::VectorDataType, _>(storage_provider, base_file, 0)?;
-    let (query_flat, nq, _) = load_bin::<Data::VectorDataType, _>(storage_provider, query_file, 0)?;
-    let (gt_flat, _, ngt) = load_bin::<u32, _>(storage_provider, gt_file, 0)?;
+    let base_data =
+        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(base_file)?)?;
+    let query_data =
+        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
+    let gt_data = read_bin::<u32>(&mut storage_provider.open_reader(gt_file)?)?;
+
+    let nb = base_data.nrows();
+    let dim = base_data.ncols();
+    let nq = query_data.nrows();
+    let ngt = gt_data.ncols();
 
     tracing::info!(
         "Loaded base: {} points, query: {} points, dimension: {}, ground truth neighbors: {}",
@@ -70,10 +78,9 @@ pub fn compute_relative_contrast<
     );
 
     // Reshape flat vectors into 2D vectors
-    let base: Vec<Vec<Data::VectorDataType>> = base_flat.chunks(dim).map(|x| x.to_vec()).collect();
-    let query: Vec<Vec<Data::VectorDataType>> =
-        query_flat.chunks(dim).map(|x| x.to_vec()).collect();
-    let gt: Vec<Vec<u32>> = gt_flat.chunks(ngt).map(|x| x.to_vec()).collect();
+    let base: Vec<Vec<Data::VectorDataType>> = base_data.row_iter().map(|x| x.to_vec()).collect();
+    let query: Vec<Vec<Data::VectorDataType>> = query_data.row_iter().map(|x| x.to_vec()).collect();
+    let gt: Vec<Vec<u32>> = gt_data.row_iter().map(|x| x.to_vec()).collect();
 
     let mut mean_rc = 0.0;
 
@@ -111,7 +118,7 @@ pub fn compute_relative_contrast<
 mod relative_contrast_tests {
     use diskann_providers::storage::{StorageWriteProvider, VirtualStorageProvider};
     use diskann_providers::utils::random;
-    use diskann_providers::utils::write_metadata;
+    use diskann_utils::io::Metadata;
     use diskann_vector::distance::Metric;
     use half::f16;
     use rand::Rng;
@@ -144,7 +151,10 @@ mod relative_contrast_tests {
         let base_file_path = "/base.bin";
         {
             let mut base_writer = storage_provider.create_for_write(base_file_path).unwrap();
-            write_metadata(&mut base_writer, num_vectors, dim).unwrap();
+            Metadata::new(num_vectors, dim)
+                .unwrap()
+                .write(&mut base_writer)
+                .unwrap();
             for value in &base {
                 base_writer.write_all(&value.to_le_bytes()).unwrap();
             }
@@ -154,7 +164,10 @@ mod relative_contrast_tests {
         let query_file_path = "/query.bin";
         {
             let mut query_writer = storage_provider.create_for_write(query_file_path).unwrap();
-            write_metadata(&mut query_writer, num_queries, dim).unwrap();
+            Metadata::new(num_queries, dim)
+                .unwrap()
+                .write(&mut query_writer)
+                .unwrap();
             for value in &query {
                 query_writer.write_all(&value.to_le_bytes()).unwrap();
             }
@@ -228,7 +241,10 @@ mod relative_contrast_tests {
             let mut query_writer = storage_provider
                 .create_for_write(query_file_path)
                 .expect("Failed to create query file in memory");
-            write_metadata(&mut query_writer, num_queries, dim).expect("Failed to write metadata");
+            Metadata::new(num_queries, dim)
+                .expect("Failed to create metadata")
+                .write(&mut query_writer)
+                .expect("Failed to write metadata");
             for value in &query {
                 query_writer
                     .write_all(&value.to_le_bytes())

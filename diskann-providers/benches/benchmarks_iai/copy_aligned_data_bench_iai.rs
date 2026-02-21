@@ -9,8 +9,9 @@ use diskann::ANNResult;
 use diskann_providers::{
     model::PQCompressedData,
     storage::{StorageReadProvider, StorageWriteProvider, VirtualStorageProvider},
-    utils::{copy_aligned_data, write_metadata},
+    utils::copy_aligned_data,
 };
+use diskann_utils::io::Metadata;
 use iai_callgrind::black_box;
 use rand::Rng;
 use tempfile::TempDir;
@@ -55,7 +56,7 @@ fn generate_random_data<Writer: Write>(
     dims: usize,
 ) -> ANNResult<()> {
     let mut writer = BufWriter::new(writer);
-    write_metadata(&mut writer, npts, dims)?;
+    Metadata::new(npts, dims)?.write(&mut writer)?;
 
     let mut rng = diskann_providers::utils::create_rnd_in_tests();
     let data: Vec<u8> = (0..dims).map(|_| rng.random()).collect();

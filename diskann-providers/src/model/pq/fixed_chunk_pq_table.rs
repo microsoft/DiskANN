@@ -773,7 +773,7 @@ mod fixed_chunk_pq_table_test {
     use super::*;
     use crate::{
         common::AlignedBoxWithSlice,
-        model::{NUM_PQ_CENTROIDS, pq::convert_types},
+        model::NUM_PQ_CENTROIDS,
         utils::{file_exists, load_bin},
     };
 
@@ -1293,62 +1293,68 @@ mod fixed_chunk_pq_table_test {
             ));
         }
 
-        let (data, offset_num, offset_dim) =
-            load_bin::<u64, _>(&mut storage_provider.open_reader(pq_pivots_path)?, 0)?;
-
-        let file_offset_data =
-            convert_types(&data, offset_num * offset_dim, |x: u64| x.into_usize());
-
-        if offset_num != 4 {
+        let offsets = load_bin::<u64>(&mut storage_provider.open_reader(pq_pivots_path)?, 0)?;
+        if offsets.nrows() != 4 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. \
                  Offsets don't contain correct metadata, \
                  # offsets = {}, but expecting 4.",
-                pq_pivots_path, offset_num
+                pq_pivots_path,
+                offsets.nrows()
             )));
         }
+        let file_offset_data = offsets.map(|x| x.into_usize());
 
-        let (data, pq_center_num, dim) = load_bin::<f32, _>(
+        let pivots = load_bin::<f32>(
             &mut storage_provider.open_reader(pq_pivots_path).unwrap(),
-            file_offset_data[0],
+            file_offset_data.as_slice()[0],
         )?;
-        let pq_table = data.to_vec();
-        if pq_center_num != NUM_PQ_CENTROIDS {
+        if pivots.nrows() != NUM_PQ_CENTROIDS {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
-                pq_pivots_path, pq_center_num, NUM_PQ_CENTROIDS
+                pq_pivots_path,
+                pivots.nrows(),
+                NUM_PQ_CENTROIDS
             )));
         }
+        let dim = pivots.ncols();
 
-        let (data, centroid_dim, nc) = load_bin::<f32, _>(
+        let centroids = load_bin::<f32>(
             &mut storage_provider.open_reader(pq_pivots_path).unwrap(),
-            file_offset_data[1],
+            file_offset_data.as_slice()[1],
         )?;
-        let centroids = data.to_vec();
-        if centroid_dim != dim || nc != 1 {
+        if centroids.nrows() != dim || centroids.ncols() != 1 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_dim = {}, \
                  file_cols = {} but expecting {} entries in 1 dimension.",
-                pq_pivots_path, centroid_dim, nc, dim
+                pq_pivots_path,
+                centroids.nrows(),
+                centroids.ncols(),
+                dim
             )));
         }
 
-        let (data, chunk_offset_num, nc) = load_bin::<u32, _>(
+        let chunk_offsets_m = load_bin::<u32>(
             &mut storage_provider.open_reader(pq_pivots_path).unwrap(),
-            file_offset_data[2],
+            file_offset_data.as_slice()[2],
         )?;
-        let chunk_offsets = convert_types(&data, chunk_offset_num * nc, |x: u32| x.into_usize());
-        if chunk_offset_num != num_pq_chunks + 1 || nc != 1 {
+        if chunk_offsets_m.nrows() != num_pq_chunks + 1 || chunk_offsets_m.ncols() != 1 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file at chunk offsets; \
                  file has nr={}, nc={} but expecting nr={} and nc=1.",
-                chunk_offset_num,
-                nc,
+                chunk_offsets_m.nrows(),
+                chunk_offsets_m.ncols(),
                 num_pq_chunks + 1
             )));
         }
+        let chunk_offsets = chunk_offsets_m.map(|x| x.into_usize());
 
-        Ok((dim, pq_table, centroids, chunk_offsets))
+        Ok((
+            dim,
+            pivots.into_inner().into_vec(),
+            centroids.into_inner().into_vec(),
+            chunk_offsets.into_inner().into_vec(),
+        ))
     }
 
     #[test]

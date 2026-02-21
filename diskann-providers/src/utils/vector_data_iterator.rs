@@ -11,9 +11,10 @@ use std::{
 
 use crate::storage::StorageReadProvider;
 use diskann::{ANNError, ANNErrorKind, utils::read_exact_into};
+use diskann_utils::io::Metadata;
 use thiserror::Error;
 
-use crate::{model::graph::traits::GraphDataType, utils::read_metadata};
+use crate::model::graph::traits::GraphDataType;
 
 /// An iterator over the vector and associated data pairs in a dataset loaded from the storage provider.
 pub struct VectorDataIterator<StorageProvider: StorageReadProvider, Data: GraphDataType> {
@@ -39,16 +40,16 @@ impl<StorageProvider: StorageReadProvider, Data: GraphDataType>
     ) -> std::io::Result<VectorDataIterator<StorageProvider, Data>> {
         let mut dataset_reader = read_provider.open_reader(vector_stream)?;
 
-        let vector_metadata = read_metadata(&mut dataset_reader)?;
-        let (vector_npts, vector_dim) = (vector_metadata.npoints, vector_metadata.ndims);
+        let vector_metadata = Metadata::read(&mut dataset_reader)?;
+        let (vector_npts, vector_dim) = vector_metadata.splat();
 
         let (associated_data_reader, associated_data_length) = if let Some(associated_data_stream) =
             associated_data_stream
         {
             let mut associated_data_reader = read_provider.open_reader(&associated_data_stream)?;
 
-            let associated_metadata = read_metadata(&mut associated_data_reader)?;
-            let (num_pts, length) = (associated_metadata.npoints, associated_metadata.ndims);
+            let associated_metadata = Metadata::read(&mut associated_data_reader)?;
+            let (num_pts, length) = associated_metadata.splat();
 
             if num_pts != vector_npts {
                 return Err(std::io::Error::new(

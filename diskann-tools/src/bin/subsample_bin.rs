@@ -15,8 +15,9 @@ use rand_distr::{Distribution, StandardUniform};
 use diskann::utils::VectorRepr;
 use diskann_providers::storage::FileStorageProvider;
 use diskann_providers::storage::StorageWriteProvider;
-use diskann_providers::utils::{random, write_metadata, SampleVectorReader, SamplingDensity};
+use diskann_providers::utils::{random, SampleVectorReader, SamplingDensity};
 use diskann_tools::utils::DataType;
+use diskann_utils::io::Metadata;
 
 /// Subsamples vectors from a DiskANN style binary file.
 #[derive(Parser, Debug)]
@@ -83,7 +84,7 @@ where
     let mut writer = storage_provider.create_for_write(&output_file)?;
 
     // Write metadata with a temporary count, then fix it after sampling.
-    write_metadata(&mut writer, npts, dims)?;
+    Metadata::new(npts, dims)?.write(&mut writer)?;
 
     let mut sampled_count: u32 = 0;
     reader.read_vectors(sampled_indices, |vec_t| {
@@ -94,7 +95,7 @@ where
 
     // Rewrite metadata at the start of the file with the actual sampled count.
     writer.seek(SeekFrom::Start(0))?;
-    write_metadata(&mut writer, sampled_count, dims)?;
+    Metadata::new(sampled_count, dims)?.write(&mut writer)?;
 
     println!(
         "Wrote {} points to sample file {}",

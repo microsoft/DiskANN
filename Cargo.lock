@@ -691,6 +691,7 @@ dependencies = [
 name = "diskann-utils"
 version = "0.46.0"
 dependencies = [
+ "bytemuck",
  "cfg-if",
  "diskann-vector",
  "diskann-wide",

@@ -228,6 +228,21 @@ where
         self.nrows
     }
 
+    /// Create a new [`Matrix`] by applying the closure `f` to each element.
+    ///
+    /// The returned matrix has the same shape as `self`.
+    pub fn map<F, R>(&self, f: F) -> Matrix<R>
+    where
+        F: FnMut(&T::Elem) -> R,
+    {
+        let data: Box<[_]> = self.as_slice().iter().map(f).collect();
+        Matrix {
+            data,
+            nrows: self.nrows(),
+            ncols: self.ncols(),
+        }
+    }
+
     /// Return the underlying data as a slice.
     pub fn as_slice(&self) -> &[T::Elem] {
         self.data.as_slice()
@@ -268,6 +283,19 @@ where
             ncols,
         }
     }
+
+    /// Construct a new `MatrixBase` over the raw data.
+    ///
+    /// The returned `MatrixBase` will only have a single column with contents equal to `data`.
+    pub fn column_vector(data: T) -> Self {
+        let nrows = data.as_slice().len();
+        Self {
+            data,
+            nrows,
+            ncols: 1,
+        }
+    }
+
     /// Return row `row` if `row < self.nrows()`. Otherwise, return `None`.
     pub fn get_row(&self, row: usize) -> Option<&[T::Elem]> {
         if row < self.nrows() {

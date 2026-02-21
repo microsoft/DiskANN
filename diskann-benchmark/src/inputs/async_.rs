@@ -384,8 +384,8 @@ impl IndexLoad {
 
         let index_config = IndexConfiguration::new(
             self.distance.into(),
-            metadata.ndims,
-            metadata.npoints,
+            metadata.ndims(),
+            metadata.npoints(),
             num_frozen_pts,
             1,
             config,

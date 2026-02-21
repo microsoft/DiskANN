@@ -11,11 +11,9 @@ use diskann::{
     ANNError, ANNResult,
     utils::{IntoUsize, VectorRepr},
 };
+use diskann_utils::io::Metadata;
 
-use crate::{
-    model::graph::traits::AdHoc,
-    utils::{load_metadata_from_file, write_metadata},
-};
+use crate::{model::graph::traits::AdHoc, utils::load_metadata_from_file};
 
 /// An simplified adaptor interface for allowing providers to use and [`load_graph`].
 ///
@@ -146,12 +144,12 @@ where
 
     tracing::info!(
         "Loading {} vectors with dimension {} from storage system {} into dataset...",
-        metadata.npoints,
-        metadata.ndims,
+        metadata.npoints(),
+        metadata.ndims(),
         path
     );
 
-    let mut data = create(metadata.npoints, metadata.ndims)?;
+    let mut data = create(metadata.npoints(), metadata.ndims())?;
     let itr = crate::utils::VectorDataIterator::<_, AdHoc<T>>::new(path, None, provider)?;
     for (i, (vector, _)) in itr.enumerate() {
         data.set_data(i.into_usize(), &vector)?;
@@ -186,10 +184,9 @@ where
     let dim = data.dim();
 
     let mut writer = provider.create_for_write(path)?;
-
     let mut points_written: u32 = 0;
+    Metadata::new(points_written, dim)?.write(&mut writer)?;
 
-    write_metadata(&mut writer, points_written, dim)?;
     for i in 0..total {
         // The binding provides a stable address for the return item of `get_data`,
         // regardless of if `get_data` returns a borrowed slice or a copy.

@@ -67,9 +67,8 @@ pub mod generate_synthetic_labels_utils;
 
 mod storage_utils;
 pub use storage_utils::{
-    Metadata, MetadataError, copy_aligned_data, load_bin, load_vector_ids, read_metadata,
-    save_bin_f32, save_bin_u32, save_bin_u64, save_bytes, save_data_in_base_dimensions,
-    write_metadata,
+    copy_aligned_data, load_bin, load_vector_ids, save_bin, save_bytes,
+    save_data_in_base_dimensions,
 };
 
 mod sampling;

@@ -1060,7 +1060,7 @@ mod disk_provider_tests {
             GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
         },
         utils::{
-            create_thread_pool, file_util, load_aligned_bin, PQPathNames, ParallelIteratorInPool,
+            create_thread_pool, load_aligned_bin, load_bin, PQPathNames, ParallelIteratorInPool,
         },
     };
     use diskann_utils::test_data_root;
@@ -1189,10 +1189,12 @@ mod disk_provider_tests {
     ) -> Vec<u32> {
         const ASSOCIATED_DATA_FILE: &str = "/sift/siftsmall_learn_256pts_u32_associated_data.fbin";
 
-        let (data, _npts, _dim) =
-            file_util::load_bin::<u32, StorageReader>(storage_provider, ASSOCIATED_DATA_FILE, 0)
-                .unwrap();
-        data
+        let data = load_bin::<u32>(
+            &mut storage_provider.open_reader(ASSOCIATED_DATA_FILE).unwrap(),
+            0,
+        )
+        .unwrap();
+        data.into_inner().into_vec()
     }
 
     #[test]
@@ -1339,10 +1341,12 @@ mod disk_provider_tests {
         storage_provider: &StorageReader,
         query_result_path: &str,
     ) -> Vec<u32> {
-        let (result, _, _) =
-            file_util::load_bin::<u32, StorageReader>(storage_provider, query_result_path, 0)
-                .unwrap();
-        result
+        let result = load_bin::<u32>(
+            &mut storage_provider.open_reader(query_result_path).unwrap(),
+            0,
+        )
+        .unwrap();
+        result.into_inner().into_vec()
     }
 
     struct TestDiskSearchParams<'a, StorageType> {

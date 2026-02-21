@@ -576,6 +576,31 @@ impl From<TryFromSliceError> for ANNError {
     }
 }
 
+impl From<diskann_utils::io::ReadBinError> for ANNError {
+    #[track_caller]
+    fn from(err: diskann_utils::io::ReadBinError) -> Self {
+        ANNError::new(ANNErrorKind::IOError, err)
+    }
+}
+
+impl From<diskann_utils::io::SaveBinError> for ANNError {
+    #[track_caller]
+    fn from(err: diskann_utils::io::SaveBinError) -> Self {
+        ANNError::new(ANNErrorKind::IOError, err)
+    }
+}
+
+impl<T, U> From<diskann_utils::io::MetadataError<T, U>> for ANNError
+where
+    T: std::error::Error + Send + Sync + 'static,
+    U: std::error::Error + Send + Sync + 'static,
+{
+    #[track_caller]
+    fn from(err: diskann_utils::io::MetadataError<T, U>) -> Self {
+        ANNError::new(ANNErrorKind::IOError, err)
+    }
+}
+
 /// An internal wrapper for error types that also tracks the file and line information
 /// for where the error was first converted and where context was propagated.
 #[derive(Debug)]

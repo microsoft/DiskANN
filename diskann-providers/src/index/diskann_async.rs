@@ -206,10 +206,11 @@ pub(crate) mod tests {
             },
             layers::BetaFilter,
         },
+        storage::StorageReadProvider,
         test_utils::{
             assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
         },
-        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests, file_util},
+        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
     };
 
     // Callbacks for use with `simplified_builder`.
@@ -2354,9 +2355,8 @@ pub(crate) mod tests {
             + diskann::provider::SetElement<[f32]>,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
-        let (data_vec, npoints, dim) = file_util::load_bin(&storage, file, 0).unwrap();
-        let data =
-            Arc::new(Matrix::<f32>::try_from(data_vec.into_boxed_slice(), npoints, dim).unwrap());
+        let mut reader = storage.open_reader(file).unwrap();
+        let data = Arc::new(diskann_utils::io::read_bin::<f32>(&mut reader).unwrap());
 
         let rng = &mut create_rnd_from_seed_in_tests(0xe058c9c57864dd1e);
         let random_index = rand::Rng::random_range(rng, 0..data.nrows());
@@ -3021,13 +3021,12 @@ pub(crate) mod tests {
         S::PruneStrategy: Clone,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
-        let (train_data, npoints, dim) = file_util::load_bin(&storage, file, 0).unwrap();
-
-        let train_data_view =
-            diskann_utils::views::MatrixView::try_from(&train_data, npoints, dim).unwrap();
+        let mut reader = storage.open_reader(file).unwrap();
+        let train_data = diskann_utils::io::read_bin::<f32>(&mut reader).unwrap();
+        let (npoints, dim) = (train_data.nrows(), train_data.ncols());
 
         let table = train_pq(
-            train_data_view,
+            train_data.as_view(),
             num_pq_chunks,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
             1,
@@ -3043,11 +3042,11 @@ pub(crate) mod tests {
             parameters,
             file,
             startpoint,
-            train_data_view,
+            train_data.as_view(),
         )
         .await;
 
-        (index, train_data_view.to_owned())
+        (index, train_data)
     }
 
     #[rstest]

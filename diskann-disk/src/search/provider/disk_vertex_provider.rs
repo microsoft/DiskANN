@@ -307,7 +307,7 @@ mod disk_vertex_provider_tests {
         let metadata = load_metadata_from_file(storage_provider, data_path).unwrap();
 
         let memory_budget = MemoryBudget::try_from_gb(1.0).unwrap();
-        let num_pq_chunks = NumPQChunks::new_with(128, metadata.ndims).unwrap();
+        let num_pq_chunks = NumPQChunks::new_with(128, metadata.ndims()).unwrap();
 
         let disk_index_build_parameters =
             DiskIndexBuildParameters::new(memory_budget, QuantizationType::FP, num_pq_chunks);
@@ -326,8 +326,8 @@ mod disk_vertex_provider_tests {
 
         let config = IndexConfiguration::new(
             diskann_vector::distance::Metric::L2,
-            metadata.ndims,
-            metadata.npoints,
+            metadata.ndims(),
+            metadata.npoints(),
             ONE,
             1,
             config,

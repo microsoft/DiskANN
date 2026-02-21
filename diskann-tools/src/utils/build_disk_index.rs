@@ -113,17 +113,17 @@ where
 
     let metadata = load_metadata_from_file(storage_provider, parameters.data_path)?;
 
-    if metadata.ndims != parameters.dim_values.dim() {
+    if metadata.ndims() != parameters.dim_values.dim() {
         return Err(ANNError::log_index_config_error(
             format!("{:?}", parameters.dim_values),
-            format!("dim_values must match with data_dim {}", metadata.ndims),
+            format!("dim_values must match with data_dim {}", metadata.ndims()),
         ));
     }
 
     let index_configuration = IndexConfiguration::new(
         parameters.metric,
-        metadata.ndims,
-        metadata.npoints,
+        metadata.ndims(),
+        metadata.npoints(),
         ONE,
         parameters.num_threads,
         config,
