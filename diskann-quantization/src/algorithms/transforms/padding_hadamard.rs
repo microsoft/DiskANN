@@ -363,14 +363,13 @@ where
 #[cfg(test)]
 mod tests {
     #[cfg(not(miri))]
+    use crate::algorithms::transforms::{Transform, TransformKind, test_utils};
+    #[cfg(not(miri))]
     use diskann_utils::lazy_format;
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
-    use crate::{
-        algorithms::transforms::{Transform, TransformKind, test_utils},
-        alloc::GlobalAllocator,
-    };
+    use crate::alloc::GlobalAllocator;
 
     // Since we use a slightly non-obvious strategy for applying the +/-1 permutation, we
     // test its behavior explicitly.

@@ -457,13 +457,15 @@ pub fn lloyds(
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views::Matrix};
+    #[cfg(not(miri))]
+    use diskann_utils::lazy_format;
+    use diskann_utils::views::Matrix;
     use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
+    use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+    #[cfg(not(miri))]
     use rand::{
-        Rng, SeedableRng,
         distr::{Distribution, Uniform},
-        rngs::StdRng,
-        seq::{IndexedRandom, SliceRandom},
+        seq::IndexedRandom,
     };
 
     use super::*;

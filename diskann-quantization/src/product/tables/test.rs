@@ -12,7 +12,6 @@ use rand::seq::IndexedRandom;
 use rand::{
     Rng, SeedableRng,
     distr::{Distribution, Uniform},
-    seq::IndexedRandom,
 };
 
 use crate::traits::CompressInto;
