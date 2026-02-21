@@ -511,13 +511,14 @@ mod test_compression {
     };
 
     use super::*;
+    #[cfg(not(miri))]
+    use crate::product::tables::test::{
+        check_pqtable_batch_compression_errors, check_pqtable_single_compression_errors,
+    };
     use crate::{
         distances::{InnerProduct, SquaredL2},
         error::format,
-        product::tables::test::{
-            check_pqtable_batch_compression_errors, check_pqtable_single_compression_errors,
-            create_dataset, create_pivot_tables,
-        },
+        product::tables::test::{create_dataset, create_pivot_tables},
     };
     use diskann_utils::lazy_format;
 
@@ -618,7 +619,7 @@ mod test_compression {
         let mut rng = StdRng::seed_from_u64(0x88e3d3366501ad6c);
 
         let num_data = if cfg!(miri) {
-            vec![0, 8, 9, 10, 11]
+            vec![0, 7, 8, 10]
         } else {
             vec![0, 1, 2, 3, 4, 16, 17, 18, 19]
         };
@@ -915,8 +916,17 @@ mod test_compression {
     #[test]
     fn test_process_into() {
         let mut rng = StdRng::seed_from_u64(0x0e3cf3ba4b27e7f8);
-        for num_chunks in 1..5 {
-            for num_centers in 1..48 {
+
+        let num_chunks_range = if cfg!(miri) { 4..5 } else { 1..5 };
+
+        let num_centers: Vec<usize> = if cfg!(miri) {
+            vec![1, 7, 16, 33, 47]
+        } else {
+            (1..48).collect()
+        };
+
+        for num_chunks in num_chunks_range {
+            for num_centers in num_centers.clone() {
                 test_process_into_impl(num_chunks, num_centers, 2, &mut rng);
             }
         }

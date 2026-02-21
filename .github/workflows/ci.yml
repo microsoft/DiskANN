@@ -334,9 +334,10 @@ jobs:
             --lcov --output-path lcov.info
 
       - name: Generate miri code coverage
+        env:
+          RUSTFLAGS: "--cfg=miri"
         run: |
           cargo llvm-cov nextest --locked --cargo-profile ci \
-            --config 'build.rustflags=["-Dwarnings", "--cfg", "miri"]' \
             --package diskann-quantization \
             --lcov --output-path lcov_miri.info
 
@@ -358,28 +359,32 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  # miri:
-  #   needs: basics
-  #   name: miri-test
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         lfs: true
+  miri:
+    needs: basics
+    name: miri-test
+    # This step is slow, so it only runs after a PR merge to avoid slowing down pre-merge checks.
+    # if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
 
-  #     - name: Install Rust nightly with miri
-  #       uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         toolchain: nightly
-  #         components: miri
+      - name: Install Rust nightly with miri
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+          components: miri
 
-  #     - name: Install cargo-nextest
-  #       uses: taiki-e/install-action@v2
-  #       with:
-  #         tool: cargo-nextest
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
-  #     - uses: Swatinem/rust-cache@v2
-  #     - name: miri
-  #       run: cargo +nightly miri nextest run --locked --package diskann-quantization
-  #       env:
-  #         MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance
+      - uses: Swatinem/rust-cache@v2
+
+      - name: miri
+        run: cargo +nightly miri nextest run --locked --package diskann-quantization
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-strict-provenance

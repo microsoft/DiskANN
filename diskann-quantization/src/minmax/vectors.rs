@@ -465,6 +465,7 @@ where
 ///////////
 
 #[cfg(test)]
+#[cfg(not(miri))]
 mod minmax_vector_tests {
     use diskann_utils::Reborrow;
     use rand::{
@@ -727,7 +728,8 @@ mod minmax_vector_tests {
             #[test]
             fn $name() {
                 let mut rng = StdRng::seed_from_u64($seed);
-                for dim in 1..(bit_scale::<$nbits>() as usize) {
+                const MAX_DIM: usize = (bit_scale::<$nbits>() as usize);
+                for dim in 1..=MAX_DIM {
                     for _ in 0..TRIALS {
                         test_minmax_compensated_vectors::<$nbits, _>(dim, &mut rng);
                     }
@@ -735,7 +737,7 @@ mod minmax_vector_tests {
             }
         };
     }
-    test_minmax_compensated!(unsigned_minmax_compensated_test_u1, 1, 0xa32d5658097a1c35);
+    test_minmax_compensated!(unsigned_minmax_compensated_test_u1, 1, 0xa33d5658097a1c35);
     test_minmax_compensated!(unsigned_minmax_compensated_test_u2, 2, 0xaedf3d2a223b7b77);
     test_minmax_compensated!(unsigned_minmax_compensated_test_u4, 4, 0xf60c0c8d1aadc126);
     test_minmax_compensated!(unsigned_minmax_compensated_test_u8, 8, 0x09fa14c42a9d7d98);

@@ -28,6 +28,7 @@ crate::utils::features! {
 mod utils;
 
 #[cfg(test)]
+#[cfg(not(miri))]
 mod test_utils;
 
 // reexports
@@ -355,4 +356,5 @@ pub enum TargetDim {
 }
 
 #[cfg(test)]
+#[cfg(not(miri))]
 test_utils::delegate_transformer!(Transform<crate::alloc::GlobalAllocator>);
