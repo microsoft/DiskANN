@@ -5,8 +5,8 @@
 
 #[cfg(not(miri))]
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use diskann_utils::views::Matrix;
@@ -83,7 +83,8 @@ unsafe impl AllocatorCore for LimitedAllocator {
     }
 
     unsafe fn deallocate(&self, ptr: std::ptr::NonNull<[u8]>, layout: std::alloc::Layout) {
-        (GlobalAllocator).deallocate(ptr, layout)
+        // SAFETY: Inherited from caller.
+        unsafe { (GlobalAllocator).deallocate(ptr, layout) }
     }
 }
 

@@ -23,7 +23,7 @@ use crate::{
 };
 
 /////
-///// 32-bit floating point
+///// 32-bit signed integer
 /////
 
 macros::x86_define_register!(i32x8, __m256i, mask32x8, i32, 8, V3);
@@ -40,7 +40,7 @@ macros::x86_splitjoin!(
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Add, add, _mm256_add_epi32, "avx2");
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Sub, sub, _mm256_sub_epi32, "avx2");
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Mul, mul, _mm256_mullo_epi32, "avx2");
-helpers::unsafe_map_unary_op!(i32x8, SIMDAbs, abs_simd, _mm256_abs_epi32, "sse3");
+helpers::unsafe_map_unary_op!(i32x8, SIMDAbs, abs_simd, _mm256_abs_epi32, "avx2");
 
 helpers::unsafe_map_binary_op!(i32x8, std::ops::BitAnd, bitand, _mm256_and_si256, "avx2");
 helpers::unsafe_map_binary_op!(i32x8, std::ops::BitOr, bitor, _mm256_or_si256, "avx2");
@@ -108,13 +108,13 @@ impl X86LoadStore for i32x8 {
 impl SIMDPartialEq for i32x8 {
     #[inline(always)]
     fn eq_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_cmpeq_epi32` requires AVX2, implied by V3.
         Self::Mask::from_underlying(self.arch(), unsafe { _mm256_cmpeq_epi32(self.0, other.0) })
     }
 
     #[inline(always)]
     fn ne_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_xor_si256` and `_mm256_cmpeq_epi32` require AVX2, implied by V3.
         let m =
             unsafe { _mm256_xor_si256(_mm256_cmpeq_epi32(self.0, other.0), __m256i::all_ones()) };
         Self::Mask::from_underlying(self.arch(), m)
@@ -124,13 +124,13 @@ impl SIMDPartialEq for i32x8 {
 impl SIMDPartialOrd for i32x8 {
     #[inline(always)]
     fn lt_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_cmpgt_epi32` requires AVX2, implied by V3.
         Self::Mask::from_underlying(self.arch(), unsafe { _mm256_cmpgt_epi32(other.0, self.0) })
     }
 
     #[inline(always)]
     fn le_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_cmpeq_epi32` and `_mm256_min_epi32` require AVX2, implied by V3.
         let m = unsafe { _mm256_cmpeq_epi32(self.0, _mm256_min_epi32(self.0, other.0)) };
         Self::Mask::from_underlying(self.arch(), m)
     }
@@ -187,7 +187,7 @@ impl SIMDDotProduct<i16x16> for i32x8 {
     fn dot_simd(self, left: i16x16, right: i16x16) -> Self {
         self + Self::from_underlying(
             self.arch(),
-            // SAFETY: Gated by CFG.
+            // SAFETY: `_mm256_madd_epi16` requires AVX2, implied by V3.
             unsafe { _mm256_madd_epi16(left.to_underlying(), right.to_underlying()) },
         )
     }

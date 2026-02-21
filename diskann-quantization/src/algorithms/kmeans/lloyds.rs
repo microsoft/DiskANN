@@ -5,7 +5,7 @@
 
 use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector};
 
-use super::common::{square_norm, BlockTranspose};
+use super::common::{BlockTranspose, square_norm};
 use diskann_utils::{
     strided::StridedView,
     views::{Matrix, MatrixView, MutMatrixView},
@@ -457,15 +457,14 @@ pub fn lloyds(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(miri))]
-    use diskann_utils::lazy_format;
-    use diskann_utils::views::Matrix;
-    use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
-    #[cfg(not(miri))]
-    use rand::distr::{Distribution, Uniform};
-    #[cfg(not(miri))]
-    use rand::seq::IndexedRandom;
-    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use diskann_utils::{lazy_format, views::Matrix};
+    use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
+    use rand::{
+        Rng, SeedableRng,
+        distr::{Distribution, Uniform},
+        rngs::StdRng,
+        seq::{IndexedRandom, SliceRandom},
+    };
 
     use super::*;
 

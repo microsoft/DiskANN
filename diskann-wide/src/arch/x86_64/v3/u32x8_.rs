@@ -21,7 +21,7 @@ use crate::{
 };
 
 /////
-///// 32-bit floating point
+///// 32-bit unsigned integer
 /////
 
 macros::x86_define_register!(u32x8, __m256i, mask32x8, u32, 8, V3);
@@ -105,13 +105,13 @@ impl X86LoadStore for u32x8 {
 impl SIMDPartialEq for u32x8 {
     #[inline(always)]
     fn eq_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_cmpeq_epi32` requires AVX2, implied by V3.
         Self::Mask::from_underlying(self.arch(), unsafe { _mm256_cmpeq_epi32(self.0, other.0) })
     }
 
     #[inline(always)]
     fn ne_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_xor_si256` and `_mm256_cmpeq_epi32` require AVX2, implied by V3.
         let m =
             unsafe { _mm256_xor_si256(_mm256_cmpeq_epi32(self.0, other.0), __m256i::all_ones()) };
         Self::Mask::from_underlying(self.arch(), m)
@@ -121,7 +121,7 @@ impl SIMDPartialEq for u32x8 {
 impl SIMDPartialOrd for u32x8 {
     #[inline(always)]
     fn lt_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_max_epu32`, `_mm256_cmpeq_epi32`, and `_mm256_xor_si256` require AVX2, implied by V3.
         let m = unsafe {
             let max = _mm256_max_epu32(self.0, other.0);
             _mm256_xor_si256(_mm256_cmpeq_epi32(self.0, max), __m256i::all_ones())
@@ -131,7 +131,7 @@ impl SIMDPartialOrd for u32x8 {
 
     #[inline(always)]
     fn le_simd(self, other: Self) -> Self::Mask {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_cmpeq_epi32` and `_mm256_min_epu32` require AVX2, implied by V3.
         let m = unsafe { _mm256_cmpeq_epi32(self.0, _mm256_min_epu32(self.0, other.0)) };
         Self::Mask::from_underlying(self.arch(), m)
     }

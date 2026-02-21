@@ -11,12 +11,12 @@ use diskann_utils::{
 };
 use diskann_wide::{SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 use rand::{
-    distr::{Distribution, Uniform},
     RngCore,
+    distr::{Distribution, Uniform},
 };
 use thiserror::Error;
 
-use super::common::{square_norm, BlockTranspose};
+use super::common::{BlockTranspose, square_norm};
 
 /// An internal trait implemented for `BlockTranspose` used to accelerate
 ///
@@ -520,8 +520,8 @@ pub fn kmeans_plusplus_into(
 #[cfg(test)]
 mod tests {
     use diskann_utils::{lazy_format, views::Matrix};
-    use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
-    use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
+    use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
+    use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
 
     use super::*;
     use crate::utils;

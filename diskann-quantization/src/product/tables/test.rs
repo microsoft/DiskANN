@@ -10,8 +10,9 @@ use diskann_utils::views::{MatrixView, MutMatrixView};
 #[cfg(not(miri))]
 use rand::seq::IndexedRandom;
 use rand::{
-    distr::{Distribution, Uniform},
     Rng, SeedableRng,
+    distr::{Distribution, Uniform},
+    seq::IndexedRandom,
 };
 
 use crate::traits::CompressInto;

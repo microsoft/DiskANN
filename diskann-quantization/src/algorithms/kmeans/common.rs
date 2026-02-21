@@ -221,13 +221,13 @@ impl<const N: usize> BlockTranspose<N> {
     /// Block must be in-bounds (i.e., `block < self.num_blocks()`).
     pub unsafe fn block_ptr_unchecked(&self, block: usize) -> *const f32 {
         debug_assert!(block < self.num_blocks());
-        // SAFETY: If we assume `block < self.num_blocks()`, then
+        // SAFETY: If we assume `block < self.num_blocks()`, (which the caller attests) then
         //
         // 1. Our base pointer was allocated in the first place, so this computed offset
         //    must fit within an `isize`.
         // 2. This pointer (and an offset `self.block_stride()`) higher all live within
         //    a single allocated object.
-        self.data.as_ptr().add(self.block_offset(block))
+        unsafe { self.data.as_ptr().add(self.block_offset(block)) }
     }
 
     /// Return a pointer to the start of data segment.
@@ -367,9 +367,9 @@ impl<const N: usize> std::ops::Index<(usize, usize)> for BlockTranspose<N> {
 mod tests {
     use diskann_utils::{lazy_format, views::Matrix};
     use rand::{
+        Rng, SeedableRng,
         distr::{Distribution, Uniform},
         rngs::StdRng,
-        Rng, SeedableRng,
     };
 
     use super::*;

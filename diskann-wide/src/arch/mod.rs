@@ -190,7 +190,7 @@
 //! The consequence of this is that we need to take an **unsafe** function pointer so we
 //! can dispatch call directly to the implementation.
 //!
-//! Reason 2: Even if the above approach worked, the [`Architecture`] is sill present in the
+//! Reason 2: Even if the above approach worked, the [`Architecture`] is still present in the
 //! signature of the `fn`, meaning we haven't really hidden the micro-architecture
 //! information.
 //!
@@ -321,12 +321,16 @@
 //!
 //! ## Hierarchies
 //!
+//! Each [`Architecture`] exposes a [`Level`] via [`Architecture::level()`] that
+//! can be used to compare capabilities without instantiating the architecture.
+//!
 //! ### X86
 //!
-//! * [`crate::arch::x86_64::V3`]: Supporting AVX2 and lower.
-//! * [`Scalar`]: Fallback architecture
+//! * [`x86_64::V4`]: Supporting AVX-512 (and AVX2 and lower).
+//! * [`x86_64::V3`]: Supporting AVX2 and lower.
+//! * [`Scalar`]: Fallback architecture.
 //!
-//! Upcoming will be `V4`, which will include support for AVX-512.
+//! The ordering is `Scalar` < `V3` < `V4`.
 //!
 //! ### Arm
 //!
@@ -345,10 +349,44 @@ pub(crate) mod emulated;
 /// compiler for optimization.
 pub use emulated::Scalar;
 
+/// An opaque representation of an [`Architecture`]'s capability level.
+///
+/// `Level` allows comparing the relative capabilities of different architectures
+/// without requiring an instance of the architecture type. This is useful for
+/// compile-time checks against [`crate::ARCH`] where constructing architecture
+/// types like [`x86_64::V3`] would require `unsafe`.
+///
+/// Levels are totally ordered within an ISA family, with greater values indicating
+/// more capable instruction sets. [`Scalar`] is always the lowest level.
+///
+/// # Examples
+///
+/// Checking if the compile-time architecture meets a minimum capability:
+///
+/// ```
+/// #[cfg(target_arch = "x86_64")]
+/// use diskann_wide::{Architecture, arch};
+///
+/// // Check at compile time whether we were built with AVX2+ support.
+/// #[cfg(target_arch = "x86_64")]
+/// let _meets_v3 = arch::Current::level() >= arch::x86_64::V3::level();
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Level(LevelInner);
+
+impl Level {
+    const fn scalar() -> Self {
+        Self(LevelInner::Scalar)
+    }
+}
+
 cfg_if::cfg_if! {
-    if #[cfg(any(target_arch = "x86_64", doc))] {
-        // Delegate to the architecture selection within the `x86_64` module,.
+    if #[cfg(target_arch = "x86_64")] {
+        // Delegate to the architecture selection within the `x86_64` module.
         pub mod x86_64;
+
+        use x86_64::LevelInner;
+
         pub use x86_64::current;
         pub use x86_64::Current;
 
@@ -361,8 +399,48 @@ cfg_if::cfg_if! {
         pub use x86_64::dispatch1_no_features;
         pub use x86_64::dispatch2_no_features;
         pub use x86_64::dispatch3_no_features;
+
+        impl Level {
+            const fn v3() -> Self {
+                Self(LevelInner::V3)
+            }
+
+            const fn v4() -> Self {
+                Self(LevelInner::V4)
+            }
+        }
+    } else if #[cfg(target_arch = "aarch64")] {
+        // Delegate to the architecture selection within the `aarch64` module.
+        pub mod aarch64;
+
+        use aarch64::LevelInner;
+
+        pub use aarch64::current;
+        pub use aarch64::Current;
+
+        pub use aarch64::dispatch;
+        pub use aarch64::dispatch1;
+        pub use aarch64::dispatch2;
+        pub use aarch64::dispatch3;
+
+        pub use aarch64::dispatch_no_features;
+        pub use aarch64::dispatch1_no_features;
+        pub use aarch64::dispatch2_no_features;
+        pub use aarch64::dispatch3_no_features;
+
+        impl Level {
+            const fn neon() -> Self {
+                Self(LevelInner::Neon)
+            }
+        }
     } else {
         pub type Current = Scalar;
+
+        // There is only one architecture present in this mode.
+        #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+        enum LevelInner {
+            Scalar,
+        }
 
         pub const fn current() -> Current {
             Scalar::new()
@@ -616,10 +694,27 @@ pub trait Architecture: sealed::Sealed {
     // Methods //
     //---------//
 
+    /// Return an opaque [`Level`] representing the capabilities of this architecture.
+    ///
+    /// Levels that compare greater represent architectures that are more capable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use diskann_wide::{Architecture, arch};
+    ///
+    /// // Scalar is the baseline — every other architecture compares greater.
+    /// assert_eq!(arch::Scalar::level(), arch::Scalar::level());
+    ///
+    /// #[cfg(target_arch = "x86_64")]
+    /// assert!(arch::Scalar::level() < arch::x86_64::V3::level());
+    /// ```
+    fn level() -> Level;
+
     /// Run the provided closure targeting this architecture.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     fn run<F, R>(self, f: F) -> R
     where
         F: Target<Self, R>;
@@ -627,9 +722,9 @@ pub trait Architecture: sealed::Sealed {
     /// Run the provided closure targeting this architecture with an inlining hint.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     ///
-    /// Note that although an inline hint is applied, it is not a guaranteed that this call
+    /// Note that although an inline hint is applied, it is not guaranteed that this call
     /// will be inlined due to the interaction of `target_features`. If you really need `F`
     /// to be inlined, you can call its `Target` method directly, but care must be taken
     /// because this will not reapply `target_features`.
@@ -640,7 +735,7 @@ pub trait Architecture: sealed::Sealed {
     /// Run the provided closure targeting this architecture with an additional argument.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     fn run1<F, T0, R>(self, f: F, x0: T0) -> R
     where
         F: Target1<Self, R, T0>;
@@ -649,9 +744,9 @@ pub trait Architecture: sealed::Sealed {
     /// an inlining hint.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     ///
-    /// Note that although an inline hint is applied, it is not a guaranteed that this call
+    /// Note that although an inline hint is applied, it is not guaranteed that this call
     /// will be inlined due to the interaction of `target_features`. If you really need `F`
     /// to be inlined, you can call its `Target1` method directly, but care must be taken
     /// because this will not reapply `target_features`.
@@ -662,7 +757,7 @@ pub trait Architecture: sealed::Sealed {
     /// Run the provided closure targeting this architecture with two additional arguments.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     fn run2<F, T0, T1, R>(self, f: F, x0: T0, x1: T1) -> R
     where
         F: Target2<Self, R, T0, T1>;
@@ -671,9 +766,9 @@ pub trait Architecture: sealed::Sealed {
     /// and an inlining hint.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     ///
-    /// Note that although an inline hint is applied, it is not a guaranteed that this call
+    /// Note that although an inline hint is applied, it is not guaranteed that this call
     /// will be inlined due to the interaction of `target_features`. If you really need `F`
     /// to be inlined, you can call its `Target2` method directly, but care must be taken
     /// because this will not reapply `target_features`.
@@ -684,7 +779,7 @@ pub trait Architecture: sealed::Sealed {
     /// Run the provided closure targeting this architecture with three additional arguments.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     fn run3<F, T0, T1, T2, R>(self, f: F, x0: T0, x1: T1, x2: T2) -> R
     where
         F: Target3<Self, R, T0, T1, T2>;
@@ -693,9 +788,9 @@ pub trait Architecture: sealed::Sealed {
     /// and an inlining hint.
     ///
     /// This function is always safe to call, but the function `f` likely needs to be
-    /// inlined into `run` in for the correct target features to be applied.
+    /// inlined into `run` for the correct target features to be applied.
     ///
-    /// Note that although an inline hint is applied, it is not a guaranteed that this call
+    /// Note that although an inline hint is applied, it is not guaranteed that this call
     /// will be inlined due to the interaction of `target_features`. If you really need `F`
     /// to be inlined, you can call its `Target3` method directly, but care must be taken
     /// because this will not reapply `target_features`.
@@ -822,7 +917,7 @@ where
 
 /// A variation of [`Target1`] that uses an associated function instead of a method.
 ///
-/// This is useful used in the function pointer API.
+/// This is used in the function pointer API.
 pub trait FTarget1<A, R, T0>
 where
     A: Architecture,
@@ -832,7 +927,7 @@ where
 
 /// A variation of [`Target2`] that uses an associated function instead of a method.
 ///
-/// This is useful used in the function pointer API.
+/// This is used in the function pointer API.
 pub trait FTarget2<A, R, T0, T1>
 where
     A: Architecture,
@@ -842,7 +937,7 @@ where
 
 /// A variation of [`Target3`] that uses an associated function instead of a method.
 ///
-/// This is useful used in the function pointer API.
+/// This is used in the function pointer API.
 pub trait FTarget3<A, R, T0, T1, T2>
 where
     A: Architecture,
@@ -907,7 +1002,7 @@ where
 }
 
 /// A hidden architecture for use in the function pointer API.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 struct Hidden;
 
 const _ASSERT_ZST: () = assert!(
@@ -923,7 +1018,7 @@ const _ASSERT_ALIGNED: () = assert!(
 macro_rules! dispatched {
     ($name:ident, { $($Ts:ident )* }, { $($xs:ident )* }, { $($lt:lifetime )* }) => {
         /// A function pointer that calls directly into a micro-architecture optimized
-        /// function, returning a value of type `R` and accepting the speficied number of
+        /// function, returning a value of type `R` and accepting the specified number of
         /// arguments.
         ///
         /// Arguments are mapped using the [`AddLifetime`] trait to enable passing structs
@@ -994,7 +1089,7 @@ dispatched!(Dispatched1, { T0 }, { x0 }, { 'a0 });
 dispatched!(Dispatched2, { T0 T1 }, { x0 x1 }, { 'a0 'a1 });
 dispatched!(Dispatched3, { T0 T1 T2 }, { x0 x1 x2 }, { 'a0 'a1 'a2 });
 
-/// This macro stamps out the function-pointer tranmute trick we use to type-erase
+/// This macro stamps out the function-pointer transmute trick we use to type-erase
 /// architecture in the function-pointer API.
 macro_rules! hide {
     ($name:ident, $dispatched:ident, { $($Ts:ident )* }) => {
@@ -1011,9 +1106,9 @@ macro_rules! hide {
         /// We can do this because Rust guarantees that zero sized types are ABI
         /// compatible.
         ///
-        /// The caller must ensure that winking into existance and instance of `A` is
+        /// The caller must ensure that winking into existence an instance of `A` is
         /// a safe operation. For [`Architectures`], this means that the requirements
-        /// of `A::new()` are uphelf.
+        /// of `A::new()` are upheld.
         ///
         /// Put plainly:
         ///
@@ -1255,6 +1350,12 @@ mod tests {
             assert_eq!(arch.run(TestOp), expected);
             assert_eq!(arch.run_inline(TestOp), expected);
         }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
+            assert_eq!(arch.run(TestOp), expected);
+            assert_eq!(arch.run_inline(TestOp), expected);
+        }
     }
 
     #[test]
@@ -1273,6 +1374,12 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            assert_eq!(arch.run1(TestOp, &src), sum);
+            assert_eq!(arch.run1_inline(TestOp, &src), sum);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             assert_eq!(arch.run1(TestOp, &src), sum);
             assert_eq!(arch.run1_inline(TestOp, &src), sum);
         }
@@ -1306,6 +1413,11 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            gen_test!(arch);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             gen_test!(arch);
         }
     }
@@ -1342,6 +1454,11 @@ mod tests {
         if let Some(arch) = x86_64::V4::new_checked_miri() {
             gen_test!(arch);
         }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
+            gen_test!(arch);
+        }
     }
 
     //----------------------------//
@@ -1374,6 +1491,12 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            let f: FnPtr = arch.dispatch1::<TestOp, f32, Ref<[f32]>>();
+            assert_eq!(f.call(&src), sum);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             let f: FnPtr = arch.dispatch1::<TestOp, f32, Ref<[f32]>>();
             assert_eq!(f.call(&src), sum);
         }
@@ -1414,6 +1537,14 @@ mod tests {
             assert_eq!(f.call(&mut dst, &src), sum);
             assert_eq!(dst, src);
         }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
+            let mut dst = [0.0f32; 3];
+            let f: FnPtr = arch.dispatch2::<TestOp, f32, Mut<[f32]>, Ref<[f32]>>();
+            assert_eq!(f.call(&mut dst, &src), sum);
+            assert_eq!(dst, src);
+        }
     }
 
     #[test]
@@ -1448,6 +1579,14 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            let mut dst = [0.0f32; 3];
+            let f: FnPtr = arch.dispatch3::<TestOp, f32, Mut<[f32]>, Ref<[f32]>, f32>();
+            assert_eq!(f.call(&mut dst, &src, offset), sum);
+            assert_eq!(dst, expected);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             let mut dst = [0.0f32; 3];
             let f: FnPtr = arch.dispatch3::<TestOp, f32, Mut<[f32]>, Ref<[f32]>, f32>();
             assert_eq!(f.call(&mut dst, &src, offset), sum);

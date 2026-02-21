@@ -39,3 +39,30 @@ pub fn init_test_subscriber() -> tracing::subscriber::DefaultGuard {
         .with(fmt_layer)
         .set_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracing::{debug, error, info, warn};
+
+    #[test]
+    fn test_init_test_subscriber() {
+        let _guard = init_test_subscriber();
+        // Test that logging works without panicking
+        info!("test info message");
+        warn!("test warn message");
+        error!("test error message");
+        debug!("test debug message");
+    }
+
+    #[test]
+    fn test_init_test_subscriber_guard_scope() {
+        {
+            let _guard = init_test_subscriber();
+            info!("inside guard scope");
+        }
+        // After guard is dropped, we can create a new one
+        let _guard2 = init_test_subscriber();
+        info!("new guard scope");
+    }
+}

@@ -23,14 +23,14 @@
 //! // Query: 2 vectors of dim 3 (wrapped as QueryMatRef)
 //! let query_data = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
 //! let query: QueryMatRef<_> = MatRef::new(
-//!     Standard::new(2, 3),
+//!     Standard::new(2, 3).unwrap(),
 //!     &query_data,
 //! ).unwrap().into();
 //!
 //! // Doc: 2 vectors of dim 3
 //! let doc_data = [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0];
 //! let doc = MatRef::new(
-//!     Standard::new(2, 3),
+//!     Standard::new(2, 3).unwrap(),
 //!     &doc_data,
 //! ).unwrap();
 //!

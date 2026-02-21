@@ -57,9 +57,17 @@ mod tests {
 
     #[test]
     fn integration_test() {
+        let input = if cfg!(target_arch = "x86_64") {
+            "test.json"
+        } else if cfg!(target_arch = "aarch64") {
+            "test-aarch64.json"
+        } else {
+            panic!("Please add a dedicated test input for the compiled architecture");
+        };
+
         let input_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("examples")
-            .join("test.json");
+            .join(input);
 
         let tempdir = tempfile::tempdir().unwrap();
         let output_path = tempdir.path().join("output.json");

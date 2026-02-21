@@ -13,21 +13,21 @@ pub(crate) trait AllOnes {
 
 impl AllOnes for __m128i {
     fn all_ones() -> Self {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm_set1_epi32` requires SSE2, which is baseline for x86_64.
         unsafe { _mm_set1_epi32(-1) }
     }
 }
 
 impl AllOnes for __m256i {
     fn all_ones() -> Self {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm256_set1_epi32` requires AVX, implied by the caller's architecture.
         unsafe { _mm256_set1_epi32(-1) }
     }
 }
 
 impl AllOnes for __m512i {
     fn all_ones() -> Self {
-        // SAFETY: Gated by CFG
+        // SAFETY: `_mm512_set1_epi32` requires AVX-512F, implied by the caller's architecture.
         unsafe { _mm512_set1_epi32(-1) }
     }
 }

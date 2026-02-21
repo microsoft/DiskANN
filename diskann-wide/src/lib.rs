@@ -104,7 +104,7 @@
 //!    invokes the reference implementation may be all that's needed.
 //!
 //!    More complicated operations may require their own test harness (see
-//!    `test_tuils/dot_product.rs`).
+//!    `test_utils/dot_product.rs`).
 //!
 //!    Tests should go through the utilities in `test_utils::driver` to ensure adequate
 //!    coverage and low compile time.
@@ -154,7 +154,6 @@ pub use splitjoin::{LoHi, SplitJoin};
 mod bitmask;
 pub use bitmask::{BitMask, FromInt};
 
-#[cfg(target_arch = "x86_64")]
 pub(crate) mod doubled;
 
 mod emulated;
@@ -170,8 +169,6 @@ pub mod arch;
 pub use arch::Architecture;
 
 /// The current architecture that is the closest fit for the current compilation target.
-///
-/// The type [`Wide`] is always configured to use this as its associated architecture type.
 pub const ARCH: arch::Current = arch::current();
 
 ///////////////////////
@@ -220,10 +217,10 @@ macro_rules! alias {
 // Internal //
 //////////////
 
-#[cfg(all(test, target_arch = "x86_64"))]
+#[cfg(all(test, any(target_arch = "x86_64", target_arch = "aarch64")))]
 const TEST_MIN_ARCH: &str = "WIDE_TEST_MIN_ARCH";
 
-#[cfg(all(test, target_arch = "x86_64"))]
+#[cfg(all(test, any(target_arch = "x86_64", target_arch = "aarch64")))]
 fn get_test_arch() -> Option<String> {
     match std::env::var(TEST_MIN_ARCH) {
         Ok(v) => Some(v),
@@ -234,7 +231,6 @@ fn get_test_arch() -> Option<String> {
     }
 }
 
-#[cfg(not(target_arch = "aarch64"))]
 pub(crate) mod helpers;
 
 #[cfg(test)]

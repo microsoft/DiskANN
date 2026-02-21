@@ -7,15 +7,12 @@ use std::fmt::Debug;
 
 // Common test traits.
 use super::common::{self, ScalarTraits};
-#[cfg(target_arch = "x86_64")]
-use crate::SplitJoin;
 use crate::{
     BitMask, Const, SIMDMask, SIMDMinMax, SIMDPartialEq, SIMDPartialOrd, SIMDSumTree, SIMDVector,
-    SupportedLaneCount, arch,
+    SplitJoin, SupportedLaneCount, arch,
     reference::{ReferenceScalarOps, ReferenceShifts, TreeReduce},
 };
 
-#[cfg(target_arch = "x86_64")]
 fn identity<T>(x: T) -> T {
     x
 }
@@ -148,7 +145,7 @@ fn check_minmax_standard_f32(got: f32, standard: f32) -> Result<(), String> {
 ///
 /// The [`FastMax`] checker will accept either the IEEE result or `NaN` in such situations.
 ///
-/// If the expected result is +/-0.0, than a zero of either sign will be accepted.
+/// If the expected result is +/-0.0, then a zero of either sign will be accepted.
 ///
 /// If neither argument is `NaN`, then the results must match the IEEE result.
 #[derive(Debug, Clone, Copy)]
@@ -163,10 +160,10 @@ impl CheckBinary<f32, f32> for FastMax {
 
 /// A checker for Rust standard compliant max implementations.
 ///
-/// If one argument is NaN, than the other is returned. A NaN is only returned if both
+/// If one argument is NaN, then the other is returned. A NaN is only returned if both
 /// arguments are NaN.
 ///
-/// If the expected result is +/-0.0, than a zero of either sign will be accepted.
+/// If the expected result is +/-0.0, then a zero of either sign will be accepted.
 ///
 /// If neither argument is `NaN`, then the results must match the IEEE result.
 #[derive(Debug, Clone, Copy)]
@@ -185,9 +182,9 @@ impl CheckBinary<f32, f32> for StandardMax {
 /// IEEE specifies that `min` between a NaN and non-NaN value `x` should return `x`. However,
 /// it is common for Intel hardware to return `NaN` instead for such operations.
 ///
-/// The [`FastMax`] checker will accept either the IEEE result or `NaN` in such situations.
+/// The [`FastMin`] checker will accept either the IEEE result or `NaN` in such situations.
 ///
-/// If the expected result is +/-0.0, than a zero of either sign will be accepted.
+/// If the expected result is +/-0.0, then a zero of either sign will be accepted.
 ///
 /// If neither argument is `NaN`, then the results must match the IEEE result.
 #[derive(Debug, Clone, Copy)]
@@ -202,10 +199,10 @@ impl CheckBinary<f32, f32> for FastMin {
 
 /// A checker for Rust standard compliant min implementations.
 ///
-/// If one argument is NaN, than the other is returned. A NaN is only returned if both
+/// If one argument is NaN, then the other is returned. A NaN is only returned if both
 /// arguments are NaN.
 ///
-/// If the expected result is +/-0.0, than a zero of either sign will be accepted.
+/// If the expected result is +/-0.0, then a zero of either sign will be accepted.
 ///
 /// If neither argument is `NaN`, then the results must match the IEEE result.
 #[derive(Debug, Clone, Copy)]
@@ -948,7 +945,7 @@ macro_rules! test_sumtree {
 ///////////////
 // SplitJoin //
 ///////////////
-#[cfg(target_arch = "x86_64")]
+
 pub fn test_splitjoin_impl<V, H, T, const N: usize, const N2: usize>(arch: V::Arch, a: &[T])
 where
     T: Copy + Debug + ScalarTraits,
@@ -976,7 +973,6 @@ where
     test_unary_op(&joined.to_array(), a, &identity, "join");
 }
 
-#[cfg(target_arch = "x86_64")]
 macro_rules! test_splitjoin {
     ($wide:ident $(< $($ps:tt),+ >)? => $half:ident $(< $($hs:tt),+ >)?, $seed:literal, $arch:expr) => {
         paste::paste! {
@@ -1021,7 +1017,6 @@ pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
 pub(crate) use test_mul;
 pub(crate) use test_select;
-#[cfg(target_arch = "x86_64")]
 pub(crate) use test_splitjoin;
 pub(crate) use test_sub;
 pub(crate) use test_sumtree;

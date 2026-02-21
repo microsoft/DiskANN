@@ -23,15 +23,15 @@ use super::{
 /// using loops over arrays rather than dispatching to platform specific instructions.
 ///
 /// The idea behind this type is that it can be used on architecture where explicit backend
-/// support has not been added, or when an architecture does not support a given type/lengh
+/// support has not been added, or when an architecture does not support a given type/length
 /// pair well.
 ///
 /// Furthermore, it can be used when developing new back-ends to provide fallback
-/// implementations. This allows new back-ends to be developed one piece as a time instead
-/// of all at onces.
+/// implementations. This allows new back-ends to be developed one piece at a time instead
+/// of all at once.
 ///
 /// NOTE: The alignment requirements of an emulated vector *will* be different than the
-/// alignment requirements an actual intrinsic.
+/// alignment requirements of an actual intrinsic.
 ///
 /// Higher level code *must not* rely on alignments being compatible across architectures!
 #[derive(Debug, Clone, Copy)]
@@ -108,7 +108,7 @@ where
         )
     }
 
-    /// Only load values then the corresponding mask lane is set.
+    /// Only load values when the corresponding mask lane is set.
     unsafe fn load_simd_masked_logical(arch: A, ptr: *const T, mask: Self::Mask) -> Self {
         Self::from_arch_fn(arch, |i| {
             if mask.get_unchecked(i) {
@@ -142,7 +142,7 @@ where
         unsafe { ptr.cast::<[T; N]>().write_unaligned(self.0) }
     }
 
-    /// Only store values then the corresponding mask lane is set.
+    /// Only store values when the corresponding mask lane is set.
     unsafe fn store_simd_masked_logical(self, ptr: *mut T, mask: Self::Mask) {
         for (i, v) in self.0.iter().enumerate() {
             if mask.get_unchecked(i) {
@@ -377,7 +377,7 @@ where
 // i16 to i32
 macro_rules! impl_simd_dot_product_i16_to_i32 {
     ($N:literal, $TwoN:literal) => {
-        /// Promote intermediate values to `i32` and then perform accuulation.
+        /// Promote intermediate values to `i32` and then perform accumulation.
         impl<A> SIMDDotProduct<Emulated<i16, $TwoN, A>> for Emulated<i32, $N, A>
         where
             A: arch::Sealed,
@@ -403,7 +403,7 @@ macro_rules! impl_simd_dot_product_i16_to_i32 {
 //i8/u8 to i32
 macro_rules! impl_simd_dot_product_iu8_to_i32 {
     ($N:literal, $TwoN:literal) => {
-        /// Promote intermediate values to `i32` and then perform accuulation.
+        /// Promote intermediate values to `i32` and then perform accumulation.
         impl<A> SIMDDotProduct<Emulated<u8, $TwoN, A>, Emulated<i8, $TwoN, A>>
             for Emulated<i32, $N, A>
         where
@@ -437,12 +437,62 @@ macro_rules! impl_simd_dot_product_iu8_to_i32 {
                 self.dot_simd(right, left)
             }
         }
+
+        impl<A> SIMDDotProduct<Emulated<u8, $TwoN, A>, Emulated<u8, $TwoN, A>>
+            for Emulated<u32, $N, A>
+        where
+            A: arch::Sealed,
+        {
+            fn dot_simd(self, left: Emulated<u8, $TwoN, A>, right: Emulated<u8, $TwoN, A>) -> Self {
+                self + Self::from_arch_fn(self.1, |i| {
+                    let l0: u32 = left.0[4 * i].into();
+                    let l1: u32 = left.0[4 * i + 1].into();
+                    let l2: u32 = left.0[4 * i + 2].into();
+                    let l3: u32 = left.0[4 * i + 3].into();
+
+                    let r0: u32 = right.0[4 * i].into();
+                    let r1: u32 = right.0[4 * i + 1].into();
+                    let r2: u32 = right.0[4 * i + 2].into();
+                    let r3: u32 = right.0[4 * i + 3].into();
+
+                    let a = l0.expected_fma_(r0, l1.expected_mul_(r1));
+                    let b = l2.expected_fma_(r2, l3.expected_mul_(r3));
+                    a + b
+                })
+            }
+        }
+
+        impl<A> SIMDDotProduct<Emulated<i8, $TwoN, A>, Emulated<i8, $TwoN, A>>
+            for Emulated<i32, $N, A>
+        where
+            A: arch::Sealed,
+        {
+            fn dot_simd(self, left: Emulated<i8, $TwoN, A>, right: Emulated<i8, $TwoN, A>) -> Self {
+                self + Self::from_arch_fn(self.1, |i| {
+                    let l0: i32 = left.0[4 * i].into();
+                    let l1: i32 = left.0[4 * i + 1].into();
+                    let l2: i32 = left.0[4 * i + 2].into();
+                    let l3: i32 = left.0[4 * i + 3].into();
+
+                    let r0: i32 = right.0[4 * i].into();
+                    let r1: i32 = right.0[4 * i + 1].into();
+                    let r2: i32 = right.0[4 * i + 2].into();
+                    let r3: i32 = right.0[4 * i + 3].into();
+
+                    let a = l0.expected_fma_(r0, l1.expected_mul_(r1));
+                    let b = l2.expected_fma_(r2, l3.expected_mul_(r3));
+                    a + b
+                })
+            }
+        }
     };
 }
 
+impl_simd_dot_product_i16_to_i32!(4, 8);
 impl_simd_dot_product_i16_to_i32!(8, 16);
 impl_simd_dot_product_i16_to_i32!(16, 32);
 
+impl_simd_dot_product_iu8_to_i32!(4, 16);
 impl_simd_dot_product_iu8_to_i32!(8, 32);
 impl_simd_dot_product_iu8_to_i32!(16, 64);
 
@@ -549,7 +599,7 @@ macro_rules! impl_little_endian_transmute_cast {
         {
             fn reinterpret_simd(self) -> Emulated<$to, $Nto, A> {
                 let array = self.0;
-                // # SAFETY: This is only ever instantiated with arrays of primitive
+                // SAFETY: This is only ever instantiated with arrays of primitive
                 // types that hold no resources, no padding, and are valid for all
                 // possible bit-patterns.
                 let casted = unsafe { std::mem::transmute::<[$from; $Nfrom], [$to; $Nto]>(array) };
@@ -676,7 +726,7 @@ mod test_emulated {
         test_utils::test_load_simd::<u32, 4, Emulated<u32, 4>>(Scalar);
         test_utils::test_load_simd::<u32, 8, Emulated<u32, 8>>(Scalar);
 
-        // Unsigned Integers
+        // Signed Integers
         test_utils::test_load_simd::<i8, 8, Emulated<i8, 8>>(Scalar);
         test_utils::test_load_simd::<i8, 16, Emulated<i8, 16>>(Scalar);
 
@@ -709,7 +759,7 @@ mod test_emulated {
         test_utils::test_store_simd::<u32, 4, Emulated<u32, 4>>(Scalar);
         test_utils::test_store_simd::<u32, 8, Emulated<u32, 8>>(Scalar);
 
-        // Unsigned Integers
+        // Signed Integers
         test_utils::test_store_simd::<i8, 8, Emulated<i8, 8>>(Scalar);
         test_utils::test_store_simd::<i8, 16, Emulated<i8, 16>>(Scalar);
 
@@ -815,10 +865,24 @@ mod test_emulated {
         (Emulated<i8, 32>, Emulated<u8, 32>) => Emulated<i32, 8>, 0x3001f05604e96289, SC
     );
     test_utils::dot_product::test_dot_product!(
+        (Emulated<i8, 32>, Emulated<i8, 32>) => Emulated<i32, 8>, 0x3001f05604e96289, SC
+    );
+
+    test_utils::dot_product::test_dot_product!(
         (Emulated<u8, 64>, Emulated<i8, 64>) => Emulated<i32, 16>, 0x3001f05604e96289, SC
     );
     test_utils::dot_product::test_dot_product!(
         (Emulated<i8, 64>, Emulated<u8, 64>) => Emulated<i32, 16>, 0x3001f05604e96289, SC
+    );
+    test_utils::dot_product::test_dot_product!(
+        (Emulated<i8, 64>, Emulated<i8, 64>) => Emulated<i32, 16>, 0x3001f05604e96289, SC
+    );
+
+    test_utils::dot_product::test_dot_product!(
+        (Emulated<u8, 32>, Emulated<u8, 32>) => Emulated<u32, 8>, 0x3001f05604e96289, SC
+    );
+    test_utils::dot_product::test_dot_product!(
+        (Emulated<u8, 64>, Emulated<u8, 64>) => Emulated<u32, 16>, 0x3001f05604e96289, SC
     );
 
     // reductions

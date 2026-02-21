@@ -4,9 +4,9 @@
  */
 
 use diskann_vector::{
+    Norm, PureDistanceFunction,
     distance::{InnerProduct, SquaredL2},
     norm::FastL2NormSquared,
-    Norm, PureDistanceFunction,
 };
 use rand::{distr::Distribution, rngs::StdRng};
 use rand_distr::StandardNormal;

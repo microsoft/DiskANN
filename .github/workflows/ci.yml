@@ -63,8 +63,14 @@ jobs:
           fi
 
   clippy:
-    name: clippy
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+      fail-fast: false
+    name: clippy (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust ${{ env.rust_stable }}
@@ -73,7 +79,6 @@ jobs:
           toolchain: ${{ env.rust_stable }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # Run clippy on workspace
       - name: "clippy --workspace --all-targets"
         run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG"
 
@@ -90,7 +95,6 @@ jobs:
           - diskann-disk
           - diskann-quantization
           - diskann-utils
-          - diskann-vector
           # Benchmark/tools crates
           - diskann-benchmark-core
           - diskann-benchmark-runner
@@ -120,6 +124,37 @@ jobs:
             --profile ci \
             --no-deps \
             --config "$RUST_CONFIG"
+
+  codeql:
+    name: CodeQL security analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build workspace
+        run: cargo build --workspace --locked --profile ci
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"
 
   # TODO: Re-enable docs check later
   # docs:
@@ -199,6 +234,7 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
@@ -297,11 +333,28 @@ jobs:
             --workspace \
             --lcov --output-path lcov.info
 
+      - name: Generate miri code coverage
+        run: |
+          cargo llvm-cov nextest --locked --cargo-profile ci \
+            --config 'build.rustflags=["-Dwarnings", "--cfg", "miri"]' \
+            --package diskann-quantization \
+            --lcov --output-path lcov_miri.info
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           files: lcov.info
           fail_ci_if_error: true
+          flags: unittests
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload miri coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov_miri.info
+          fail_ci_if_error: true
+          flags: miri
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 

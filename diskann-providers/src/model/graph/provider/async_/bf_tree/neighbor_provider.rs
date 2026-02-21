@@ -47,10 +47,15 @@ impl<I: VectorId> NeighborProvider<I> {
         }
     }
 
+    /// Access the BfTree config
+    pub(crate) fn config(&self) -> &Config {
+        self.adjacency_list_index.config()
+    }
+
     /// Create a snapshot of the adjacency list index
     ///
-    pub fn snapshot(&self) {
-        self.adjacency_list_index.snapshot();
+    pub fn snapshot(&self) -> std::path::PathBuf {
+        self.adjacency_list_index.snapshot()
     }
 
     /// Return the maximum degree (number of neighbors per vector)
