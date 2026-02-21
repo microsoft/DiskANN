@@ -884,7 +884,7 @@ impl StartPoint {
         }
         let data = read_bin::<u32>(&mut reader.open_reader(path)?)?;
 
-        let start_point_id = data.as_slice().first().ok_or_else(|| {
+        let start_point_id = data.try_get(0, 0).ok_or_else(|| {
             ANNError::log_invalid_file_format(format!("Start point ID file {} is empty", path))
         })?;
 

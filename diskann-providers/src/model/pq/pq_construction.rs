@@ -705,8 +705,7 @@ where
         storage_provider.create_for_write(pq_storage.get_compressed_data_path())?
     };
 
-    let metadata = Metadata::read(uncompressed_data_reader)?;
-    let (num_points, dim) = metadata.splat();
+    let (num_points, dim) = Metadata::read(uncompressed_data_reader)?.splat();
 
     let mut full_pivot_data: Vec<f32>;
     let centroid: Vec<f32>;
@@ -1021,7 +1020,7 @@ mod pq_test {
             FixedChunkPQTable,
             pq::{METADATA_SIZE, debug},
         },
-        utils::{ParallelIteratorInPool, create_thread_pool_for_test, load_bin},
+        utils::{ParallelIteratorInPool, create_thread_pool_for_test, read_bin_from},
     };
 
     #[test]
@@ -1049,6 +1048,7 @@ mod pq_test {
             compressed_file_name,
             Some(pq_training_file_name),
         );
+
         let mut train_data: Vec<f32> = vec![
             1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 2.0f32, 2.0f32, 2.0f32,
             2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32,
@@ -1066,47 +1066,33 @@ mod pq_test {
         )
         .unwrap();
 
-        let offsets = load_bin::<u64>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            0,
-        )
-        .unwrap();
+        let mut reader = storage_provider.open_reader(pivot_file_name).unwrap();
+        let offsets = read_bin_from::<u64>(&mut reader, 0).unwrap();
         let file_offset_data = offsets.map(|x| x.into_usize());
-        assert_eq!(file_offset_data.as_slice()[0], METADATA_SIZE);
+        assert_eq!(file_offset_data[(0, 0)], METADATA_SIZE);
         assert_eq!(offsets.nrows(), 4);
         assert_eq!(offsets.ncols(), 1);
 
-        let pivots = load_bin::<f32>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data.as_slice()[0],
-        )
-        .unwrap();
+        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)]).unwrap();
 
         assert_eq!(pivots.as_slice().len(), 16);
         assert_eq!(pivots.nrows(), 2);
         assert_eq!(pivots.ncols(), 8);
 
-        let centroid = load_bin::<f32>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data.as_slice()[1],
-        )
-        .unwrap();
+        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)]).unwrap();
         assert_eq!(
-            centroid.as_slice()[0],
+            centroid[(0, 0)],
             (1.0f32 + 2.0f32 + 2.1f32 + 2.2f32 + 100.0f32) / 5.0f32
         );
         assert_eq!(centroid.nrows(), 8);
         assert_eq!(centroid.ncols(), 1);
 
-        let chunk_offsets = load_bin::<u32>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data.as_slice()[2],
-        )
-        .unwrap()
-        .map(|x| x.into_usize());
-        assert_eq!(chunk_offsets.as_slice()[0], 0);
-        assert_eq!(chunk_offsets.as_slice()[1], 4);
-        assert_eq!(chunk_offsets.as_slice()[2], 8);
+        let chunk_offsets = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])
+            .unwrap()
+            .map(|x| x.into_usize());
+        assert_eq!(chunk_offsets[(0, 0)], 0);
+        assert_eq!(chunk_offsets[(1, 0)], 4);
+        assert_eq!(chunk_offsets[(2, 0)], 8);
         assert_eq!(chunk_offsets.nrows(), 3);
         assert_eq!(chunk_offsets.ncols(), 1);
     }
@@ -1123,6 +1109,7 @@ mod pq_test {
             compressed_file_name,
             Some(pq_training_file_name),
         );
+
         let mut train_data: Vec<f32> = vec![
             1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 1.0f32, 2.0f32, 2.0f32, 2.0f32,
             2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.0f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32, 2.1f32,
@@ -1140,47 +1127,33 @@ mod pq_test {
         )
         .unwrap();
 
-        let offsets = load_bin::<u64>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            0,
-        )
-        .unwrap();
+        let mut reader = storage_provider.open_reader(pivot_file_name).unwrap();
+        let offsets = read_bin_from::<u64>(&mut reader, 0).unwrap();
         let file_offset_data = offsets.map(|x| x.into_usize());
-        assert_eq!(file_offset_data.as_slice()[0], METADATA_SIZE);
+        assert_eq!(file_offset_data[(0, 0)], METADATA_SIZE);
         assert_eq!(offsets.nrows(), 4);
         assert_eq!(offsets.ncols(), 1);
 
-        let pivots = load_bin::<f32>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data.as_slice()[0],
-        )
-        .unwrap();
+        let pivots = read_bin_from::<f32>(&mut reader, file_offset_data[(0, 0)]).unwrap();
 
         assert_eq!(pivots.as_slice().len(), 16);
         assert_eq!(pivots.nrows(), 2);
         assert_eq!(pivots.ncols(), 8);
 
-        let centroid = load_bin::<f32>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data.as_slice()[1],
-        )
-        .unwrap();
+        let centroid = read_bin_from::<f32>(&mut reader, file_offset_data[(1, 0)]).unwrap();
         assert_eq!(
-            centroid.as_slice()[0],
+            centroid[(0, 0)],
             (1.0f32 + 2.0f32 + 2.1f32 + 2.2f32 + 100.0f32) / 5.0f32
         );
         assert_eq!(centroid.nrows(), 8);
         assert_eq!(centroid.ncols(), 1);
 
-        let chunk_offsets = load_bin::<u32>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            file_offset_data.as_slice()[2],
-        )
-        .unwrap()
-        .map(|x| x.into_usize());
-        assert_eq!(chunk_offsets.as_slice()[0], 0);
-        assert_eq!(chunk_offsets.as_slice()[1], 4);
-        assert_eq!(chunk_offsets.as_slice()[2], 8);
+        let chunk_offsets = read_bin_from::<u32>(&mut reader, file_offset_data[(2, 0)])
+            .unwrap()
+            .map(|x| x.into_usize());
+        assert_eq!(chunk_offsets[(0, 0)], 0);
+        assert_eq!(chunk_offsets[(1, 0)], 4);
+        assert_eq!(chunk_offsets[(2, 0)], 8);
         assert_eq!(chunk_offsets.nrows(), 3);
         assert_eq!(chunk_offsets.ncols(), 1);
     }
@@ -1314,7 +1287,7 @@ mod pq_test {
             &pool,
         )
         .unwrap();
-        let compressed = load_bin::<u8>(
+        let compressed = read_bin_from::<u8>(
             &mut storage_provider
                 .open_reader(pq_compressed_vectors_path)
                 .unwrap(),
@@ -1503,7 +1476,7 @@ mod pq_test {
             });
 
         // use pq generated by original function as the gt
-        let original_pq_data = load_bin::<u8>(
+        let original_pq_data = read_bin_from::<u8>(
             &mut storage_provider
                 .open_reader(pq_compressed_vectors_path)
                 .unwrap(),
@@ -1689,14 +1662,14 @@ mod pq_test {
         )
         .expect("Failed to generate quantized data");
 
-        let data = load_bin::<u8>(
+        let data = read_bin_from::<u8>(
             &mut storage_provider
                 .open_reader(pq_compressed_vectors_path)
                 .unwrap(),
             0,
         )
         .unwrap();
-        let gt_data = load_bin::<u8>(
+        let gt_data = read_bin_from::<u8>(
             &mut storage_provider.open_reader(ground_truth_path).unwrap(),
             0,
         )

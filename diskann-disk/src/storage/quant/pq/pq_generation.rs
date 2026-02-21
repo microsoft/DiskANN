@@ -189,9 +189,12 @@ mod pq_generation_tests {
     use diskann_providers::storage::{
         PQStorage, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
-    use diskann_providers::utils::{create_thread_pool_for_test, load_bin, save_bin, AsThreadPool};
-    use diskann_utils::test_data_root;
-    use diskann_utils::views::{MatrixView, MutMatrixView};
+    use diskann_providers::utils::{create_thread_pool_for_test, AsThreadPool};
+    use diskann_utils::{
+        io::{read_bin, write_bin},
+        test_data_root,
+        views::{MatrixView, MutMatrixView},
+    };
     use diskann_vector::distance::Metric;
     use rstest::rstest;
     use vfs::FileSystem;
@@ -257,11 +260,11 @@ mod pq_generation_tests {
         let (ndata, dim, num_centers, num_chunks, max_k_means_reps) = (5, 8, 2, 2, 5);
         let mut train_data: Vec<f32> = VALIDATION_DATA.to_vec();
 
-        let _ = save_bin(
+        write_bin(
             MatrixView::try_from(train_data.as_slice(), ndata, dim).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
-            0,
-        );
+        )
+        .unwrap();
 
         let pool = create_thread_pool_for_test();
         generate_pq_pivots(
@@ -307,18 +310,14 @@ mod pq_generation_tests {
         assert_eq!(compressor.table.nchunks(), num_chunks);
 
         assert!(&storage_provider.exists(pivot_file_name_compressor));
-        let compressor_pivots = load_bin::<u8>(
+        let compressor_pivots = read_bin::<u8>(
             &mut storage_provider
                 .open_reader(pivot_file_name_compressor)
                 .unwrap(),
-            0,
         )
         .unwrap();
-        let true_pivots = load_bin::<u8>(
-            &mut storage_provider.open_reader(pivot_file_name).unwrap(),
-            0,
-        )
-        .unwrap();
+        let true_pivots =
+            read_bin::<u8>(&mut storage_provider.open_reader(pivot_file_name).unwrap()).unwrap();
         assert_eq!(compressor_pivots, true_pivots);
     }
 
@@ -336,11 +335,11 @@ mod pq_generation_tests {
 
         let (ndata, dim, num_centers, num_chunks, max_k_means_reps) = (5, 8, 2, 2, 5);
 
-        let _ = save_bin(
+        write_bin(
             MatrixView::try_from(VALIDATION_DATA.as_slice(), ndata, dim).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
-            0,
-        );
+        )
+        .unwrap();
         let pool = create_thread_pool_for_test();
 
         let compressor = create_new_compressor(
@@ -389,11 +388,8 @@ mod pq_generation_tests {
 
         assert!(compressor.is_ok());
 
-        let data_matrix = load_bin::<f32>(
-            &mut storage_provider.open_reader(TEST_PQ_DATA_PATH).unwrap(),
-            0,
-        )
-        .unwrap();
+        let data_matrix =
+            read_bin::<f32>(&mut storage_provider.open_reader(TEST_PQ_DATA_PATH).unwrap()).unwrap();
         let npts = data_matrix.nrows();
         let mut compressed_mat = vec![0_u8; num_chunks * npts];
         let result = compressor.unwrap().compress(
@@ -402,11 +398,10 @@ mod pq_generation_tests {
         );
         assert!(result.is_ok());
 
-        let compressed_gt = load_bin::<u8>(
+        let compressed_gt = read_bin::<u8>(
             &mut storage_provider
                 .open_reader(TEST_PQ_COMPRESSED_PATH)
                 .unwrap(),
-            0,
         )
         .unwrap();
         assert_eq!(compressed_gt.as_slice(), &compressed_mat);

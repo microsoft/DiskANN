@@ -149,7 +149,7 @@ where
     // Process vectors one by one
     for i in 0..num_points {
         // Get input vector
-        let input_vector: Vec<f32> = input_data.row(i).iter().map(|x| (*x).into()).collect();
+        let input_vector = input_data.row(i);
 
         // Create buffer for quantized data with proper alignment
         let mut quantized_buffer = vec![0u8; bytes_per_vector];
@@ -161,7 +161,7 @@ where
 
         // Compress the vector
         let loss_x = quantizer
-            .compress_into(input_vector.as_slice(), quantized_data)
+            .compress_into(input_vector, quantized_data)
             .with_context(|| format!("Failed to compress vector {}", i))?;
 
         loss += loss_x.as_f32();

@@ -9,13 +9,16 @@ use diskann::{
     ANNError, ANNResult,
     utils::{IntoUsize, VectorRepr},
 };
-use diskann_utils::{io::Metadata, views::MatrixView};
+use diskann_utils::{
+    io::{Metadata, read_bin, write_bin},
+    views::MatrixView,
+};
 use rand::Rng;
 use tracing::info;
 
 use crate::{
     model::{FixedChunkPQTable, NUM_PQ_CENTROIDS, PQCompressedData, pq::METADATA_SIZE},
-    utils::{copy_aligned_data, gen_random_slice, load_bin, save_bin},
+    utils::{copy_aligned_data, gen_random_slice, read_bin_from, write_bin_from},
 };
 
 // Create types to make return values easier to understand
@@ -94,26 +97,28 @@ impl PQStorage {
         let mut cumul_bytes: Vec<usize> = vec![0; 4];
         cumul_bytes[0] = METADATA_SIZE;
         let writer = &mut storage_provider.create_for_write(&self.pivot_data_path)?;
-        // Write Pq centroids vectors at offset METADATA_SIZE(4096)
-        let pivot_view = MatrixView::try_from(full_pivot_data, num_centers, dim).unwrap();
-        cumul_bytes[1] = cumul_bytes[0] + save_bin(pivot_view, writer, cumul_bytes[0])?;
 
-        // Write THE CENTROID of PQ CENTROID vectors at offset METADATA_SIZE(4096) + size of centroids vectors.
-        cumul_bytes[2] =
-            cumul_bytes[1] + save_bin(MatrixView::column_vector(centroid), writer, cumul_bytes[1])?;
+        // Skip past the offset table — we'll write it last once we know all offsets.
+        writer.seek(SeekFrom::Start(cumul_bytes[0] as u64))?;
+
+        // Write PQ centroid vectors
+        let pivot_view = MatrixView::try_from(full_pivot_data, num_centers, dim)?;
+        cumul_bytes[1] = cumul_bytes[0] + write_bin(pivot_view, writer)?;
+
+        // Write the centroid of PQ centroid vectors
+        cumul_bytes[2] = cumul_bytes[1] + write_bin(MatrixView::column_vector(centroid), writer)?;
 
         // Write PQ chunk offsets
         let chunk_offsets_u32: Vec<u32> = chunk_offsets.iter().map(|&x| x as u32).collect();
         cumul_bytes[3] = cumul_bytes[2]
-            + save_bin(
+            + write_bin(
                 MatrixView::column_vector(chunk_offsets_u32.as_slice()),
                 writer,
-                cumul_bytes[2],
             )?;
 
-        // Write metadata at offset 0.
+        // Seek back to offset 0 and write the offset table.
         let cumul_bytes_u64: Vec<u64> = cumul_bytes.iter().map(|&x| x as u64).collect();
-        save_bin(
+        write_bin_from(
             MatrixView::column_vector(cumul_bytes_u64.as_slice()),
             writer,
             0,
@@ -146,8 +151,8 @@ impl PQStorage {
         let writer = &mut storage_provider.create_for_write(&self.get_rotation_matrix_path())?;
 
         // Save the rotation matrix
-        let view = MatrixView::try_from(rotation_matrix, dimension, dimension).unwrap();
-        save_bin(view, writer, 0)?;
+        let view = MatrixView::try_from(rotation_matrix, dimension, dimension)?;
+        write_bin(view, writer)?;
 
         Ok(())
     }
@@ -187,11 +192,10 @@ impl PQStorage {
     where
         Storage: StorageReadProvider,
     {
-        // Load file offset data. File saved as offset data(4*1) -> pivot data(centroid num*dim) -> centroid of dim data(dim*1) -> chunk offset data(chunksize+1*1)
-        // Because we only can write u64 rather than usize, so the file stored as u64 type. Need to convert to usize when use.
+        // Load file offset data. File layout: offset table(4*1) -> pivot data(num_centers*dim) -> centroid(dim*1) -> chunk offsets(num_chunks+1*1)
         let reader = &mut storage_provider.open_reader(&self.pivot_data_path)?;
 
-        let offsets = load_bin::<u64>(reader, 0)?;
+        let offsets = read_bin_from::<u64>(reader, 0)?;
         if offsets.nrows() != 4 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. Offsets don't contain correct \
@@ -204,7 +208,10 @@ impl PQStorage {
 
         info!(" Offset data: {:?}", file_offset_data.as_slice());
 
-        let pivots = load_bin::<f32>(reader, file_offset_data.as_slice()[0])?;
+        // Seek to the first data section; subsequent reads are contiguous.
+        reader.seek(SeekFrom::Start(file_offset_data.as_slice()[0] as u64))?;
+
+        let pivots = read_bin::<f32>(reader)?;
         if pivots.nrows() != *num_centers || pivots.ncols() != *dim {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, \
@@ -217,7 +224,7 @@ impl PQStorage {
             )));
         }
 
-        let centroid_m = load_bin::<f32>(reader, file_offset_data.as_slice()[1])?;
+        let centroid_m = read_bin::<f32>(reader)?;
         if centroid_m.nrows() != *dim || centroid_m.ncols() != 1 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_dim = {}, \
@@ -229,7 +236,7 @@ impl PQStorage {
             )));
         }
 
-        let chunk_offsets_m = load_bin::<u32>(reader, file_offset_data.as_slice()[2])?;
+        let chunk_offsets_m = read_bin::<u32>(reader)?;
         if chunk_offsets_m.nrows() != *num_pq_chunks + 1 || chunk_offsets_m.ncols() != 1 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file at chunk offsets; \
@@ -278,7 +285,7 @@ impl PQStorage {
             }
         };
 
-        let data = load_bin::<f32>(rotation_matrix_reader, 0)?;
+        let data = read_bin_from::<f32>(rotation_matrix_reader, 0)?;
 
         info!("OPQ rotation matrix load complete");
 
@@ -329,7 +336,7 @@ impl PQStorage {
         info!("Loading PQ pivots from {}...", pq_pivots);
 
         let mut reader = storage_provider.open_reader(pq_pivots)?;
-        let offsets = load_bin::<u64>(&mut reader, 0)?;
+        let offsets = read_bin_from::<u64>(&mut reader, 0)?;
         if offsets.nrows() != 4 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. Offsets don't contain correct metadata, \
@@ -340,7 +347,10 @@ impl PQStorage {
         }
         let file_offset_data = offsets.map(|x| x.into_usize());
 
-        let pivots = load_bin::<f32>(&mut reader, file_offset_data.as_slice()[0])?;
+        // Seek to the first data section; subsequent reads are contiguous.
+        reader.seek(SeekFrom::Start(file_offset_data.as_slice()[0] as u64))?;
+
+        let pivots = read_bin::<f32>(&mut reader)?;
         if pivots.nrows() > NUM_PQ_CENTROIDS {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_num_centers = {}, but expecting {} centers.",
@@ -351,7 +361,7 @@ impl PQStorage {
         }
         let dim = pivots.ncols();
 
-        let centroids = load_bin::<f32>(&mut reader, file_offset_data.as_slice()[1])?;
+        let centroids = read_bin::<f32>(&mut reader)?;
         if centroids.nrows() != dim || centroids.ncols() != 1 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file {}. file_dim = {}, file_cols = {} \
@@ -363,7 +373,7 @@ impl PQStorage {
             )));
         }
 
-        let chunk_offsets_m = load_bin::<u32>(&mut reader, file_offset_data.as_slice()[2])?;
+        let chunk_offsets_m = read_bin::<u32>(&mut reader)?;
         if (chunk_offsets_m.nrows() != num_pq_chunks + 1 && num_pq_chunks as u32 != 0)
             || chunk_offsets_m.ncols() != 1
         {

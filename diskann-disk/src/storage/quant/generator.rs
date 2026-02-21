@@ -276,9 +276,11 @@ mod generator_tests {
 
     use diskann::utils::read_exact_into;
     use diskann_providers::storage::VirtualStorageProvider;
-    use diskann_providers::utils::{create_thread_pool_for_test, save_bin, save_bytes};
-    use diskann_utils::io::Metadata;
-    use diskann_utils::views::MatrixView;
+    use diskann_providers::utils::{create_thread_pool_for_test, save_bytes};
+    use diskann_utils::{
+        io::{write_bin, Metadata},
+        views::MatrixView,
+    };
     use rstest::rstest;
     use vfs::{FileSystem, MemoryFS};
 
@@ -383,10 +385,9 @@ mod generator_tests {
         // Setup test data
         let data = create_test_data(num_points, dim);
         let view = MatrixView::try_from(data.as_slice(), num_points, dim).unwrap();
-        let _ = save_bin(
+        write_bin(
             view,
             &mut storage_provider.create_for_write(data_path.as_str())?,
-            0,
         )?;
 
         if offset > 0 {

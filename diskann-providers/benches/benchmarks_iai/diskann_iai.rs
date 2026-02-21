@@ -15,8 +15,9 @@ use diskann_providers::{
         traits::AdHoc,
     },
     storage::FileStorageProvider,
-    utils::{VectorDataIterator, create_thread_pool_for_bench, load_bin},
+    utils::{VectorDataIterator, create_thread_pool_for_bench},
 };
+use diskann_utils::io::read_bin;
 use diskann_vector::distance::Metric;
 use tokio::runtime::Runtime;
 
@@ -48,11 +49,10 @@ async fn test_sift_256_vectors_with_quant_vectors() {
     )
     .unwrap();
 
-    let train_data = load_bin::<f32>(
+    let train_data = read_bin::<f32>(
         &mut storage_provider
             .open_reader(get_test_file_path(file_path).as_str())
             .unwrap(),
-        0,
     )
     .unwrap();
 

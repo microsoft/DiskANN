@@ -81,7 +81,7 @@ pub fn copy_aligned_data<T: Default + bytemuck::Pod, Reader: Read>(
 /// # Arguments
 /// * `reader` - a stream reader.
 /// * `offset` - start offset of the data.
-pub fn load_bin<T: Pod>(
+pub fn read_bin_from<T: Pod>(
     reader: &mut (impl Read + Seek),
     offset: usize,
 ) -> Result<Matrix<T>, ReadBinError> {
@@ -90,7 +90,7 @@ pub fn load_bin<T: Pod>(
 }
 
 /// Write a matrix at the given byte offset.
-pub fn save_bin<T: Pod>(
+pub fn write_bin_from<T: Pod>(
     data: MatrixView<'_, T>,
     writer: &mut (impl Write + Seek),
     offset: usize,
@@ -181,14 +181,12 @@ mod storage_util_test {
     }
 
     #[test]
-    fn load_bin_test() {
-        let file_name = "/load_bin_test";
+    fn test_read_bin_from() {
+        let file_name = "/read_bin_from";
         let data = vec![0u64, 1u64, 2u64];
-        let num_pts = data.len();
-        let dims = 1;
         let storage_provider = VirtualStorageProvider::new_memory();
-        let view = MatrixView::try_from(data.as_slice(), num_pts, dims).unwrap();
-        let bytes_written = save_bin(
+        let view = MatrixView::column_vector(data.as_slice());
+        let bytes_written = write_bin_from(
             view,
             &mut storage_provider.create_for_write(file_name).unwrap(),
             0,
@@ -197,23 +195,19 @@ mod storage_util_test {
         assert_eq!(bytes_written, 32);
 
         let loaded =
-            load_bin::<u64>(&mut storage_provider.open_reader(file_name).unwrap(), 0).unwrap();
-        assert_eq!(loaded.nrows(), num_pts);
-        assert_eq!(loaded.ncols(), dims);
-        assert_eq!(loaded.as_slice(), &data);
+            read_bin_from::<u64>(&mut storage_provider.open_reader(file_name).unwrap(), 0).unwrap();
+        assert_eq!(loaded.as_view(), view);
         storage_provider.delete(file_name).unwrap();
     }
 
     #[test]
-    fn load_bin_offset_test() {
+    fn test_read_bin_from_offset_test() {
         let offset: usize = 32;
-        let file_name = "/load_bin_offset_test";
+        let file_name = "/read_bin_from_offset_test";
         let data = vec![0u64, 1u64, 2u64];
-        let num_pts = data.len();
-        let dims = 1;
         let storage_provider = VirtualStorageProvider::new_memory();
-        let view = MatrixView::try_from(data.as_slice(), num_pts, dims).unwrap();
-        let bytes_written = save_bin(
+        let view = MatrixView::column_vector(data.as_slice());
+        let bytes_written = write_bin_from(
             view,
             &mut storage_provider.create_for_write(file_name).unwrap(),
             offset,
@@ -221,14 +215,12 @@ mod storage_util_test {
         .unwrap();
         assert_eq!(bytes_written, 32);
 
-        let loaded = load_bin::<u64>(
+        let loaded = read_bin_from::<u64>(
             &mut storage_provider.open_reader(file_name).unwrap(),
             offset,
         )
         .unwrap();
-        assert_eq!(loaded.nrows(), num_pts);
-        assert_eq!(loaded.ncols(), dims);
-        assert_eq!(loaded.as_slice(), &data);
+        assert_eq!(loaded.as_view(), view);
         storage_provider.delete(file_name).unwrap();
     }
 
@@ -274,13 +266,13 @@ mod storage_util_test {
     }
 
     #[test]
-    fn save_bin_test() {
+    fn write_bin_from_test() {
         let data = vec![0u64, 1u64, 2u64];
         let num_pts = data.len();
         let dims = 1;
         let mut file = tempfile().unwrap();
-        let view = MatrixView::try_from(data.as_slice(), num_pts, dims).unwrap();
-        let bytes_written = save_bin(view, &mut file, 0).unwrap();
+        let view = MatrixView::column_vector(data.as_slice());
+        let bytes_written = write_bin_from(view, &mut file, 0).unwrap();
         assert_eq!(bytes_written, 32);
 
         let mut buffer = vec![];
