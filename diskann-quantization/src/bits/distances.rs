@@ -1361,6 +1361,29 @@ impl Target2<diskann_wide::arch::Scalar, MathematicalResult<u32>, USlice<'_, 8>,
 impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 4>>
     for InnerProduct
 {
+    /// Computes the inner product of 8-bit unsigned × 4-bit unsigned vectors using AVX2.
+    ///
+    /// # Strategy: `vpmaddubsw`-based 32-element blocks
+    ///
+    /// Each iteration processes 32 logical elements:
+    /// - **x**: 32 bytes loaded directly as `u8x32`.
+    /// - **y**: 16 packed bytes → unpacked to 32 nibble values in a `u8x32`.
+    ///
+    /// The nibble-unpacking interleaves low and high nibbles from each packed byte:
+    /// ```text
+    /// packed byte[i] = (hi_nibble << 4) | lo_nibble
+    ///      → unpacked[2i]   = lo_nibble   (element 2i)
+    ///      → unpacked[2i+1] = hi_nibble   (element 2i+1)
+    /// ```
+    ///
+    /// The core multiply-accumulate chain is:
+    /// 1. `vpmaddubsw(x, y)` — multiply 32 `u8 × u8` pairs, add adjacent products
+    ///    → 16 × `i16`. No overflow because max pair sum = 255×15 + 255×15 = 7650 < 32767.
+    /// 2. `vpmaddwd(result, 1s)` — horizontally add adjacent `i16` pairs → 8 × `i32`.
+    /// 3. `vpaddd` — accumulate into running `i32x8` sum.
+    ///
+    /// This yields ~10 instructions per 32 elements (0.31 instr/elem), compared to the
+    /// previous `vpmaddwd`-only approach at ~8 instructions per 16 elements (0.50 instr/elem).
     #[inline(always)]
     fn run(
         self,
@@ -1368,116 +1391,177 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         x: USlice<'_, 8>,
         y: USlice<'_, 4>,
     ) -> MathematicalResult<u32> {
-        use std::arch::x86_64::{_mm_srli_epi16, _mm_unpacklo_epi8};
+        use std::arch::x86_64::{
+            _mm256_maddubs_epi16, _mm_srli_epi16, _mm_unpackhi_epi8, _mm_unpacklo_epi8,
+        };
 
         let len = check_lengths!(x, y)?;
 
         diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
         diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V3>::i16x16);
-        diskann_wide::alias!(i8s = <diskann_wide::arch::x86_64::V3>::i8x16);
-        diskann_wide::alias!(u8s = <diskann_wide::arch::x86_64::V3>::u8x16);
+        diskann_wide::alias!(u8s_16 = <diskann_wide::arch::x86_64::V3>::u8x16);
+        diskann_wide::alias!(u8s_32 = <diskann_wide::arch::x86_64::V3>::u8x32);
 
         let px: *const u8 = x.as_ptr();
         let py: *const u8 = y.as_ptr();
 
-        /// Unpack 16 nibbles (8 bytes at `ptr`) into 16 × i16 lanes.
+        /// Unpack 32 nibbles from 16 packed bytes into a `u8x32`.
+        ///
+        /// Each input byte contains two 4-bit values: the low nibble in bits [3:0]
+        /// and the high nibble in bits [7:4]. The output interleaves them so that
+        /// element `2i` gets the low nibble and element `2i+1` gets the high nibble
+        /// of input byte `i`.
+        ///
+        /// # Implementation
+        ///
+        /// 1. Load 16 bytes into `u8x16`.
+        /// 2. Shift each 16-bit lane right by 4 to extract high nibbles.
+        ///    (Cross-byte bit leakage within 16-bit lanes is cleaned up by the
+        ///    final mask step.)
+        /// 3. Byte-interleave low half (`unpacklo`) and high half (`unpackhi`)
+        ///    to produce two `u8x16` registers.
+        /// 4. Join the two halves into a `u8x32` via [`SplitJoin`].
+        /// 5. Mask all 32 bytes with `0x0F` to isolate clean nibble values.
         ///
         /// # Safety
         ///
-        /// `[ptr, ptr + 8)` must be readable.
+        /// `[ptr, ptr + 16)` must be readable.
         #[inline(always)]
-        unsafe fn unpack_nibbles(
+        unsafe fn unpack_nibbles_32(
             arch: diskann_wide::arch::x86_64::V3,
             ptr: *const u8,
-        ) -> <diskann_wide::arch::x86_64::V3 as diskann_wide::Architecture>::i16x16 {
-            // Load 8 bytes into the lower half of i8x16 (upper 8 zeroed).
-            // SAFETY: The caller asserts `[ptr, ptr + 8)` is readable.
-            let raw = unsafe { i8s::load_simd_first(arch, ptr as *const i8, 8) };
-            
-            let mask_0f = i8s::splat(arch, 0x0f);
-            
-            // Low nibble of each byte.
-            let lo = raw & mask_0f;
-            
-            // High nibble: shift 16-bit lanes right by 4. Leaking into 
-            // next byte is ok, the byte-level mask will clean it up.
+        ) -> <diskann_wide::arch::x86_64::V3 as diskann_wide::Architecture>::u8x32 {
+            use diskann_wide::LoHi;
+
+            diskann_wide::alias!(u8s_16 = <diskann_wide::arch::x86_64::V3>::u8x16);
+            diskann_wide::alias!(u8s_32 = <diskann_wide::arch::x86_64::V3>::u8x32);
+
+            // Load 16 packed bytes (32 nibbles).
+            // SAFETY: The caller asserts `[ptr, ptr + 16)` is readable.
+            let raw = unsafe { u8s_16::load_simd(arch, ptr) };
+
+            // Shift each 16-bit lane right by 4 to position high nibbles in the
+            // low 4 bits of each byte. Bit leakage across byte boundaries within
+            // a 16-bit lane is harmless — the final `& 0x0F` mask cleans it up.
             // SAFETY: `_mm_srli_epi16` requires SSE2, implied by V3.
-            let hi = i8s::from_underlying(arch, unsafe {
+            let shifted = u8s_16::from_underlying(arch, unsafe {
                 _mm_srli_epi16::<4>(raw.to_underlying())
-            }) & mask_0f;
-            
-            // Interleave low bytes of `lo` and `hi`:
-            // SAFETY: `_mm_unpacklo_epi8` requires SSE2, implied by V3.
-            let interleaved = i8s::from_underlying(arch, unsafe {
-                _mm_unpacklo_epi8(lo.to_underlying(), hi.to_underlying())
             });
 
-            // Sign-extend each of the 16 bytes to i16. Values are originally [0, 15] 
-            // so sign-extension is ok.
-            i16s::from(interleaved)
+            // Byte-interleave: pair each raw byte with its shifted counterpart.
+            //   unpacklo(raw, shifted) → bytes 0..7:  [raw[0], shifted[0], raw[1], shifted[1], ...]
+            //   unpackhi(raw, shifted) → bytes 8..15: [raw[8], shifted[8], raw[9], shifted[9], ...]
+            // This places lo_nibble at even positions and hi_nibble at odd positions.
+            // SAFETY: `_mm_unpacklo/hi_epi8` require SSE2, implied by V3.
+            let lo_half = u8s_16::from_underlying(arch, unsafe {
+                _mm_unpacklo_epi8(raw.to_underlying(), shifted.to_underlying())
+            });
+            let hi_half = u8s_16::from_underlying(arch, unsafe {
+                _mm_unpackhi_epi8(raw.to_underlying(), shifted.to_underlying())
+            });
+
+            // Combine the two 128-bit halves into a single 256-bit register.
+            let combined: u8s_32 = LoHi::new(lo_half, hi_half).join();
+
+            // Mask to isolate the 4-bit nibble values [0, 15].
+            combined & u8s_32::splat(arch, 0x0F)
         }
 
-        let mut i = 0;
+        /// Multiply-accumulate using `vpmaddubsw` + `vpmaddwd`.
+        ///
+        /// Computes `acc += Σ(x[i] * y[i])` for 32 elements, where x is `u8x32`
+        /// and y is `u8x32` with values in `[0, 15]`.
+        ///
+        /// `vpmaddubsw` treats the first operand as unsigned and the second as signed,
+        /// multiplies corresponding byte pairs, then adds adjacent products with
+        /// signed saturation to produce 16 × `i16`. Since y ∈ [0, 15], all products
+        /// are non-negative and the maximum pair sum is 255×15 + 255×15 = 7650,
+        /// which is well within the `i16` range (max 32767). No saturation occurs.
+        ///
+        /// The subsequent `vpmaddwd` with a vector of 1s horizontally adds adjacent
+        /// `i16` pairs to produce 8 × `i32`, which is then added to the accumulator.
+        #[inline(always)]
+        fn maddubs_accumulate(
+            arch: diskann_wide::arch::x86_64::V3,
+            acc: <diskann_wide::arch::x86_64::V3 as diskann_wide::Architecture>::i32x8,
+            vx: <diskann_wide::arch::x86_64::V3 as diskann_wide::Architecture>::u8x32,
+            vy: <diskann_wide::arch::x86_64::V3 as diskann_wide::Architecture>::u8x32,
+        ) -> <diskann_wide::arch::x86_64::V3 as diskann_wide::Architecture>::i32x8 {
+            use diskann_wide::SIMDDotProduct;
+
+            diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V3>::i16x16);
+
+            // vpmaddubsw: 32 × u8 * 32 × "i8" → 16 × i16 (with saturating pair-add).
+            // SAFETY: `_mm256_maddubs_epi16` requires AVX2, implied by V3.
+            let products = i16s::from_underlying(arch, unsafe {
+                _mm256_maddubs_epi16(vx.to_underlying(), vy.to_underlying())
+            });
+
+            // vpmaddwd with 1s: reduce 16 × i16 → 8 × i32 by adding adjacent pairs,
+            // then add to accumulator. This is exactly what `dot_simd(products, ones)`
+            // does: acc + madd(products, ones).
+            let ones = i16s::splat(arch, 1);
+            acc.dot_simd(products, ones)
+        }
+
+        let mut i: usize = 0;
         let mut s: u32 = 0;
 
-        let blocks = len / 16;
+        // Each block processes 32 elements: 32 bytes from x, 16 packed bytes from y.
+        let blocks = len / 32;
         if blocks > 0 {
             let mut s0 = i32s::default(arch);
             let mut s1 = i32s::default(arch);
             let mut s2 = i32s::default(arch);
             let mut s3 = i32s::default(arch);
 
+            // Main loop: 4× unrolled, processing 128 elements per iteration.
             while i + 4 <= blocks {
                 // Block 0
                 // SAFETY: `i + 4 <= blocks` guarantees at least 4 full blocks remain.
-                // Each block is 16 elements: 16 bytes from `px` and 8 bytes from `py`.
-                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * i)) });
-                // SAFETY: Same bounds guarantee.
-                let vy = unsafe { unpack_nibbles(arch, py.add(8 * i)) };
-                s0 = s0.dot_simd(vx, vy);
+                // Each block needs 32 bytes from `px` and 16 bytes from `py`.
+                let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
+                let vy = unsafe { unpack_nibbles_32(arch, py.add(16 * i)) };
+                s0 = maddubs_accumulate(arch, s0, vx, vy);
 
                 // Block 1
                 // SAFETY: `i + 1 < i + 4 <= blocks`.
-                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * (i + 1))) });
-                // SAFETY: Same bounds guarantee.
-                let vy = unsafe { unpack_nibbles(arch, py.add(8 * (i + 1))) };
-                s1 = s1.dot_simd(vx, vy);
+                let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 1))) };
+                let vy = unsafe { unpack_nibbles_32(arch, py.add(16 * (i + 1))) };
+                s1 = maddubs_accumulate(arch, s1, vx, vy);
 
                 // Block 2
                 // SAFETY: `i + 2 < i + 4 <= blocks`.
-                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * (i + 2))) });
-                // SAFETY: Same bounds guarantee.
-                let vy = unsafe { unpack_nibbles(arch, py.add(8 * (i + 2))) };
-                s2 = s2.dot_simd(vx, vy);
+                let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 2))) };
+                let vy = unsafe { unpack_nibbles_32(arch, py.add(16 * (i + 2))) };
+                s2 = maddubs_accumulate(arch, s2, vx, vy);
 
                 // Block 3
                 // SAFETY: `i + 3 < i + 4 <= blocks`.
-                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * (i + 3))) });
-                // SAFETY: Same bounds guarantee.
-                let vy = unsafe { unpack_nibbles(arch, py.add(8 * (i + 3))) };
-                s3 = s3.dot_simd(vx, vy);
+                let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 3))) };
+                let vy = unsafe { unpack_nibbles_32(arch, py.add(16 * (i + 3))) };
+                s3 = maddubs_accumulate(arch, s3, vx, vy);
 
                 i += 4;
             }
 
-            // Process remaining full blocks (0..3 blocks).
+            // Drain remaining full 32-element blocks (0..3 iterations).
             while i < blocks {
-                // SAFETY: `i < blocks` guarantees 16 bytes from `px` and 8 bytes
+                // SAFETY: `i < blocks` guarantees 32 bytes from `px` and 16 bytes
                 // from `py` are readable at this offset.
-                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * i)) });
-                // SAFETY: Same bounds guarantee.
-                let vy = unsafe { unpack_nibbles(arch, py.add(8 * i)) };
-                s0 = s0.dot_simd(vx, vy);
+                let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
+                let vy = unsafe { unpack_nibbles_32(arch, py.add(16 * i)) };
+                s0 = maddubs_accumulate(arch, s0, vx, vy);
                 i += 1;
             }
 
             s = ((s0 + s1) + (s2 + s3)).sum_tree() as u32;
         }
 
-        // Convert blocks to element indexes.
-        i *= 16;
+        // Convert block count to element index.
+        i *= 32;
 
-        // Deal with the remainder the slow way.
+        // Scalar fallback for the remaining < 32 elements.
         if i != len {
             #[inline(never)]
             fn fallback(x: USlice<'_, 8>, y: USlice<'_, 4>, from: usize) -> u32 {
@@ -2896,5 +2980,162 @@ mod tests {
                 &mut rng,
             );
         }
+    }
+
+    /// Verify that the vpmaddubsw kernel produces correct results when all values
+    /// are at their maximum: x[i] = 255, y[i] = 15. This exercises the path where
+    /// the vpmaddubsw pair-sum reaches its maximum of 255×15 + 255×15 = 7650,
+    /// confirming no i16 saturation occurs (max i16 = 32767).
+    #[test]
+    fn test_heterogeneous_ip_8x4_max_values() {
+        // Dimensions chosen to hit every structural boundary:
+        //   1       → pure scalar fallback
+        //   15, 16  → boundary of old 16-elem blocks
+        //   31      → no full 32-elem block (all scalar)
+        //   32, 33  → exactly one block ± 1 remainder
+        //   63, 64  → two blocks boundary
+        //   127,128 → 4× unroll boundary (128 = 4 blocks of 32)
+        //   129     → 4× unroll + 1 remainder
+        //   255,256 → 8× blocks
+        //   512,768 → many iterations of 4× unrolled loop
+        let dims = [1, 15, 16, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 512, 768];
+
+        for &dim in &dims {
+            let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+            let mut y = BoxedBitSlice::<4, Unsigned>::new_boxed(dim);
+
+            for i in 0..dim {
+                x.set(i, 255).unwrap();
+                y.set(i, 15).unwrap();
+            }
+
+            let expected: u32 = (255u32 * 15) * dim as u32;
+
+            // Test through dispatch.
+            let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
+                .unwrap()
+                .into_inner();
+            assert_eq!(
+                expected, got,
+                "max-value IP(8,4) via dispatch failed for dim = {}",
+                dim,
+            );
+
+            // Test V3 kernel directly.
+            #[cfg(target_arch = "x86_64")]
+            if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
+                let got = arch
+                    .run2(InnerProduct, x.reborrow(), y.reborrow())
+                    .unwrap()
+                    .into_inner();
+                assert_eq!(
+                    expected, got,
+                    "max-value IP(8,4) via V3 failed for dim = {}",
+                    dim,
+                );
+            }
+        }
+    }
+
+    /// Test with larger dimensions that exercise many iterations of the 4× unrolled
+    /// loop (32 elements/block × 4 = 128 elements per unrolled iteration).
+    #[test]
+    fn test_heterogeneous_ip_8x4_large_dims() {
+        let mut rng = StdRng::seed_from_u64(0xa1b2c3d4e5f60718);
+
+        // Test dimensions larger than MAX_DIM (256), including some non-power-of-two values
+        // to exercise the scalar fallback path at the end.
+        test_heterogeneous_ip_8x4(
+            1025,
+            2,
+            &|x, y| InnerProduct::evaluate(x, y),
+            "pure distance function (large)",
+            &mut rng,
+        );
+
+        #[cfg(target_arch = "x86_64")]
+        if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
+            let mut rng = StdRng::seed_from_u64(0x1234567890abcdef);
+            test_heterogeneous_ip_8x4(
+                1025,
+                2,
+                &|x, y| arch.run2(InnerProduct, x, y),
+                "x86-64-v3 (large)",
+                &mut rng,
+            );
+        }
+    }
+
+    /// Regression test: verify specific known-answer values for the 8×4 kernel.
+    ///
+    /// This catches bit-ordering bugs in the nibble unpacking logic by using
+    /// values that distinguish between low and high nibbles within each packed byte.
+    #[test]
+    fn test_heterogeneous_ip_8x4_known_answers() {
+        // Test case 1: nibble-ordering check.
+        // Use distinct x values at even vs odd positions with distinct lo vs hi
+        // nibbles in y, so a nibble-swap bug changes the sum.
+        //   x[even] = 10, x[odd] = 1
+        //   y[even] = 3 (lo nibble), y[odd] = 12 (hi nibble)
+        // Correct:  Σ = 32×(10×3) + 32×(1×12) = 960 + 384 = 1344
+        // Swapped:  Σ = 32×(10×12) + 32×(1×3) = 3840 + 96 = 3936  ← wrong
+        let dim = 64;
+        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+        let mut y = BoxedBitSlice::<4, Unsigned>::new_boxed(dim);
+
+        for i in 0..dim {
+            x.set(i, if i % 2 == 0 { 10 } else { 1 }).unwrap();
+            y.set(i, if i % 2 == 0 { 3 } else { 12 }).unwrap();
+        }
+
+        let expected = 32 * (10u32 * 3) + 32 * (1u32 * 12); // 1344
+        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
+            .unwrap()
+            .into_inner();
+        assert_eq!(expected, got, "nibble-ordering test failed");
+
+        // Test case 2: vpmaddubsw operand-order check.
+        // x[i] = 200 (> 127, would be -56 if misinterpreted as i8).
+        // y[i] = 10.
+        // Correct:  200 × 10 = 2000 per element.
+        // Wrong:    (-56) × 10 = -560 per element (if args swapped).
+        let dim = 64;
+        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+        let mut y = BoxedBitSlice::<4, Unsigned>::new_boxed(dim);
+        for i in 0..dim {
+            x.set(i, 200).unwrap();
+            y.set(i, 10).unwrap();
+        }
+        let expected = 200u32 * 10 * 64; // 128000
+        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
+            .unwrap()
+            .into_inner();
+        assert_eq!(expected, got, "vpmaddubsw operand-order test failed");
+
+        // Test case 3: ascending x, constant y.
+        // x[i] = i % 256, y[i] = 7.
+        let dim = 128;
+        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+        let mut y = BoxedBitSlice::<4, Unsigned>::new_boxed(dim);
+        for i in 0..dim {
+            x.set(i, (i % 256) as i64).unwrap();
+            y.set(i, 7).unwrap();
+        }
+        let expected: u32 = (0..128u32).map(|i| i * 7).sum();
+        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
+            .unwrap()
+            .into_inner();
+        assert_eq!(expected, got, "ascending-x constant-y test failed");
+
+        // Test case 4: single element (pure scalar fallback).
+        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(1);
+        let mut y = BoxedBitSlice::<4, Unsigned>::new_boxed(1);
+        x.set(0, 200).unwrap();
+        y.set(0, 13).unwrap();
+        let expected = 200u32 * 13;
+        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
+            .unwrap()
+            .into_inner();
+        assert_eq!(expected, got, "single element test failed");
     }
 }
