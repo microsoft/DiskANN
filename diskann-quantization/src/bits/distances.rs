@@ -2004,6 +2004,17 @@ mod tests {
 
     type MR = MathematicalResult<u32>;
 
+    #[inline(always)]
+    fn should_check_this_dimension(dim: usize) -> bool {
+        if cfg!(miri) {
+            return dim.is_power_of_two()
+                || (dim > 1 && (dim - 1).is_power_of_two())
+                || (dim < 64 && (dim % 8 == 7));
+        }
+
+        true
+    }
+
     /////////////////////////
     // Unsigned Bit Slices //
     /////////////////////////
@@ -2031,6 +2042,10 @@ mod tests {
         let dist = Uniform::new_inclusive(min, max).unwrap();
 
         for dim in 0..dim_max {
+            if !should_check_this_dimension(dim) {
+                continue;
+            }
+
             let mut x_reference: Vec<u8> = vec![0; dim];
             let mut y_reference: Vec<u8> = vec![0; dim];
 
@@ -2306,6 +2321,10 @@ mod tests {
         let dist: [i8; 2] = [-1, 1];
 
         for dim in 0..dim_max {
+            if !should_check_this_dimension(dim) {
+                continue;
+            }
+
             let mut x_reference: Vec<i8> = vec![1; dim];
             let mut y_reference: Vec<i8> = vec![1; dim];
 
@@ -2378,6 +2397,10 @@ mod tests {
         };
 
         for dim in 0..dim_max {
+            if !should_check_this_dimension(dim) {
+                continue;
+            }
+
             let mut x_reference: Vec<u8> = vec![0; dim];
             let mut y_reference: Vec<u8> = vec![0; dim];
 
@@ -2513,6 +2536,10 @@ mod tests {
         };
 
         for dim in 0..dim_max {
+            if !should_check_this_dimension(dim) {
+                continue;
+            }
+
             let mut x: Vec<f32> = vec![0.0; dim];
 
             let mut y_reference: Vec<u8> = vec![0; dim];
