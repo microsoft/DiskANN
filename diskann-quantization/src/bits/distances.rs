@@ -73,6 +73,8 @@
 //! | `USlice<7>`   | `USlice<7>`   | `MV<u32>` | Fallback  | No            | Uses V3   |
 //! | `USlice<8>`   | `USlice<8>`   | `MV<u32>` | Yes       | Yes           | Yes       |
 //! |               |               | `       ` |           |               |           |
+//! | `USlice<8>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes (i16+madd) | Uses V3  |
+//! |               |               | `       ` |           |               |           |
 //! | `TSlice<4>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Optimized |
 //! |               |               | `       ` |           |               |           |
 //! | `&[f32]`      | `USlice<1>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   |
@@ -1318,6 +1320,213 @@ retarget!(diskann_wide::arch::x86_64::V3, InnerProduct, 7, 6, 5, 3);
 retarget!(diskann_wide::arch::x86_64::V4, InnerProduct, 7, 6, 4, 5, 3);
 
 dispatch_pure!(InnerProduct, 1, 2, 3, 4, 5, 6, 7, 8);
+
+/////////////////////////////////////
+// Heterogeneous: USlice<8> × USlice<4> //
+/////////////////////////////////////
+
+/// Compute the inner product between an 8-bit vector `x` and a 4-bit vector `y`.
+///
+/// Returns an error if the arguments have different (logical) lengths.
+///
+/// # Performance
+///
+/// This function uses a generic scalar implementation and therefore is not very fast.
+impl Target2<diskann_wide::arch::Scalar, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 4>>
+    for InnerProduct
+{
+    #[inline(never)]
+    fn run(
+        self,
+        _: diskann_wide::arch::Scalar,
+        x: USlice<'_, 8>,
+        y: USlice<'_, 4>,
+    ) -> MathematicalResult<u32> {
+        let len = check_lengths!(x, y)?;
+
+        let mut accum: u32 = 0;
+        for i in 0..len {
+            // SAFETY: `i` is guaranteed to be less than `x.len()`.
+            let ix = unsafe { x.get_unchecked(i) } as u32;
+            // SAFETY: `i` is guaranteed to be less than `y.len()`.
+            let iy = unsafe { y.get_unchecked(i) } as u32;
+            accum += ix * iy;
+        }
+        Ok(MV::new(accum))
+    }
+}
+
+
+#[cfg(target_arch = "x86_64")]
+impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 4>>
+    for InnerProduct
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::x86_64::V3,
+        x: USlice<'_, 8>,
+        y: USlice<'_, 4>,
+    ) -> MathematicalResult<u32> {
+        use std::arch::x86_64::{_mm_srli_epi16, _mm_unpacklo_epi8};
+
+        let len = check_lengths!(x, y)?;
+
+        diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
+        diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V3>::i16x16);
+        diskann_wide::alias!(i8s = <diskann_wide::arch::x86_64::V3>::i8x16);
+        diskann_wide::alias!(u8s = <diskann_wide::arch::x86_64::V3>::u8x16);
+
+        let px: *const u8 = x.as_ptr();
+        let py: *const u8 = y.as_ptr();
+
+        /// Unpack 16 nibbles (8 bytes at `ptr`) into 16 × i16 lanes.
+        ///
+        /// # Safety
+        ///
+        /// `[ptr, ptr + 8)` must be readable.
+        #[inline(always)]
+        unsafe fn unpack_nibbles(
+            arch: diskann_wide::arch::x86_64::V3,
+            ptr: *const u8,
+        ) -> <diskann_wide::arch::x86_64::V3 as diskann_wide::Architecture>::i16x16 {
+            // Load 8 bytes into the lower half of i8x16 (upper 8 zeroed).
+            // SAFETY: The caller asserts `[ptr, ptr + 8)` is readable.
+            let raw = unsafe { i8s::load_simd_first(arch, ptr as *const i8, 8) };
+            
+            let mask_0f = i8s::splat(arch, 0x0f);
+            
+            // Low nibble of each byte.
+            let lo = raw & mask_0f;
+            
+            // High nibble: shift 16-bit lanes right by 4. Leaking into 
+            // next byte is ok, the byte-level mask will clean it up.
+            // SAFETY: `_mm_srli_epi16` requires SSE2, implied by V3.
+            let hi = i8s::from_underlying(arch, unsafe {
+                _mm_srli_epi16::<4>(raw.to_underlying())
+            }) & mask_0f;
+            
+            // Interleave low bytes of `lo` and `hi`:
+            // SAFETY: `_mm_unpacklo_epi8` requires SSE2, implied by V3.
+            let interleaved = i8s::from_underlying(arch, unsafe {
+                _mm_unpacklo_epi8(lo.to_underlying(), hi.to_underlying())
+            });
+
+            // Sign-extend each of the 16 bytes to i16. Values are originally [0, 15] 
+            // so sign-extension is ok.
+            i16s::from(interleaved)
+        }
+
+        let mut i = 0;
+        let mut s: u32 = 0;
+
+        let blocks = len / 16;
+        if blocks > 0 {
+            let mut s0 = i32s::default(arch);
+            let mut s1 = i32s::default(arch);
+            let mut s2 = i32s::default(arch);
+            let mut s3 = i32s::default(arch);
+
+            while i + 4 <= blocks {
+                // Block 0
+                // SAFETY: `i + 4 <= blocks` guarantees at least 4 full blocks remain.
+                // Each block is 16 elements: 16 bytes from `px` and 8 bytes from `py`.
+                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * i)) });
+                // SAFETY: Same bounds guarantee.
+                let vy = unsafe { unpack_nibbles(arch, py.add(8 * i)) };
+                s0 = s0.dot_simd(vx, vy);
+
+                // Block 1
+                // SAFETY: `i + 1 < i + 4 <= blocks`.
+                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * (i + 1))) });
+                // SAFETY: Same bounds guarantee.
+                let vy = unsafe { unpack_nibbles(arch, py.add(8 * (i + 1))) };
+                s1 = s1.dot_simd(vx, vy);
+
+                // Block 2
+                // SAFETY: `i + 2 < i + 4 <= blocks`.
+                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * (i + 2))) });
+                // SAFETY: Same bounds guarantee.
+                let vy = unsafe { unpack_nibbles(arch, py.add(8 * (i + 2))) };
+                s2 = s2.dot_simd(vx, vy);
+
+                // Block 3
+                // SAFETY: `i + 3 < i + 4 <= blocks`.
+                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * (i + 3))) });
+                // SAFETY: Same bounds guarantee.
+                let vy = unsafe { unpack_nibbles(arch, py.add(8 * (i + 3))) };
+                s3 = s3.dot_simd(vx, vy);
+
+                i += 4;
+            }
+
+            // Process remaining full blocks (0..3 blocks).
+            while i < blocks {
+                // SAFETY: `i < blocks` guarantees 16 bytes from `px` and 8 bytes
+                // from `py` are readable at this offset.
+                let vx = i16s::from(unsafe { u8s::load_simd(arch, px.add(16 * i)) });
+                // SAFETY: Same bounds guarantee.
+                let vy = unsafe { unpack_nibbles(arch, py.add(8 * i)) };
+                s0 = s0.dot_simd(vx, vy);
+                i += 1;
+            }
+
+            s = ((s0 + s1) + (s2 + s3)).sum_tree() as u32;
+        }
+
+        // Convert blocks to element indexes.
+        i *= 16;
+
+        // Deal with the remainder the slow way.
+        if i != len {
+            #[inline(never)]
+            fn fallback(x: USlice<'_, 8>, y: USlice<'_, 4>, from: usize) -> u32 {
+                let mut s: u32 = 0;
+                for i in from..x.len() {
+                    // SAFETY: `i` is bounded by `x.len()`.
+                    let ix = unsafe { x.get_unchecked(i) } as u32;
+                    // SAFETY: `i` is bounded by `x.len()` which equals `y.len()`.
+                    let iy = unsafe { y.get_unchecked(i) } as u32;
+                    s += ix * iy;
+                }
+                s
+            }
+            s += fallback(x, y, i);
+        }
+
+        Ok(MV::new(s))
+    }
+}
+
+/// Retarget V4 to V3 for the heterogeneous `USlice<8> × USlice<4>` inner product.
+#[cfg(target_arch = "x86_64")]
+impl
+    Target2<
+        diskann_wide::arch::x86_64::V4,
+        MathematicalResult<u32>,
+        USlice<'_, 8>,
+        USlice<'_, 4>,
+    > for InnerProduct
+{
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::x86_64::V4,
+        x: USlice<'_, 8>,
+        y: USlice<'_, 4>,
+    ) -> MathematicalResult<u32> {
+        self.run(arch.retarget(), x, y)
+    }
+}
+
+/// Compute the inner product between an 8-bit vector `x` and a 4-bit vector `y`.
+///
+/// Delegates to the architecture-dispatched implementation.
+impl PureDistanceFunction<USlice<'_, 8>, USlice<'_, 4>, MathematicalResult<u32>> for InnerProduct {
+    fn evaluate(x: USlice<'_, 8>, y: USlice<'_, 4>) -> MathematicalResult<u32> {
+        Self.run(ARCH, x, y)
+    }
+}
 
 //////////////////
 // BitTranspose //
@@ -2567,4 +2776,125 @@ mod tests {
     test_full!(test_full_distance_6bit, 6, 0x1f69de79e418d336);
     test_full!(test_full_distance_7bit, 7, 0x3fcf17b82dadc5ab);
     test_full!(test_full_distance_8bit, 8, 0x85dcaf48b1399db2);
+
+    ///////////////////////////////////
+    // Heterogeneous: USlice<8> × USlice<4> //
+    ///////////////////////////////////
+
+    /// Test the heterogeneous inner product between 8-bit and 4-bit vectors.
+    ///
+    /// The reference result is computed by expanding both sides to `u8` vectors and
+    /// computing the integer dot product directly.
+    fn test_heterogeneous_ip_8x4(
+        dim_max: usize,
+        trials_per_dim: usize,
+        evaluate_ip: &dyn Fn(USlice<'_, 8>, USlice<'_, 4>) -> MR,
+        context: &str,
+        rng: &mut impl Rng,
+    ) {
+        let dist_8bit = Uniform::new_inclusive(0i64, 255i64).unwrap();
+        let dist_4bit = Uniform::new_inclusive(0i64, 15i64).unwrap();
+
+        for dim in 0..dim_max {
+            let mut x_reference: Vec<u8> = vec![0; dim];
+            let mut y_reference: Vec<u8> = vec![0; dim];
+
+            let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+            let mut y = BoxedBitSlice::<4, Unsigned>::new_boxed(dim);
+
+            for trial in 0..trials_per_dim {
+                x_reference
+                    .iter_mut()
+                    .for_each(|i| *i = dist_8bit.sample(rng).try_into().unwrap());
+                y_reference
+                    .iter_mut()
+                    .for_each(|i| *i = dist_4bit.sample(rng).try_into().unwrap());
+
+                // Pre-fill with 1's to catch situations where we don't correctly handle
+                // odd remaining elements.
+                x.as_mut_slice().fill(u8::MAX);
+                y.as_mut_slice().fill(u8::MAX);
+
+                for i in 0..dim {
+                    x.set(i, x_reference[i].into()).unwrap();
+                    y.set(i, y_reference[i].into()).unwrap();
+                }
+
+                // Compute the expected inner product using the reference vectors.
+                let expected: u32 = x_reference
+                    .iter()
+                    .zip(y_reference.iter())
+                    .map(|(&a, &b)| a as u32 * b as u32)
+                    .sum();
+
+                let got = evaluate_ip(x.reborrow(), y.reborrow()).unwrap();
+
+                // Integer computations should be exact.
+                assert_eq!(
+                    expected,
+                    got.into_inner(),
+                    "failed heterogeneous IP(8,4) for dim = {}, trial = {} -- context {}",
+                    dim,
+                    trial,
+                    context,
+                );
+            }
+        }
+
+        // Test that we correctly return error types for length mismatches.
+        let x = BoxedBitSlice::<8, Unsigned>::new_boxed(10);
+        let y = BoxedBitSlice::<4, Unsigned>::new_boxed(11);
+
+        assert!(
+            evaluate_ip(x.reborrow(), y.reborrow()).is_err(),
+            "context: {}",
+            context
+        );
+    }
+
+    #[test]
+    fn test_heterogeneous_ip_8bit_4bit() {
+        let mut rng = StdRng::seed_from_u64(0xd3a7f1c09b2e4856);
+
+        // PureDistanceFunction dispatch.
+        test_heterogeneous_ip_8x4(
+            MAX_DIM,
+            TRIALS_PER_DIM,
+            &|x, y| InnerProduct::evaluate(x, y),
+            "pure distance function",
+            &mut rng,
+        );
+
+        // Scalar architecture.
+        test_heterogeneous_ip_8x4(
+            MAX_DIM,
+            TRIALS_PER_DIM,
+            &|x, y| diskann_wide::arch::Scalar::new().run2(InnerProduct, x, y),
+            "scalar arch",
+            &mut rng,
+        );
+
+        // Architecture Specific.
+        #[cfg(target_arch = "x86_64")]
+        if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
+            test_heterogeneous_ip_8x4(
+                MAX_DIM,
+                TRIALS_PER_DIM,
+                &|x, y| arch.run2(InnerProduct, x, y),
+                "x86-64-v3",
+                &mut rng,
+            );
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked_miri() {
+            test_heterogeneous_ip_8x4(
+                MAX_DIM,
+                TRIALS_PER_DIM,
+                &|x, y| arch.run2(InnerProduct, x, y),
+                "x86-64-v4",
+                &mut rng,
+            );
+        }
+    }
 }
