@@ -334,9 +334,10 @@ jobs:
             --lcov --output-path lcov.info
 
       - name: Generate miri code coverage
+        env:
+          RUSTFLAGS: "--cfg=miri"
         run: |
           cargo llvm-cov nextest --locked --cargo-profile ci \
-            --config 'build.rustflags=["-Dwarnings", "--cfg", "miri"]' \
             --package diskann-quantization \
             --lcov --output-path lcov_miri.info
 
