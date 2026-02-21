@@ -229,7 +229,7 @@ pub(crate) mod tests {
     use crate::utils::VirtualAlignedReaderFactory;
     use diskann_providers::{
         storage::VirtualStorageProvider,
-        test_utils::graph_data_type_utils::GraphDataF32VectorU32Data,
+        test_utils::graph_data_type_utils::GraphDataF32VectorUnitData,
     };
     use diskann_utils::test_data_root;
     use vfs::OverlayFS;
@@ -243,7 +243,7 @@ pub(crate) mod tests {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         let factory = DiskVertexProviderFactory::<
-            GraphDataF32VectorU32Data,
+            GraphDataF32VectorUnitData,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
             VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
@@ -255,13 +255,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "Requires test data with associated data - pending proper test fixture"]
     fn test_disk_vertex_provider_factory_with_static_cache() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         let num_nodes_to_cache = 10;
         let factory = DiskVertexProviderFactory::<
-            GraphDataF32VectorU32Data,
+            GraphDataF32VectorUnitData,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
             VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
@@ -277,14 +276,13 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "Requires test data with associated data - pending proper test fixture"]
     fn test_disk_vertex_provider_factory_cache_limit_exceeds_total_nodes() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         // Request to cache more nodes than exist in the index
         let num_nodes_to_cache = 100000;
         let factory = DiskVertexProviderFactory::<
-            GraphDataF32VectorU32Data,
+            GraphDataF32VectorUnitData,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
             VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
@@ -304,7 +302,7 @@ pub(crate) mod tests {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         let factory = DiskVertexProviderFactory::<
-            GraphDataF32VectorU32Data,
+            GraphDataF32VectorUnitData,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
             VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
@@ -320,12 +318,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore = "Requires test data with associated data - pending proper test fixture"]
     fn test_create_vertex_provider_with_cache() {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         let factory = DiskVertexProviderFactory::<
-            GraphDataF32VectorU32Data,
+            GraphDataF32VectorUnitData,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
             VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
@@ -346,7 +343,7 @@ pub(crate) mod tests {
 
         // Create a factory with a caching strategy but manually set cache to None
         let factory = DiskVertexProviderFactory::<
-            GraphDataF32VectorU32Data,
+            GraphDataF32VectorUnitData,
             VirtualAlignedReaderFactory<OverlayFS>,
         > {
             aligned_reader_factory: VirtualAlignedReaderFactory::new(
@@ -369,7 +366,7 @@ pub(crate) mod tests {
         let storage_provider = Arc::new(VirtualStorageProvider::new_overlay(test_data_root()));
 
         let factory = DiskVertexProviderFactory::<
-            GraphDataF32VectorU32Data,
+            GraphDataF32VectorUnitData,
             VirtualAlignedReaderFactory<OverlayFS>,
         >::new(
             VirtualAlignedReaderFactory::new(TEST_INDEX_PATH.to_string(), storage_provider.clone()),
