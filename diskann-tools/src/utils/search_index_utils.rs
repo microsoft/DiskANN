@@ -367,7 +367,7 @@ pub fn load_truthset(
     let mut file = storage_provider.open_reader(bin_file)?;
 
     let metadata = Metadata::read(&mut file)?;
-    let (npts, dim) = metadata.splat();
+    let (npts, dim) = metadata.into_dims();
 
     info!("Metadata: #pts = {npts}, #dims = {dim}... ");
 
@@ -421,7 +421,7 @@ pub fn load_truthset_with_associated_data<Data: GraphDataType>(
     let mut file = storage_provider.open_reader(bin_file)?;
 
     let metadata = Metadata::read(&mut file)?;
-    let (npts, dim) = metadata.splat();
+    let (npts, dim) = metadata.into_dims();
 
     info!("Metadata: #pts = {}, #dims = {}...", npts, dim);
 
@@ -470,7 +470,7 @@ pub fn load_range_truthset(
     let mut file = storage_provider.open_reader(bin_file)?;
 
     let metadata = Metadata::read(&mut file)?;
-    let (npts, total_ids) = metadata.splat();
+    let (npts, total_ids) = metadata.into_dims();
     let mut buffer = [0; size_of::<i32>()];
 
     info!("Metadata: #pts = {}, #totalIds = {}", npts, total_ids);

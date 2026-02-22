@@ -112,7 +112,7 @@ where
         let timer = Timer::new();
 
         let metadata = load_metadata_from_file(storage_provider, &self.data_path)?;
-        let (num_points, dim) = metadata.splat();
+        let (num_points, dim) = metadata.into_dims();
 
         self.validate_params(num_points, storage_provider)?;
 

@@ -40,14 +40,14 @@ impl<StorageProvider: StorageReadProvider, Data: GraphDataType>
     ) -> std::io::Result<VectorDataIterator<StorageProvider, Data>> {
         let mut dataset_reader = read_provider.open_reader(vector_stream)?;
 
-        let (vector_npts, vector_dim) = Metadata::read(&mut dataset_reader)?.splat();
+        let (vector_npts, vector_dim) = Metadata::read(&mut dataset_reader)?.into_dims();
 
         let (associated_data_reader, associated_data_length) = if let Some(associated_data_stream) =
             associated_data_stream
         {
             let mut associated_data_reader = read_provider.open_reader(&associated_data_stream)?;
 
-            let (num_pts, length) = Metadata::read(&mut associated_data_reader)?.splat();
+            let (num_pts, length) = Metadata::read(&mut associated_data_reader)?.into_dims();
 
             if num_pts != vector_npts {
                 return Err(std::io::Error::new(

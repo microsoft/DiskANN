@@ -116,8 +116,8 @@ impl Metadata {
         self.ndims
     }
 
-    /// Return a tuple (`npoints`, `ndims`).
-    pub fn splat(&self) -> (usize, usize) {
+    /// Destructure into (`npoints`, `ndims`) as `usize`.
+    pub fn into_dims(&self) -> (usize, usize) {
         (self.npoints(), self.ndims())
     }
 

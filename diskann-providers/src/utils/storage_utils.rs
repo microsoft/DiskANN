@@ -57,7 +57,7 @@ pub fn copy_aligned_data<T: Default + bytemuck::Pod, Reader: Read>(
     let mut reader = BufReader::with_capacity(DEFAULT_BUF_SIZE, reader);
 
     let metadata = Metadata::read(&mut reader)?;
-    let (npts, dim) = metadata.splat();
+    let (npts, dim) = metadata.into_dims();
     let rounded_dim = dataset_dto.rounded_dim;
     let offset = pts_offset * rounded_dim;
 

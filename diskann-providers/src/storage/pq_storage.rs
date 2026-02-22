@@ -173,7 +173,7 @@ impl PQStorage {
     {
         let reader = &mut storage_provider.open_reader(&self.pivot_data_path)?;
         reader.seek(SeekFrom::Start(METADATA_SIZE as u64))?;
-        Ok(Metadata::read(reader)?.splat())
+        Ok(Metadata::read(reader)?.into_dims())
     }
 
     pub fn load_existing_pivot_data<Storage>(

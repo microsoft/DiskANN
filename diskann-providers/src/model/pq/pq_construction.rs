@@ -705,7 +705,7 @@ where
         storage_provider.create_for_write(pq_storage.get_compressed_data_path())?
     };
 
-    let (num_points, dim) = Metadata::read(uncompressed_data_reader)?.splat();
+    let (num_points, dim) = Metadata::read(uncompressed_data_reader)?.into_dims();
 
     let mut full_pivot_data: Vec<f32>;
     let centroid: Vec<f32>;
