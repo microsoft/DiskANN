@@ -11,4 +11,4 @@
 //! * [`BetaFilter`]
 
 mod betafilter;
-pub use betafilter::{BetaAccessor, BetaComputer, BetaFilter, Unwrap};
+pub use betafilter::{BetaAccessor, BetaComputer, BetaFilter, Unwrap as BetaFilterUnwrap};
