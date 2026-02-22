@@ -222,10 +222,7 @@ mod tests {
         provider::{Accessor, SetElement},
         utils::{IntoUsize, ONE},
     };
-    use diskann_utils::{
-        Reborrow, test_data_root,
-        views::{Matrix, MatrixView},
-    };
+    use diskann_utils::{Reborrow, test_data_root, views::MatrixView};
     use diskann_vector::distance::Metric;
 
     use super::*;
@@ -236,7 +233,7 @@ mod tests {
             common::{FullPrecision, NoDeletes, NoStore, TableBasedDeletes},
             inmem::{self},
         },
-        utils::{create_rnd_from_seed_in_tests, file_util},
+        utils::create_rnd_from_seed_in_tests,
     };
 
     async fn build_index<DP, S>(
@@ -271,8 +268,8 @@ mod tests {
         let file_path = "/sift/siftsmall_learn_256pts.fbin";
         let train_data = {
             let storage = VirtualStorageProvider::new_overlay(test_data_root());
-            let (train_data, npoints, dim) = file_util::load_bin(&storage, file_path, 0).unwrap();
-            Matrix::<f32>::try_from(train_data.into(), npoints, dim).unwrap()
+            let mut reader = storage.open_reader(file_path).unwrap();
+            diskann_utils::io::read_bin::<f32>(&mut reader).unwrap()
         };
 
         let pq_bytes = 8;

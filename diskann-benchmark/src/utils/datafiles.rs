@@ -22,12 +22,11 @@ pub(crate) fn load_dataset<T>(path: BinFile<'_>) -> anyhow::Result<Matrix<T>>
 where
     T: Copy + bytemuck::Pod,
 {
-    let (data, num_data, data_dim) = diskann_providers::utils::file_util::load_bin::<T, _>(
-        &diskann_providers::storage::FileStorageProvider,
-        &path.0.to_string_lossy(),
-        0,
+    let data = diskann_utils::io::read_bin::<T>(
+        &mut diskann_providers::storage::FileStorageProvider
+            .open_reader(&path.0.to_string_lossy())?,
     )?;
-    Ok(Matrix::try_from(data.into(), num_data, data_dim).map_err(|err| err.as_static())?)
+    Ok(data)
 }
 
 /// Helper trait to load a `Matrix<Self>` from source files that potentially have a different

@@ -6,10 +6,8 @@
 use std::io::{BufWriter, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
-use diskann_providers::{
-    storage::StorageWriteProvider,
-    utils::{math_util, write_metadata},
-};
+use diskann_providers::{storage::StorageWriteProvider, utils::math_util};
+use diskann_utils::io::Metadata;
 use diskann_vector::Half;
 
 use crate::utils::{CMDResult, CMDToolError, DataType};
@@ -75,7 +73,7 @@ pub fn write_random_data_writer<T: Sized + Write>(
         });
     }
 
-    write_metadata(&mut writer, number_of_vectors, number_of_dimensions)?;
+    Metadata::new(number_of_vectors, number_of_dimensions)?.write(&mut writer)?;
 
     let block_size = 131072;
     let nblks = u64::div_ceil(number_of_vectors, block_size);

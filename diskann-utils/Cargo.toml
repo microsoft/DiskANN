@@ -15,6 +15,7 @@ thiserror.workspace = true
 diskann-vector = { workspace = true }
 rand = { workspace = true }
 diskann-wide = { workspace = true }
+bytemuck = { workspace = true, features = ["must_cast"] }
 
 [lints]
 workspace = true

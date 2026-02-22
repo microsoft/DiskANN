@@ -228,6 +228,21 @@ where
         self.nrows
     }
 
+    /// Create a new [`Matrix`] by applying the closure `f` to each element.
+    ///
+    /// The returned matrix has the same shape as `self`.
+    pub fn map<F, R>(&self, f: F) -> Matrix<R>
+    where
+        F: FnMut(&T::Elem) -> R,
+    {
+        let data: Box<[_]> = self.as_slice().iter().map(f).collect();
+        Matrix {
+            data,
+            nrows: self.nrows(),
+            ncols: self.ncols(),
+        }
+    }
+
     /// Return the underlying data as a slice.
     pub fn as_slice(&self) -> &[T::Elem] {
         self.data.as_slice()
@@ -268,6 +283,19 @@ where
             ncols,
         }
     }
+
+    /// Construct a new `MatrixBase` over the raw data.
+    ///
+    /// The returned `MatrixBase` will only have a single column with contents equal to `data`.
+    pub fn column_vector(data: T) -> Self {
+        let nrows = data.as_slice().len();
+        Self {
+            data,
+            nrows,
+            ncols: 1,
+        }
+    }
+
     /// Return row `row` if `row < self.nrows()`. Otherwise, return `None`.
     pub fn get_row(&self, row: usize) -> Option<&[T::Elem]> {
         if row < self.nrows() {
@@ -555,6 +583,15 @@ where
         T: MutDenseData,
     {
         self.as_mut_slice().as_mut_ptr()
+    }
+
+    pub fn try_get(&self, row: usize, col: usize) -> Option<&T::Elem> {
+        if row >= self.nrows() || col >= self.ncols() {
+            None
+        } else {
+            // SAFETY: We just verified that `row` and `col~ are in-bounds.
+            Some(unsafe { self.get_unchecked(row, col) })
+        }
     }
 
     /// Returns a reference to an element without boundschecking.
@@ -1169,6 +1206,7 @@ mod tests {
     #[should_panic(expected = "row 3 is out of bounds (max: 3)")]
     fn test_index_panics_row() {
         let m = Matrix::<usize>::new(0, 3, 7);
+        assert!(m.try_get(3, 2).is_none());
         let _ = m[(3, 2)];
     }
 
@@ -1176,6 +1214,7 @@ mod tests {
     #[should_panic(expected = "col 7 is out of bounds (max: 7)")]
     fn test_index_panics_col() {
         let m = Matrix::<usize>::new(0, 3, 7);
+        assert!(m.try_get(2, 7).is_none());
         let _ = m[(2, 7)];
     }
 
@@ -1373,6 +1412,7 @@ mod tests {
         assert_eq!(m.nrows(), 1);
         assert_eq!(m.ncols(), 1);
         assert_eq!(m[(0, 0)], 42);
+        assert_eq!(*m.try_get(0, 0).unwrap(), 42);
 
         // Test single row matrix
         let m = Matrix::new(7, 1, 5);
@@ -1398,6 +1438,8 @@ mod tests {
         assert_eq!(m.ncols(), 1);
         assert_eq!(m[(0, 0)], 10);
         assert_eq!(m[(1, 0)], 20);
+        assert_eq!(*m.try_get(0, 0).unwrap(), 10);
+        assert_eq!(*m.try_get(1, 0).unwrap(), 20);
         assert_eq!(m.row(0), &[10]);
         assert_eq!(m.row(1), &[20]);
 
@@ -1407,7 +1449,82 @@ mod tests {
         assert_eq!(m.ncols(), 2);
         assert_eq!(m[(0, 0)], 10);
         assert_eq!(m[(0, 1)], 20);
+        assert_eq!(*m.try_get(0, 0).unwrap(), 10);
+        assert_eq!(*m.try_get(0, 1).unwrap(), 20);
         assert_eq!(m.row(0), &[10, 20]);
+    }
+
+    #[test]
+    fn test_row_vector() {
+        let data = vec![1, 2, 3];
+        let m = MatrixView::row_vector(data.as_slice());
+        assert_eq!(m.nrows(), 1);
+        assert_eq!(m.ncols(), 3);
+        assert_eq!(m.as_slice(), &[1, 2, 3]);
+        assert_eq!(m.row(0), &[1, 2, 3]);
+
+        // Empty
+        let empty: &[i32] = &[];
+        let m = MatrixView::row_vector(empty);
+        assert_eq!(m.nrows(), 1);
+        assert_eq!(m.ncols(), 0);
+
+        // Owned
+        let m = Matrix::row_vector(vec![10u64, 20].into_boxed_slice());
+        assert_eq!(m.nrows(), 1);
+        assert_eq!(m.ncols(), 2);
+        assert_eq!(m[(0, 0)], 10);
+        assert_eq!(m[(0, 1)], 20);
+    }
+
+    #[test]
+    fn test_column_vector() {
+        let data = vec![1, 2, 3];
+        let m = MatrixView::column_vector(data.as_slice());
+        assert_eq!(m.nrows(), 3);
+        assert_eq!(m.ncols(), 1);
+        assert_eq!(m.as_slice(), &[1, 2, 3]);
+        assert_eq!(m[(0, 0)], 1);
+        assert_eq!(m[(1, 0)], 2);
+        assert_eq!(m[(2, 0)], 3);
+        assert_eq!(m.row(0), &[1]);
+        assert_eq!(m.row(1), &[2]);
+        assert_eq!(m.row(2), &[3]);
+
+        // Empty
+        let empty: &[i32] = &[];
+        let m = MatrixView::column_vector(empty);
+        assert_eq!(m.nrows(), 0);
+        assert_eq!(m.ncols(), 1);
+
+        // Owned
+        let m = Matrix::column_vector(vec![10u64, 20].into_boxed_slice());
+        assert_eq!(m.nrows(), 2);
+        assert_eq!(m.ncols(), 1);
+        assert_eq!(m[(0, 0)], 10);
+        assert_eq!(m[(1, 0)], 20);
+    }
+
+    #[test]
+    fn test_map() {
+        let m = Matrix::try_from(vec![1u32, 2, 3, 4].into(), 2, 2).unwrap();
+        let doubled = m.map(|&x| x * 2);
+        assert_eq!(doubled.as_slice(), &[2, 4, 6, 8]);
+        assert_eq!(doubled.nrows(), 2);
+        assert_eq!(doubled.ncols(), 2);
+
+        // Type-changing map
+        let as_f64 = m.map(|&x| x as f64);
+        assert_eq!(as_f64.as_slice(), &[1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn test_try_get() {
+        let m = Matrix::try_from(vec![1, 2, 3, 4, 5, 6].into(), 2, 3).unwrap();
+        assert_eq!(m.try_get(0, 0), Some(&1));
+        assert_eq!(m.try_get(1, 2), Some(&6));
+        assert_eq!(m.try_get(2, 0), None);
+        assert_eq!(m.try_get(0, 3), None);
     }
 
     #[test]
