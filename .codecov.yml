@@ -13,7 +13,7 @@ coverage:
         threshold: 1%
         informational: true
 
-    # Patch coverage (changed lines only) - this will block PRs
+    # Patch coverage (changed lines only) - blocks PRs if below 90%
     patch:
       default:
         target: 90%
