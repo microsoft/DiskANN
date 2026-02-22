@@ -427,6 +427,22 @@ where
             return Err(NotCanonical::WrongLength(expected_len, data.len()));
         }
 
+        // SAFETY: We have checked both the length and alignment of `data`.
+        Ok(unsafe { Self::from_canonical_mut_unchecked(data, dim) })
+    }
+
+    /// Construct a `SliceMut` from the raw data.
+    ///
+    /// # Safety
+    ///
+    /// * `data.as_ptr()` must be aligned to `Self::canonical_align()`.
+    /// * `data.len()` must be equal to `Self::canonical_bytes(dim)`.
+    ///
+    /// This invariant is checked in debug builds and will panic if not satisfied.
+    pub unsafe fn from_canonical_mut_unchecked(data: &'a mut [u8], dim: usize) -> Self {
+        debug_assert_eq!(data.len(), Self::canonical_bytes(dim));
+        debug_assert!((data.as_ptr() as usize).is_multiple_of(Self::canonical_align().raw()));
+
         let offset = canonical_metadata_bytes::<T, M>();
 
         // SAFETY: `offset < expected_len` and `data.len() == expected_len`, so `offset`
@@ -436,9 +452,9 @@ where
         // SAFETY: `data.as_ptr()` when offset by `offset` will have an alignment suitable
         // for type `T`.
         //
-        // We have checked that `data.len() == expected_len`, which implies that the region
-        // of memory between `offset` and `data.len()` covers exactly `size_of::<T>() * dim`
-        // bytes.
+        // The caller has guaranteed that `data.len() == canonical_bytes(dim)`, which implies that
+        // the region of memory between `offset` and `data.len()` covers exactly
+        // `size_of::<T>() * dim` bytes.
         //
         // The `bytemuck::Pod` requirement on `T` ensures the resulting values are valid.
         let slice = unsafe { std::slice::from_raw_parts_mut(slice.as_mut_ptr().cast::<T>(), dim) };
@@ -450,7 +466,7 @@ where
         // The `bytemuck::Pod` requirement ensures we have a valid instance.
         let meta = unsafe { Mut::new(NonNull::new_unchecked(meta.as_mut_ptr()).cast::<M>()) };
 
-        Ok(Self { slice, meta })
+        Self { slice, meta }
     }
 }
 
