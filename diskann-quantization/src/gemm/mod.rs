@@ -26,7 +26,11 @@ diskann_wide::alias!(f32x8 = <V3>::f32x8);
 #[cold]
 fn test_function_panic(
 ) {
-    panic!("nope!");
+    // assert_eq!(scratch.len(), a.nrows())
+    //     || !a.nrows().is_multiple_of(32)
+    //     || !b.nrows().is_multiple_of(4)
+    //     || a.ncols() != b.ncols() {
+    //     test_function_panic();
 }
 
 pub fn test_function(
@@ -166,3 +170,32 @@ pub unsafe fn microkernel<Op>(
     unsafe { r0.store_simd(r) };
     unsafe { r1.store_simd(r.add(f32x8::LANES)) };
 }
+
+///////////
+// Tests //
+///////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diskann_utils::views::Matrix;
+
+    #[test]
+    fn test() {
+        let a = Matrix::new(1.0f32, 32, 128);
+        let a_packed = BlockTranspose::<16>::from_matrix_view(a.as_view());
+        let b = Matrix::new(1.0f32, 128, 128);
+        let mut c = vec![f32::NEG_INFINITY; a.nrows()];
+
+        test_function(
+            diskann_wide::ARCH,
+            &a_packed,
+            b.as_view(),
+            &mut c
+        );
+
+        let f = c.iter().map(|i| *i).sum::<f32>();
+        println!("f = {:?}", f);
+    }
+}
+
