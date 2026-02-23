@@ -150,6 +150,7 @@ impl Knn {
     ///
     /// * `recorder` — controls whether the traversal path is recorded.
     /// * `post_processor` — selects which post-processing pipeline to apply.
+    #[allow(clippy::too_many_arguments)]
     async fn search_core<DP, S, T, O, OB, SR, PP>(
         &self,
         index: &DiskANNIndex<DP>,

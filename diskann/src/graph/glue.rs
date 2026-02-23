@@ -404,7 +404,7 @@ where
     T: ?Sized + Sync,
     O: Send,
 {
-    fn post_process_with<'a, I, B>(
+    async fn post_process_with<'a, I, B>(
         &self,
         _processor: &DefaultPostProcess,
         accessor: &mut Self::SearchAccessor<'a>,
@@ -412,18 +412,16 @@ where
         computer: &Self::QueryComputer,
         candidates: I,
         output: &mut B,
-    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
+    ) -> ANNResult<usize>
     where
         I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
         B: SearchOutputBuffer<O> + Send + ?Sized,
     {
-        async move {
-            self.post_processor()
-                .post_process(accessor, query, computer, candidates, output)
-                .send()
-                .await
-                .into_ann_result()
-        }
+        self.post_processor()
+            .post_process(accessor, query, computer, candidates, output)
+            .send()
+            .await
+            .into_ann_result()
     }
 }
 

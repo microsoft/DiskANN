@@ -1,0 +1,31 @@
+{
+  "search_directories": [
+    "C:/data/mimir"
+  ],
+  "jobs": [
+    {
+      "type": "disk-index",
+      "content": {
+        "source": {
+          "disk-index-source": "Load",
+          "data_type": "float16",
+          "load_path": "C:/data/mimir/mimir_new"
+        },
+        "search_phase": {
+          "queries": "mimir_query.bin",
+          "groundtruth": "mimir_gt_1000.bin",
+          "search_list": [2000],
+          "beam_width": 4,
+          "recall_at": 1000,
+          "num_threads": 1,
+          "is_flat_search": false,
+          "distance": "squared_l2",
+          "vector_filters_file": null,
+          "is_rag_search": true,
+          "rag_eta": 0.01,
+          "rag_power": 2.0
+        }
+      }
+    }
+  ]
+}
