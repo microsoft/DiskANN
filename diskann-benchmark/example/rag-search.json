@@ -1,0 +1,59 @@
+{
+  "search_directories": [
+    "test_data/disk_index_search"
+  ],
+  "jobs": [
+    {
+      "type": "async-index-build",
+      "content": {
+        "source": {
+          "index-source": "Load",
+          "data_type": "float32",
+          "distance": "squared_l2",
+          "load_path": "disk_index_siftsmall_learn_256pts_saved_index"
+        },
+        "search_phase": {
+          "search-type": "topk",
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "reps": 3,
+          "num_threads": [1],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [10, 20, 50, 100],
+              "recall_k": 10
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "async-index-build",
+      "content": {
+        "source": {
+          "index-source": "Load",
+          "data_type": "float32",
+          "distance": "squared_l2",
+          "load_path": "disk_index_siftsmall_learn_256pts_saved_index"
+        },
+        "search_phase": {
+          "search-type": "topk-rag",
+          "queries": "disk_index_sample_query_10pts.fbin",
+          "groundtruth": "disk_index_10pts_idx_uint32_truth_search_res.bin",
+          "reps": 3,
+          "num_threads": [1],
+          "runs": [
+            {
+              "search_n": 10,
+              "search_l": [10, 20, 50, 100],
+              "recall_k": 10
+            }
+          ],
+          "rag_eta": 0.01,
+          "rag_power": 2.0
+        }
+      }
+    }
+  ]
+}

@@ -4,4 +4,5 @@
  */
 
 pub(crate) mod knn;
+pub(crate) mod rag;
 pub(crate) mod range;

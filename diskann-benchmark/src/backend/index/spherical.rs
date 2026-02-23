@@ -495,6 +495,11 @@ mod imp {
                             writeln!(output, "\n\n{}", result)?;
                             Ok(result)
                         }
+                        SearchPhase::TopkRag(_) => {
+                            anyhow::bail!(
+                                "RAG search is not supported for spherical quantization indexes"
+                            )
+                        }
                     }
                 }
             }

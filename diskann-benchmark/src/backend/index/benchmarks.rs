@@ -43,7 +43,9 @@ use crate::{
         result::{AggregatedSearchResults, BuildResult},
         streaming::{self, managed, stats::StreamStats, FullPrecisionStream, Managed},
     },
-    inputs::async_::{DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, SearchPhase},
+    inputs::async_::{
+        DynamicIndexRun, IndexBuild, IndexOperation, IndexSource, RagSearchPhase, SearchPhase,
+    },
     utils::{
         self,
         datafiles::{self},
@@ -490,6 +492,103 @@ where
             result.append(AggregatedSearchResults::Topk(search_results));
             Ok(result)
         }
+        SearchPhase::TopkRag(search_phase) => {
+            // RAG search is handled by the RunRagSearch trait dispatch.
+            // This arm is unreachable for types that support RAG (f32 with FullPrecision)
+            // and serves as a fallback for types that don't.
+            let _ = (
+                search_phase,
+                search_strategy,
+                index,
+                build_stats,
+                checkpoint,
+            );
+            anyhow::bail!(
+                "RAG search is not supported in this context. \
+                 Use run_search_outer_with_rag or the RunRagSearch trait for f32 full-precision indexes."
+            )
+        }
+    }
+}
+
+/// Trait for dispatching RAG search by element type.
+///
+/// RAG post-processing requires full-precision f32 vectors, so only
+/// `f32` provides a real implementation. Other types bail at runtime.
+trait RunRagSearch:
+    SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod + VectorRepr
+{
+    fn run_rag(
+        search_phase: &RagSearchPhase,
+        index: diskann_async::MemoryIndex<Self>,
+        build_stats: Option<BuildStats>,
+        checkpoint: Checkpoint<'_>,
+    ) -> anyhow::Result<BuildResult>;
+}
+
+impl RunRagSearch for f16 {
+    fn run_rag(
+        _search_phase: &RagSearchPhase,
+        _index: diskann_async::MemoryIndex<Self>,
+        _build_stats: Option<BuildStats>,
+        _checkpoint: Checkpoint<'_>,
+    ) -> anyhow::Result<BuildResult> {
+        anyhow::bail!("RAG search requires float32 data type")
+    }
+}
+
+impl RunRagSearch for u8 {
+    fn run_rag(
+        _search_phase: &RagSearchPhase,
+        _index: diskann_async::MemoryIndex<Self>,
+        _build_stats: Option<BuildStats>,
+        _checkpoint: Checkpoint<'_>,
+    ) -> anyhow::Result<BuildResult> {
+        anyhow::bail!("RAG search requires float32 data type")
+    }
+}
+
+impl RunRagSearch for i8 {
+    fn run_rag(
+        _search_phase: &RagSearchPhase,
+        _index: diskann_async::MemoryIndex<Self>,
+        _build_stats: Option<BuildStats>,
+        _checkpoint: Checkpoint<'_>,
+    ) -> anyhow::Result<BuildResult> {
+        anyhow::bail!("RAG search requires float32 data type")
+    }
+}
+
+impl RunRagSearch for f32 {
+    fn run_rag(
+        search_phase: &RagSearchPhase,
+        index: diskann_async::MemoryIndex<Self>,
+        build_stats: Option<BuildStats>,
+        checkpoint: Checkpoint<'_>,
+    ) -> anyhow::Result<BuildResult> {
+        let mut result = BuildResult::new_topk(build_stats);
+
+        // Save construction stats before running queries.
+        checkpoint.checkpoint(&result)?;
+
+        let queries: Arc<Matrix<f32>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
+            &search_phase.queries,
+        ))?);
+
+        let groundtruth =
+            datafiles::load_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
+
+        let rag = benchmark_core::search::graph::RAG::new(
+            index,
+            queries,
+            benchmark_core::search::graph::Strategy::broadcast(common::FullPrecision),
+        )?;
+
+        let steps = search::rag::RagSearchSteps::new(search_phase);
+
+        let search_results = search::rag::run(&rag, &groundtruth, steps)?;
+        result.append(AggregatedSearchResults::Topk(search_results));
+        Ok(result)
     }
 }
 
@@ -544,13 +643,17 @@ macro_rules! impl_build {
                     }
                 };
 
-                let result = run_search_outer(
-                    &self.input.search_phase,
-                    common::FullPrecision,
-                    index,
-                    build_stats,
-                    checkpoint,
-                )?;
+                let result = if let SearchPhase::TopkRag(rag_phase) = &self.input.search_phase {
+                    <$T as RunRagSearch>::run_rag(rag_phase, index, build_stats, checkpoint)?
+                } else {
+                    run_search_outer(
+                        &self.input.search_phase,
+                        common::FullPrecision,
+                        index,
+                        build_stats,
+                        checkpoint,
+                    )?
+                };
 
                 writeln!(output, "\n\n{}", result)?;
                 Ok(result)
