@@ -346,8 +346,8 @@ where
 /// duplicating the core search algorithm. The `Processor` type parameter selects which
 /// post-processing behavior to use.
 ///
-/// For example, a standard k-NN search can be combined with diversity-aware
-/// post-processing by implementing `PostProcess<PostProcessOnlyDiverseSearch>` for a
+/// For example, a standard k-NN search can be combined with RAG-aware
+/// post-processing by implementing `PostProcess<RagSearchParams>` for a
 /// strategy, without rewriting the search loop.
 ///
 /// A blanket implementation exists for [`DefaultPostProcess`], which delegates to the
@@ -424,58 +424,6 @@ where
                 .await
                 .into_ann_result()
         }
-    }
-}
-
-/// Post-processor that applies diversity filtering to search results.
-///
-/// Unlike the full [`super::search::Diverse`] search which uses a
-/// [`crate::neighbor::DiverseNeighborQueue`] during the search loop itself,
-/// `PostProcessOnlyDiverseSearch` applies diversity filtering purely in post-processing.
-/// This means it can be composed with **any** search algorithm (e.g.,
-/// [`super::search::Knn`] via [`super::search::KnnWith`]) without duplicating search logic.
-///
-/// # Usage
-///
-/// Strategy implementations should implement
-/// `PostProcess<PostProcessOnlyDiverseSearch, Provider, T, O>` to bridge their accessor
-/// to the diversity filtering logic.
-///
-/// ```ignore
-/// use diskann::graph::search::{Knn, KnnWith};
-/// use diskann::graph::glue::PostProcessOnlyDiverseSearch;
-///
-/// let diverse_pp = PostProcessOnlyDiverseSearch::new(/* params */);
-/// let search = KnnWith::new(Knn::new(10, 100, None)?, diverse_pp);
-/// let stats = index.search(search, &strategy, &context, &query, &mut output).await?;
-/// ```
-#[derive(Debug, Clone)]
-pub struct PostProcessOnlyDiverseSearch {
-    // TODO: Add diversity parameters here, e.g.:
-    // pub diverse_attribute_id: usize,
-    // pub diverse_results_k: usize,
-    // pub attribute_provider: Arc<dyn AttributeValueProvider<Id = ...>>,
-}
-
-impl PostProcessOnlyDiverseSearch {
-    /// Apply diversity filtering to the candidate results.
-    ///
-    /// This method contains the core diversity logic that is independent of any
-    /// particular strategy or accessor type.
-    pub fn post_process<I, Id>(
-        &self,
-        candidates: I,
-        // TODO: Add additional parameters as needed, e.g.:
-        // diverse_attribute_id: usize,
-        // diverse_results_k: usize,
-    ) -> impl Iterator<Item = Neighbor<Id>>
-    where
-        I: Iterator<Item = Neighbor<Id>>,
-        Id: Default + Eq,
-    {
-        // TODO: Implement diversity filtering logic.
-        // For now, pass through all candidates unchanged.
-        candidates
     }
 }
 

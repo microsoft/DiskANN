@@ -330,17 +330,16 @@ where
 /// the post-processing logic.
 ///
 /// This eliminates the need to duplicate the core search loop for each post-processing
-/// variant. For example, pairing `KnnWith<PostProcessOnlyDiverseSearch>` gives
-/// diversity-aware results without rewriting the search algorithm.
+/// variant. For example, pairing `KnnWith<RagSearchParams>` gives
+/// RAG-reranked results without rewriting the search algorithm.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use diskann::graph::search::{Knn, KnnWith};
-/// use diskann::graph::glue::PostProcessOnlyDiverseSearch;
+/// use diskann::graph::search::{Knn, KnnWith, RagSearchParams};
 ///
-/// let diverse_pp = PostProcessOnlyDiverseSearch { /* ... */ };
-/// let search = KnnWith::new(Knn::new(10, 100, None)?, diverse_pp);
+/// let rag_pp = RagSearchParams::new(0.01, 2.0);
+/// let search = KnnWith::new(Knn::new(10, 100, None)?, rag_pp);
 /// let stats = index.search(search, &strategy, &context, &query, &mut output).await?;
 /// ```
 #[derive(Debug, Clone)]
