@@ -237,7 +237,7 @@ impl PQStorage {
         if chunk_offsets_m.nrows() != *num_pq_chunks + 1 || chunk_offsets_m.ncols() != 1 {
             return Err(ANNError::log_pq_error(format_args!(
                 "Error reading pq_pivots file at chunk offsets; \
-                file has nr={}, nc={} but expecting nr={} and nc=2.",
+                file has nr={}, nc={} but expecting nr={} and nc=1.",
                 chunk_offsets_m.nrows(),
                 chunk_offsets_m.ncols(),
                 num_pq_chunks + 1

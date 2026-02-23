@@ -589,7 +589,7 @@ where
         if row >= self.nrows() || col >= self.ncols() {
             None
         } else {
-            // SAFETY: We just verified that `row` and `col~ are in-bounds.
+            // SAFETY: We just verified that `row` and `col` are in-bounds.
             Some(unsafe { self.get_unchecked(row, col) })
         }
     }
