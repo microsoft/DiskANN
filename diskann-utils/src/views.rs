@@ -585,6 +585,9 @@ where
         self.as_mut_slice().as_mut_ptr()
     }
 
+    /// Return the value at the specified `row` and `col`.
+    ///
+    /// If either index is out-of-bounds, return `None`.
     pub fn try_get(&self, row: usize, col: usize) -> Option<&T::Elem> {
         if row >= self.nrows() || col >= self.ncols() {
             None
