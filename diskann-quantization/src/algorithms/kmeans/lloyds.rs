@@ -457,13 +457,15 @@ pub fn lloyds(
 
 #[cfg(test)]
 mod tests {
-    use diskann_utils::{lazy_format, views::Matrix};
+    #[cfg(not(miri))]
+    use diskann_utils::lazy_format;
+    use diskann_utils::views::Matrix;
     use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
+    use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+    #[cfg(not(miri))]
     use rand::{
-        Rng, SeedableRng,
         distr::{Distribution, Uniform},
-        rngs::StdRng,
-        seq::{IndexedRandom, SliceRandom},
+        seq::IndexedRandom,
     };
 
     use super::*;
@@ -477,6 +479,7 @@ mod tests {
     // relatively quickly.
     //
     // Outside of rare validations, Miri tests go through a different path for speed purposes.
+    #[cfg(not(miri))]
     fn test_distances_in_place_impl<R: Rng>(
         ndata: usize,
         ncenters: usize,
@@ -556,15 +559,11 @@ mod tests {
         }
     }
 
-    cfg_if::cfg_if! {
-        if #[cfg(miri)] {
-            const TRIALS: usize = 1;
-        } else {
-            const TRIALS: usize = 100;
-        }
-    }
+    #[cfg(not(miri))]
+    const TRIALS: usize = 100;
 
     #[test]
+    #[cfg(not(miri))]
     fn test_distances_in_place() {
         let mut rng = StdRng::seed_from_u64(0xece88a9c6cd86a8a);
         for ndata in 1..=31 {
@@ -719,12 +718,22 @@ mod tests {
     #[test]
     fn end_to_end_test() {
         let mut rng = StdRng::seed_from_u64(0xff22c38d0f0531bf);
-        let setup = EndToEndSetup {
-            ncenters: 11,
-            ndim: 4,
-            data_per_center: 8,
-            step_between_clusters: 20,
-            ntrials: 10,
+        let setup = if cfg!(miri) {
+            EndToEndSetup {
+                ncenters: 3,
+                ndim: 4,
+                data_per_center: 2,
+                step_between_clusters: 20,
+                ntrials: 2,
+            }
+        } else {
+            EndToEndSetup {
+                ncenters: 11,
+                ndim: 4,
+                data_per_center: 8,
+                step_between_clusters: 20,
+                ntrials: 10,
+            }
         };
         end_to_end_test_impl(&setup, &mut rng);
     }
