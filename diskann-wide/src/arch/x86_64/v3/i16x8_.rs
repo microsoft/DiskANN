@@ -21,7 +21,7 @@ use crate::{
     constant::Const,
     emulated::Emulated,
     helpers,
-    traits::{AsSIMD, SIMDAbs, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector},
+    traits::{AsSIMD, SIMDAbs, SIMDMulAdd, SIMDPartialEq, SIMDPartialOrd, SIMDVector, ShrSigned},
 };
 
 ///////////////////
@@ -71,6 +71,24 @@ impl SIMDMulAdd for i16x8 {
     #[inline(always)]
     fn mul_add_simd(self, rhs: Self, accumulator: Self) -> Self {
         self * rhs + accumulator
+    }
+}
+
+impl ShrSigned for i16x8 {
+    /// Logical right-shift each 16-bit lane by `N` bits, filling with zeros.
+    ///
+    /// Unlike the emulated `Shr` (which is element-wise and scalar), this maps
+    /// directly to `_mm_srli_epi16` — a single SSE2 instruction.
+    ///
+    /// # Safety (internal)
+    ///
+    /// `_mm_srli_epi16` requires SSE2, which is implied by `V3`.
+    #[inline(always)]
+    fn shr_signed<const N: i32>(self) -> Self {
+        // SAFETY: `_mm_srli_epi16` requires SSE2, implied by V3.
+        Self::from_underlying(self.arch(), unsafe {
+            _mm_srli_epi16::<N>(self.to_underlying())
+        })
     }
 }
 
