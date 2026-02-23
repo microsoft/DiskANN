@@ -32,17 +32,19 @@
 
 use std::num::NonZeroUsize;
 
-use diskann_utils::future::SendFuture;
+use diskann_utils::{Reborrow, future::SendFuture};
 
 use super::{Knn, KnnWith, Search};
 use crate::{
     ANNResult,
+    error::ErrorExt,
     graph::{
-        glue::PostProcess,
+        glue::{PostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
-    provider::DataProvider,
+    neighbor::Neighbor,
+    provider::{Accessor, DataProvider},
 };
 
 /// Parameters for RAG post-processing.
@@ -85,6 +87,84 @@ impl RagSearchParams {
     /// Create new RAG search parameters.
     pub fn new(rag_eta: f64, rag_power: f64) -> Self {
         Self { rag_eta, rag_power }
+    }
+}
+
+/// Blanket implementation: any [`SearchStrategy`] whose accessor yields elements
+/// reborrowing to `AsRef<[f32]>` supports RAG post-processing for `[f32]` queries.
+///
+/// This impl fetches candidate vectors from the accessor, runs the RAG reranking
+/// algorithm ([`super::rag_post_process::rag_post_process`]), and writes the diversified
+/// results to the output buffer.
+///
+// TODO: This blanket impl requires `ElementRef: AsRef<[f32]>`, which only works for
+// accessors that return full-precision f32 vectors. It will not match strategies whose
+// accessors yield quantized vectors (e.g. `&[u8]` or `Hybrid<&[f32], &[u8]>`).
+// For those cases, we will need to provide concrete `PostProcess<RagSearchParams>`
+// implementations on specific strategies that can retrieve the full-precision vector
+// (e.g. via a secondary full-precision accessor or by dequantizing).
+impl<S, Provider> PostProcess<RagSearchParams, Provider, [f32]> for S
+where
+    S: SearchStrategy<Provider, [f32]>,
+    Provider: DataProvider,
+    for<'x, 'y> <S::SearchAccessor<'x> as Accessor>::ElementRef<'y>: AsRef<[f32]>,
+{
+    async fn post_process_with<'a, I, B>(
+        &self,
+        processor: &RagSearchParams,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &[f32],
+        _computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> ANNResult<usize>
+    where
+        I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
+        B: SearchOutputBuffer<Provider::InternalId> + Send + ?Sized,
+    {
+        // Collect candidates and fetch their vectors.
+        // TODO: This calls `get_element` which returns whatever the accessor's
+        // `Element` type is. For quantized accessors this would be quantized data,
+        // not full-precision f32. Specific strategy impls should override this to
+        // retrieve full-precision vectors when the default accessor is quantized.
+        let mut candidate_data: Vec<(Provider::InternalId, f32, Vec<f32>)> = Vec::new();
+        for neighbor in candidates {
+            let element = accessor
+                .get_element(neighbor.id)
+                .await
+                .escalate("failed to retrieve vector during RAG post-processing")?;
+            let vec_data: Vec<f32> = element.reborrow().as_ref().to_vec();
+            candidate_data.push((neighbor.id, neighbor.distance, vec_data));
+        }
+
+        if candidate_data.is_empty() {
+            return Ok(0);
+        }
+
+        // Determine k from the output buffer's remaining capacity.
+        let k = output
+            .size_hint()
+            .unwrap_or(candidate_data.len())
+            .min(candidate_data.len());
+
+        // Build input for rag_post_process using InternalId directly.
+        let rag_input: Vec<(Provider::InternalId, f32, &[f32])> = candidate_data
+            .iter()
+            .map(|(id, dist, v)| (*id, *dist, v.as_slice()))
+            .collect();
+
+        let reranked = super::rag_post_process::rag_post_process(
+            rag_input,
+            query,
+            k,
+            processor.rag_eta,
+            processor.rag_power,
+        );
+
+        // Write reranked results to output.
+        let count = output.extend(reranked);
+
+        Ok(count)
     }
 }
 

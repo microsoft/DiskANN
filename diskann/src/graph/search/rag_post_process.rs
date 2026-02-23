@@ -43,13 +43,13 @@ use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerPro
 /// # Returns
 ///
 /// Returns a vector of (id, distance) tuples, reranked for diversity.
-pub fn rag_post_process(
-    candidates: Vec<(u32, f32, &[f32])>,
+pub fn rag_post_process<Id: Copy>(
+    candidates: Vec<(Id, f32, &[f32])>,
     query: &[f32],
     k: usize,
     rag_eta: f64,
     rag_power: f64,
-) -> Vec<(u32, f32)> {
+) -> Vec<(Id, f32)> {
     if candidates.is_empty() {
         return Vec::new();
     }
@@ -57,7 +57,7 @@ pub fn rag_post_process(
     let k = k.min(candidates.len());
 
     // Convert candidates vectors to owned f32 for in-place orthogonalization
-    let candidates_f32: Vec<(u32, f32, Vec<f32>)> = candidates
+    let candidates_f32: Vec<(Id, f32, Vec<f32>)> = candidates
         .into_iter()
         .map(|(id, dist, v)| (id, dist, v.to_vec()))
         .collect();
@@ -101,13 +101,13 @@ pub fn rag_post_process(
 ///    - s_i <- s_i - alpha^2 (incremental norm update)
 ///
 /// Complexity: O(n * k * d) - same as greedy orthogonalization!
-fn post_process_with_eta_f32(
-    candidates: Vec<(u32, f32, Vec<f32>)>,
+fn post_process_with_eta_f32<Id: Copy>(
+    candidates: Vec<(Id, f32, Vec<f32>)>,
     query: &[f32],
     k: usize,
     rag_eta: f64,
     rag_power: f64,
-) -> Vec<(u32, f32)> {
+) -> Vec<(Id, f32)> {
     let eta = rag_eta as f32;
     let power = rag_power;
 
@@ -219,12 +219,12 @@ fn matrix_vec_mult(m: &[Vec<f32>], v: &[f32]) -> Vec<f32> {
 /// Optimized with:
 /// - Cached squared norms (avoid recomputing each iteration)
 /// - Parallel orthogonalization updates using rayon
-fn post_process_greedy_orthogonalization_f32(
-    candidates: Vec<(u32, f32, Vec<f32>)>,
+fn post_process_greedy_orthogonalization_f32<Id: Copy>(
+    candidates: Vec<(Id, f32, Vec<f32>)>,
     query: &[f32],
     k: usize,
     rag_power: f64,
-) -> Vec<(u32, f32)> {
+) -> Vec<(Id, f32)> {
     let power = rag_power;
 
     if candidates.is_empty() || query.is_empty() {
