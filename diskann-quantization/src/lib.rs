@@ -176,6 +176,7 @@ pub(crate) mod flatbuffers;
 
 // common algorithms
 pub mod algorithms;
+pub mod gemm;
 
 // quantization
 pub mod binary;
