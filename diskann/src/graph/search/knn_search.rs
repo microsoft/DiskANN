@@ -7,7 +7,7 @@
 
 use std::{fmt::Debug, num::NonZeroUsize};
 
-use diskann_utils::future::{AssertSend, SendFuture};
+use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
 use super::Search;
@@ -15,9 +15,9 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{DefaultPostProcess, PostProcess, SearchExt},
         index::{DiskANNIndex, SearchStats},
-        search::record::NoopSearchRecord,
+        search::record::{NoopSearchRecord, SearchRecord},
         search_output_buffer::SearchOutputBuffer,
     },
     provider::{BuildQueryComputer, DataProvider},
@@ -141,13 +141,74 @@ impl Knn {
     pub fn beam_width(&self) -> NonZeroUsize {
         self.beam_width
     }
+
+    /// Core search implementation shared by [`Knn`], [`RecordedKnn`], and [`KnnWith`].
+    ///
+    /// All k-NN search variants follow the same algorithm: create an accessor, build a
+    /// query computer, run `search_internal`, then post-process. The only axes of
+    /// variation are:
+    ///
+    /// * `recorder` — controls whether the traversal path is recorded.
+    /// * `post_processor` — selects which post-processing pipeline to apply.
+    async fn search_core<DP, S, T, O, OB, SR, PP>(
+        &self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
+        recorder: &mut SR,
+        post_processor: &PP,
+    ) -> ANNResult<SearchStats>
+    where
+        DP: DataProvider,
+        T: Sync + ?Sized,
+        S: PostProcess<PP, DP, T, O>,
+        O: Send,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+        SR: SearchRecord<DP::InternalId> + ?Sized,
+        PP: Send + Sync,
+    {
+        let mut accessor = strategy
+            .search_accessor(&index.data_provider, context)
+            .into_ann_result()?;
+
+        let computer = accessor.build_query_computer(query).into_ann_result()?;
+        let start_ids = accessor.starting_points().await?;
+
+        let mut scratch = index.search_scratch(self.l_value.get(), start_ids.len());
+
+        let stats = index
+            .search_internal(
+                Some(self.beam_width.get()),
+                &start_ids,
+                &mut accessor,
+                &computer,
+                &mut scratch,
+                recorder,
+            )
+            .await?;
+
+        let result_count = strategy
+            .post_process_with(
+                post_processor,
+                &mut accessor,
+                query,
+                &computer,
+                scratch.best.iter().take(self.l_value.get().into_usize()),
+                output,
+            )
+            .await?;
+
+        Ok(stats.finish(result_count as u32))
+    }
 }
 
 impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for Knn
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
+    S: PostProcess<DefaultPostProcess, DP, T, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send + ?Sized,
 {
@@ -186,40 +247,17 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
-            let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
-                .into_ann_result()?;
-
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = index.search_scratch(self.l_value.get(), start_ids.len());
-
-            let stats = index
-                .search_internal(
-                    Some(self.beam_width.get()),
-                    &start_ids,
-                    &mut accessor,
-                    &computer,
-                    &mut scratch,
-                    &mut NoopSearchRecord::new(),
-                )
-                .await?;
-
-            let result_count = strategy
-                .post_processor()
-                .post_process(
-                    &mut accessor,
-                    query,
-                    &computer,
-                    scratch.best.iter().take(self.l_value.get().into_usize()),
-                    output,
-                )
-                .send()
-                .await
-                .into_ann_result()?;
-
-            Ok(stats.finish(result_count as u32))
+            let mut recorder = NoopSearchRecord::new();
+            self.search_core(
+                index,
+                strategy,
+                context,
+                query,
+                output,
+                &mut recorder,
+                &DefaultPostProcess,
+            )
+            .await
         }
     }
 }
@@ -250,10 +288,10 @@ impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
+    S: PostProcess<DefaultPostProcess, DP, T, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send + ?Sized,
-    SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
+    SR: SearchRecord<DP::InternalId> + ?Sized,
 {
     type Output = SearchStats;
 
@@ -266,43 +304,107 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
-            let mut accessor = strategy
-                .search_accessor(&index.data_provider, context)
-                .into_ann_result()?;
-
-            let computer = accessor.build_query_computer(query).into_ann_result()?;
-            let start_ids = accessor.starting_points().await?;
-
-            let mut scratch = index.search_scratch(self.inner.l_value.get(), start_ids.len());
-
-            let stats = index
-                .search_internal(
-                    Some(self.inner.beam_width.get()),
-                    &start_ids,
-                    &mut accessor,
-                    &computer,
-                    &mut scratch,
-                    self.recorder,
-                )
-                .await?;
-
-            let result_count = strategy
-                .post_processor()
-                .post_process(
-                    &mut accessor,
+            self.inner
+                .search_core(
+                    index,
+                    strategy,
+                    context,
                     query,
-                    &computer,
-                    scratch
-                        .best
-                        .iter()
-                        .take(self.inner.l_value.get().into_usize()),
                     output,
+                    self.recorder,
+                    &DefaultPostProcess,
                 )
-                .send()
                 .await
-                .into_ann_result()?;
+        }
+    }
+}
 
-            Ok(stats.finish(result_count as u32))
+///////////////////////
+// KnnWith (generic) //
+///////////////////////
+
+/// K-NN search with a custom post-processor.
+///
+/// This type composes a standard [`Knn`] search with an arbitrary post-processing
+/// strategy `PP`. The strategy `S` must implement `PostProcess<PP, ...>` to provide
+/// the post-processing logic.
+///
+/// This eliminates the need to duplicate the core search loop for each post-processing
+/// variant. For example, pairing `KnnWith<PostProcessOnlyDiverseSearch>` gives
+/// diversity-aware results without rewriting the search algorithm.
+///
+/// # Example
+///
+/// ```ignore
+/// use diskann::graph::search::{Knn, KnnWith};
+/// use diskann::graph::glue::PostProcessOnlyDiverseSearch;
+///
+/// let diverse_pp = PostProcessOnlyDiverseSearch { /* ... */ };
+/// let search = KnnWith::new(Knn::new(10, 100, None)?, diverse_pp);
+/// let stats = index.search(search, &strategy, &context, &query, &mut output).await?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct KnnWith<PP> {
+    /// Base k-NN search parameters.
+    inner: Knn,
+    /// The post-processor to apply after the core search.
+    post_processor: PP,
+}
+
+impl<PP> KnnWith<PP> {
+    /// Create a new k-NN search with custom post-processing.
+    pub fn new(inner: Knn, post_processor: PP) -> Self {
+        Self {
+            inner,
+            post_processor,
+        }
+    }
+
+    /// Returns a reference to the inner k-NN parameters.
+    #[inline]
+    pub fn inner(&self) -> &Knn {
+        &self.inner
+    }
+
+    /// Returns a reference to the post-processor.
+    #[inline]
+    pub fn post_processor(&self) -> &PP {
+        &self.post_processor
+    }
+}
+
+impl<DP, S, T, O, OB, PP> Search<DP, S, T, O, OB> for KnnWith<PP>
+where
+    DP: DataProvider,
+    T: Sync + ?Sized,
+    S: PostProcess<PP, DP, T, O>,
+    O: Send,
+    OB: SearchOutputBuffer<O> + Send + ?Sized,
+    PP: Send + Sync,
+{
+    type Output = SearchStats;
+
+    fn search(
+        self,
+        index: &DiskANNIndex<DP>,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>> {
+        async move {
+            let mut recorder = NoopSearchRecord::new();
+            self.inner
+                .search_core(
+                    index,
+                    strategy,
+                    context,
+                    query,
+                    output,
+                    &mut recorder,
+                    &self.post_processor,
+                )
+                .await
         }
     }
 }

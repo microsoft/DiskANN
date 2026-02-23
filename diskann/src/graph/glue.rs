@@ -83,7 +83,7 @@ use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 
 use crate::{
     ANNError, ANNResult,
-    error::{ErrorExt, RankedError, StandardError, ToRanked, TransientError},
+    error::{ErrorExt, IntoANNResult, RankedError, StandardError, ToRanked, TransientError},
     graph::{AdjacencyList, SearchOutputBuffer},
     neighbor::Neighbor,
     provider::{
@@ -338,6 +338,145 @@ where
     /// Construct the [`SearchPostProcess`] struct to post-process the results of search and
     /// store them into the output container.
     fn post_processor(&self) -> Self::PostProcessor;
+}
+
+/// A composable post-processing override for search strategies.
+///
+/// This trait allows search results to be post-processed in different ways without
+/// duplicating the core search algorithm. The `Processor` type parameter selects which
+/// post-processing behavior to use.
+///
+/// For example, a standard k-NN search can be combined with diversity-aware
+/// post-processing by implementing `PostProcess<PostProcessOnlyDiverseSearch>` for a
+/// strategy, without rewriting the search loop.
+///
+/// A blanket implementation exists for [`DefaultPostProcess`], which delegates to the
+/// strategy's [`SearchPostProcess`]or via [`SearchStrategy::post_processor()`]. This means
+/// every [`SearchStrategy`] automatically supports `PostProcess<DefaultPostProcess>`
+/// with no additional code.
+///
+/// # Usage
+///
+/// Search types like [`super::search::KnnWith`] accept a `Processor` type parameter and
+/// require `S: PostProcess<Processor, Provider, T, O>` in their `Search` impl. This
+/// enables composing any search algorithm with any post-processing strategy.
+pub trait PostProcess<Processor, Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<Provider, T, O>
+where
+    Provider: DataProvider,
+    T: ?Sized,
+    O: Send,
+{
+    /// Post-process search results using the given `processor`.
+    ///
+    /// This method bridges between the strategy's accessor/computer and the processor's
+    /// logic. Implementations should extract any data the processor needs from the
+    /// accessor and delegate to the processor.
+    fn post_process_with<'a, I, B>(
+        &self,
+        processor: &Processor,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &T,
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
+        B: SearchOutputBuffer<O> + Send + ?Sized;
+}
+
+/// Marker for default post-processing behavior.
+///
+/// When used with [`PostProcess`], delegates to the strategy's existing
+/// [`SearchPostProcess`]or via [`SearchStrategy::post_processor()`].
+///
+/// A blanket implementation is provided so that every [`SearchStrategy`] automatically
+/// implements `PostProcess<DefaultPostProcess>`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DefaultPostProcess;
+
+/// Blanket implementation: every [`SearchStrategy`] supports default post-processing.
+impl<S, Provider, T, O> PostProcess<DefaultPostProcess, Provider, T, O> for S
+where
+    S: SearchStrategy<Provider, T, O>,
+    Provider: DataProvider,
+    T: ?Sized + Sync,
+    O: Send,
+{
+    fn post_process_with<'a, I, B>(
+        &self,
+        _processor: &DefaultPostProcess,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &T,
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
+        B: SearchOutputBuffer<O> + Send + ?Sized,
+    {
+        async move {
+            self.post_processor()
+                .post_process(accessor, query, computer, candidates, output)
+                .send()
+                .await
+                .into_ann_result()
+        }
+    }
+}
+
+/// Post-processor that applies diversity filtering to search results.
+///
+/// Unlike the full [`super::search::Diverse`] search which uses a
+/// [`crate::neighbor::DiverseNeighborQueue`] during the search loop itself,
+/// `PostProcessOnlyDiverseSearch` applies diversity filtering purely in post-processing.
+/// This means it can be composed with **any** search algorithm (e.g.,
+/// [`super::search::Knn`] via [`super::search::KnnWith`]) without duplicating search logic.
+///
+/// # Usage
+///
+/// Strategy implementations should implement
+/// `PostProcess<PostProcessOnlyDiverseSearch, Provider, T, O>` to bridge their accessor
+/// to the diversity filtering logic.
+///
+/// ```ignore
+/// use diskann::graph::search::{Knn, KnnWith};
+/// use diskann::graph::glue::PostProcessOnlyDiverseSearch;
+///
+/// let diverse_pp = PostProcessOnlyDiverseSearch::new(/* params */);
+/// let search = KnnWith::new(Knn::new(10, 100, None)?, diverse_pp);
+/// let stats = index.search(search, &strategy, &context, &query, &mut output).await?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct PostProcessOnlyDiverseSearch {
+    // TODO: Add diversity parameters here, e.g.:
+    // pub diverse_attribute_id: usize,
+    // pub diverse_results_k: usize,
+    // pub attribute_provider: Arc<dyn AttributeValueProvider<Id = ...>>,
+}
+
+impl PostProcessOnlyDiverseSearch {
+    /// Apply diversity filtering to the candidate results.
+    ///
+    /// This method contains the core diversity logic that is independent of any
+    /// particular strategy or accessor type.
+    pub fn post_process<I, Id>(
+        &self,
+        candidates: I,
+        // TODO: Add additional parameters as needed, e.g.:
+        // diverse_attribute_id: usize,
+        // diverse_results_k: usize,
+    ) -> impl Iterator<Item = Neighbor<Id>>
+    where
+        I: Iterator<Item = Neighbor<Id>>,
+        Id: Default + Eq,
+    {
+        // TODO: Implement diversity filtering logic.
+        // For now, pass through all candidates unchanged.
+        candidates
+    }
 }
 
 /// Perform post-processing on the results of search, storing the results in an output buffer.
