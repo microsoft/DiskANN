@@ -337,7 +337,7 @@ jobs:
         env:
           RUSTFLAGS: "--cfg=miri"
         run: |
-          cargo llvm-cov nextest --locked --cargo-profile ci \
+          cargo +nightly llvm-cov nextest --locked --cargo-profile ci \
             --package diskann-quantization \
             --lcov --output-path lcov_miri.info
 
