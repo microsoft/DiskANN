@@ -84,6 +84,7 @@ pub(crate) enum Arch {
     #[serde(rename = "x86-64-v3")]
     #[allow(non_camel_case_types)]
     X86_64_V3,
+    Neon,
     Scalar,
     Reference,
 }
@@ -93,6 +94,7 @@ impl std::fmt::Display for Arch {
         let st = match self {
             Self::X86_64_V4 => "x86-64-v4",
             Self::X86_64_V3 => "x86-64-v3",
+            Self::Neon => "neon",
             Self::Scalar => "scalar",
             Self::Reference => "reference",
         };
@@ -277,6 +279,32 @@ fn register_benchmarks_impl(dispatcher: &mut diskann_benchmark_runner::registry:
         Kernel<'static, diskann_wide::arch::x86_64::V3, i8, i8>
     );
 
+    // aarch64-neon
+    register!(
+        "aarch64",
+        dispatcher,
+        "simd-op-f32xf32-aarch64_neon",
+        Kernel<'static, diskann_wide::arch::aarch64::Neon, f32, f32>
+    );
+    register!(
+        "aarch64",
+        dispatcher,
+        "simd-op-f16xf16-aarch64_neon",
+        Kernel<'static, diskann_wide::arch::aarch64::Neon, f16, f16>
+    );
+    register!(
+        "aarch64",
+        dispatcher,
+        "simd-op-u8xu8-aarch64_neon",
+        Kernel<'static, diskann_wide::arch::aarch64::Neon, u8, u8>
+    );
+    register!(
+        "aarch64",
+        dispatcher,
+        "simd-op-i8xi8-aarch64_neon",
+        Kernel<'static, diskann_wide::arch::aarch64::Neon, i8, i8>
+    );
+
     // scalar
     register!(
         dispatcher,
@@ -377,7 +405,7 @@ impl DispatchRule<Arch> for Identity<Reference> {
         if *from == Arch::Reference {
             Ok(MatchScore(0))
         } else {
-            Err(FailureScore(0))
+            Err(FailureScore(1))
         }
     }
 
@@ -407,7 +435,7 @@ impl DispatchRule<Arch> for Identity<diskann_wide::arch::Scalar> {
         if *from == Arch::Scalar {
             Ok(MatchScore(0))
         } else {
-            Err(FailureScore(0))
+            Err(FailureScore(1))
         }
     }
 
@@ -430,71 +458,55 @@ impl DispatchRule<Arch> for Identity<diskann_wide::arch::Scalar> {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-impl DispatchRule<Arch> for Identity<diskann_wide::arch::x86_64::V4> {
-    type Error = ArchNotSupported;
+macro_rules! match_arch {
+    ($target_arch:literal, $arch:path, $enum:ident) => {
+        #[cfg(target_arch = $target_arch)]
+        impl DispatchRule<Arch> for Identity<$arch> {
+            type Error = ArchNotSupported;
 
-    fn try_match(from: &Arch) -> Result<MatchScore, FailureScore> {
-        if *from == Arch::X86_64_V4 {
-            Ok(MatchScore(0))
-        } else {
-            Err(FailureScore(0))
-        }
-    }
-
-    fn convert(from: Arch) -> Result<Self, Self::Error> {
-        assert_eq!(from, Arch::X86_64_V4);
-        diskann_wide::arch::x86_64::V4::new_checked()
-            .ok_or(ArchNotSupported(from))
-            .map(Identity)
-    }
-
-    fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&Arch>) -> std::fmt::Result {
-        match from {
-            None => write!(f, "x86-64-v4"),
-            Some(arch) => {
-                if Self::try_match(arch).is_ok() {
-                    write!(f, "matched {}", arch)
+            fn try_match(from: &Arch) -> Result<MatchScore, FailureScore> {
+                let available = <$arch>::new_checked().is_some();
+                if available && *from == Arch::$enum {
+                    Ok(MatchScore(0))
+                } else if !available && *from == Arch::$enum {
+                    Err(FailureScore(0))
                 } else {
-                    write!(f, "expected {}, got {}", Arch::X86_64_V4, arch)
+                    Err(FailureScore(1))
+                }
+            }
+
+            fn convert(from: Arch) -> Result<Self, Self::Error> {
+                assert_eq!(from, Arch::$enum);
+                <$arch>::new_checked()
+                    .ok_or(ArchNotSupported(from))
+                    .map(Identity)
+            }
+
+            fn description(
+                f: &mut std::fmt::Formatter<'_>,
+                from: Option<&Arch>,
+            ) -> std::fmt::Result {
+                let available = <$arch>::new_checked().is_some();
+                match from {
+                    None => write!(f, "{}", Arch::$enum),
+                    Some(arch) => {
+                        if Self::try_match(arch).is_ok() {
+                            write!(f, "matched {}", arch)
+                        } else if !available && *arch == Arch::$enum {
+                            write!(f, "matched {} but unsupported by this CPU", Arch::$enum)
+                        } else {
+                            write!(f, "expected {}, got {}", Arch::$enum, arch)
+                        }
+                    }
                 }
             }
         }
-    }
+    };
 }
 
-#[cfg(target_arch = "x86_64")]
-impl DispatchRule<Arch> for Identity<diskann_wide::arch::x86_64::V3> {
-    type Error = ArchNotSupported;
-
-    fn try_match(from: &Arch) -> Result<MatchScore, FailureScore> {
-        if *from == Arch::X86_64_V3 {
-            Ok(MatchScore(0))
-        } else {
-            Err(FailureScore(0))
-        }
-    }
-
-    fn convert(from: Arch) -> Result<Self, Self::Error> {
-        assert_eq!(from, Arch::X86_64_V3);
-        diskann_wide::arch::x86_64::V3::new_checked()
-            .ok_or(ArchNotSupported(from))
-            .map(Identity)
-    }
-
-    fn description(f: &mut std::fmt::Formatter<'_>, from: Option<&Arch>) -> std::fmt::Result {
-        match from {
-            None => write!(f, "x86-64-v3"),
-            Some(arch) => {
-                if Self::try_match(arch).is_ok() {
-                    write!(f, "matched {}", arch)
-                } else {
-                    write!(f, "expected {}, got {}", Arch::X86_64_V3, arch)
-                }
-            }
-        }
-    }
-}
+match_arch!("x86_64", diskann_wide::arch::x86_64::V4, X86_64_V4);
+match_arch!("x86_64", diskann_wide::arch::x86_64::V3, X86_64_V3);
+match_arch!("aarch64", diskann_wide::arch::aarch64::Neon, Neon);
 
 impl<'a, A, Q, D> DispatchRule<&'a SimdOp> for Kernel<'a, A, Q, D>
 where
@@ -513,9 +525,10 @@ where
         if datatype::Type::<D>::try_match(&from.data_type).is_err() {
             *failscore.get_or_insert(0) += 10;
         }
-        if Identity::<A>::try_match(&from.arch).is_err() {
-            *failscore.get_or_insert(0) += 2;
+        if let Err(FailureScore(score)) = Identity::<A>::try_match(&from.arch) {
+            *failscore.get_or_insert(0) += 2 + score;
         }
+
         match failscore {
             None => Ok(MatchScore(0)),
             Some(score) => Err(FailureScore(score)),
@@ -549,13 +562,13 @@ where
             }
             Some(input) => {
                 if let Err(err) = datatype::Type::<Q>::try_match_verbose(&input.query_type) {
-                    describeln!(f, "- Mismatched query type: {}", err)?;
+                    describeln!(f, "\n    - Mismatched query type: {}", err)?;
                 }
                 if let Err(err) = datatype::Type::<D>::try_match_verbose(&input.data_type) {
-                    describeln!(f, "- Mismatched data type: {}", err)?;
+                    describeln!(f, "\n    - Mismatched data type: {}", err)?;
                 }
                 if let Err(err) = Identity::<A>::try_match_verbose(&input.arch) {
-                    describeln!(f, "- Mismatched architecture: {}", err)?;
+                    describeln!(f, "\n    - Mismatched architecture: {}", err)?;
                 }
             }
         }
@@ -801,6 +814,11 @@ stamp!("x86_64", diskann_wide::arch::x86_64::V3, f16, f16);
 stamp!("x86_64", diskann_wide::arch::x86_64::V3, u8, u8);
 stamp!("x86_64", diskann_wide::arch::x86_64::V3, i8, i8);
 
+stamp!("aarch64", diskann_wide::arch::aarch64::Neon, f32, f32);
+stamp!("aarch64", diskann_wide::arch::aarch64::Neon, f16, f16);
+stamp!("aarch64", diskann_wide::arch::aarch64::Neon, u8, u8);
+stamp!("aarch64", diskann_wide::arch::aarch64::Neon, i8, i8);
+
 stamp!(diskann_wide::arch::Scalar, f32, f32);
 stamp!(diskann_wide::arch::Scalar, f16, f16);
 stamp!(diskann_wide::arch::Scalar, u8, u8);
@@ -870,6 +888,13 @@ mod reference {
 
     #[cfg(target_arch = "x86_64")]
     impl MaybeFMA for diskann_wide::arch::x86_64::V4 {
+        fn maybe_fma(self, a: f32, b: f32, c: f32) -> f32 {
+            a.mul_add(b, c)
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    impl MaybeFMA for diskann_wide::arch::aarch64::Neon {
         fn maybe_fma(self, a: f32, b: f32, c: f32) -> f32 {
             a.mul_add(b, c)
         }
