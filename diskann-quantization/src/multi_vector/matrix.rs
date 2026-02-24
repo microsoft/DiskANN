@@ -692,6 +692,18 @@ impl<T: Copy> Mat<Standard<T>> {
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
     }
+
+    pub fn nrows(&self) -> usize {
+        self.repr.nrows()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.repr.ncols()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_ptr_raw().cast::<T>()
+    }
 }
 
 ////////////
@@ -806,6 +818,18 @@ impl<'a, T: Copy> MatRef<'a, Standard<T>> {
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    pub fn nrows(&self) -> usize {
+        self.repr.nrows()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.repr.ncols()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_ptr_raw().cast::<T>()
     }
 }
 
@@ -1011,6 +1035,18 @@ impl<'a, T: Copy> MatMut<'a, Standard<T>> {
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    pub fn nrows(&self) -> usize {
+        self.repr.nrows()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.repr.ncols()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_ptr_raw().cast::<T>()
     }
 }
 

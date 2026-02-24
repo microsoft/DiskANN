@@ -180,6 +180,9 @@ mod tests {
     use super::*;
     use diskann_utils::views::Matrix;
 
+    // fn pack_matrix(mut x: MutMatrixView<'_, f32>) {
+    // }
+
     #[test]
     fn test() {
         let a = Matrix::new(1.0f32, 32, 128);
