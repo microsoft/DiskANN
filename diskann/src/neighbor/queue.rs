@@ -303,7 +303,14 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
             }
         }
 
-        self.size
+        // If we reach here, none of the existing neighbors has a distance >= the target.
+        // This might mean that we’re among trailing NaNs as well; find the first NaN neighbor if any.
+        let mut index = self.size;
+        while index > 0 && self.get_unchecked(index - 1).distance.is_nan() {
+            index -= 1;
+        }
+
+        index
     }
 
     /// Get the neighbor at index - SAFETY: index must be less than size
@@ -1387,6 +1394,16 @@ mod neighbor_priority_queue_test {
     }
 
     #[test]
+    fn test_insert_single_neighbor_with_nan_distance() {
+        let mut queue = NeighborPriorityQueue::new(5);
+
+        assert_eq!(queue.size(), 0);
+        assert_eq!(queue.capacity(), 5);
+        queue.insert(Neighbor::new(999, f32::NAN));
+        assert_eq!(queue.get(0).id, 999);
+    }
+
+    #[test]
     fn test_insert_with_infinity_distance_then_with_nan_distance() {
         let mut queue = NeighborPriorityQueue::new(5);
 
@@ -1408,6 +1425,56 @@ mod neighbor_priority_queue_test {
         assert_eq!(queue.capacity(), 5);
 
         assert!(queue.get(0).id >= 0, "First element should be retrievable");
+    }
+
+    #[test]
+    fn test_normal_distances_should_push_nan_distances_away_from_queue() {
+        let mut queue = NeighborPriorityQueue::new(5);
+
+        assert_eq!(queue.size(), 0);
+        assert_eq!(queue.capacity(), 5);
+
+        for id in 0..5 {
+            queue.insert(Neighbor::new(id, f32::NAN));
+        }
+
+        assert_eq!(queue.size(), 5);
+        assert_eq!(queue.capacity(), 5);
+
+        assert!(queue.get(0).id >= 0, "First element should be retrievable");
+
+        for id in 5..9 {
+            queue.insert(Neighbor::new(id, id as f32));
+        }
+
+        assert_eq!(queue.size(), 5);
+        assert_eq!(queue.capacity(), 5);
+
+        assert_eq!(
+            queue.get(0).id,
+            5,
+            "The closest element should be id 5 with distance 5.0"
+        );
+        assert_eq!(
+            queue.get(1).id,
+            6,
+            "The closest element should be id 6 with distance 6.0"
+        );
+        assert_eq!(
+            queue.get(2).id,
+            7,
+            "The closest element should be id 7 with distance 7.0"
+        );
+        assert_eq!(
+            queue.get(3).id,
+            8,
+            "The closest element should be id 8 with distance 8.0"
+        );
+        assert_eq!(
+            queue.get(4).id,
+            4,
+            "The farthest element should be id 4 with distance NAN"
+        );
     }
 
     #[test]
