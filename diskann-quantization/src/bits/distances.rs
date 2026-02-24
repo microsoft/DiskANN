@@ -1436,6 +1436,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
             let mut s3 = i32s::default(arch);
 
             let products = |x: u8s_32, y: u8s_32| -> i16s {
+                // SAFETY: `arch` is V3 (AVX2), which provides `_mm256_maddubs_epi16`.
                 i16s::from_underlying(arch, unsafe {
                     _mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())
                 })
@@ -1456,18 +1457,21 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 // Block 1
                 // SAFETY: `i + 1 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 1))) };
+                // SAFETY: same bound; 16 bytes readable at `py.add(16 * (i + 1))`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 1))) };
                 s1 = s1.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
 
                 // Block 2
                 // SAFETY: `i + 2 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 2))) };
+                // SAFETY: same bound; 16 bytes readable at `py.add(16 * (i + 2))`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 2))) };
                 s2 = s2.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
 
                 // Block 3
                 // SAFETY: `i + 3 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 3))) };
+                // SAFETY: same bound; 16 bytes readable at `py.add(16 * (i + 3))`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 3))) };
                 s3 = s3.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
 
@@ -1567,6 +1571,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
             let mut s3 = i32s::default(arch);
 
             let products = |x: u8s_32, y: u8s_32| -> i16s {
+                // SAFETY: `arch` is V3 (AVX2), which provides `_mm256_maddubs_epi16`.
                 i16s::from_underlying(arch, unsafe {
                     _mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())
                 })

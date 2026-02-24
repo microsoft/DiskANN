@@ -33,10 +33,6 @@ trybuild = "1.0.101"
 rand_distr = { workspace = true }
 criterion = { workspace = true }
 
-[[bench]]
-name = "bench_ip"
-harness = false
-
 [features]
 default = ["rayon"]
 
