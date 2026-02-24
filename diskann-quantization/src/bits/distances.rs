@@ -1412,7 +1412,7 @@ dispatch_pure!(InnerProduct, 1, 2, 3, 4, 5, 6, 7, 8);
 impl_heterogeneous_scalar_8xM!(4, 2, 1);
 
 #[cfg(target_arch = "x86_64")]
-use diskann_wide::arch::x86_64::algorithms::{maddubs_accumulate, unpack_crumbs_64, unpack_sub_bytes};
+use diskann_wide::arch::x86_64::algorithms::{unpack_half_bytes};
 
 #[cfg(target_arch = "x86_64")]
 impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 4>>
@@ -1432,15 +1432,6 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
     ///      → unpacked[2i]   = lo_nibble   (element 2i)
     ///      → unpacked[2i+1] = hi_nibble   (element 2i+1)
     /// ```
-    ///
-    /// The core multiply-accumulate chain is:
-    /// 1. `vpmaddubsw(x, y)` — multiply 32 `u8 × u8` pairs, add adjacent products
-    ///    → 16 × `i16`. No overflow because max pair sum = 255×15 + 255×15 = 7650 < 32767.
-    /// 2. `vpmaddwd(result, 1s)` — horizontally add adjacent `i16` pairs → 8 × `i32`.
-    /// 3. `vpaddd` — accumulate into running `i32x8` sum.
-    ///
-    /// This yields ~10 instructions per 32 elements (0.31 instr/elem), compared to the
-    /// previous `vpmaddwd`-only approach at ~8 instructions per 16 elements (0.50 instr/elem).
     #[inline(always)]
     fn run(
         self,
@@ -1448,11 +1439,14 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         x: USlice<'_, 8>,
         y: USlice<'_, 4>,
     ) -> MathematicalResult<u32> {
+        use std::arch::x86_64::_mm256_maddubs_epi16;
+
         let len = check_lengths!(x, y)?;
 
         diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
         diskann_wide::alias!(u8s_16 = <diskann_wide::arch::x86_64::V3>::u8x16);
         diskann_wide::alias!(u8s_32 = <diskann_wide::arch::x86_64::V3>::u8x32);
+        diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V3>::i16x16);
 
         let px: *const u8 = x.as_ptr();
         let py: *const u8 = y.as_ptr();
@@ -1468,6 +1462,12 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
             let mut s2 = i32s::default(arch);
             let mut s3 = i32s::default(arch);
 
+            let products = |x : u8s_32, y: u8s_32| -> i16s {
+                i16s::from_underlying(arch, unsafe {_mm256_maddubs_epi16(x.to_underlying(), y.to_underlying())})
+            };
+
+            let ones = i16s::splat(arch, 1); 
+
             // Main loop: 4× unrolled, processing 128 elements per iteration.
             while i + 4 <= blocks {
                 // Block 0
@@ -1475,26 +1475,26 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 // Each block needs 32 bytes from `px` and 16 bytes from `py`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
                 // SAFETY: `i + 4 <= blocks` guarantees 16 bytes readable at `py.add(16 * i)`.
-                let vy = unpack_sub_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * i)) });
-                s0 = maddubs_accumulate(arch, s0, vx, vy);
+                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * i)) });
+                s0 = s0.dot_simd(products(vx, vy), ones); 
 
                 // Block 1
                 // SAFETY: `i + 1 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 1))) };
-                let vy = unpack_sub_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 1))) });
-                s1 = maddubs_accumulate(arch, s1, vx, vy);
+                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 1))) });
+                s1 = s1.dot_simd(products(vx, vy), ones); 
 
                 // Block 2
                 // SAFETY: `i + 2 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 2))) };
-                let vy = unpack_sub_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 2))) });
-                s2 = maddubs_accumulate(arch, s2, vx, vy);
+                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 2))) });
+                s2 = s2.dot_simd(products(vx, vy), ones); 
 
                 // Block 3
                 // SAFETY: `i + 3 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 3))) };
-                let vy = unpack_sub_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 3))) });
-                s3 = maddubs_accumulate(arch, s3, vx, vy);
+                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 3))) });
+                s3 = s3.dot_simd(products(vx, vy), ones); 
 
                 i += 4;
             }
@@ -1505,8 +1505,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 // from `py` are readable at this offset.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
                 // SAFETY: `i < blocks` guarantees 16 bytes readable at `py.add(16 * i)`.
-                let vy = unpack_sub_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * i)) });
-                s0 = maddubs_accumulate(arch, s0, vx, vy);
+                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * i)) });
+                s0 = s0.dot_simd(products(vx, vy), ones); 
                 i += 1;
             }
 
@@ -1551,11 +1551,11 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
     ///
     /// The unpacking uses a two-level cascade:
     ///
-    /// **Level 1 (nibble split):** identical to the 4-bit unpacker. Each packed byte
+    /// **Level 1 (nibble):** identical to the 4-bit unpacker. Each packed byte
     /// is split into its low and high nibbles via `_mm_srli_epi16::<4>` +
     /// `_mm_unpacklo/hi_epi8`, producing 32 × 4-bit values in two `u8x16` registers.
     ///
-    /// **Level 2 (crumb split):** each 4-bit value contains two 2-bit crumbs. We
+    /// **Level 2 (crumb):** each 4-bit value contains two 2-bit crumbs. We
     /// apply the same shift-interleave at a 2-bit granularity: `_mm_srli_epi16::<2>` +
     /// `_mm_unpacklo/hi_epi8`, then join halves into `u8x32` and mask with `0x03`.
     ///
@@ -1566,14 +1566,6 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
     ///      → unpacked[4j+2] = c2   (element 4j+2)
     ///      → unpacked[4j+3] = c3   (element 4j+3)
     /// ```
-    ///
-    /// The core multiply-accumulate chain is the same as the 4-bit kernel:
-    /// 1. `vpmaddubsw(x, y)` — multiply 32 `u8 × u8` pairs, add adjacent products
-    ///    → 16 × `i16`. No overflow: max pair sum = 255×3 + 255×3 = 1530 < 32767.
-    /// 2. `vpmaddwd(result, 1s)` — horizontally add adjacent `i16` pairs → 8 × `i32`.
-    /// 3. `vpaddd` — accumulate into running `i32x8` sum.
-    ///
-    /// Two `vpmaddubsw` calls per block (one per `u8x32` half).
     #[inline(always)]
     fn run(
         self,
@@ -1581,10 +1573,15 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         x: USlice<'_, 8>,
         y: USlice<'_, 2>,
     ) -> MathematicalResult<u32> {
+        use std::arch::x86_64::_mm256_maddubs_epi16;
+        use diskann_wide::SplitJoin;
+
         let len = check_lengths!(x, y)?;
 
         diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
+        diskann_wide::alias!(u8s_16 = <diskann_wide::arch::x86_64::V3>::u8x16);
         diskann_wide::alias!(u8s_32 = <diskann_wide::arch::x86_64::V3>::u8x32);
+        diskann_wide::alias!(i16s = <diskann_wide::arch::x86_64::V3>::i16x16);
 
         let px: *const u8 = x.as_ptr();
         let py: *const u8 = y.as_ptr();
@@ -1600,6 +1597,25 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
             let mut s2 = i32s::default(arch);
             let mut s3 = i32s::default(arch);
 
+            let products = |x: u8s_32, y: u8s_32| -> i16s {
+                i16s::from_underlying(arch, unsafe { _mm256_maddubs_epi16(x.to_underlying(), y.to_underlying()) })
+            };
+
+            let ones = i16s::splat(arch, 1);
+
+            let unpack_crumbs = |x : u8s_16| -> (u8s_32, u8s_32) {
+                 // Level 1: nibble split → 32 × 4-bit values in a u8x32.
+                let nibbles = unpack_half_bytes::<4>(arch, x);
+
+                // Split the u8x32 into two u8x16 halves (lo = elements 0..15,
+                // hi = elements 16..31), then apply Level 2 crumb split to each.
+                let diskann_wide::LoHi { lo, hi } = nibbles.split();
+                let lower = unpack_half_bytes::<2>(arch, lo);
+                let upper = unpack_half_bytes::<2>(arch, hi);
+
+                (lower, upper)
+            };
+
             // Main loop: 4× unrolled, processing 256 elements per iteration.
             while i + 4 <= blocks {
                 // Block 0
@@ -1608,40 +1624,40 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 let (vx0, vx1, (vy0, vy1)) = unsafe {(
                     u8s_32::load_simd(arch, px.add(64 * i)),
                     u8s_32::load_simd(arch, px.add(64 * i + 32)),
-                    unpack_crumbs_64(arch, py.add(16 * i)),
+                    unpack_crumbs(u8s_16::load_simd(arch, py.add(16 * i))),
                 )};
-                s0 = maddubs_accumulate(arch, s0, vx0, vy0);
-                s0 = maddubs_accumulate(arch, s0, vx1, vy1);
+                s0 = s0.dot_simd(products(vx0, vy0), ones);
+                s0 = s0.dot_simd(products(vx1, vy1), ones);
 
                 // Block 1
                 // SAFETY: `i + 1 < i + 4 <= blocks`.
                 let (vx0, vx1, (vy0, vy1)) = unsafe {(
                     u8s_32::load_simd(arch, px.add(64 * (i + 1))),
                     u8s_32::load_simd(arch, px.add(64 * (i + 1) + 32)),
-                    unpack_crumbs_64(arch, py.add(16 * (i + 1))),
+                    unpack_crumbs(u8s_16::load_simd(arch, py.add(16 * (i + 1)))),
                 )};
-                s1 = maddubs_accumulate(arch, s1, vx0, vy0);
-                s1 = maddubs_accumulate(arch, s1, vx1, vy1);
+                s1 = s1.dot_simd(products(vx0, vy0), ones);
+                s1 = s1.dot_simd(products(vx1, vy1), ones);
 
                 // Block 2
                 // SAFETY: `i + 2 < i + 4 <= blocks`.
                 let (vx0, vx1, (vy0, vy1)) = unsafe {(
                     u8s_32::load_simd(arch, px.add(64 * (i + 2))),
                     u8s_32::load_simd(arch, px.add(64 * (i + 2) + 32)),
-                    unpack_crumbs_64(arch, py.add(16 * (i + 2))),
+                    unpack_crumbs(u8s_16::load_simd(arch, py.add(16 * (i + 2)))),
                 )};
-                s2 = maddubs_accumulate(arch, s2, vx0, vy0);
-                s2 = maddubs_accumulate(arch, s2, vx1, vy1);
+                s2 = s2.dot_simd(products(vx0, vy0), ones);
+                s2 = s2.dot_simd(products(vx1, vy1), ones);
 
                 // Block 3
                 // SAFETY: `i + 3 < i + 4 <= blocks`.
                 let (vx0, vx1, (vy0, vy1)) = unsafe {(
                     u8s_32::load_simd(arch, px.add(64 * (i + 3))),
                     u8s_32::load_simd(arch, px.add(64 * (i + 3) + 32)),
-                    unpack_crumbs_64(arch, py.add(16 * (i + 3))),
+                    unpack_crumbs(u8s_16::load_simd(arch, py.add(16 * (i + 3)))),
                 )};
-                s3 = maddubs_accumulate(arch, s3, vx0, vy0);
-                s3 = maddubs_accumulate(arch, s3, vx1, vy1);
+                s3 = s3.dot_simd(products(vx0, vy0), ones);
+                s3 = s3.dot_simd(products(vx1, vy1), ones);
 
                 i += 4;
             }
@@ -1653,10 +1669,10 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 let (vx0, vx1, (vy0, vy1)) = unsafe {(
                     u8s_32::load_simd(arch, px.add(64 * i)),
                     u8s_32::load_simd(arch, px.add(64 * i + 32)),
-                    unpack_crumbs_64(arch, py.add(16 * i)),
+                    unpack_crumbs( u8s_16::load_simd(arch, py.add(16 * i))),
                 )};
-                s0 = maddubs_accumulate(arch, s0, vx0, vy0);
-                s0 = maddubs_accumulate(arch, s0, vx1, vy1);
+                s0 = s0.dot_simd(products(vx0, vy0), ones);
+                s0 = s0.dot_simd(products(vx1, vy1), ones);
                 i += 1;
             }
 

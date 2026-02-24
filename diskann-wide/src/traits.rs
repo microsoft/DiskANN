@@ -728,6 +728,19 @@ pub trait ShrConst: SIMDVector {
     fn shr_const<const N: i32>(self) -> Self;
 }
 
+/// Element-wise interleave of two SIMD vectors at the current lane width.
+///
+/// Given vectors `a = [a0, a1, ..., a(N-1)]` and `b = [b0, b1, ..., b(N-1)]`,
+/// interleaving produces two half-results:
+///
+/// - **lo**: `[a0, b0, a1, b1, ..., a(N/2-1), b(N/2-1)]`
+/// - **hi**: `[a(N/2), b(N/2), ..., a(N-1), b(N-1)]`
+///
+pub trait Interleave: SIMDVector {
+    /// Interleave elements of `self` and `other`, returning the low and high halves.
+    fn interleave(self, other: Self) -> crate::LoHi<Self>;
+}
+
 // Since it is so difficult to work directly with generic integers, resort to using a macro
 // to stamp out implementations of `SIMDMask` for `BitMask`.
 //

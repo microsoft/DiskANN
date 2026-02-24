@@ -7,9 +7,9 @@
 use std::arch::x86_64::*;
 
 use super::V3;
-use super::v3::{i16x16, i32x8, u8x16, u8x32};
-use crate::traits::{SIMDDotProduct, SIMDVector, ShrConst};
-use crate::{LoHi, SIMDReinterpret, SplitJoin};
+use super::v3::{u8x16, u8x32};
+use crate::traits::{SIMDVector, ShrConst, Interleave};
+use crate::{SIMDReinterpret};
 
 /// Efficiently load the first `8 < bytes < 16` bytes from `ptr` without accessing memory
 /// outside of `[ptr, ptr + bytes)`.
@@ -166,32 +166,6 @@ pub(crate) unsafe fn __load_first_u16_of_16_bytes(
     }
 }
 
-/// Multiply-accumulate 32 `u8` pairs using `vpmaddubsw` + `vpmaddwd`.
-///
-/// Computes `acc += Σ(x[i] * y[i])` for 32 elements, where `x` is `u8x32`
-/// and `y` is `u8x32` with values in some sub-range of `[0, 255]`.
-///
-/// `vpmaddubsw` treats the first operand as unsigned and the second as signed,
-/// multiplies corresponding byte pairs, then adds adjacent products with
-/// signed saturation to produce 16 × `i16`. As long as the maximum pair-sum
-/// fits in `i16` (≤ 32767), no saturation occurs.
-///
-/// The subsequent `vpmaddwd` with a vector of 1s horizontally adds adjacent
-/// `i16` pairs to produce 8 × `i32`, which is then added to the accumulator.
-#[inline(always)]
-pub fn maddubs_accumulate(arch: V3, acc: i32x8, vx: u8x32, vy: u8x32) -> i32x8 {
-    // vpmaddubsw: 32 × u8 * 32 × "i8" → 16 × i16 (with saturating pair-add).
-    // SAFETY: `_mm256_maddubs_epi16` requires AVX2, implied by V3.
-    let products = i16x16::from_underlying(arch, unsafe {
-        _mm256_maddubs_epi16(vx.to_underlying(), vy.to_underlying())
-    });
-
-    // vpmaddwd with 1s: reduce 16 × i16 → 8 × i32 by adding adjacent pairs,
-    // then add to accumulator.
-    let ones = i16x16::splat(arch, 1);
-    acc.dot_simd(products, ones)
-}
-
 /// Unpack sub-byte fields from a `u8x16` register into a `u8x32` by
 /// shift-interleave-mask.
 ///
@@ -202,56 +176,24 @@ pub fn maddubs_accumulate(arch: V3, acc: i32x8, vx: u8x32, vy: u8x32) -> i32x8 {
 /// Both outputs are masked to `N`-bit values.
 ///
 /// With `N = 4`, this unpacks 32 nibbles from 16 packed bytes.
-/// With `N = 2`, this unpacks 32 crumbs from 16 packed bytes (where each
-/// byte holds four 2-bit values).
+/// With `N = 2`, this unpacks 32 crumbs from 16 packed bytes, where each
+/// byte holds four 2-bit values.
 #[inline(always)]
-pub fn unpack_sub_bytes<const N: i32>(arch: V3, input: u8x16) -> u8x32 {
+pub fn unpack_half_bytes<const N: i32>(arch: V3, input: u8x16) -> u8x32 {
     // Shift each 16-bit lane right by N to position upper sub-fields in the
     // low bits of each byte. Bit leakage across byte boundaries within a
     // 16-bit lane is harmless — the final mask cleans it up.
-    let shifted = input.reinterpret_simd().shr_const::<N>().to_underlying();
-
-    let raw = input.to_underlying();
+    let shifted: u8x16 = input.reinterpret_simd().shr_const::<N>().reinterpret_simd();
 
     // Byte-interleave: pair each raw byte with its shifted counterpart.
-    //   unpacklo(raw, shifted) → [raw[0], shifted[0], raw[1], shifted[1], ...]
-    //   unpackhi(raw, shifted) → [raw[8], shifted[8], raw[9], shifted[9], ...]
-    // SAFETY: `_mm_unpacklo/hi_epi8` require SSE2, implied by V3.
-    let lo_half = u8x16::from_underlying(arch, unsafe { _mm_unpacklo_epi8(raw, shifted) });
-    // SAFETY: `_mm_unpackhi_epi8` requires SSE2, implied by V3.
-    let hi_half = u8x16::from_underlying(arch, unsafe { _mm_unpackhi_epi8(raw, shifted) });
+    //   lo: [input[0], shifted[0], input[1], shifted[1], ..., input[7], shifted[7]]
+    //   hi: [input[8], shifted[8], input[9], shifted[9], ..., input[15], shifted[15]]
+    let lohi = input.interleave(shifted);
 
     // Combine the two 128-bit halves into a single 256-bit register.
-    let combined: u8x32 = LoHi::new(lo_half, hi_half).join();
+    let combined: u8x32 = lohi.join();
 
-    // Mask to isolate the N-bit sub-field values.
+    // Mask to isolate the N-bit sub-field values. 
     //   N = 4 → 0x0F,  N = 2 → 0x03,  N = 1 → 0x01
     combined & u8x32::splat(arch, (1u8 << N) - 1)
-}
-
-/// Unpack 64 crumb (2-bit) values from 16 packed bytes into two `u8x32`
-/// registers.
-///
-/// Uses a two-level cascade of [`unpack_sub_bytes`]:
-/// - Level 1: nibble split (16 bytes → 32 × 4-bit values via `unpack_sub_bytes::<4>`)
-/// - Level 2: crumb split (each `u8x16` half → 32 × 2-bit values via `unpack_sub_bytes::<2>`)
-///
-/// # Safety
-///
-/// `[ptr, ptr + 16)` must be readable.
-#[inline(always)]
-pub unsafe fn unpack_crumbs_64(arch: V3, ptr: *const u8) -> (u8x32, u8x32) {
-    // SAFETY: The caller asserts `[ptr, ptr + 16)` is readable.
-    let loaded = unsafe { u8x16::load_simd(arch, ptr) };
-
-    // Level 1: nibble split → 32 × 4-bit values in a u8x32.
-    let nibbles = unpack_sub_bytes::<4>(arch, loaded);
-
-    // Split the u8x32 into two u8x16 halves (lo = elements 0..15,
-    // hi = elements 16..31), then apply Level 2 crumb split to each.
-    let LoHi { lo, hi } = nibbles.split();
-    let lower = unpack_sub_bytes::<2>(arch, lo);
-    let upper = unpack_sub_bytes::<2>(arch, hi);
-
-    (lower, upper)
 }

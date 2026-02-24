@@ -196,6 +196,19 @@ impl SIMDPartialEq for u8x16 {
     }
 }
 
+impl crate::Interleave for u8x16 {
+    #[inline(always)]
+    fn interleave(self, other: Self) -> LoHi<Self> {
+        // SAFETY: `_mm_unpacklo/hi_epi8` require SSE2, implied by V3.
+        unsafe {
+            LoHi::new(
+                Self(_mm_unpacklo_epi8(self.0, other.0)),
+                Self(_mm_unpackhi_epi8(self.0, other.0)),
+            )
+        }
+    }
+}
+
 ///////////
 // Tests //
 ///////////

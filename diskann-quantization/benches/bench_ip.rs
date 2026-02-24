@@ -26,9 +26,9 @@ cfg_if::cfg_if! {
         use rand_distr::Uniform;
         use std::time::Duration;
 
-        /// Dimensions to benchmark. Covers small (64), medium (256), and large (768)
+        /// Dimensions to benchmark. Covers medium (256), medium-large (384), and large (896)
         /// embeddings that are representative of real-world vector search workloads.
-        const DIMS: &[usize] = &[64, 256, 768];
+        const DIMS: &[usize] = &[256, 384, 896];
 
         /// Number of vector pairs per dimension. Enough to amortize per-iteration overhead.
         const COUNT: usize = 512;
