@@ -722,27 +722,10 @@ impl<T> SIMDUnsigned for T where
 pub trait SIMDSigned: SIMDUnsigned + SIMDAbs {}
 impl<T> SIMDSigned for T where T: SIMDUnsigned + SIMDAbs {}
 
-/// Logical right-shift at 16-bit lane granularity.
-///
-/// This trait exposes hardware shifts that operate on 16-bit lanes of a SIMD register,
-/// even when the register is typed with a narrower element (e.g. `u8x16` or `i8x16`).
-/// The underlying intrinsic (`_mm_srli_epi16` / `_mm256_srli_epi16`) treats the register
-/// as packed 16-bit integers and shifts each lane right by `N` bits, filling vacated bits
-/// with zeros.
-///
-/// **Important:** because the shift crosses byte boundaries within each 16-bit lane,
-/// callers should typically mask the result (e.g. `& 0x0F`) to isolate the desired bits
-/// and discard any bit leakage from adjacent bytes.
-///
-/// # Trait Bound Rationale
-///
-/// Only [`SIMDVector`] is required. The operation reinterprets the register at a
-/// different lane width, which does not correspond to element-wise arithmetic on the
-/// vector's native scalar type. Bounding on [`SIMDUnsigned`] or [`SIMDSigned`] would be
-/// misleading — this is not an element-wise shift in the type's declared lane width.
-pub trait ShrSigned: SIMDVector {
-    /// Shift each 16-bit lane of `self` right by `N` bits, filling with zeros.
-    fn shr_signed<const N: i32>(self) -> Self;
+/// Logical right-shift by a constant across lanes, extending with zeros.
+pub trait ShrConst: SIMDVector {
+    /// Shift each lane of `self` right by `N` bits, filling with zeros.
+    fn shr_const<const N: i32>(self) -> Self;
 }
 
 // Since it is so difficult to work directly with generic integers, resort to using a macro

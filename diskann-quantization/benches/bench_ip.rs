@@ -233,6 +233,126 @@ cfg_if::cfg_if! {
             group.finish();
         }
 
+        fn benchmark_u8x2_ip(c: &mut Criterion) {
+            let mut group = c.benchmark_group("ip/u8x2");
+            let mut rng = StdRng::seed_from_u64(0x82c4_0022);
+
+            for &dim in DIMS {
+                let dist_8bit = Uniform::new_inclusive(0u8, 255u8).unwrap();
+                let dist_2bit = Uniform::new_inclusive(0i64, 3i64).unwrap();
+
+                let xs: Vec<BoxedBitSlice<8, Unsigned>> = (0..COUNT)
+                    .map(|_| {
+                        let mut bs = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+                        for j in 0..dim {
+                            bs.set(j, rng.sample(dist_8bit) as i64).unwrap();
+                        }
+                        bs
+                    })
+                    .collect();
+
+                let ys: Vec<BoxedBitSlice<2, Unsigned>> = (0..COUNT)
+                    .map(|_| {
+                        let mut bs = BoxedBitSlice::<2, Unsigned>::new_boxed(dim);
+                        for j in 0..dim {
+                            bs.set(j, rng.sample(dist_2bit)).unwrap();
+                        }
+                        bs
+                    })
+                    .collect();
+
+                group.bench_function(format!("dim={dim}"), |b| {
+                    b.iter(|| {
+                        for i in 0..COUNT {
+                            let _ = black_box(
+                                QuantInnerProduct::evaluate(
+                                    black_box(xs[i].reborrow()),
+                                    black_box(ys[i].reborrow()),
+                                ),
+                            );
+                        }
+                    });
+                });
+            }
+            group.finish();
+        }
+
+        fn benchmark_f32x2_ip(c: &mut Criterion) {
+            let mut group = c.benchmark_group("ip/f32x2");
+            let mut rng = StdRng::seed_from_u64(0xf32a_0002);
+
+            for &dim in DIMS {
+                let dist_f32 = Uniform::new(-1.0f32, 1.0f32).unwrap();
+                let dist_2bit = Uniform::new_inclusive(0i64, 3i64).unwrap();
+
+                let xs: Vec<Vec<f32>> = (0..COUNT)
+                    .map(|_| (0..dim).map(|_| rng.sample(dist_f32)).collect())
+                    .collect();
+
+                let ys: Vec<BoxedBitSlice<2, Unsigned>> = (0..COUNT)
+                    .map(|_| {
+                        let mut bs = BoxedBitSlice::<2, Unsigned>::new_boxed(dim);
+                        for j in 0..dim {
+                            bs.set(j, rng.sample(dist_2bit)).unwrap();
+                        }
+                        bs
+                    })
+                    .collect();
+
+                group.bench_function(format!("dim={dim}"), |b| {
+                    b.iter(|| {
+                        for i in 0..COUNT {
+                            let _ = black_box(
+                                QuantInnerProduct::evaluate(
+                                    black_box(xs[i].as_slice()),
+                                    black_box(ys[i].reborrow()),
+                                ),
+                            );
+                        }
+                    });
+                });
+            }
+            group.finish();
+        }
+
+        fn benchmark_f32x1_ip(c: &mut Criterion) {
+            let mut group = c.benchmark_group("ip/f32x1");
+            let mut rng = StdRng::seed_from_u64(0xf32a_0001);
+
+            for &dim in DIMS {
+                let dist_f32 = Uniform::new(-1.0f32, 1.0f32).unwrap();
+                let dist_1bit = Uniform::new_inclusive(0i64, 1i64).unwrap();
+
+                let xs: Vec<Vec<f32>> = (0..COUNT)
+                    .map(|_| (0..dim).map(|_| rng.sample(dist_f32)).collect())
+                    .collect();
+
+                let ys: Vec<BoxedBitSlice<1, Unsigned>> = (0..COUNT)
+                    .map(|_| {
+                        let mut bs = BoxedBitSlice::<1, Unsigned>::new_boxed(dim);
+                        for j in 0..dim {
+                            bs.set(j, rng.sample(dist_1bit)).unwrap();
+                        }
+                        bs
+                    })
+                    .collect();
+
+                group.bench_function(format!("dim={dim}"), |b| {
+                    b.iter(|| {
+                        for i in 0..COUNT {
+                            let _ = black_box(
+                                QuantInnerProduct::evaluate(
+                                    black_box(xs[i].as_slice()),
+                                    black_box(ys[i].reborrow()),
+                                ),
+                            );
+                        }
+                    });
+                });
+            }
+            group.finish();
+        }
+
         criterion_group!(
             name = benches;
             config = Criterion::default()
@@ -243,8 +363,11 @@ cfg_if::cfg_if! {
             targets =
                 benchmark_u8x8_ip,
                 benchmark_u8x4_ip,
+                benchmark_u8x2_ip,
                 benchmark_u4x4_ip,
                 benchmark_f32x4_ip,
+                benchmark_f32x2_ip,
+                benchmark_f32x1_ip,
                 benchmark_f32xf32_ip,
         );
         criterion_main!(benches);

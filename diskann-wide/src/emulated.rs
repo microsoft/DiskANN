@@ -561,6 +561,9 @@ macro_rules! impl_little_endian_transmute_cast {
 
 impl_little_endian_transmute_cast!(<u32, 8> => <i16, 16>);
 
+impl_little_endian_transmute_cast!(<i16, 8> => <u8, 16>);
+impl_little_endian_transmute_cast!(<u8, 16> => <i16, 8>);
+
 impl_little_endian_transmute_cast!(<u32, 16> => <u8, 64>);
 impl_little_endian_transmute_cast!(<u32, 16> => <i8, 64>);
 
