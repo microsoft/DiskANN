@@ -4,11 +4,14 @@
  */
 
 // A collection of test helpers to ensure uniformity across tables.
-use diskann_utils::views::{Matrix, MatrixView, MutMatrixView};
+use diskann_utils::views::Matrix;
+#[cfg(not(miri))]
+use diskann_utils::views::{MatrixView, MutMatrixView};
+#[cfg(not(miri))]
+use rand::seq::IndexedRandom;
 use rand::{
     Rng, SeedableRng,
     distr::{Distribution, Uniform},
-    seq::IndexedRandom,
 };
 
 use crate::traits::CompressInto;
@@ -290,6 +293,7 @@ pub(super) fn check_pqtable_single_compression_errors<T>(
 ////////////////////////////////////////////////////////////////////
 
 // A cantralized test for error handling in `CompressInto<[f32], [u8]>`
+#[cfg(not(miri))]
 pub(super) fn check_pqtable_batch_compression_errors<T>(
     build: &dyn Fn(Matrix<f32>, ChunkOffsets) -> T,
     context: &dyn std::fmt::Display,
