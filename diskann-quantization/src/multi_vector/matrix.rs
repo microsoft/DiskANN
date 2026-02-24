@@ -702,7 +702,7 @@ impl<T: Copy> Mat<Standard<T>> {
     }
 
     pub fn as_ptr(&self) -> *const T {
-        self.as_ptr_raw().cast::<T>()
+        self.as_raw_ptr().cast::<T>()
     }
 }
 
@@ -829,7 +829,16 @@ impl<'a, T: Copy> MatRef<'a, Standard<T>> {
     }
 
     pub fn as_ptr(&self) -> *const T {
-        self.as_ptr_raw().cast::<T>()
+        self.as_raw_ptr().cast::<T>()
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.repr.num_elements()) }
+    }
+
+    pub fn as_legacy_view(&self) -> diskann_utils::views::MatrixView<'_, T> {
+        diskann_utils::views::MatrixView::try_from(self.as_slice(), self.nrows(), self.ncols())
+            .unwrap()
     }
 }
 
@@ -1046,7 +1055,7 @@ impl<'a, T: Copy> MatMut<'a, Standard<T>> {
     }
 
     pub fn as_ptr(&self) -> *const T {
-        self.as_ptr_raw().cast::<T>()
+        self.as_raw_ptr().cast::<T>()
     }
 }
 
