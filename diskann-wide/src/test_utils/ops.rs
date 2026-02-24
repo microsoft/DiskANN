@@ -7,15 +7,12 @@ use std::fmt::Debug;
 
 // Common test traits.
 use super::common::{self, ScalarTraits};
-#[cfg(target_arch = "x86_64")]
-use crate::SplitJoin;
 use crate::{
     BitMask, Const, SIMDMask, SIMDMinMax, SIMDPartialEq, SIMDPartialOrd, SIMDSumTree, SIMDVector,
-    SupportedLaneCount, arch,
+    SplitJoin, SupportedLaneCount, arch,
     reference::{ReferenceScalarOps, ReferenceShifts, TreeReduce},
 };
 
-#[cfg(target_arch = "x86_64")]
 fn identity<T>(x: T) -> T {
     x
 }
@@ -948,7 +945,7 @@ macro_rules! test_sumtree {
 ///////////////
 // SplitJoin //
 ///////////////
-#[cfg(target_arch = "x86_64")]
+
 pub fn test_splitjoin_impl<V, H, T, const N: usize, const N2: usize>(arch: V::Arch, a: &[T])
 where
     T: Copy + Debug + ScalarTraits,
@@ -976,7 +973,6 @@ where
     test_unary_op(&joined.to_array(), a, &identity, "join");
 }
 
-#[cfg(target_arch = "x86_64")]
 macro_rules! test_splitjoin {
     ($wide:ident $(< $($ps:tt),+ >)? => $half:ident $(< $($hs:tt),+ >)?, $seed:literal, $arch:expr) => {
         paste::paste! {
@@ -1021,7 +1017,6 @@ pub(crate) use test_lossless_convert;
 pub(crate) use test_minmax;
 pub(crate) use test_mul;
 pub(crate) use test_select;
-#[cfg(target_arch = "x86_64")]
 pub(crate) use test_splitjoin;
 pub(crate) use test_sub;
 pub(crate) use test_sumtree;

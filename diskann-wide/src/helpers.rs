@@ -42,6 +42,18 @@ macro_rules! unsafe_map_unary_op {
 ///
 /// SAFETY: It is the invoker's responsibility to ensure that the intrinsic is safe to call.
 macro_rules! unsafe_map_conversion {
+    ($from:ty, $to:ty, ($i1:ident, $i0:ident), $requires:literal) => {
+        impl From<$from> for $to {
+            #[inline(always)]
+            fn from(value: $from) -> $to {
+                // SAFETY: The invoker of this macro must pass the `target_feature`
+                // requirement of the intrinsic.
+                //
+                // That way, if the intrinsic is not available, we get a compile-time error.
+                Self(unsafe { $i1($i0(value.0)) })
+            }
+        }
+    };
     ($from:ty, $to:ty, $intrinsic:expr, $requires:literal) => {
         impl From<$from> for $to {
             #[inline(always)]
@@ -79,6 +91,7 @@ macro_rules! unsafe_map_cast {
 }
 
 /// Implement shifting by calling Splat.
+#[cfg(target_arch = "x86_64")]
 macro_rules! scalar_shift_by_splat {
     ($T:ty, $scalar:ty) => {
         impl std::ops::Shr<$scalar> for $T {
@@ -100,6 +113,7 @@ macro_rules! scalar_shift_by_splat {
 }
 
 // Allow modules in this crate to use these macros.
+#[cfg(target_arch = "x86_64")]
 pub(crate) use scalar_shift_by_splat;
 pub(crate) use unsafe_map_binary_op;
 pub(crate) use unsafe_map_cast;

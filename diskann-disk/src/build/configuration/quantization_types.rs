@@ -238,4 +238,51 @@ mod tests {
     fn fmt_quantization_type(#[case] quantization: QuantizationType, #[case] expected: &str) {
         assert_eq!(quantization.to_string(), expected);
     }
+
+    #[test]
+    fn test_serialize_deserialize_quantization_type_fp() {
+        let quant = QuantizationType::FP;
+        let serialized = bincode::serialize(&quant).unwrap();
+        let deserialized: QuantizationType = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(quant, deserialized);
+    }
+
+    #[test]
+    fn test_serialize_deserialize_quantization_type_pq() {
+        let quant = QuantizationType::PQ { num_chunks: 128 };
+        let serialized = bincode::serialize(&quant).unwrap();
+        let deserialized: QuantizationType = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(quant, deserialized);
+    }
+
+    #[test]
+    fn test_serialize_deserialize_quantization_type_sq() {
+        let quant = QuantizationType::SQ {
+            nbits: 1,
+            standard_deviation: Some(Positive::new(2.0).unwrap()),
+        };
+        let serialized = bincode::serialize(&quant).unwrap();
+        let deserialized: QuantizationType = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(quant, deserialized);
+    }
+
+    #[test]
+    fn test_roundtrip_serialization() {
+        // Note: SQ with None standard_deviation is not included as it formats to "SQ_N_None"
+        // which the parser doesn't accept - this is a known limitation of the current implementation
+        let types = vec![
+            QuantizationType::FP,
+            QuantizationType::PQ { num_chunks: 256 },
+            QuantizationType::SQ {
+                nbits: 8,
+                standard_deviation: Some(Positive::new(1.5).unwrap()),
+            },
+        ];
+
+        for quant_type in types {
+            let serialized = bincode::serialize(&quant_type).unwrap();
+            let deserialized: QuantizationType = bincode::deserialize(&serialized).unwrap();
+            assert_eq!(quant_type, deserialized);
+        }
+    }
 }

@@ -193,5 +193,7 @@ mod tests {
         // Execute this at run time so code-coverage counts it.
         let arch = Scalar::new();
         assert_eq!(arch, ARCH);
+
+        assert_eq!(Scalar::level(), arch::Level::scalar());
     }
 }

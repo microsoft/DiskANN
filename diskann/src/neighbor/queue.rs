@@ -40,7 +40,7 @@ pub trait NeighborQueue<I: NeighborPriorityQueueIdType>: std::fmt::Debug + Send 
     fn get(&self, index: usize) -> Neighbor<I>;
 
     /// Get the closest unvisited neighbor.
-    fn closest_notvisited(&mut self) -> Neighbor<I>;
+    fn closest_notvisited(&mut self) -> Option<Neighbor<I>>;
 
     /// Check whether there is an unvisited node.
     fn has_notvisited_node(&self) -> bool;
@@ -312,8 +312,13 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         self.get_unchecked(index)
     }
 
-    /// Get the closest and notvisited neighbor
-    pub fn closest_notvisited(&mut self) -> Neighbor<I> {
+    /// Get the closest and notvisited neighbor. This function returns None if there are no notvisited neighbors.
+    pub fn closest_notvisited(&mut self) -> Option<Neighbor<I>> {
+        // has_notvisited_node() ensures that cursor is less than size and thus get_unchecked call inside set_visited() is safe to call. Without this check, set_visited() would panic if cursor is equal to size.
+        if !self.has_notvisited_node() {
+            return None;
+        }
+
         let current = self.cursor;
         self.set_visited(current, true);
 
@@ -322,7 +327,8 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
         while self.cursor < self.size && self.get_visited(self.cursor) {
             self.cursor += 1;
         }
-        self.get_unchecked(current)
+
+        Some(self.get_unchecked(current))
     }
 
     /// Whether there is notvisited node or not
@@ -389,7 +395,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
 
     fn set_visited(&mut self, index: usize, flag: bool) {
         // SAFETY: index must be less than size
-        assert!(index <= self.size);
+        assert!(index < self.size);
         assert!(self.size <= self.capacity);
         unsafe { self.id_visiteds.get_unchecked_mut(index) }.1 = flag;
     }
@@ -502,7 +508,7 @@ impl<I: NeighborPriorityQueueIdType> NeighborQueue<I> for NeighborPriorityQueue<
         self.get(index)
     }
 
-    fn closest_notvisited(&mut self) -> Neighbor<I> {
+    fn closest_notvisited(&mut self) -> Option<Neighbor<I>> {
         self.closest_notvisited()
     }
 
@@ -695,21 +701,30 @@ mod neighbor_priority_queue_test {
         assert!(!queue.get_visited(0));
         queue.insert(Neighbor::new(3, 1.5)); // node id in queue should be [2,1,3]
         assert!(queue.has_notvisited_node());
-        let nbr = queue.closest_notvisited();
+        let nbr = queue.closest_notvisited().unwrap();
         assert_eq!(nbr.id, 2);
         assert_eq!(nbr.distance, 0.5);
         assert!(queue.get_visited(0)); // super unfortunate test. We know based on above id 2 should be 0th index
         assert!(queue.has_notvisited_node());
-        let nbr = queue.closest_notvisited();
+        let nbr = queue.closest_notvisited().unwrap();
         assert_eq!(nbr.id, 1);
         assert_eq!(nbr.distance, 1.0);
         assert!(queue.get_visited(1));
         assert!(queue.has_notvisited_node());
-        let nbr = queue.closest_notvisited();
+        let nbr = queue.closest_notvisited().unwrap();
         assert_eq!(nbr.id, 3);
         assert_eq!(nbr.distance, 1.5);
         assert!(queue.get_visited(2));
         assert!(!queue.has_notvisited_node());
+        assert!(queue.closest_notvisited().is_none());
+    }
+
+    #[test]
+    fn test_closest_notvisited_when_no_notvisited_nodes_left() {
+        let mut queue = NeighborPriorityQueue::new(1);
+        queue.insert(Neighbor::new(1, 1.0));
+        assert!(queue.closest_notvisited().is_some());
+        assert!(queue.closest_notvisited().is_none());
     }
 
     #[test]
@@ -789,10 +804,10 @@ mod neighbor_priority_queue_test {
         queue.insert(Neighbor::new(1, 0.1));
         queue.insert(Neighbor::new(3, 0.3));
 
-        let _: Neighbor<u32> = queue.closest_notvisited();
-        let _: Neighbor<u32> = queue.closest_notvisited();
-        let _: Neighbor<u32> = queue.closest_notvisited();
-        let _: Neighbor<u32> = queue.closest_notvisited();
+        assert!(queue.closest_notvisited().is_some());
+        assert!(queue.closest_notvisited().is_some());
+        assert!(queue.closest_notvisited().is_some());
+        assert!(queue.closest_notvisited().is_some());
 
         assert_eq!(queue.capacity(), 5);
         assert_eq!(queue.size(), 5);
@@ -906,9 +921,9 @@ mod neighbor_priority_queue_test {
         );
         assert!(queue.has_notvisited_node());
 
-        queue.closest_notvisited();
+        assert!(queue.closest_notvisited().is_some());
         assert!(queue.has_notvisited_node());
-        queue.closest_notvisited();
+        assert!(queue.closest_notvisited().is_some());
         assert_queue_size_search_param_l_cursor(
             &queue, /*size=*/ 2, /*search_param_l=*/ 3, /*cursor=*/ 2,
         );
@@ -921,7 +936,7 @@ mod neighbor_priority_queue_test {
         );
         assert!(queue.has_notvisited_node());
 
-        queue.closest_notvisited();
+        assert!(queue.closest_notvisited().is_some());
         assert_queue_size_search_param_l_cursor(
             &queue, /*size=*/ 3, /*search_param_l=*/ 3, /*cursor=*/ 3,
         );
@@ -944,7 +959,7 @@ mod neighbor_priority_queue_test {
 
         for i in 1..=5 {
             assert!(queue.has_notvisited_node());
-            queue.closest_notvisited();
+            assert!(queue.closest_notvisited().is_some());
             assert_queue_size_search_param_l_cursor(
                 &queue, /*size=*/ 5, /*search_param_l=*/ 5, /*cursor=*/ i,
             );
@@ -964,9 +979,9 @@ mod neighbor_priority_queue_test {
         );
         assert!(queue.has_notvisited_node());
 
-        queue.closest_notvisited();
+        assert!(queue.closest_notvisited().is_some());
         assert!(queue.has_notvisited_node());
-        queue.closest_notvisited();
+        assert!(queue.closest_notvisited().is_some());
         assert_queue_size_search_param_l_cursor(
             &queue, /*size=*/ 2, /*search_param_l=*/ 3, /*cursor=*/ 2,
         );
@@ -979,7 +994,7 @@ mod neighbor_priority_queue_test {
         );
         assert!(queue.has_notvisited_node());
 
-        queue.closest_notvisited();
+        assert!(queue.closest_notvisited().is_some());
         assert_queue_size_search_param_l_cursor(
             &queue, /*size=*/ 4, /*search_param_l=*/ 3, /*cursor=*/ 3,
         );
@@ -1043,7 +1058,7 @@ mod neighbor_priority_queue_test {
         assert_eq!(queue.get(2).id, 3); // distance 1.5
 
         // Test closest_notvisited
-        let closest = queue.closest_notvisited();
+        let closest = queue.closest_notvisited().unwrap();
         assert_eq!(closest.id, 2);
         assert_eq!(closest.distance, 0.5);
 
@@ -1118,7 +1133,7 @@ mod neighbor_priority_queue_test {
             assert_eq!(queue.size(), 2);
             assert!(queue.has_notvisited_node());
 
-            let closest = queue.closest_notvisited();
+            let closest = queue.closest_notvisited().unwrap();
             assert_eq!(closest.id, 2);
         }
 
@@ -1199,8 +1214,8 @@ mod neighbor_priority_queue_test {
         // Queue: [4(0.3), 2(0.5), 1(1.0), 3(1.5)]
 
         // Visit some nodes to advance cursor
-        queue.closest_notvisited(); // Visits 4, cursor = 1
-        queue.closest_notvisited(); // Visits 2, cursor = 2
+        assert!(queue.closest_notvisited().is_some()); // Visits 4, cursor = 1
+        assert!(queue.closest_notvisited().is_some()); // Visits 2, cursor = 2
 
         assert_eq!(queue.cursor, 2);
 
@@ -1340,8 +1355,8 @@ mod neighbor_priority_queue_test {
         queue.insert(Neighbor::new(4, 0.3));
 
         // Mark some nodes as visited
-        queue.closest_notvisited(); // marks 4 (0.3) as visited
-        queue.closest_notvisited(); // marks 2 (0.5) as visited
+        assert!(queue.closest_notvisited().is_some()); // marks 4 (0.3) as visited
+        assert!(queue.closest_notvisited().is_some()); // marks 2 (0.5) as visited
 
         assert_eq!(queue.cursor, 2);
         assert!(!queue.has_notvisited_node() || queue.cursor < queue.size());
@@ -1356,15 +1371,15 @@ mod neighbor_priority_queue_test {
         assert!(queue.has_notvisited_node());
 
         // Verify we can traverse all elements again
-        let first = queue.closest_notvisited();
+        let first = queue.closest_notvisited().unwrap();
         assert_eq!(first.id, 4); // 0.3
         assert_eq!(queue.cursor, 1);
 
-        let second = queue.closest_notvisited();
+        let second = queue.closest_notvisited().unwrap();
         assert_eq!(second.id, 2); // 0.5
         assert_eq!(queue.cursor, 2);
 
-        let third = queue.closest_notvisited();
+        let third = queue.closest_notvisited().unwrap();
         assert_eq!(third.id, 1); // 1.0
         assert_eq!(queue.cursor, 3);
     }
@@ -1416,8 +1431,8 @@ mod neighbor_priority_queue_test {
         queue.insert(Neighbor::new(4, 0.3));
 
         // Advance cursor
-        queue.closest_notvisited(); // cursor = 1
-        queue.closest_notvisited(); // cursor = 2
+        assert!(queue.closest_notvisited().is_some()); // cursor = 1
+        assert!(queue.closest_notvisited().is_some()); // cursor = 2
 
         assert_eq!(queue.cursor, 2);
 

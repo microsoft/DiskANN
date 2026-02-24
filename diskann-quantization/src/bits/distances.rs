@@ -62,49 +62,49 @@
 //!
 //! ### Inner Product
 //!
-//! | LHS           | RHS           | Result    | Scalar    | x86-64-v3     | x86-64-v4 |
-//! |---------------|---------------|-----------|-----------|---------------|-----------|
-//! | `USlice<1>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Uses V3   |
-//! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Yes       |
-//! | `USlice<3>`   | `USlice<3>`   | `MV<u32>` | Fallback  | No            | Uses V3   |
-//! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   |
-//! | `USlice<5>`   | `USlice<5>`   | `MV<u32>` | Fallback  | No            | Uses V3   |
-//! | `USlice<6>`   | `USlice<6>`   | `MV<u32>` | Fallback  | No            | Uses V3   |
-//! | `USlice<7>`   | `USlice<7>`   | `MV<u32>` | Fallback  | No            | Uses V3   |
-//! | `USlice<8>`   | `USlice<8>`   | `MV<u32>` | Yes       | Yes           | Yes       |
-//! |               |               | `       ` |           |               |           |
-//! | `USlice<8>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   |
-//! | `USlice<8>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   |
-//! |               |               | `       ` |           |               |           |
-//! | `TSlice<4>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Optimized |
-//! |               |               | `       ` |           |               |           |
-//! | `&[f32]`      | `USlice<1>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   |
-//! | `&[f32]`      | `USlice<2>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   |
-//! | `&[f32]`      | `USlice<3>`   | `MV<f32>` | Fallback  | No            | Uses V3   |
-//! | `&[f32]`      | `USlice<4>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   |
-//! | `&[f32]`      | `USlice<5>`   | `MV<f32>` | Fallback  | No            | Uses V3   |
-//! | `&[f32]`      | `USlice<6>`   | `MV<f32>` | Fallback  | No            | Uses V3   |
-//! | `&[f32]`      | `USlice<7>`   | `MV<f32>` | Fallback  | No            | Uses V3   |
-//! | `&[f32]`      | `USlice<8>`   | `MV<f32>` | Fallback  | No            | Uses V3   |
+//! | LHS           | RHS           | Result    | Scalar    | x86-64-v3     | x86-64-v4 | Neon      |
+//! |---------------|---------------|-----------|-----------|---------------|-----------|-----------|
+//! | `USlice<1>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Uses V3   | Optimized |
+//! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Yes       | Fallback  |
+//! | `USlice<3>`   | `USlice<3>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `USlice<5>`   | `USlice<5>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `USlice<6>`   | `USlice<6>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `USlice<7>`   | `USlice<7>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `USlice<8>`   | `USlice<8>`   | `MV<u32>` | Yes       | Yes           | Yes       | Fallback  |
+//! |               |               |           |           |               |           |           |
+//! | `USlice<8>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   |           |
+//! | `USlice<8>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   |           |
+//! |               |               | `       ` |           |               |           |           |
+//! | `TSlice<4>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Optimized | Optimized |
+//! |               |               | `       ` |           |               |           |           |
+//! | `&[f32]`      | `USlice<1>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<2>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<3>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<4>`   | `MV<f32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<5>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<6>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<7>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `&[f32]`      | `USlice<8>`   | `MV<f32>` | Fallback  | No            | Uses V3   | Fallback  |
 //!
 //! ### Squared L2
 //!
-//! | LHS           | RHS           | Result    | Scalar    | x86-64-v3     | x86-64-v4 |
-//! |---------------|---------------|-----------|-----------|---------------|-----------|
-//! | `USlice<1>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Uses V3   |
-//! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   |
-//! | `USlice<3>`   | `USlice<3>`   | `MV<u32>` | Fallback  | No            | Uses V3   |
-//! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   |
-//! | `USlice<5>`   | `USlice<5>`   | `MV<u32>` | Fallback  | No            | Uses V3   |
-//! | `USlice<6>`   | `USlice<6>`   | `MV<u32>` | Fallback  | No            | Uses V3   |
-//! | `USlice<7>`   | `USlice<7>`   | `MV<u32>` | Fallback  | No            | Uses V3   |
-//! | `USlice<8>`   | `USlice<8>`   | `MV<u32>` | Yes       | Yes           | Yes       |
+//! | LHS           | RHS           | Result    | Scalar    | x86-64-v3     | x86-64-v4 | Neon      |
+//! |---------------|---------------|-----------|-----------|---------------|-----------|-----------|
+//! | `USlice<1>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Uses V3   | Optimized |
+//! | `USlice<2>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `USlice<3>`   | `USlice<3>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `USlice<4>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `USlice<5>`   | `USlice<5>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `USlice<6>`   | `USlice<6>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `USlice<7>`   | `USlice<7>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
+//! | `USlice<8>`   | `USlice<8>`   | `MV<u32>` | Yes       | Yes           | Yes       | Fallback  |
 //!
 //! ### Hamming
 //!
-//! | LHS           | RHS           | Result    | Scalar    | x86-64-v3     | x86-64-v4 |
-//! |---------------|---------------|-----------|-----------|---------------|-----------|
-//! | `BSlice`      | `BSlice`      | `MV<u32>` | Optimized | Optimized     | Uses V3   |
+//! | LHS           | RHS           | Result    | Scalar    | x86-64-v3     | x86-64-v4 | Neon      |
+//! |---------------|---------------|-----------|-----------|---------------|-----------|-----------|
+//! | `BSlice`      | `BSlice`      | `MV<u32>` | Optimized | Optimized     | Uses V3   | Optimized |
 
 use diskann_vector::PureDistanceFunction;
 use diskann_wide::{ARCH, Architecture, arch::Target2};
@@ -119,9 +119,11 @@ use crate::distances::{Hamming, InnerProduct, MV, MathematicalResult, SquaredL2,
 // Convenience alias.
 type USlice<'a, const N: usize, Perm = Dense> = BitSlice<'a, N, Unsigned, Perm>;
 
-/// Retarget the [`diskann_wide::arch::x86_64::V3`] architecture to
-/// [`diskann_wide::arch::Scalar`] or [`diskann_wide::arch::x86_64::V4`] to V3 etc.
-#[cfg(target_arch = "x86_64")]
+/// Retarget the architectures via the `retarget` inherent method.
+///
+/// * [`diskann_wide::arch::x86_64::V3`] -> [`diskann_wide::arch::Scalar`]
+/// * [`diskann_wide::arch::x86_64::V4`] -> [`diskann_wide::arch::x86_64::V3`]
+/// * [`diskann_wide::arch::aarch64::Neon`] -> [`diskann_wide::arch::Scalar`]
 macro_rules! retarget {
     ($arch:path, $op:ty, ($N:literal, $M:literal)) => {
         impl Target2<
@@ -817,6 +819,12 @@ dispatch_pure!(
     (7, 7),
     (8, 8)
 );
+#[cfg(target_arch = "aarch64")]
+retarget!(
+    diskann_wide::arch::aarch64::Neon,
+    SquaredL2,
+    (7, 7)(6, 6)(5, 5)(4, 4)(3, 3)(2, 2)
+);
 
 ///////////////////
 // Inner Product //
@@ -1385,13 +1393,9 @@ dispatch_pure!(
     (8, 2)
 );
 
-/////////////////////////////////////
-// Heterogeneous: USlice<8> × USlice<M> //
-/////////////////////////////////////
-
-#[cfg(target_arch = "x86_64")]
-use diskann_wide::arch::x86_64::algorithms::unpack_half_bytes;
-
+//////////////////////////////////////////
+// Heterogeneous USlice<8> × USlice<M> //
+/////////////////////////////////////////
 #[cfg(target_arch = "x86_64")]
 impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 4>>
     for InnerProduct
@@ -1412,6 +1416,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         x: USlice<'_, 8>,
         y: USlice<'_, 4>,
     ) -> MathematicalResult<u32> {
+        use diskann_wide::arch::x86_64::algorithms::unpack_half_bytes;
         use std::arch::x86_64::_mm256_maddubs_epi16;
 
         let len = check_lengths!(x, y)?;
@@ -1547,6 +1552,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         y: USlice<'_, 2>,
     ) -> MathematicalResult<u32> {
         use diskann_wide::SplitJoin;
+        use diskann_wide::arch::x86_64::algorithms::unpack_half_bytes;
         use std::arch::x86_64::_mm256_maddubs_epi16;
 
         let len = check_lengths!(x, y)?;
@@ -1687,6 +1693,12 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         Ok(MV::new(s))
     }
 }
+#[cfg(target_arch = "aarch64")]
+retarget!(
+    diskann_wide::arch::aarch64::Neon,
+    InnerProduct,
+    (7, 7)(6, 6)(4, 4)(5, 5)(3, 3)(2, 2)
+);
 
 //////////////////
 // BitTranspose //
@@ -2274,7 +2286,6 @@ where
 }
 
 /// Implement `Target2` for higher architecture in terms of the scalar fallback.
-#[cfg(target_arch = "x86_64")]
 macro_rules! ip_retarget {
     ($arch:path, $N:literal) => {
         impl Target2<$arch, MathematicalResult<f32>, &[f32], USlice<'_, $N>>
@@ -2301,6 +2312,9 @@ ip_retarget!(diskann_wide::arch::x86_64::V3, 3, 5, 6, 7, 8);
 
 #[cfg(target_arch = "x86_64")]
 ip_retarget!(diskann_wide::arch::x86_64::V4, 1, 2, 3, 4, 5, 6, 7, 8);
+
+#[cfg(target_arch = "aarch64")]
+ip_retarget!(diskann_wide::arch::aarch64::Neon, 1, 2, 3, 4, 5, 6, 7, 8);
 
 /// Delegate the implementation of `PureDistanceFunction` to `diskann_wide::arch::Target2`
 /// with the current architectures.
@@ -2345,6 +2359,17 @@ mod tests {
 
     type MR = MathematicalResult<u32>;
 
+    #[inline(always)]
+    fn should_check_this_dimension(dim: usize) -> bool {
+        if cfg!(miri) {
+            return dim.is_power_of_two()
+                || (dim > 1 && (dim - 1).is_power_of_two())
+                || (dim < 64 && (dim % 8 == 7));
+        }
+
+        true
+    }
+
     /////////////////////////
     // Unsigned Bit Slices //
     /////////////////////////
@@ -2372,6 +2397,10 @@ mod tests {
         let dist = Uniform::new_inclusive(min, max).unwrap();
 
         for dim in 0..dim_max {
+            if !should_check_this_dimension(dim) {
+                continue;
+            }
+
             let mut x_reference: Vec<u8> = vec![0; dim];
             let mut y_reference: Vec<u8> = vec![0; dim];
 
@@ -2461,7 +2490,7 @@ mod tests {
 
     cfg_if::cfg_if! {
         if #[cfg(miri)] {
-            const MAX_DIM: usize = 128;
+            const MAX_DIM: usize = 132;
             const TRIALS_PER_DIM: usize = 1;
         } else {
             const MAX_DIM: usize = 256;
@@ -2479,34 +2508,42 @@ mod tests {
     // However, some SIMD kernels (especially for the lower bit widths), require higher bounds
     // to trigger all possible corner cases.
     static BITSLICE_TEST_BOUNDS: LazyLock<HashMap<Key, Bounds>> = LazyLock::new(|| {
-        use ArchKey::{Scalar, X86_64_V3, X86_64_V4};
+        use ArchKey::{Neon, Scalar, X86_64_V3, X86_64_V4};
         [
             (Key::new(1, Scalar), Bounds::new(64, 64)),
             (Key::new(1, X86_64_V3), Bounds::new(256, 256)),
             (Key::new(1, X86_64_V4), Bounds::new(256, 256)),
+            (Key::new(1, Neon), Bounds::new(64, 64)),
             (Key::new(2, Scalar), Bounds::new(64, 64)),
             // Need a higher miri-amount due to the larget block size
             (Key::new(2, X86_64_V3), Bounds::new(512, 300)),
             (Key::new(2, X86_64_V4), Bounds::new(768, 600)), // main loop processes 256 items
+            (Key::new(2, Neon), Bounds::new(64, 64)),
             (Key::new(3, Scalar), Bounds::new(64, 64)),
             (Key::new(3, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(3, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(3, Neon), Bounds::new(64, 64)),
             (Key::new(4, Scalar), Bounds::new(64, 64)),
             // Need a higher miri-amount due to the larget block size
             (Key::new(4, X86_64_V3), Bounds::new(256, 150)),
             (Key::new(4, X86_64_V4), Bounds::new(256, 150)),
+            (Key::new(4, Neon), Bounds::new(64, 64)),
             (Key::new(5, Scalar), Bounds::new(64, 64)),
             (Key::new(5, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(5, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(5, Neon), Bounds::new(64, 64)),
             (Key::new(6, Scalar), Bounds::new(64, 64)),
             (Key::new(6, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(6, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(6, Neon), Bounds::new(64, 64)),
             (Key::new(7, Scalar), Bounds::new(64, 64)),
             (Key::new(7, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(7, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(7, Neon), Bounds::new(64, 64)),
             (Key::new(8, Scalar), Bounds::new(64, 64)),
             (Key::new(8, X86_64_V3), Bounds::new(256, 96)),
             (Key::new(8, X86_64_V4), Bounds::new(256, 96)),
+            (Key::new(8, Neon), Bounds::new(64, 64)),
         ]
         .into_iter()
         .collect()
@@ -2519,6 +2556,7 @@ mod tests {
         X86_64_V3,
         #[expect(non_camel_case_types)]
         X86_64_V4,
+        Neon,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2601,6 +2639,19 @@ mod tests {
                         &mut rng,
                     );
                 }
+
+                #[cfg(target_arch = "aarch64")]
+                if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                    let max_dim = BITSLICE_TEST_BOUNDS[&Key::new($nbits, ArchKey::Neon)].get();
+                    test_bitslice_distances::<$nbits, _>(
+                        max_dim,
+                        TRIALS_PER_DIM,
+                        &|x, y| arch.run2(SquaredL2, x, y),
+                        &|x, y| arch.run2(InnerProduct, x, y),
+                        "neon",
+                        &mut rng,
+                    );
+                }
             }
         };
     }
@@ -2625,6 +2676,10 @@ mod tests {
         let dist: [i8; 2] = [-1, 1];
 
         for dim in 0..dim_max {
+            if !should_check_this_dimension(dim) {
+                continue;
+            }
+
             let mut x_reference: Vec<i8> = vec![1; dim];
             let mut y_reference: Vec<i8> = vec![1; dim];
 
@@ -2697,6 +2752,10 @@ mod tests {
         };
 
         for dim in 0..dim_max {
+            if !should_check_this_dimension(dim) {
+                continue;
+            }
+
             let mut x_reference: Vec<u8> = vec![0; dim];
             let mut y_reference: Vec<u8> = vec![0; dim];
 
@@ -2797,6 +2856,18 @@ mod tests {
                 &mut rng,
             );
         }
+
+        // Architecture Specific.
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+            test_bit_transpose_distances(
+                MAX_DIM,
+                TRIALS_PER_DIM,
+                &|x, y| arch.run2(InnerProduct, x, y),
+                "neon",
+                &mut rng,
+            );
+        }
     }
 
     //////////
@@ -2820,6 +2891,10 @@ mod tests {
         };
 
         for dim in 0..dim_max {
+            if !should_check_this_dimension(dim) {
+                continue;
+            }
+
             let mut x: Vec<f32> = vec![0.0; dim];
 
             let mut y_reference: Vec<u8> = vec![0; dim];
@@ -2915,12 +2990,23 @@ mod tests {
                 }
 
                 #[cfg(target_arch = "x86_64")]
-                if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked() {
+                if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked_miri() {
                     test_full_distances::<$nbits>(
                         MAX_DIM,
                         TRIALS_PER_DIM,
                         &|x, y| arch.run2(InnerProduct, x, y),
                         "x86-64-v4",
+                        &mut rng,
+                    );
+                }
+
+                #[cfg(target_arch = "aarch64")]
+                if let Some(arch) = diskann_wide::arch::aarch64::Neon::new_checked() {
+                    test_full_distances::<$nbits>(
+                        MAX_DIM,
+                        TRIALS_PER_DIM,
+                        &|x, y| arch.run2(InnerProduct, x, y),
+                        "neon",
                         &mut rng,
                     );
                 }
