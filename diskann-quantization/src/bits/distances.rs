@@ -123,125 +123,42 @@ type USlice<'a, const N: usize, Perm = Dense> = BitSlice<'a, N, Unsigned, Perm>;
 /// [`diskann_wide::arch::Scalar`] or [`diskann_wide::arch::x86_64::V4`] to V3 etc.
 #[cfg(target_arch = "x86_64")]
 macro_rules! retarget {
-    ($arch:path, $op:ty, $N:literal) => {
+    ($arch:path, $op:ty, ($N:literal, $M:literal)) => {
         impl Target2<
             $arch,
             MathematicalResult<u32>,
             USlice<'_, $N>,
-            USlice<'_, $N>,
+            USlice<'_, $M>,
         > for $op {
             #[inline(always)]
             fn run(
                 self,
                 arch: $arch,
                 x: USlice<'_, $N>,
-                y: USlice<'_, $N>
+                y: USlice<'_, $M>
             ) -> MathematicalResult<u32> {
                 self.run(arch.retarget(), x, y)
             }
         }
     };
-    ($arch:path, $op:ty, $($N:literal),+ $(,)?) => {
-        $(retarget!($arch, $op, $N);)+
+    ($arch:path, $op:ty, $($args:tt),+ $(,)?) => {
+        $(retarget!($arch, $op, $args);)+
     }
 }
 
 /// Impledment [`diskann_vector::PureDistanceFunction`] using the current compilation architecture
 macro_rules! dispatch_pure {
-    ($op:ty, $N:literal) => {
-        /// Compute the squared L2 distance between `x` and `y`.
-        impl PureDistanceFunction<USlice<'_, $N>, USlice<'_, $N>, MathematicalResult<u32>> for $op {
+    ($op:ty, ($N:literal, $M:literal)) => {
+        impl PureDistanceFunction<USlice<'_, $N>, USlice<'_, $M>, MathematicalResult<u32>> for $op {
             #[inline(always)]
-            fn evaluate(x: USlice<'_, $N>, y: USlice<'_, $N>) -> MathematicalResult<u32> {
+            fn evaluate(x: USlice<'_, $N>, y: USlice<'_, $M>) -> MathematicalResult<u32> {
                 (diskann_wide::ARCH).run2(Self, x, y)
             }
         }
     };
-    ($op:ty, $($N:literal),+ $(,)?) => {
-        $(dispatch_pure!($op, $N);)+
+    ($op:ty, $($args:tt),+ $(,)?) => {
+        $(dispatch_pure!($op, $args);)+
     }
-}
-
-/// Scalar fallback for heterogeneous `USlice<8> × USlice<M>` inner product.
-///
-/// This generates a generic scalar implementation that uses element-wise indexing.
-macro_rules! impl_heterogeneous_scalar_8xM {
-    ($M:literal) => {
-        impl Target2<diskann_wide::arch::Scalar, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, $M>>
-            for InnerProduct
-        {
-            #[inline(never)]
-            fn run(
-                self,
-                _: diskann_wide::arch::Scalar,
-                x: USlice<'_, 8>,
-                y: USlice<'_, $M>,
-            ) -> MathematicalResult<u32> {
-                let len = check_lengths!(x, y)?;
-
-                let mut accum: u32 = 0;
-                for i in 0..len {
-                    // SAFETY: `i` is guaranteed to be less than `x.len()`.
-                    let ix = unsafe { x.get_unchecked(i) } as u32;
-                    // SAFETY: `i` is guaranteed to be less than `y.len()`.
-                    let iy = unsafe { y.get_unchecked(i) } as u32;
-                    accum += ix * iy;
-                }
-                Ok(MV::new(accum))
-            }
-        }
-    };
-    ($($M:literal),+ $(,)?) => {
-        $(impl_heterogeneous_scalar_8xM!($M);)+
-    };
-}
-
-/// Retarget V4 to V3 for heterogeneous `USlice<8> × USlice<M>` inner product.
-///
-/// All heterogeneous 8×M kernels are implemented for V3 (AVX2). V4 delegates to V3.
-#[cfg(target_arch = "x86_64")]
-macro_rules! heterogeneous_retarget_8xM {
-    ($M:literal) => {
-        impl
-            Target2<
-                diskann_wide::arch::x86_64::V4,
-                MathematicalResult<u32>,
-                USlice<'_, 8>,
-                USlice<'_, $M>,
-            > for InnerProduct
-        {
-            #[inline(always)]
-            fn run(
-                self,
-                arch: diskann_wide::arch::x86_64::V4,
-                x: USlice<'_, 8>,
-                y: USlice<'_, $M>,
-            ) -> MathematicalResult<u32> {
-                self.run(arch.retarget(), x, y)
-            }
-        }
-    };
-    ($($M:literal),+ $(,)?) => {
-        $(heterogeneous_retarget_8xM!($M);)+
-    };
-}
-
-/// Implement [`PureDistanceFunction`] for heterogeneous `USlice<8> × USlice<M>` inner product.
-///
-/// Delegates to the architecture-dispatched implementation.
-macro_rules! heterogeneous_dispatch_8xM {
-    ($M:literal) => {
-        impl PureDistanceFunction<USlice<'_, 8>, USlice<'_, $M>, MathematicalResult<u32>>
-            for InnerProduct
-        {
-            fn evaluate(x: USlice<'_, 8>, y: USlice<'_, $M>) -> MathematicalResult<u32> {
-                Self.run(ARCH, x, y)
-            }
-        }
-    };
-    ($($M:literal),+ $(,)?) => {
-        $(heterogeneous_dispatch_8xM!($M);)+
-    };
 }
 
 /// Load 1 byte beginning at `ptr` and invoke `f` with that byte.
@@ -868,12 +785,12 @@ macro_rules! impl_fallback_l2 {
 impl_fallback_l2!(7, 6, 5, 4, 3, 2);
 
 #[cfg(target_arch = "x86_64")]
-retarget!(diskann_wide::arch::x86_64::V3, SquaredL2, 7, 6, 5, 3);
+retarget!(diskann_wide::arch::x86_64::V3, SquaredL2, (7,7), (6,6), (5,5), (3,3));
 
 #[cfg(target_arch = "x86_64")]
-retarget!(diskann_wide::arch::x86_64::V4, SquaredL2, 7, 6, 5, 4, 3, 2);
+retarget!(diskann_wide::arch::x86_64::V4, SquaredL2, (7,7), (6,6), (5,5), (4,4), (3,3), (2,2));
 
-dispatch_pure!(SquaredL2, 1, 2, 3, 4, 5, 6, 7, 8);
+dispatch_pure!(SquaredL2, (1,1), (2,2), (3,3), (4,4), (5,5), (6,6), (7,7), (8,8));
 
 ///////////////////
 // Inner Product //
@@ -1359,7 +1276,7 @@ where
 
 /// An implementation for inner products that uses scalar indexing for the implementation.
 macro_rules! impl_fallback_ip {
-    ($N:literal) => {
+    (($N:literal, $M:literal)) => {
         /// Compute the inner product between `x` and `y`.
         ///
         /// Returns an error if the arguments have different lengths.
@@ -1367,13 +1284,13 @@ macro_rules! impl_fallback_ip {
         /// # Performance
         ///
         /// This function uses a generic implementation and therefore is not very fast.
-        impl Target2<diskann_wide::arch::Scalar, MathematicalResult<u32>, USlice<'_, $N>, USlice<'_, $N>> for InnerProduct {
+        impl Target2<diskann_wide::arch::Scalar, MathematicalResult<u32>, USlice<'_, $N>, USlice<'_, $M>> for InnerProduct {
             #[inline(never)]
             fn run(
                 self,
                 _: diskann_wide::arch::Scalar,
                 x: USlice<'_, $N>,
-                y: USlice<'_, $N>
+                y: USlice<'_, $M>
             ) -> MathematicalResult<u32> {
                 let len = check_lengths!(x, y)?;
 
@@ -1389,27 +1306,24 @@ macro_rules! impl_fallback_ip {
             }
         }
     };
-    ($($N:literal),+ $(,)?) => {
-        $(impl_fallback_ip!($N);)+
+    ($($args:tt),+ $(,)?) => {
+        $(impl_fallback_ip!($args);)+
     };
 }
 
-impl_fallback_ip!(7, 6, 5, 4, 3, 2);
+impl_fallback_ip!((7,7), (6,6), (5,5), (4,4), (3,3), (2,2), (8, 4), (8, 2));
 
 #[cfg(target_arch = "x86_64")]
-retarget!(diskann_wide::arch::x86_64::V3, InnerProduct, 7, 6, 5, 3);
+retarget!(diskann_wide::arch::x86_64::V3, InnerProduct, (7,7), (6,6), (5,5), (3,3));
 
 #[cfg(target_arch = "x86_64")]
-retarget!(diskann_wide::arch::x86_64::V4, InnerProduct, 7, 6, 4, 5, 3);
+retarget!(diskann_wide::arch::x86_64::V4, InnerProduct, (7,7), (6,6), (4,4), (5,5), (3,3), (8,4), (8,2));
 
-dispatch_pure!(InnerProduct, 1, 2, 3, 4, 5, 6, 7, 8);
+dispatch_pure!(InnerProduct, (1,1), (2,2), (3,3), (4,4), (5,5), (6,6), (7,7), (8,8), (8,4), (8,2));
 
 /////////////////////////////////////
 // Heterogeneous: USlice<8> × USlice<M> //
 /////////////////////////////////////
-
-// Scalar fallback for all heterogeneous 8×M inner products.
-impl_heterogeneous_scalar_8xM!(4, 2, 1);
 
 #[cfg(target_arch = "x86_64")]
 use diskann_wide::arch::x86_64::algorithms::{unpack_half_bytes};
@@ -1418,20 +1332,15 @@ use diskann_wide::arch::x86_64::algorithms::{unpack_half_bytes};
 impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 4>>
     for InnerProduct
 {
-    /// Computes the inner product of 8-bit unsigned × 4-bit unsigned vectors using AVX2.
+    /// Computes the inner product of 8-bit unsigned × 4-bit unsigned vectors using avx2 intrinsics.
     ///
-    /// # Strategy: `vpmaddubsw`-based 32-element blocks
+    /// # Strategy: 
+    /// Use [`std::arch::x86_64::_mm256_maddubs_epi16_`] intrinsic on 
+    /// blocks of size 32 after unpacking the 4-bit values into bytes. 
     ///
     /// Each iteration processes 32 logical elements:
     /// - **x**: 32 bytes loaded directly as `u8x32`.
-    /// - **y**: 16 packed bytes → unpacked to 32 nibble values in a `u8x32`.
-    ///
-    /// The nibble-unpacking interleaves low and high nibbles from each packed byte:
-    /// ```text
-    /// packed byte[i] = (hi_nibble << 4) | lo_nibble
-    ///      → unpacked[2i]   = lo_nibble   (element 2i)
-    ///      → unpacked[2i+1] = hi_nibble   (element 2i+1)
-    /// ```
+    /// - **y**: 16 packed bytes → unpacked to 32 nibble values in a `u8x32`, using `_mm_unpacklo/hi_epi8`.
     #[inline(always)]
     fn run(
         self,
@@ -1475,26 +1384,26 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 // Each block needs 32 bytes from `px` and 16 bytes from `py`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
                 // SAFETY: `i + 4 <= blocks` guarantees 16 bytes readable at `py.add(16 * i)`.
-                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * i)) });
-                s0 = s0.dot_simd(products(vx, vy), ones); 
+                let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * i)) };
+                s0 = s0.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones); 
 
                 // Block 1
                 // SAFETY: `i + 1 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 1))) };
-                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 1))) });
-                s1 = s1.dot_simd(products(vx, vy), ones); 
+                let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 1))) };
+                s1 = s1.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
 
                 // Block 2
                 // SAFETY: `i + 2 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 2))) };
-                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 2))) });
-                s2 = s2.dot_simd(products(vx, vy), ones); 
+                let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 2))) };
+                s2 = s2.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
 
                 // Block 3
                 // SAFETY: `i + 3 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 3))) };
-                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 3))) });
-                s3 = s3.dot_simd(products(vx, vy), ones); 
+                let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 3))) };
+                s3 = s3.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
 
                 i += 4;
             }
@@ -1505,8 +1414,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 // from `py` are readable at this offset.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
                 // SAFETY: `i < blocks` guarantees 16 bytes readable at `py.add(16 * i)`.
-                let vy = unpack_half_bytes::<4>(arch, unsafe { u8s_16::load_simd(arch, py.add(16 * i)) });
-                s0 = s0.dot_simd(products(vx, vy), ones); 
+                let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * i)) };
+                s0 = s0.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones); 
                 i += 1;
             }
 
@@ -1541,31 +1450,25 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 2>>
     for InnerProduct
 {
-    /// Computes the inner product of 8-bit unsigned × 2-bit unsigned vectors using AVX2.
+    /// Computes the inner product of 8-bit unsigned × 2-bit unsigned vectors using avx2 intrinsics.
     ///
-    /// # Strategy: `vpmaddubsw`-based 64-element blocks
+    /// # Strategy: 
+    /// Use [`std::arch::x86_64::_mm256_maddubs_epi16_`] intrinsic on 
+    /// blocks of size 64 after unpacking the 2-bit values into bytes. 
     ///
     /// Each iteration processes 64 logical elements:
-    /// - **x**: 64 bytes loaded as two `u8x32`.
-    /// - **y**: 16 packed bytes → unpacked to 64 crumb values in two `u8x32`.
+    /// - **x**: 64 bytes loaded as two separate `u8x32`s.
+    /// - **y**: 16 packed bytes unpacked to 64 crumb values in two `u8x32` lanes.
     ///
     /// The unpacking uses a two-level cascade:
     ///
-    /// **Level 1 (nibble):** identical to the 4-bit unpacker. Each packed byte
-    /// is split into its low and high nibbles via `_mm_srli_epi16::<4>` +
-    /// `_mm_unpacklo/hi_epi8`, producing 32 × 4-bit values in two `u8x16` registers.
+    /// *Level 1 (nibble):* identical to the 4-bit unpacker. Each packed byte
+    /// is split into its low and high nibbles using [`unpack_half_bytes`] into 
+    /// two `u8x16` registers.
     ///
-    /// **Level 2 (crumb):** each 4-bit value contains two 2-bit crumbs. We
-    /// apply the same shift-interleave at a 2-bit granularity: `_mm_srli_epi16::<2>` +
-    /// `_mm_unpacklo/hi_epi8`, then join halves into `u8x32` and mask with `0x03`.
-    ///
-    /// ```text
-    /// packed byte[j] = (c3 << 6) | (c2 << 4) | (c1 << 2) | c0
-    ///      → unpacked[4j]   = c0   (element 4j)
-    ///      → unpacked[4j+1] = c1   (element 4j+1)
-    ///      → unpacked[4j+2] = c2   (element 4j+2)
-    ///      → unpacked[4j+3] = c3   (element 4j+3)
-    /// ```
+    /// *Level 2 (crumb):* each 4-bit value contains two 2-bit crumbs. We
+    /// apply the same shift-interleave at a 2-bit granularity 
+    /// then join halves into `u8x32` and mask with `0x03`.
     #[inline(always)]
     fn run(
         self,
@@ -1616,7 +1519,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 (lower, upper)
             };
 
-            // Main loop: 4× unrolled, processing 256 elements per iteration.
+            // Processing 256 elements per iteration, i.e. 4x unrolled.
             while i + 4 <= blocks {
                 // Block 0
                 // SAFETY: `i + 4 <= blocks` guarantees at least 4 full blocks remain.
@@ -1703,13 +1606,6 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         Ok(MV::new(s))
     }
 }
-
-// Retarget V4 → V3 for all heterogeneous 8×M inner products.
-#[cfg(target_arch = "x86_64")]
-heterogeneous_retarget_8xM!(4, 2);
-
-// PureDistanceFunction dispatch for all heterogeneous 8×M inner products.
-heterogeneous_dispatch_8xM!(4, 2);
 
 //////////////////
 // BitTranspose //
@@ -2983,6 +2879,57 @@ mod tests {
             mod $mod {
                 use super::*;
 
+                /// Helper that builds vectors from a
+                /// fill function and asserts the inner product matches.
+                struct Case {
+                    x_vals: Vec<i64>,
+                    y_vals: Vec<i64>,
+                }
+
+                impl Case {
+                    fn new(dim: usize, fill: impl FnMut(usize) -> (i64, i64)) -> Self {
+                        let (x_vals, y_vals) = (0..dim).map(fill).unzip();
+                        Self { x_vals, y_vals }
+                    }
+
+                    fn check(&self, label: &str) {
+                        self.check_with(label, |x, y| InnerProduct::evaluate(x, y));
+                    }
+
+                    fn check_with(
+                        &self,
+                        label: &str,
+                        evaluate: impl Fn(USlice<'_, 8>, USlice<'_, $M>) -> MR,
+                    ) {
+                        let dim = self.x_vals.len();
+                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
+                        // Pre-fill with 0xFF to catch trailing-element bugs.
+                        x.as_mut_slice().fill(u8::MAX);
+                        y.as_mut_slice().fill(u8::MAX);
+                        for (i, (&xv, &yv)) in
+                            self.x_vals.iter().zip(&self.y_vals).enumerate()
+                        {
+                            x.set(i, xv).unwrap();
+                            y.set(i, yv).unwrap();
+                        }
+                        let expected: u32 = self
+                            .x_vals
+                            .iter()
+                            .zip(&self.y_vals)
+                            .map(|(&a, &b)| a as u32 * b as u32)
+                            .sum();
+                        let got = evaluate(x.reborrow(), y.reborrow())
+                            .unwrap()
+                            .into_inner();
+                        assert_eq!(
+                            expected, got,
+                            "{} failed for dim = {}",
+                            label, dim,
+                        );
+                    }
+                }
+
                 /// Fuzz test helper: random vectors across many dimensions.
                 fn test_heterogeneous_ip(
                     dim_max: usize,
@@ -2995,59 +2942,33 @@ mod tests {
                     let dist_mbit = Uniform::new_inclusive(0i64, $max_val as i64).unwrap();
 
                     for dim in 0..dim_max {
-                        let mut x_reference: Vec<u8> = vec![0; dim];
-                        let mut y_reference: Vec<u8> = vec![0; dim];
-
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-
                         for trial in 0..trials_per_dim {
-                            x_reference
-                                .iter_mut()
-                                .for_each(|i| *i = dist_8bit.sample(rng).try_into().unwrap());
-                            y_reference
-                                .iter_mut()
-                                .for_each(|i| *i = dist_mbit.sample(rng).try_into().unwrap());
-
-                            // Pre-fill with 1's to catch situations where we don't
-                            // correctly handle remaining elements.
-                            x.as_mut_slice().fill(u8::MAX);
-                            y.as_mut_slice().fill(u8::MAX);
-
-                            for i in 0..dim {
-                                x.set(i, x_reference[i].into()).unwrap();
-                                y.set(i, y_reference[i].into()).unwrap();
-                            }
-
-                            let expected: u32 = x_reference
-                                .iter()
-                                .zip(y_reference.iter())
-                                .map(|(&a, &b)| a as u32 * b as u32)
-                                .sum();
-
-                            let got = evaluate_ip(x.reborrow(), y.reborrow()).unwrap();
-
-                            assert_eq!(
-                                expected,
-                                got.into_inner(),
-                                "failed heterogeneous IP(8,{}) for dim = {}, trial = {} -- context {}",
-                                $M, dim, trial, context,
+                            Case::new(dim, |_| (
+                                dist_8bit.sample(&mut *rng),
+                                dist_mbit.sample(&mut *rng),
+                            ))
+                            .check_with(
+                                &format!(
+                                    "IP(8,{}) dim={}, trial={} -- {}",
+                                    $M, dim, trial, context,
+                                ),
+                                evaluate_ip,
                             );
                         }
-                    }
 
-                    // Length mismatch → error.
-                    let x = BoxedBitSlice::<8, Unsigned>::new_boxed(10);
-                    let y = BoxedBitSlice::<$M, Unsigned>::new_boxed(11);
-                    assert!(
-                        evaluate_ip(x.reborrow(), y.reborrow()).is_err(),
-                        "context: {}",
-                        context,
-                    );
+                        // Length mismatch → error.
+                        let x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+                        let y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim + 1);
+                        assert!(
+                            evaluate_ip(x.reborrow(), y.reborrow()).is_err(),
+                            "context: {}",
+                            context,
+                        );
+                    }
                 }
 
                 #[test]
-                fn fuzz() {
+                fn all_ip_dispatches() {
                     let mut rng = StdRng::seed_from_u64($seed_fuzz);
 
                     // PureDistanceFunction dispatch.
@@ -3096,349 +3017,115 @@ mod tests {
                 #[test]
                 fn max_values() {
                     let dims = [
-                        1, 15, 16, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 512, 768,
+                        127, 128, 129, 255, 256, 512, 768, 896, 3072,
                     ];
 
                     for &dim in &dims {
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-
-                        for i in 0..dim {
-                            x.set(i, 255).unwrap();
-                            y.set(i, $max_val).unwrap();
-                        }
-
-                        let expected: u32 = (255u32 * $max_val as u32) * dim as u32;
-
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(
-                            expected, got,
-                            "max-value IP(8,{}) via dispatch failed for dim = {}",
-                            $M, dim,
-                        );
+                        let case = Case::new(dim, |_| (255, $max_val as i64));
+                        case.check(&format!("max-value dispatch dim={}", dim));
 
                         #[cfg(target_arch = "x86_64")]
                         if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-                            let got = arch
-                                .run2(InnerProduct, x.reborrow(), y.reborrow())
-                                .unwrap()
-                                .into_inner();
-                            assert_eq!(
-                                expected, got,
-                                "max-value IP(8,{}) via V3 failed for dim = {}",
-                                $M, dim,
+                            case.check_with(
+                                &format!("max-value V3 dim={}", dim),
+                                |x, y| arch.run2(InnerProduct, x, y),
                             );
                         }
-                    }
-                }
-
-                /// Large dimensions exercising many iterations of the unrolled loop.
-                #[test]
-                fn large_dims() {
-                    let mut rng = StdRng::seed_from_u64($seed_large);
-
-                    test_heterogeneous_ip(
-                        1025,
-                        2,
-                        &|x, y| InnerProduct::evaluate(x, y),
-                        "pure distance function (large)",
-                        &mut rng,
-                    );
-
-                    #[cfg(target_arch = "x86_64")]
-                    if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-                        let mut rng = StdRng::seed_from_u64($seed_large ^ 0x1234_5678);
-                        test_heterogeneous_ip(
-                            1025,
-                            2,
-                            &|x, y| arch.run2(InnerProduct, x, y),
-                            "x86-64-v3 (large)",
-                            &mut rng,
-                        );
                     }
                 }
 
                 /// Known-answer tests to catch bit-ordering bugs.
                 #[test]
                 fn known_answers() {
-                    // Test: vpmaddubsw unsigned treatment.
-                    // x[i] = 200 (> 127), y[i] = max_val.
+                    // _mm256_addubs_epi8 unsigned treatment: x[i] = 200 (> 127), y[i] = max_val.
                     // Correct: 200 × max_val per element.
-                    // Wrong (signed): (-56) × max_val.
-                    let dim = 64;
-                    let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                    let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                    for i in 0..dim {
-                        x.set(i, 200).unwrap();
-                        y.set(i, $max_val).unwrap();
-                    }
-                    let expected = 200u32 * $max_val as u32 * dim as u32;
-                    let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                        .unwrap()
-                        .into_inner();
-                    assert_eq!(expected, got, "vpmaddubsw operand-order test failed");
+                    Case::new(64, |_| (200, $max_val as i64))
+                        .check("vpmaddubsw operand-order");
 
                     // Ascending x, constant y.
-                    let dim = 128;
-                    let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                    let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
                     let y_val = ($max_val / 2).max(1) as i64;
-                    for i in 0..dim {
-                        x.set(i, (i % 256) as i64).unwrap();
-                        y.set(i, y_val).unwrap();
-                    }
-                    let expected: u32 = (0..128u32).map(|i| i * y_val as u32).sum();
-                    let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                        .unwrap()
-                        .into_inner();
-                    assert_eq!(expected, got, "ascending-x constant-y test failed");
+                    Case::new(128, |i| ((i % 256) as i64, y_val))
+                        .check("ascending-x constant-y");
 
                     // Single element (pure scalar fallback).
-                    let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(1);
-                    let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(1);
-                    x.set(0, 200).unwrap();
-                    y.set(0, $max_val).unwrap();
-                    let expected = 200u32 * $max_val as u32;
-                    let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                        .unwrap()
-                        .into_inner();
-                    assert_eq!(expected, got, "single element test failed");
+                    Case::new(1, |_| (200, $max_val as i64))
+                        .check("single element");
                 }
 
                 /// Exhaustive edge-case coverage.
                 #[test]
                 fn edge_cases() {
-                    // 1. All-zeros inputs.
-                    for &dim in &[0, 1, 31, 32, 33, 64, 128, 129] {
-                        let x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(0u32, got, "all-zeros failed for dim = {}", dim);
-                    }
+                    let y_half = ($max_val / 2).max(1) as i64;
 
-                    // 2. One side zero.
-                    {
-                        let dim = 64;
-                        let x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            y.set(i, $max_val).unwrap();
-                        }
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(0u32, got, "x-zero y-nonzero failed");
-                    }
-                    {
-                        let dim = 64;
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, 255).unwrap();
-                        }
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(0u32, got, "y-zero x-nonzero failed");
-                    }
+                    // One side zero.
+                    Case::new(64, |_| (0, $max_val as i64)).check("x-zero y-nonzero");
+                    Case::new(64, |_| (255, 0)).check("y-zero x-nonzero");
 
-                    // 3. Length mismatch → error.
-                    {
-                        let x = BoxedBitSlice::<8, Unsigned>::new_boxed(10);
-                        let y = BoxedBitSlice::<$M, Unsigned>::new_boxed(11);
-                        assert!(
-                            InnerProduct::evaluate(x.reborrow(), y.reborrow()).is_err(),
-                            "length mismatch should return error",
-                        );
-                    }
-
-                    // 4. Every dimension from 0..block_size+1 (scalar fallback boundary).
+                    // Every dimension from 0..block_size+1 (scalar fallback boundary).
                     for dim in 0..=($block_size + 1) {
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        let y_val = ($max_val / 2).max(1) as i64;
-                        for i in 0..dim {
-                            x.set(i, 3).unwrap();
-                            y.set(i, y_val).unwrap();
-                        }
-                        let expected = 3u32 * y_val as u32 * dim as u32;
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(expected, got, "uniform fill failed for dim = {}", dim);
+                        Case::new(dim, |_| (3, y_half)).check("uniform fill");
                     }
 
-                    // 5. Exact block boundaries.
-                    for &dim in &[$block_size, 2 * $block_size, 4 * $block_size, 8 * $block_size] {
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, 100).unwrap();
-                            y.set(i, $max_val).unwrap();
-                        }
-                        let expected = 100u32 * $max_val as u32 * dim as u32;
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(
-                            expected, got,
-                            "exact block boundary failed for dim = {}",
-                            dim,
-                        );
+                    // Exact block boundaries.
+                    for &dim in &[
+                        $block_size,
+                        2 * $block_size,
+                        4 * $block_size,
+                        8 * $block_size,
+                    ] {
+                        Case::new(dim, |_| (100, $max_val as i64))
+                            .check("exact block boundary");
                     }
 
-                    // 6. Asymmetric: x varies, y constant.
-                    {
-                        let dim = 300;
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, (i % 256) as i64).unwrap();
-                            y.set(i, 1).unwrap();
-                        }
-                        let expected: u32 = (0..300u32).map(|i| i % 256).sum();
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(expected, got, "x-varies y-constant failed");
+                    // x varies, y constant.
+                    Case::new(300, |i| ((i % 256) as i64, 1))
+                        .check("x-varies y-constant");
+
+                    // x constant, y varies.
+                    Case::new(300, |i| (1, (i as i64) % ($max_val as i64 + 1)))
+                        .check("x-constant y-varies");
+
+                    // Alternating pattern
+                    Case::new(128, |i| {
+                        if i % 2 == 0 { (255, $max_val as i64) } else { (0, 0) }
+                    })
+                    .check("alternating pattern");
+
+                    // Opposite alternating pattern.
+                    Case::new(128, |i| {
+                        if i % 2 == 0 { (0, 0) } else { (255, $max_val as i64) }
+                    })
+                    .check("opposite alternating");
+
+                    // Large accumulation check for overflow
+                    Case::new(1024, |_| (255, $max_val as i64))
+                        .check("large accumulation");
+
+                    // x > 127 sweep (vpmaddubsw unsigned treatment).
+                    for x_val in [128i64, 170, 200, 240, 255] {
+                        Case::new($block_size, move |_| (x_val, y_half))
+                            .check(&format!("x > 127 (x_val={})", x_val));
                     }
 
-                    // 7. Asymmetric: x constant, y varies.
-                    {
-                        let dim = 300;
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, 1).unwrap();
-                            y.set(i, (i as i64) % ($max_val as i64 + 1)).unwrap();
-                        }
-                        let expected: u32 =
-                            (0..300u32).map(|i| i % ($max_val as u32 + 1)).sum();
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(expected, got, "x-constant y-varies failed");
-                    }
+                    // Dim = block_size - 1 (no full block, all scalar).
+                    Case::new($block_size - 1, |i| {
+                        (
+                            ((i * 7 + 3) % 256) as i64,
+                            ((i * 11 + 5) as i64) % ($max_val as i64 + 1),
+                        )
+                    })
+                    .check("dim=block_size-1 (all scalar)");
 
-                    // 8. Alternating pattern (detects lane-swap bugs).
-                    {
-                        let dim = 128;
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, if i % 2 == 0 { 255 } else { 0 }).unwrap();
-                            y.set(i, if i % 2 == 0 { $max_val } else { 0 }).unwrap();
-                        }
-                        let expected = (dim as u32 / 2) * 255 * $max_val as u32;
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(expected, got, "alternating pattern failed");
-                    }
-
-                    // 9. Opposite alternating pattern.
-                    {
-                        let dim = 128;
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, if i % 2 == 0 { 0 } else { 255 }).unwrap();
-                            y.set(i, if i % 2 == 0 { 0 } else { $max_val }).unwrap();
-                        }
-                        let expected = (dim as u32 / 2) * 255 * $max_val as u32;
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(expected, got, "opposite alternating failed");
-                    }
-
-                    // 10. Large accumulation (overflow in narrow accumulators).
-                    {
-                        let dim = 1024;
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, 255).unwrap();
-                            y.set(i, $max_val).unwrap();
-                        }
-                        let expected = 255u32 * $max_val as u32 * 1024;
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(expected, got, "large accumulation failed");
-                    }
-
-                    // 11. x > 127 sweep (vpmaddubsw unsigned treatment).
-                    {
-                        let dim = $block_size;
-                        for x_val in [128u8, 170, 200, 240, 255] {
-                            let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                            let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                            let y_val = ($max_val / 2).max(1) as i64;
-                            for i in 0..dim {
-                                x.set(i, x_val as i64).unwrap();
-                                y.set(i, y_val).unwrap();
-                            }
-                            let expected = x_val as u32 * y_val as u32 * dim as u32;
-                            let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                                .unwrap()
-                                .into_inner();
-                            assert_eq!(
-                                expected, got,
-                                "x > 127 unsigned treatment failed for x_val = {}",
-                                x_val,
-                            );
-                        }
-                    }
-
-                    // 12. Dim = block_size - 1 (no full block, all scalar).
-                    {
-                        let dim = $block_size - 1;
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, ((i * 7 + 3) % 256) as i64).unwrap();
-                            y.set(i, ((i * 11 + 5) as i64) % ($max_val as i64 + 1)).unwrap();
-                        }
-                        let expected: u32 = (0..dim)
-                            .map(|i| {
-                                ((i * 7 + 3) % 256) as u32
-                                    * (((i * 11 + 5) as u32) % ($max_val as u32 + 1))
-                            })
-                            .sum();
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(expected, got, "dim=block_size-1 (all scalar) failed");
-                    }
-
-                    // 13. 4× unroll boundary exercises.
+                    // 4× unroll boundary exercises.
                     let unroll4 = 4 * $block_size;
-                    for &dim in &[unroll4, unroll4 + 1, unroll4 + $block_size] {
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, ((i + 1) % 256) as i64).unwrap();
-                            y.set(i, ((i + 1) as i64) % ($max_val as i64 + 1)).unwrap();
-                        }
-                        let expected: u32 = (0..dim)
-                            .map(|i| {
-                                ((i + 1) % 256) as u32
-                                    * (((i + 1) as u32) % ($max_val as u32 + 1))
-                            })
-                            .sum();
-                        let got = InnerProduct::evaluate(x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
-                        assert_eq!(
-                            expected, got,
-                            "unroll boundary failed for dim = {}",
-                            dim,
-                        );
+                    for &dim in &[unroll4, unroll4 + 1, unroll4 + $block_size, unroll4 + $block_size + 1] {
+                        Case::new(dim, |i| {
+                            (
+                                ((i + 1) % 256) as i64,
+                                ((i + 1) as i64) % ($max_val as i64 + 1),
+                            )
+                        })
+                        .check("unroll boundary");
                     }
                 }
 
@@ -3459,28 +3146,20 @@ mod tests {
                     let dist_mbit = Uniform::new_inclusive(0i64, $max_val as i64).unwrap();
 
                     for &dim in &dims {
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        for i in 0..dim {
-                            x.set(i, dist_8bit.sample(&mut rng)).unwrap();
-                            y.set(i, dist_mbit.sample(&mut rng)).unwrap();
-                        }
+                        let case = Case::new(dim, |_| {
+                            (dist_8bit.sample(&mut rng), dist_mbit.sample(&mut rng))
+                        });
 
-                        let scalar_result = scalar
-                            .run2(InnerProduct, x.reborrow(), y.reborrow())
-                            .unwrap()
-                            .into_inner();
+                        case.check_with(
+                            &format!("scalar dim={}", dim),
+                            |x, y| scalar.run2(InnerProduct, x, y),
+                        );
 
                         #[cfg(target_arch = "x86_64")]
                         if let Some(arch) = v3 {
-                            let v3_result = arch
-                                .run2(InnerProduct, x.reborrow(), y.reborrow())
-                                .unwrap()
-                                .into_inner();
-                            assert_eq!(
-                                scalar_result, v3_result,
-                                "V3 vs Scalar mismatch for dim = {}",
-                                dim,
+                            case.check_with(
+                                &format!("V3 dim={}", dim),
+                                |x, y| arch.run2(InnerProduct, x, y),
                             );
                         }
                     }
