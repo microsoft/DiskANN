@@ -169,31 +169,43 @@ pub(crate) unsafe fn __load_first_u16_of_16_bytes(
 /// Unpack sub-byte fields from a `u8x16` register into a `u8x32` by
 /// shift-interleave-mask.
 ///
-/// For each input byte, the function produces two output bytes:
-///   - the original byte (low element)
-///   - the byte right-shifted by `N` bits (high element)
-///
-/// Both outputs are masked to `N`-bit values.
-///
-/// With `N = 4`, this unpacks 32 nibbles from 16 packed bytes.
-/// With `N = 2`, this unpacks 32 crumbs from 16 packed bytes, where each
-/// byte holds four 2-bit values.
+/// Each byte has the form `G | Hi | Lo`, where `Hi` and `Lo` are `N`-bit fields and 
+/// G is `(8 - 2N)` bytes. For e.g. with `N = 2`,  
+/// ```
+/// [0,     1,     2,     3,     4,     5,     6,     7]
+/// |----------------------||------------||------------|
+///             G                 Hi             Lo
+///```
+/// This operation will result in a u8x32 vector with 32 (Lo, Hi) byte-pairs.
+/// For `N = 4` this will unpack the half-bytes into a u8x32 byte vector.
 #[inline(always)]
 pub fn unpack_half_bytes<const N: i32>(arch: V3, input: u8x16) -> u8x32 {
-    // Shift each 16-bit lane right by N to position upper sub-fields in the
-    // low bits of each byte. Bit leakage across byte boundaries within a
+    assert!(N <= 4); 
+    // Step 1: Shift each 16-bit lane right by N. This positions Hi in the low
+    // N bits of each byte. Bit leakage across the byte boundary within a
     // 16-bit lane is harmless — the final mask cleans it up.
+    //
+    // input:   [B0,       B1,       B2,       ..., B15      ]
+    // shifted: [B0 >> N,  B1 >> N,  B2 >> N,  ..., B15 >> N ]
     let shifted: u8x16 = input.reinterpret_simd().shr_const::<N>().reinterpret_simd();
 
-    // Byte-interleave: pair each raw byte with its shifted counterpart.
-    //   lo: [input[0], shifted[0], input[1], shifted[1], ..., input[7], shifted[7]]
-    //   hi: [input[8], shifted[8], input[9], shifted[9], ..., input[15], shifted[15]]
+    // Step 2: Byte-interleave input with shifted. This pairs each original
+    // byte with its shifted counterpart, producing two 128-bit halves.
+    //
+    // lo: [B0, B0>>N, B1, B1>>N, ..., B7, B7>>N ]
+    // hi: [B8, B8>>N, B9, B9>>N, ..., B15, B15>>N]
     let lohi = input.interleave(shifted);
 
-    // Combine the two 128-bit halves into a single 256-bit register.
+    // Step 3: Join the two halves into one 256-bit register.
+    //
+    // [B0, B0>>N, B1, B1>>N, ..., B7, B7>>N, B8, B8>>N, ..., B15, B15>>N]
     let combined: u8x32 = lohi.join();
 
-    // Mask to isolate the N-bit sub-field values. 
-    //   N = 4 → 0x0F,  N = 2 → 0x03,  N = 1 → 0x01
+    // Step 4: Mask every byte to N bits. This isolates Lo from the even
+    // positions and Hi from the odd positions, giving 32 clean N-bit values.
+    //
+    // [Lo0, Hi0, Lo1, Hi1, ..., Lo15, Hi15]
+    // |---------|---------|     |---------|
+    //  each pair came from one input byte
     combined & u8x32::splat(arch, (1u8 << N) - 1)
 }
