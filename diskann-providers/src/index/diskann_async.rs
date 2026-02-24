@@ -175,7 +175,7 @@ pub(crate) mod tests {
         graph::{
             self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
-            glue::{AsElement, InplaceDeleteStrategy, InsertStrategy, SearchStrategy, aliases},
+            glue::{AsElement, DefaultPostProcess, InplaceDeleteStrategy, InsertStrategy, PostProcess, SearchStrategy, aliases},
             index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
             search::{Knn, Range},
             search_output_buffer,
@@ -346,7 +346,7 @@ pub(crate) mod tests {
         mut checker: Checker,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<DP, Q>,
+        S: DefaultPostProcess<DP, Q, u32>,
         Q: std::fmt::Debug + Sync + ?Sized,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
@@ -394,7 +394,7 @@ pub(crate) mod tests {
         filter: &dyn QueryLabelProvider<DP::InternalId>,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<DP, Q>,
+        S: DefaultPostProcess<DP, Q, u32>,
         Q: std::fmt::Debug + Sync + ?Sized,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
@@ -500,8 +500,8 @@ pub(crate) mod tests {
         quant_strategy: QS,
     ) where
         DP: DataProvider<InternalId = u32, Context = DefaultContext>,
-        FS: SearchStrategy<DP, [T]> + Clone + 'static,
-        QS: SearchStrategy<DP, [T]> + Clone + 'static,
+        FS: DefaultPostProcess<DP, [T], u32> + Clone + 'static,
+        QS: DefaultPostProcess<DP, [T], u32> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
     {
         // Assume all vectors have the same length.
@@ -923,7 +923,7 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+            + DefaultPostProcess<FullPrecisionProvider<T, DefaultQuant>, [T], u32>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -1050,7 +1050,7 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+            + DefaultPostProcess<FullPrecisionProvider<T, DefaultQuant>, [T], u32>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -3065,6 +3065,7 @@ pub(crate) mod tests {
         S: InsertStrategy<TestProvider, [f32]>
             + SearchStrategy<TestProvider, [f32]>
             + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
+            + for<'a> PostProcess<TestProvider, [f32], <S as InplaceDeleteStrategy<TestProvider>>::SearchPostProcessor>
             + Clone
             + Sync,
         for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
@@ -3167,6 +3168,7 @@ pub(crate) mod tests {
         S: InsertStrategy<TestProvider, [f32]>
             + SearchStrategy<TestProvider, [f32]>
             + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
+            + for<'a> PostProcess<TestProvider, [f32], <S as InplaceDeleteStrategy<TestProvider>>::SearchPostProcessor>
             + Clone
             + Sync,
         for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,

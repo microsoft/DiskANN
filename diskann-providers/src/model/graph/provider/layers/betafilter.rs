@@ -17,10 +17,9 @@ use std::{future::Future, sync::Arc};
 
 use diskann::{
     ANNResult,
-    error::StandardError,
     graph::{
         SearchOutputBuffer,
-        glue::{self, ExpandBeam, SearchExt, SearchPostProcessStep, SearchStrategy},
+        glue::{DefaultPostProcess, ExpandBeam, PostProcess, SearchExt, SearchStrategy},
         index::QueryLabelProvider,
     },
     neighbor::Neighbor,
@@ -63,47 +62,6 @@ impl<Strategy, I> BetaFilter<Strategy, I> {
     }
 }
 
-/// A post processor step the delegates [`BetaAccessor`] to the inner accessor.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Unwrap;
-
-/// Delegate post-processing to the inner strategy's post-processing routine.
-impl<A, T, O> SearchPostProcessStep<BetaAccessor<A>, T, O> for Unwrap
-where
-    T: ?Sized,
-    A: BuildQueryComputer<T>,
-{
-    type Error<NextError>
-        = NextError
-    where
-        NextError: StandardError;
-
-    type NextAccessor = A;
-
-    fn post_process_step<I, B, Next>(
-        &self,
-        next: &Next,
-        accessor: &mut BetaAccessor<A>,
-        query: &T,
-        computer: &BetaComputer<A::QueryComputer, A::Id>,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = Result<usize, Next::Error>> + Send
-    where
-        I: Iterator<Item = Neighbor<A::Id>> + Send,
-        B: SearchOutputBuffer<O> + Send + ?Sized,
-        Next: glue::SearchPostProcess<Self::NextAccessor, T, O>,
-    {
-        next.post_process(
-            &mut accessor.inner,
-            query,
-            computer.inner(),
-            candidates,
-            output,
-        )
-    }
-}
-
 /// Allow `BetaFilter` to be used as a [`SearchStrategy`] for `Provider` when its enclosing
 /// strategy is a valid search strategy.
 ///
@@ -143,12 +101,49 @@ where
         })
     }
 
-    /// Forward the post-processing error from the inner strategy.
-    type PostProcessor = glue::Pipeline<Unwrap, Strategy::PostProcessor>;
+}
 
-    /// Delegate post-processing to the inner strategy's post-processing routine.
-    fn post_processor(&self) -> Self::PostProcessor {
-        glue::Pipeline::new(Unwrap, self.strategy.post_processor())
+impl<Provider, Strategy, T, I, O, P> PostProcess<Provider, T, P, O> for BetaFilter<Strategy, I>
+where
+    T: ?Sized + Sync,
+    I: VectorId,
+    O: Send,
+    Provider: DataProvider<InternalId = I>,
+    Strategy: PostProcess<Provider, T, P, O>,
+    P: Send + Sync,
+{
+    async fn post_process<'a, Itr, B>(
+        &self,
+        processor: &P,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &T,
+        computer: &Self::QueryComputer,
+        candidates: Itr,
+        output: &mut B,
+    ) -> ANNResult<usize>
+    where
+        Itr: Iterator<Item = Neighbor<I>> + Send,
+        B: SearchOutputBuffer<O> + Send + ?Sized,
+    {
+        let inner_accessor = &mut accessor.inner;
+        let inner_computer = computer.inner();
+        self.strategy
+            .post_process(processor, inner_accessor, query, inner_computer, candidates, output)
+            .await
+    }
+}
+
+impl<Provider, Strategy, T, I, O> DefaultPostProcess<Provider, T, O> for BetaFilter<Strategy, I>
+where
+    T: ?Sized + Sync,
+    I: VectorId,
+    O: Send,
+    Provider: DataProvider<InternalId = I>,
+    Strategy: DefaultPostProcess<Provider, T, O>,
+{
+    type Processor = Strategy::Processor;
+    fn create_processor(&self) -> Self::Processor {
+        self.strategy.create_processor()
     }
 }
 
@@ -388,7 +383,7 @@ mod tests {
     use diskann::{
         ANNError, ANNResult, always_escalate,
         graph::AdjacencyList,
-        graph::glue::CopyIds,
+        graph::glue::{CopyIds, SearchPostProcess},
         provider::{DefaultContext, NeighborAccessor},
     };
     use futures_util::future;
@@ -538,7 +533,6 @@ mod tests {
     impl SearchStrategy<SimpleProvider, u64> for SimpleStrategy {
         type SearchAccessor<'a> = Doubler;
         type QueryComputer = AddingComputer;
-        type PostProcessor = CopyIds;
         type SearchAccessorError = ANNError;
 
         fn search_accessor<'a>(
@@ -548,10 +542,34 @@ mod tests {
         ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
             Ok(Doubler::default())
         }
+    }
 
-        fn post_processor(&self) -> Self::PostProcessor {
-            Default::default()
+    impl<P> PostProcess<SimpleProvider, u64, P> for SimpleStrategy
+    where
+        P: SearchPostProcess<Doubler, u64> + Send + Sync,
+    {
+        async fn post_process<'a, I, B>(
+            &self,
+            processor: &P,
+            accessor: &mut Self::SearchAccessor<'a>,
+            query: &u64,
+            computer: &Self::QueryComputer,
+            candidates: I,
+            output: &mut B,
+        ) -> ANNResult<usize>
+        where
+            I: Iterator<Item = Neighbor<u32>> + Send,
+            B: SearchOutputBuffer<u32> + Send + ?Sized,
+        {
+            processor
+                .post_process(accessor, query, computer, candidates, output)
+                .await
+                .map_err(|e| ANNError::log_async_error(e))
         }
+    }
+
+    impl DefaultPostProcess<SimpleProvider, u64> for SimpleStrategy {
+        diskann::delegate_default_post_process!(CopyIds);
     }
 
     /// A simple `QueryLabelProvider` that matches multiples of 3.

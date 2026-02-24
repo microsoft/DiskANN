@@ -16,8 +16,8 @@ use crate::{
     error::{ErrorExt, IntoANNResult},
     graph::{
         glue::{
-            self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
-            SearchPostProcess, SearchStrategy,
+            self, DefaultPostProcess, ExpandBeam, HybridPredicate, Predicate, PredicateMut,
+            SearchExt,
         },
         index::{
             DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
@@ -57,7 +57,7 @@ impl<'q, DP, S, T, O, OB> Search<DP, S, T, O, OB> for MultihopSearch<'q, DP::Int
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
+    S: DefaultPostProcess<DP, T, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send,
 {
@@ -92,9 +92,10 @@ where
             )
             .await?;
 
+            let processor = strategy.create_processor();
             let result_count = strategy
-                .post_processor()
                 .post_process(
+                    &processor,
                     &mut accessor,
                     query,
                     &computer,
@@ -102,8 +103,7 @@ where
                     output,
                 )
                 .send()
-                .await
-                .into_ann_result()?;
+                .await?;
 
             Ok(stats.finish(result_count as u32))
         }
