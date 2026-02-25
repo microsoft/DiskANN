@@ -6,10 +6,10 @@
 // x86 intrinsics
 use std::arch::x86_64::*;
 
-use super::V3;
 use super::v3::{u8x16, u8x32};
-use crate::traits::{SIMDVector, ShrConst, Interleave};
-use crate::{SIMDReinterpret};
+use super::V3;
+use crate::traits::{Interleave, SIMDVector, ShrConst};
+use crate::SIMDReinterpret;
 
 /// Efficiently load the first `8 < bytes < 16` bytes from `ptr` without accessing memory
 /// outside of `[ptr, ptr + bytes)`.
@@ -169,7 +169,7 @@ pub(crate) unsafe fn __load_first_u16_of_16_bytes(
 /// Unpack sub-byte fields from a `u8x16` register into a `u8x32` by
 /// shift-interleave-mask.
 ///
-/// Each byte has the form `G | Hi | Lo`, where `Hi` and `Lo` are `N`-bit fields and 
+/// Each byte has the form `G | Hi | Lo`, where `Hi` and `Lo` are `N`-bit fields and
 /// G is `(8 - 2N)` bytes. For e.g. with `N = 2`,  
 /// ```
 /// [0,     1,     2,     3,     4,     5,     6,     7]
@@ -180,7 +180,7 @@ pub(crate) unsafe fn __load_first_u16_of_16_bytes(
 /// For `N = 4` this will unpack the half-bytes into a u8x32 byte vector.
 #[inline(always)]
 pub fn unpack_half_bytes<const N: i32>(arch: V3, input: u8x16) -> u8x32 {
-    assert!(N <= 4); 
+    assert!(N <= 4);
     // Step 1: Shift each 16-bit lane right by N. This positions Hi in the low
     // N bits of each byte. Bit leakage across the byte boundary within a
     // 16-bit lane is harmless — the final mask cleans it up.

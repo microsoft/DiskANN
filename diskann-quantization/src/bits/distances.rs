@@ -73,8 +73,8 @@
 //! | `USlice<7>`   | `USlice<7>`   | `MV<u32>` | Fallback  | No            | Uses V3   | Fallback  |
 //! | `USlice<8>`   | `USlice<8>`   | `MV<u32>` | Yes       | Yes           | Yes       | Fallback  |
 //! |               |               |           |           |               |           |           |
-//! | `USlice<8>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   |           |
-//! | `USlice<8>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   |           |
+//! | `USlice<8>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `USlice<8>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
 //! |               |               | `       ` |           |               |           |           |
 //! | `TSlice<4>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Optimized | Optimized |
 //! |               |               | `       ` |           |               |           |           |
@@ -823,7 +823,12 @@ dispatch_pure!(
 retarget!(
     diskann_wide::arch::aarch64::Neon,
     SquaredL2,
-    (7, 7)(6, 6)(5, 5)(4, 4)(3, 3)(2, 2)
+    (7, 7),
+    (6, 6),
+    (5, 5),
+    (4, 4),
+    (3, 3),
+    (2, 2)
 );
 
 ///////////////////
@@ -1697,7 +1702,14 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 retarget!(
     diskann_wide::arch::aarch64::Neon,
     InnerProduct,
-    (7, 7)(6, 6)(4, 4)(5, 5)(3, 3)(2, 2)
+    (7, 7),
+    (6, 6),
+    (4, 4),
+    (5, 5),
+    (3, 3),
+    (2, 2),
+    (8, 4),
+    (8, 2)
 );
 
 //////////////////
