@@ -201,7 +201,7 @@ macro_rules! alias {
         $crate::alias!($var = $var);
     };
     ($var:ident = $type:ident) => {
-        $crate::alias!($var = <diskann_wide::arch::Current>::$type);
+        $crate::alias!($var = <$crate::arch::Current>::$type);
     };
     ($var:ident = <$arch:ty>::$type:ident) => {
         #[allow(non_camel_case_types)]
@@ -235,6 +235,16 @@ pub(crate) mod helpers;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
+
+alias!(i8s = i8x16);
+alias!(i16h = i16x8);
+alias!(i16s = i16x16);
+
+#[inline(never)]
+pub fn test_function(v: &i16) -> i16s {
+    let u: i8s = i16h::splat(ARCH, *v).reinterpret_simd();
+    u.into()
+}
 
 ///////////
 // Tests //
