@@ -8,8 +8,7 @@ use std::arch::x86_64::*;
 
 use super::v3::{u8x16, u8x32};
 use super::V3;
-use crate::traits::{Interleave, SIMDVector, ShrConst};
-use crate::SIMDReinterpret;
+use crate::traits::{Interleave, SIMDVector};
 
 /// Efficiently load the first `8 < bytes < 16` bytes from `ptr` without accessing memory
 /// outside of `[ptr, ptr + bytes)`.
@@ -171,7 +170,7 @@ pub(crate) unsafe fn __load_first_u16_of_16_bytes(
 ///
 /// Each byte has the form `G | Hi | Lo`, where `Hi` and `Lo` are `N`-bit fields and
 /// G is `(8 - 2N)` bytes. For e.g. with `N = 2`,  
-/// ```
+/// ```text
 /// [0,     1,     2,     3,     4,     5,     6,     7]
 /// |----------------------||------------||------------|
 ///             G                 Hi             Lo
@@ -179,15 +178,14 @@ pub(crate) unsafe fn __load_first_u16_of_16_bytes(
 /// This operation will result in a u8x32 vector with 32 (Lo, Hi) byte-pairs.
 /// For `N = 4` this will unpack the half-bytes into a u8x32 byte vector.
 #[inline(always)]
-pub fn unpack_half_bytes<const N: i32>(arch: V3, input: u8x16) -> u8x32 {
-    assert!(N <= 4);
-    // Step 1: Shift each 16-bit lane right by N. This positions Hi in the low
-    // N bits of each byte. Bit leakage across the byte boundary within a
-    // 16-bit lane is harmless — the final mask cleans it up.
+pub fn unpack_half_bytes<const N: u8>(arch: V3, input: u8x16) -> u8x32 {
+    const { assert!(N <= 4) };
+    // Step 1: Shift each byte right by N. This positions Hi in the low
+    // N bits of each byte.
     //
     // input:   [B0,       B1,       B2,       ..., B15      ]
     // shifted: [B0 >> N,  B1 >> N,  B2 >> N,  ..., B15 >> N ]
-    let shifted: u8x16 = input.reinterpret_simd().shr_const::<N>().reinterpret_simd();
+    let shifted = input >> N;
 
     // Step 2: Byte-interleave input with shifted. This pairs each original
     // byte with its shifted counterpart, producing two 128-bit halves.

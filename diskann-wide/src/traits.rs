@@ -722,12 +722,6 @@ impl<T> SIMDUnsigned for T where
 pub trait SIMDSigned: SIMDUnsigned + SIMDAbs {}
 impl<T> SIMDSigned for T where T: SIMDUnsigned + SIMDAbs {}
 
-/// Logical right-shift by a constant across lanes, extending with zeros.
-pub trait ShrConst: SIMDVector {
-    /// Shift each lane of `self` right by `N` bits, filling with zeros.
-    fn shr_const<const N: i32>(self) -> Self;
-}
-
 /// Element-wise interleave of two SIMD vectors at the current lane width.
 ///
 /// Given vectors `a = [a0, a1, ..., a(N-1)]` and `b = [b0, b1, ..., b(N-1)]`,

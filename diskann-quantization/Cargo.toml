@@ -31,7 +31,6 @@ uninlined_format_args = "allow"
 cfg-if = { workspace = true }
 trybuild = "1.0.101"
 rand_distr = { workspace = true }
-criterion = { workspace = true }
 
 [features]
 default = ["rayon"]

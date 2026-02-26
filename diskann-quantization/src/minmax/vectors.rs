@@ -203,16 +203,16 @@ pub type FullQueryMut<'a> = slice::SliceMut<'a, f32, FullQueryMeta>;
 // Compensated Distances //
 ///////////////////////////
 #[inline(always)]
-fn kernel<const NBITS: usize, F>(
-    x: DataRef<'_, NBITS>,
-    y: DataRef<'_, NBITS>,
+fn kernel<const N: usize, const M: usize , F>(
+    x: DataRef<'_, N>,
+    y: DataRef<'_, M>,
     f: F,
 ) -> distances::MathematicalResult<f32>
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<N> + Representation<M>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'a, N, Unsigned>,
+            BitSlice<'b, M, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
     F: Fn(f32, &MinMaxCompensation, &MinMaxCompensation) -> f32,
@@ -465,7 +465,6 @@ where
 ///////////
 
 #[cfg(test)]
-#[cfg(not(miri))]
 mod minmax_vector_tests {
     use diskann_utils::Reborrow;
     use rand::{

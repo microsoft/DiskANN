@@ -145,7 +145,7 @@ mod traits;
 pub use traits::{
     AsSIMD, SIMDAbs, SIMDCast, SIMDDotProduct, SIMDFloat, SIMDMask, SIMDMinMax, SIMDMulAdd,
     SIMDPartialEq, SIMDPartialOrd, SIMDReinterpret, SIMDSelect, SIMDSigned, SIMDSumTree,
-    SIMDUnsigned, SIMDVector, ShrConst, Interleave,
+    SIMDUnsigned, SIMDVector, Interleave,
 };
 
 mod splitjoin;

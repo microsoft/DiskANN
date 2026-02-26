@@ -642,7 +642,6 @@ version = "0.47.0"
 dependencies = [
  "bytemuck",
  "cfg-if",
- "criterion",
  "diskann-linalg",
  "diskann-utils",
  "diskann-vector",
