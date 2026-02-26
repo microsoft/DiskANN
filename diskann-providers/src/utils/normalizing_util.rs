@@ -9,11 +9,12 @@ use std::{
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{ANNError, ANNResult};
+use diskann_utils::io::Metadata;
 use diskann_vector::{Norm, norm::FastL2Norm};
 use rayon::prelude::*;
 use tracing::info;
 
-use super::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool, read_metadata, write_metadata};
+use super::{AsThreadPool, ParallelIteratorInPool, RayonThreadPool};
 use crate::forward_threadpool;
 
 /// The normalizing_utils derives from the DiskANN c++ utils.
@@ -30,10 +31,9 @@ where
     let mut reader = BufReader::new(storage_provider.open_reader(in_file_name)?);
     let mut writer = BufWriter::new(storage_provider.create_for_write(out_file_name)?);
 
-    let metadata = read_metadata(&mut reader)?;
-    let (npts, ndims) = (metadata.npoints, metadata.ndims);
-
-    write_metadata(&mut writer, npts, ndims)?;
+    let metadata = Metadata::read(&mut reader)?;
+    let (npts, ndims) = (metadata.npoints(), metadata.ndims());
+    metadata.write(&mut writer)?;
 
     info!("Normalizing FLOAT vectors in file: {}", in_file_name);
     info!("Dataset: #pts = {}, # dims = {}", npts, ndims);
@@ -139,10 +139,10 @@ pub fn normalize_data_internal<Pool: AsThreadPool>(
 #[cfg(test)]
 mod normalizing_utils_test {
     use crate::storage::{StorageReadProvider, VirtualStorageProvider};
-    use diskann_utils::test_data_root;
+    use diskann_utils::{io::read_bin, test_data_root};
 
     use super::*;
-    use crate::utils::{create_thread_pool_for_test, storage_utils::*};
+    use crate::utils::create_thread_pool_for_test;
 
     #[test]
     fn test_normalize_data_file() {
@@ -154,21 +154,15 @@ mod normalizing_utils_test {
         let pool = create_thread_pool_for_test();
         normalize_data_file(in_file_name, out_file_name, &storage_provider, &pool).unwrap();
 
-        let (load_data, load_num_pts, load_dims) =
-            load_bin::<f32, _>(&mut storage_provider.open_reader(out_file_name).unwrap(), 0)
-                .unwrap();
+        let load_data =
+            read_bin::<f32>(&mut storage_provider.open_reader(out_file_name).unwrap()).unwrap();
         storage_provider
             .delete(out_file_name)
             .expect("Should be able to delete temp file");
 
-        let (norm_data, norm_num_pts, norm_dims) = load_bin::<f32, _>(
-            &mut storage_provider.open_reader(norm_file_name).unwrap(),
-            0,
-        )
-        .unwrap();
+        let norm_data =
+            read_bin::<f32>(&mut storage_provider.open_reader(norm_file_name).unwrap()).unwrap();
 
-        assert_eq!(load_num_pts, norm_num_pts);
-        assert_eq!(load_dims, norm_dims);
         assert_eq!(load_data, norm_data);
     }
 }

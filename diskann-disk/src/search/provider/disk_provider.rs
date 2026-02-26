@@ -1059,11 +1059,9 @@ mod disk_provider_tests {
         test_utils::graph_data_type_utils::{
             GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
         },
-        utils::{
-            create_thread_pool, file_util, load_aligned_bin, PQPathNames, ParallelIteratorInPool,
-        },
+        utils::{create_thread_pool, load_aligned_bin, PQPathNames, ParallelIteratorInPool},
     };
-    use diskann_utils::test_data_root;
+    use diskann_utils::{io::read_bin, test_data_root};
     use diskann_vector::distance::Metric;
     use rayon::prelude::{IndexedParallelIterator, IntoParallelRefIterator};
     use rstest::rstest;
@@ -1189,10 +1187,10 @@ mod disk_provider_tests {
     ) -> Vec<u32> {
         const ASSOCIATED_DATA_FILE: &str = "/sift/siftsmall_learn_256pts_u32_associated_data.fbin";
 
-        let (data, _npts, _dim) =
-            file_util::load_bin::<u32, StorageReader>(storage_provider, ASSOCIATED_DATA_FILE, 0)
+        let data =
+            read_bin::<u32>(&mut storage_provider.open_reader(ASSOCIATED_DATA_FILE).unwrap())
                 .unwrap();
-        data
+        data.into_inner().into_vec()
     }
 
     #[test]
@@ -1339,10 +1337,9 @@ mod disk_provider_tests {
         storage_provider: &StorageReader,
         query_result_path: &str,
     ) -> Vec<u32> {
-        let (result, _, _) =
-            file_util::load_bin::<u32, StorageReader>(storage_provider, query_result_path, 0)
-                .unwrap();
-        result
+        let result =
+            read_bin::<u32>(&mut storage_provider.open_reader(query_result_path).unwrap()).unwrap();
+        result.into_inner().into_vec()
     }
 
     struct TestDiskSearchParams<'a, StorageType> {

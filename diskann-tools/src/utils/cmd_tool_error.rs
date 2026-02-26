@@ -53,6 +53,20 @@ impl From<diskann::ANNError> for CMDToolError {
         }
     }
 }
+impl From<diskann_utils::io::ReadBinError> for CMDToolError {
+    fn from(err: diskann_utils::io::ReadBinError) -> Self {
+        CMDToolError {
+            details: err.to_string(),
+        }
+    }
+}
+impl From<diskann_utils::io::SaveBinError> for CMDToolError {
+    fn from(err: diskann_utils::io::SaveBinError) -> Self {
+        CMDToolError {
+            details: err.to_string(),
+        }
+    }
+}
 impl From<diskann::graph::config::ConfigError> for CMDToolError {
     fn from(err: diskann::graph::config::ConfigError) -> Self {
         CMDToolError {
@@ -69,12 +83,12 @@ impl From<diskann_label_filter::JsonlReadError> for CMDToolError {
     }
 }
 
-impl<T, U> From<diskann_providers::utils::MetadataError<T, U>> for CMDToolError
+impl<T, U> From<diskann_utils::io::MetadataError<T, U>> for CMDToolError
 where
     T: std::error::Error + Send + Sync + 'static,
     U: std::error::Error + Send + Sync + 'static,
 {
-    fn from(err: diskann_providers::utils::MetadataError<T, U>) -> Self {
+    fn from(err: diskann_utils::io::MetadataError<T, U>) -> Self {
         // Leverage the existing conversion chain: MetadataError -> ANNError -> CMDToolError
         let ann_error: diskann::ANNError = err.into();
         ann_error.into()
