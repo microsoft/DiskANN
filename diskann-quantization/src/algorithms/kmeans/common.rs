@@ -155,6 +155,17 @@ impl<const N: usize> BlockTranspose<N> {
         }
     }
 
+    /// Return the number of rows of data rounded up to `Self::group_size`.
+    ///
+    /// This provides the total memory available to access. Note that any rows between
+    /// `self.nrows()` and `self.available_rows()`, while valid to access, can contain
+    /// arbitrary values.
+    ///
+    /// You cannot rely on these rows being 0.
+    pub fn available_rows(&self) -> usize {
+        self.nrows.next_multiple_of(N)
+    }
+
     /// Return the number of rows of data stored in `self`.
     pub fn nrows(&self) -> usize {
         self.nrows

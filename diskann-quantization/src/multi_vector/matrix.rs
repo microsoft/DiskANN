@@ -656,6 +656,11 @@ impl<T: ReprOwned> Mat<T> {
         Self { ptr, repr }
     }
 
+    /// Return the base pointer for the [`Mat`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
+    }
+
     #[cfg(test)]
     fn as_ptr(&self) -> NonNull<u8> {
         self.ptr
@@ -697,6 +702,18 @@ impl<T: Dense + ReprOwned> Mat<T> {
         // SAFETY: We have exclusive access via `&mut self`, and the Mat was constructed
         // with valid data compatible with `DenseMut`.
         unsafe { self.repr.as_slice_mut(self.ptr) }
+    }
+
+    pub fn nrows(&self) -> usize {
+        self.repr.nrows()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.repr.ncols()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_raw_ptr().cast::<T>()
     }
 }
 
@@ -791,6 +808,26 @@ impl<'a, T: Repr> MatRef<'a, T> {
             repr,
             _lifetime: PhantomData,
         }
+    }
+
+    /// Return the base pointer for the [`MatRef`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
+    }
+}
+
+
+impl<'a, T: Copy> MatRef<'a, Standard<T>> {
+    pub fn nrows(&self) -> usize {
+        self.repr.nrows()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.repr.ncols()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_raw_ptr().cast::<T>()
     }
 }
 
@@ -971,6 +1008,11 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
             _lifetime: PhantomData,
         }
     }
+
+    /// Return the base pointer for the [`MatRef`].
+    pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
+    }
 }
 
 // Reborrow: MatMut -> MatRef
@@ -1022,6 +1064,18 @@ impl<'a, T: Dense + ReprMut> MatMut<'a, T> {
         // SAFETY: We have exclusive access via `&mut self`, and the MatMut was constructed
         // with valid data compatible with `DenseMut`.
         unsafe { self.repr.as_slice_mut(self.ptr) }
+    }
+
+    pub fn nrows(&self) -> usize {
+        self.repr.nrows()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.repr.ncols()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_raw_ptr().cast::<T>()
     }
 }
 
