@@ -16,9 +16,10 @@ use rand::{
 };
 use thiserror::Error;
 
-use super::common::{BlockTranspose, square_norm};
+use super::common::square_norm;
+use crate::multi_vector::{BlockTransposed, Mat};
 
-/// An internal trait implemented for `BlockTranspose` used to accelerate
+/// An internal trait implemented for `BlockTransposed` used to accelerate
 ///
 /// 1. Computation of distances between a newly selected kmeans++ center and all elements
 ///    in the dataset.
@@ -29,7 +30,7 @@ use super::common::{BlockTranspose, square_norm};
 ///
 /// All of these operations are fused for efficiency.
 ///
-/// This trait is only meant to be implemented by `BlockTranspose`.
+/// This trait is only meant to be implemented by `BlockTransposed`.
 pub(crate) trait MicroKernel {
     /// The intermediate value storing inner products.
     type Intermediate;
@@ -50,7 +51,7 @@ pub(crate) trait MicroKernel {
     ///
     /// # SAFETY
     ///
-    /// `block` must be the base pointer of a data block in a `BlockTranspose` and the
+    /// `block` must be the base pointer of a data block in a `BlockTransposed` and the
     /// block size of this block must have the same length as `this`.
     unsafe fn accum_full(block: *const f32, this: &[f32]) -> Self::Intermediate;
 
@@ -79,7 +80,7 @@ pub(crate) trait MicroKernel {
 
 diskann_wide::alias!(f32s = f32x8);
 
-impl MicroKernel for BlockTranspose<16> {
+impl MicroKernel for BlockTransposed<f32, 16> {
     // Process 16-dimensions concurrently, split across two `Wide`s.
     type Intermediate = (f32s, f32s);
     type RollingSum = f64;
@@ -235,13 +236,13 @@ impl MicroKernel for BlockTranspose<16> {
 /// Return the sum of the new `square_distances`.
 fn update_distances<const N: usize>(
     square_distances: &mut [f32],
-    transpose: &BlockTranspose<N>,
+    transpose: &Mat<BlockTransposed<f32, N>>,
     norms: &[f32],
     this: &[f32],
     this_square_norm: f32,
 ) -> f64
 where
-    BlockTranspose<N>: MicroKernel,
+    BlockTransposed<f32, N>: MicroKernel,
 {
     // Establish our safety requirements.
     // Check 1.
@@ -263,8 +264,8 @@ where
         "norms and dataset must have the same length",
     );
 
-    let splat = BlockTranspose::<N>::splat(this_square_norm);
-    let mut rolling_sum = <BlockTranspose<N> as MicroKernel>::RollingSum::default();
+    let splat = BlockTransposed::<f32, N>::splat(this_square_norm);
+    let mut rolling_sum = <BlockTransposed<f32, N> as MicroKernel>::RollingSum::default();
 
     let iter =
         std::iter::zip(norms.chunks_exact(N), square_distances.chunks_exact_mut(N)).enumerate();
@@ -277,9 +278,9 @@ where
 
         // SAFETY: The pointer `base` does point to a full block and by Check 1,
         // `transpose.ncols() == this.len()`.
-        let intermediate = unsafe { BlockTranspose::<N>::accum_full(base, this) };
+        let intermediate = unsafe { BlockTransposed::<f32, N>::accum_full(base, this) };
 
-        rolling_sum = BlockTranspose::<N>::finish(
+        rolling_sum = BlockTransposed::<f32, N>::finish(
             intermediate,
             splat,
             rolling_sum,
@@ -295,14 +296,14 @@ where
         // `transpose.full_blocks() < transpose.num_blocks()`.
         let base = unsafe { transpose.block_ptr_unchecked(transpose.full_blocks()) };
 
-        // A full accumulation is fine because `BlockTranspose` allocates at the granularity
+        // A full accumulation is fine because `BlockTransposed` allocates at the granularity
         // of blocks. We will just ignore the extra lanes.
         // SAFETY: The pointer `base` does point to a full block and by Check 1,
         // `transpose.ncols() == this.len()`.
-        let intermediate = unsafe { BlockTranspose::<N>::accum_full(base, this) };
+        let intermediate = unsafe { BlockTransposed::<f32, N>::accum_full(base, this) };
 
         let start = N * transpose.full_blocks();
-        rolling_sum = BlockTranspose::<N>::finish_last(
+        rolling_sum = BlockTransposed::<f32, N>::finish_last(
             intermediate,
             splat,
             rolling_sum,
@@ -312,7 +313,7 @@ where
         );
     }
 
-    BlockTranspose::<N>::complete_sum(rolling_sum)
+    BlockTransposed::<f32, N>::complete_sum(rolling_sum)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -379,12 +380,12 @@ impl KMeansPlusPlusError {
 pub(crate) fn kmeans_plusplus_into_inner<const N: usize>(
     mut points: MutMatrixView<'_, f32>,
     data: StridedView<'_, f32>,
-    transpose: &BlockTranspose<N>,
+    transpose: &Mat<BlockTransposed<f32, N>>,
     norms: &[f32],
     rng: &mut dyn RngCore,
 ) -> Result<(), KMeansPlusPlusError>
 where
-    BlockTranspose<N>: MicroKernel,
+    BlockTransposed<f32, N>: MicroKernel,
 {
     assert_eq!(norms.len(), data.nrows());
     assert_eq!(transpose.nrows(), data.nrows());
@@ -513,7 +514,7 @@ pub fn kmeans_plusplus_into(
         *n = square_norm(d);
     }
 
-    let transpose = BlockTranspose::<GROUPSIZE>::from_matrix_view(data);
+    let transpose = Mat::<BlockTransposed<f32, GROUPSIZE>>::from_matrix_view(data);
     kmeans_plusplus_into_inner(centers, data.into(), &transpose, &norms, rng)
 }
 
@@ -597,7 +598,7 @@ mod tests {
     // floating point values.
     fn test_update_distances_impl<const N: usize, R>(num_points: usize, dim: usize, rng: &mut R)
     where
-        BlockTranspose<N>: MicroKernel,
+        BlockTransposed<f32, N>: MicroKernel,
         R: Rng,
     {
         let context = lazy_format!(
@@ -617,7 +618,7 @@ mod tests {
         let mut samples = Matrix::<f32>::new(0.0, num_samples, dim);
         let mut distances = vec![f32::INFINITY; num_points];
         let distribution = Uniform::<u32>::new(0, (num_points + dim) as u32).unwrap();
-        let transpose = BlockTranspose::<N>::from_matrix_view(data.as_view());
+        let transpose = Mat::<BlockTransposed<f32, N>>::from_matrix_view(data.as_view());
 
         let mut last_residual = f64::INFINITY;
         for i in 0..num_samples {
@@ -1015,7 +1016,7 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
             &norms,
             &this,
             this_square_norm,
@@ -1034,7 +1035,7 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
             &norms,
             &this,
             this_square_norm,
@@ -1053,7 +1054,7 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
             &norms,
             &this,
             this_square_norm,

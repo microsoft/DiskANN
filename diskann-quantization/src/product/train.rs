@@ -13,11 +13,9 @@ use thiserror::Error;
 
 use crate::{
     Parallelism,
-    algorithms::kmeans::{
-        self,
-        common::{BlockTranspose, square_norm},
-    },
+    algorithms::kmeans::{self, common::square_norm},
     cancel::Cancelation,
+    multi_vector::{BlockTransposed, Mat},
     random::{BoxedRngBuilder, RngBuilder},
 };
 
@@ -170,7 +168,7 @@ impl TrainQuantizer for LightPQTrainingParameters {
 
                 // Allocate scratch data structures.
                 let norms: Vec<f32> = view.row_iter().map(square_norm).collect();
-                let transpose = BlockTranspose::<16>::from_strided(view);
+                let transpose = Mat::<BlockTransposed<f32, 16>>::from_strided(view);
                 let mut centers = Matrix::new(0.0, trainer.ncenters, range.len());
 
                 // Construct the random number generator seeded by the PQ chunk.

@@ -349,7 +349,7 @@ pub struct Overflow {
 }
 
 impl Overflow {
-    fn check<T>(nrows: usize, ncols: usize) -> Result<(), Self> {
+    pub(crate) fn check<T>(nrows: usize, ncols: usize) -> Result<(), Self> {
         let elsize = std::mem::size_of::<T>();
         // Guard the element count itself so that `num_elements()` can never overflow.
         let elements = nrows.checked_mul(ncols).ok_or(Self {
@@ -557,8 +557,8 @@ where
 /// Memory is automatically deallocated when the matrix is dropped.
 #[derive(Debug)]
 pub struct Mat<T: ReprOwned> {
-    ptr: NonNull<u8>,
-    repr: T,
+    pub(crate) ptr: NonNull<u8>,
+    pub(crate) repr: T,
 }
 
 // SAFETY: [`Repr`] is required to propagate its `Send` bound.

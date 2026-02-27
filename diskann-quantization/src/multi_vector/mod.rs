@@ -61,9 +61,13 @@
 //! assert_eq!(scores[1], -1.0);
 //! ```
 
+pub mod block_transposed;
 pub mod distance;
 pub(crate) mod matrix;
 
+pub use block_transposed::{
+    BlockTransposed, BlockTransposedRow, BlockTransposedRowIter, BlockTransposedRowMut,
+};
 pub use distance::{Chamfer, MaxSim, MaxSimError, QueryMatRef};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,

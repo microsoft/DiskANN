@@ -5,7 +5,8 @@
 
 use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector};
 
-use super::common::{BlockTranspose, square_norm};
+use super::common::square_norm;
+use crate::multi_vector::{BlockTransposed, Mat};
 use diskann_utils::{
     strided::StridedView,
     views::{Matrix, MatrixView, MutMatrixView},
@@ -25,7 +26,7 @@ diskann_wide::alias!(u32s = u32x8);
 //
 // Return the residual distance.
 pub fn distances_in_place(
-    dataset: &BlockTranspose<16>,
+    dataset: &Mat<BlockTransposed<f32, 16>>,
     data_norms: &[f32],
     centers: MatrixView<'_, f32>,
     center_norms: &[f32],
@@ -373,7 +374,7 @@ fn update_centroids(mut centers: MutMatrixView<'_, f32>, data: StridedView<'_, f
 pub(crate) fn lloyds_inner(
     data: StridedView<'_, f32>,
     square_norms: &[f32],
-    transpose: &BlockTranspose<16>,
+    transpose: &Mat<BlockTransposed<f32, 16>>,
     mut centers: MutMatrixView<'_, f32>,
     max_reps: usize,
 ) -> (Vec<u32>, f32) {
@@ -450,7 +451,7 @@ pub fn lloyds(
         "data and centers must have the same dimension",
     );
 
-    let transpose = BlockTranspose::<16>::from_matrix_view(data);
+    let transpose = Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data);
     let square_norms: Vec<f32> = data.row_iter().map(square_norm).collect();
     lloyds_inner(data.into(), &square_norms, &transpose, centers, max_reps)
 }
@@ -522,7 +523,7 @@ mod tests {
             let data_norms: Vec<f32> = data.row_iter().map(square_norm).collect();
 
             let residual = distances_in_place(
-                &(BlockTranspose::from_matrix_view(data.as_view())),
+                &(Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view())),
                 &data_norms,
                 centers.as_view(),
                 &center_norms,
@@ -585,7 +586,7 @@ mod tests {
         let mut nearest = vec![0; ndata];
 
         let _ = distances_in_place(
-            &(BlockTranspose::from_matrix_view(data.as_view())),
+            &(Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view())),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -752,7 +753,7 @@ mod tests {
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -769,7 +770,7 @@ mod tests {
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -786,7 +787,7 @@ mod tests {
         let center_norms = vec![0.0; centers.nrows() + 1]; // Incorrect
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -803,7 +804,7 @@ mod tests {
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows() + 1]; // Incorrect
         distances_in_place(
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -824,7 +825,7 @@ mod tests {
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
             centers.as_mut_view(),
             1,
         );
@@ -840,7 +841,7 @@ mod tests {
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
-            &BlockTranspose::from_matrix_view(data_incorrect.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data_incorrect.as_view()),
             centers.as_mut_view(),
             1,
         );
@@ -856,7 +857,7 @@ mod tests {
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
-            &BlockTranspose::from_matrix_view(data_incorrect.as_view()), // Incorrect
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data_incorrect.as_view()), // Incorrect
             centers.as_mut_view(),
             1,
         );
@@ -871,7 +872,7 @@ mod tests {
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
             centers.as_mut_view(),
             1,
         );
