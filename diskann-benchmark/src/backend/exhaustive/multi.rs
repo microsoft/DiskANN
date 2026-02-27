@@ -18,7 +18,8 @@ use diskann_benchmark_runner::{
     Any,
 };
 use diskann_quantization::multi_vector::{distance::Chamfer, Mat, Standard};
-use diskann_vector::PureDistanceFunction;
+use diskann_vector::{PureDistanceFunction, distance::InnerProduct};
+use diskann_providers::model::graph::provider::async_::inmem;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::Serialize;
@@ -80,12 +81,10 @@ impl<'a> MultiExhaustive<'a> {
             );
         }
 
-        // Set up thread pool
         let threadpool = rayon::ThreadPoolBuilder::new()
             .num_threads(input.num_threads.get())
             .build()?;
 
-        // Progress bar
         let progress = ProgressBar::with_draw_target(
             Some(num_queries as u64),
             output.draw_target(),
@@ -94,7 +93,6 @@ impl<'a> MultiExhaustive<'a> {
             "Exhaustive search [{elapsed_precise}] {wide_bar} {percent}%",
         )?);
 
-        // Run exhaustive search
         writeln!(output, "Running exhaustive search (K={})...", k)?;
         let start = std::time::Instant::now();
 

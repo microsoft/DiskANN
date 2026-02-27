@@ -108,13 +108,13 @@ impl<'a> MultiVectorBuild<'a> {
 
 fn run(
     input: &inputs::multi::BuildAndSearch,
-    output: &mut dyn runner::Output,
+    mut output: &mut dyn runner::Output,
 ) -> anyhow::Result<()> {
     let index = build(&input.build, output)?;
     let queries: Arc<[_]> = datafiles::load_multi_vectors::<f32>(&input.search.queries)?.into();
 
     // TODO: Placeholder.
-    let gt = ZeroGroundtruth::new(queries.len(), 100);
+    let gt = datafiles::load_groundtruth(datafiles::BinFile(&input.search.groundtruth))?;
 
     let searcher = MultiKNN::new(
         index.clone(),
@@ -128,11 +128,14 @@ fn run(
         &input.search.runs,
     );
 
-    knn::run(
+    let summaries = knn::run(
         &searcher,
         &gt,
         steps,
     )?;
+
+    let results: Vec<_> = summaries.into_iter().map(|r| SearchResults::from(r)).collect();
+    writeln!(output, "{}", crate::utils::DisplayWrapper(&*results))?;
 
     Ok(())
 }
@@ -544,43 +547,6 @@ impl From<Summary> for SearchResults {
             mean_cmps: mean_cmps as f32,
             mean_hops: mean_hops as f32,
         }
-    }
-}
-
-///////////////////
-// Test Helpers  //
-///////////////////
-
-/// A stub groundtruth that returns zeros for all queries.
-///
-/// Useful for end-to-end testing when no groundtruth file is available.
-/// Recall metrics will be meaningless but the search pipeline can still run.
-pub struct ZeroGroundtruth {
-    nrows: usize,
-    row: Vec<u32>,
-}
-
-impl ZeroGroundtruth {
-    /// Create a new stub groundtruth with `nrows` queries, each with `ncols` neighbors.
-    pub fn new(nrows: usize, ncols: usize) -> Self {
-        Self {
-            nrows,
-            row: vec![0u32; ncols],
-        }
-    }
-}
-
-impl benchmark_core::recall::Rows<u32> for ZeroGroundtruth {
-    fn nrows(&self) -> usize {
-        self.nrows
-    }
-
-    fn row(&self, _i: usize) -> &[u32] {
-        &self.row
-    }
-
-    fn ncols(&self) -> Option<usize> {
-        Some(self.row.len())
     }
 }
 

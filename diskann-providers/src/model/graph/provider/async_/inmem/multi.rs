@@ -354,9 +354,7 @@ where
                     None
                 } else {
                     let multi = accessor.store().multi[n.id.into_usize()].read().unwrap();
-                    // let tic = std::time::Instant::now();
                     let v = Chamfer::evaluate(query.as_view(), multi.as_ref().unwrap().as_view());
-                    // println!("elapsed = {}", tic.elapsed().as_secs());
                     Some((n.id, v))
                 }
             })
@@ -442,6 +440,7 @@ where
     type SearchAccessor<'a> = Accessor<'a, T, D>;
     type SearchAccessorError = common::Panics;
     type PostProcessor = glue::Pipeline<glue::FilterStartPoints, ChamferRerank>;
+    // type PostProcessor = glue::Pipeline<glue::FilterStartPoints, glue::CopyIds>;
 
     fn search_accessor<'a>(
         &'a self,
