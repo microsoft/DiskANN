@@ -692,6 +692,18 @@ impl<T: Copy> Mat<Standard<T>> {
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
     }
+
+    pub fn nrows(&self) -> usize {
+        self.repr.nrows()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.repr.ncols()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_raw_ptr().cast::<T>()
+    }
 }
 
 ////////////
@@ -806,6 +818,27 @@ impl<'a, T: Copy> MatRef<'a, Standard<T>> {
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    pub fn nrows(&self) -> usize {
+        self.repr.nrows()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.repr.ncols()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_raw_ptr().cast::<T>()
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), self.repr.num_elements()) }
+    }
+
+    pub fn as_legacy_view(&self) -> diskann_utils::views::MatrixView<'_, T> {
+        diskann_utils::views::MatrixView::try_from(self.as_slice(), self.nrows(), self.ncols())
+            .unwrap()
     }
 }
 
@@ -1011,6 +1044,18 @@ impl<'a, T: Copy> MatMut<'a, Standard<T>> {
     #[inline]
     pub fn vector_dim(&self) -> usize {
         self.repr.ncols()
+    }
+
+    pub fn nrows(&self) -> usize {
+        self.repr.nrows()
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.repr.ncols()
+    }
+
+    pub fn as_ptr(&self) -> *const T {
+        self.as_raw_ptr().cast::<T>()
     }
 }
 
