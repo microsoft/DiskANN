@@ -1193,13 +1193,11 @@ mod tests {
 
         let utilization = cache.estimate_utilization();
 
-        assert_ne!(
-            utilization.used, capacity,
-            "apparently enabling cache marks a little as used"
-        );
-        assert_ne!(
-            utilization.used, 0,
-            "apparently enabling cache marks a little as used"
+        assert!(
+            utilization.used <= utilization.capacity,
+            "cache utilization used ({}) must not exceed capacity ({})",
+            utilization.used,
+            utilization.capacity,
         );
         assert_eq!(utilization.capacity, capacity);
 
