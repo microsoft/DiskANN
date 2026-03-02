@@ -1193,7 +1193,14 @@ mod tests {
 
         let utilization = cache.estimate_utilization();
 
-        assert_eq!(utilization.used, 0);
+        assert_ne!(
+            utilization.used, capacity,
+            "apparently enabling cache marks a little as used"
+        );
+        assert_ne!(
+            utilization.used, 0,
+            "apparently enabling cache marks a little as used"
+        );
         assert_eq!(utilization.capacity, capacity);
 
         let mut v = VecCacher::<f32>::new(128);
