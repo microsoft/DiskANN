@@ -24,11 +24,9 @@ impl Cache {
     pub fn new(bytes: PowerOfTwo) -> diskann::ANNResult<Self> {
         let mut config = bf_tree::Config::default();
 
-        // N.B.: When `https://github.com/gim-home/Bf-Tree/issues/59` is resolved, set
-        // `cache_only(true)`. But until then, keep this as false to prevent hangs.
         config
             .storage_backend(bf_tree::StorageBackend::Memory)
-            .cache_only(false)
+            .cache_only(true)
             .cb_size_byte(bytes.raw());
 
         Ok(Self {
