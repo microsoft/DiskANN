@@ -125,16 +125,16 @@ where
             {
                 Ok(matched) => {
                     if matched {
-                        return sim * self.beta_value;
+                        sim * self.beta_value
                     } else {
-                        return sim;
+                        sim
                     }
                 }
                 Err(_) => {
                     //If predicate evaluation fails for any reason, we simply revert
                     //to unfiltered search.
                     tracing::warn!("Predicate evaluation failed");
-                    return sim;
+                    sim
                 }
             }
         } else {
@@ -182,16 +182,15 @@ where
             let doc = accessor.get_element(candidate.id).await?;
             let pe = PredicateEvaluator::new(doc.attributes());
 
-            if computer.is_valid_filter() {
-                if computer
+            if computer.is_valid_filter()
+                && computer
                     .filter_expr()
                     .encoded_filter_expr()
                     .as_ref()
                     .unwrap()
                     .accept(&pe)?
-                {
-                    filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
-                }
+            {
+                filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
             }
         }
 
