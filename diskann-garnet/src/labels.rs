@@ -6,7 +6,6 @@
 //!
 //! ## Design
 //!
-//! Unlike CDB-DiskANN which calls back to C++ via `AreDocumentsIncluded()`,
 //! Garnet sends a **pre-computed dense bitmap** where each bit position
 //! corresponds to a DiskANN internal ID (`u32`). This makes `is_match()`
 //! a simple bit lookup — no cross-FFI callback needed.
@@ -23,43 +22,30 @@ use diskann::graph::index::QueryLabelProvider;
 
 /// A zero-copy bitmap-based label provider for Garnet filtered vector search.
 ///
-/// Holds a raw pointer to the bitmap data owned by the FFI caller.
-/// No allocation — bit lookups are performed directly on the caller's memory.
+/// Borrows the bitmap data for lifetime `'a`. No allocation — bit lookups
+/// are performed directly on the caller's memory.
 ///
-/// # Safety
-///
-/// The bitmap pointer must remain valid and unmodified for the lifetime of
-/// this struct. In practice, the struct is created and dropped within a
-/// single FFI search call.
-pub struct GarnetQueryLabelProvider {
-    data: *const u8,
-    len: usize,
+/// For FFI usage, [`from_raw`](Self::from_raw) constructs a
+/// `GarnetQueryLabelProvider<'static>` from a raw pointer; the caller must
+/// guarantee the pointer remains valid for the duration of the search call.
+#[derive(Clone)]
+pub struct GarnetQueryLabelProvider<'a> {
+    data: &'a [u8],
 }
 
-// Safety: the bitmap data is read-only and the caller guarantees the pointer
-// is valid for the duration of the search call.
-unsafe impl Send for GarnetQueryLabelProvider {}
-unsafe impl Sync for GarnetQueryLabelProvider {}
-
-impl std::fmt::Debug for GarnetQueryLabelProvider {
+impl std::fmt::Debug for GarnetQueryLabelProvider<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GarnetQueryLabelProvider")
-            .field("len", &self.len)
+            .field("len", &self.data.len())
             .finish()
     }
 }
 
-impl Clone for GarnetQueryLabelProvider {
-    fn clone(&self) -> Self {
-        Self {
-            data: self.data,
-            len: self.len,
-        }
-    }
-}
-
-impl GarnetQueryLabelProvider {
-    /// Construct a `GarnetQueryLabelProvider` from raw bitmap bytes.
+impl GarnetQueryLabelProvider<'static> {
+    /// Construct a `GarnetQueryLabelProvider` from a raw pointer.
+    ///
+    /// Returns a `GarnetQueryLabelProvider<'static>` suitable for use with
+    /// `Arc<dyn QueryLabelProvider<u32>>`.
     ///
     /// # Arguments
     ///
@@ -73,49 +59,42 @@ impl GarnetQueryLabelProvider {
     /// of this struct.
     pub unsafe fn from_raw(data: *const u8, len: usize) -> Self {
         if data.is_null() || len == 0 {
-            return Self {
-                data: std::ptr::null(),
-                len: 0,
-            };
+            return Self { data: &[] };
         }
-        Self { data, len }
-    }
-
-    /// Construct a `GarnetQueryLabelProvider` from a byte slice.
-    #[allow(dead_code)]
-    pub fn from_bytes(bytes: &[u8]) -> Self {
-        if bytes.is_empty() {
-            Self {
-                data: std::ptr::null(),
-                len: 0,
-            }
-        } else {
-            Self {
-                data: bytes.as_ptr(),
-                len: bytes.len(),
-            }
+        Self {
+            data: unsafe { std::slice::from_raw_parts(data, len) },
         }
-    }
-
-    /// Check if the given internal ID has its bit set in the bitmap.
-    /// Empty bitmap (len == 0) matches all IDs (no filter).
-    /// If the bitmap is smaller than the ID being checked, it's considered a partial bitmap and out-of-range IDs are treated as matching (not filtered out)
-    #[inline(always)]
-    fn is_set(&self, id: u32) -> bool {
-        if self.len == 0 {
-            return true;
-        }
-        let byte_idx = (id / 8) as usize;
-        if byte_idx >= self.len {
-            return true;
-        }
-        let bit_idx = id % 8;
-        let byte = unsafe { *self.data.add(byte_idx) };
-        (byte >> bit_idx) & 1 == 1
     }
 }
 
-impl QueryLabelProvider<u32> for GarnetQueryLabelProvider {
+impl<'a> GarnetQueryLabelProvider<'a> {
+    /// Construct a `GarnetQueryLabelProvider` from a byte slice.
+    #[allow(dead_code)]
+    pub fn from_bytes(bytes: &'a [u8]) -> Self {
+        Self { data: bytes }
+    }
+
+    /// Check if the given internal ID has its bit set in the bitmap.
+    /// Empty bitmap matches all IDs (no filter).
+    /// If the bitmap is smaller than the ID being checked, it's considered a
+    /// partial bitmap and out-of-range IDs are treated as matching (not filtered out).
+    #[inline(always)]
+    fn is_set(&self, id: u32) -> bool {
+        if self.data.is_empty() {
+            return true;
+        }
+        let byte_idx = (id / 8) as usize;
+        match self.data.get(byte_idx) {
+            Some(&byte) => {
+                let bit_idx = id % 8;
+                (byte >> bit_idx) & 1 == 1
+            }
+            None => true, // partial bitmap — out-of-range matches
+        }
+    }
+}
+
+impl QueryLabelProvider<u32> for GarnetQueryLabelProvider<'_> {
     /// Check if the vector at `internal_id` passes the filter.
     ///
     /// Returns `true` if the corresponding bit is set in the bitmap,

@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use diskann::{
     ANNError, ANNResult,
-    graph::{
-        InplaceDeleteMethod, SearchOutputBuffer, glue::SearchStrategy, index::SearchStats, search,
-    },
+    graph::{InplaceDeleteMethod, glue::SearchStrategy, index::SearchStats, search},
     provider::{Accessor, DataProvider},
     utils::VectorRepr,
 };
@@ -20,61 +18,6 @@ use crate::{
     provider::{self, GarnetProvider},
 };
 
-/// Wraps `SearchResults` (FFI output buffer) with a provider and context so that
-/// `SearchOutputBuffer<u32>` can be implemented: each internal ID (u32) is converted
-/// to a `GarnetId` via `to_external_id` and written into the underlying buffer.
-/// Start point (internal ID 0) is skipped since it has no external ID mapping.
-///
-/// TODO: Once diskann-providers >= 0.45.0 exports BetaAccessor/BetaComputer/Unwrap,
-/// implement SearchStrategy<..., GarnetId> for BetaFilter directly and remove this wrapper.
-struct FilteredSearchResults<'a, 'b, T: VectorRepr> {
-    inner: &'a mut SearchResults<'b>,
-    provider: &'a GarnetProvider<T>,
-    context: &'a Context,
-}
-
-impl<T: VectorRepr> SearchOutputBuffer<u32> for FilteredSearchResults<'_, '_, T> {
-    fn size_hint(&self) -> Option<usize> {
-        self.inner.size_hint()
-    }
-
-    fn push(&mut self, id: u32, distance: f32) -> diskann::graph::BufferState {
-        // Skip start point (internal ID 0) which has no external ID mapping
-        if id == 0 {
-            if let Some(sz) = self.inner.size_hint()
-                && sz == 0
-            {
-                return diskann::graph::BufferState::Full;
-            } else {
-                return diskann::graph::BufferState::Available;
-            }
-        }
-
-        let eid = self.provider.to_external_id(self.context, id).unwrap();
-
-        self.inner.push(eid, distance)
-    }
-
-    fn current_len(&self) -> usize {
-        self.inner.current_len()
-    }
-
-    fn extend<Itr>(&mut self, itr: Itr) -> usize
-    where
-        Itr: IntoIterator<Item = (u32, f32)>,
-    {
-        let initial = self.inner.current_len();
-
-        for (id, dist) in itr {
-            if self.push(id, dist).is_full() {
-                break;
-            }
-        }
-
-        self.inner.current_len() - initial
-    }
-}
-
 /// Type-erased version of `DiskANNIndex<GarnetProvider>`.
 /// All vector data is passed as untyped byte slices.
 pub trait DynIndex: Send + Sync {
@@ -87,7 +30,7 @@ pub trait DynIndex: Send + Sync {
         context: &Context,
         data: &[u8],
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        filter: Option<(&GarnetQueryLabelProvider<'static>, f32)>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
@@ -96,7 +39,7 @@ pub trait DynIndex: Send + Sync {
         context: &Context,
         id: &GarnetId,
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        filter: Option<(&GarnetQueryLabelProvider<'static>, f32)>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
@@ -136,25 +79,13 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         context: &Context,
         data: &[u8],
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        filter: Option<(&GarnetQueryLabelProvider<'static>, f32)>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         let query = bytemuck::cast_slice::<u8, T>(data);
         if let Some((labels, beta)) = filter {
             let beta_filter = BetaFilter::new(FullPrecision, Arc::new(labels.clone()), beta);
-            let provider = self.inner.provider();
-            let mut filtered = FilteredSearchResults {
-                inner: output,
-                provider,
-                context,
-            };
-
-            let stats = self.search(&beta_filter, context, query, params, &mut filtered)?;
-
-            Ok(SearchStats {
-                result_count: filtered.current_len() as u32,
-                ..stats
-            })
+            self.search(&beta_filter, context, query, params, output)
         } else {
             self.search(&FullPrecision, context, query, params, output)
         }
@@ -165,7 +96,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         context: &Context,
         id: &GarnetId,
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider, f32)>,
+        filter: Option<(&GarnetQueryLabelProvider<'static>, f32)>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         let rt = tokio::runtime::Builder::new_current_thread()
