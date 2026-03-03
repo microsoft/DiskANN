@@ -65,7 +65,7 @@ NeighborsAndDistances<StaticIdType> StaticDiskIndex<DT>::search(
     std::vector<uint64_t> u64_ids(knn);
     diskann::QueryStats stats;
 
-    _index.cached_beam_search(query.data(), knn, complexity, u64_ids.data(), dists.mutable_data(), beam_width, false,
+    _index.cached_beam_search(query.data(), knn, complexity, u64_ids.data(), dists.mutable_data(), beam_width, std::numeric_limits<uint32_t>::max(), false,
                               &stats);
 
     auto r = ids.mutable_unchecked<1>();
