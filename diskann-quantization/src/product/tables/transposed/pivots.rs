@@ -11,7 +11,7 @@ use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector}
 use crate::{
     algorithms::kmeans,
     distances::{InnerProduct, SquaredL2},
-    multi_vector::{BlockTransposed, Mat},
+    multi_vector::BlockTransposed,
 };
 
 // The `Wide` type used as the group granularity for `Chunk`.
@@ -149,14 +149,14 @@ impl CompressionResult {
 #[derive(Debug)]
 pub struct Chunk {
     /// The data actually underlying the blocked representation.
-    data: Mat<BlockTransposed<f32, 16>>,
+    data: BlockTransposed<f32, 16>,
     /// The squared norms of each center.
     square_norms: Vec<f32>,
 }
 
 impl Chunk {
     const fn groupsize() -> usize {
-        Mat::<BlockTransposed<f32, 16>>::const_group_size()
+        BlockTransposed::<f32, 16>::const_group_size()
     }
 
     /// The number of queries that can be processed at a time in an efficient manner.
@@ -230,7 +230,7 @@ impl Chunk {
         }
 
         let square_norms = data.row_iter().map(kmeans::square_norm).collect();
-        let data = Mat::<BlockTransposed<f32, 16>>::from_strided(data);
+        let data = BlockTransposed::<f32, 16>::from_strided(data);
         Ok(Self { data, square_norms })
     }
 

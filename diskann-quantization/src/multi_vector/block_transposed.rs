@@ -1,10 +1,13 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
-//! Block-transposed matrix representation with configurable packing.
+//! Block-transposed matrix types with configurable packing.
 //!
-//! This module provides a [`Repr`] implementation for block-transposed matrices, where
-//! groups of `GROUP` rows are stored in transposed form to enable efficient SIMD
+//! This module provides block-transposed matrix types — [`BlockTransposed`] (owned),
+//! [`BlockTransposedRef`] (shared view), and [`BlockTransposedMut`] (mutable view) —
+//! where groups of `GROUP` rows are stored in transposed form to enable efficient SIMD
 //! processing. An optional packing factor `PACK` interleaves adjacent columns within
 //! each group, which can be used to feed SIMD instructions that operate on packed pairs
 //! (e.g. `vpmaddwd` with `PACK = 2`).
@@ -37,15 +40,36 @@
 //!
 //! ## `PACK = 2` (super-packed)
 //!
-//! With `GROUP = 4` and `PACK = 2`, adjacent column-pairs are interleaved per row
-//! within each group panel:
+//! With `GROUP = 4`, `PACK = 2`, and a logical matrix with rows `a`, `b`, `c`, `d`,
+//! `e`, `f` (each with **5** columns — odd, to show padding), adjacent column-pairs
+//! are interleaved per row within each group panel:
 //!
 //! ```text
-//! Col-group(0,1):  [r0_c0, r0_c1, r1_c0, r1_c1, r2_c0, r2_c1, r3_c0, r3_c1]
-//! Col-group(2,3):  [r0_c2, r0_c3, r1_c2, r1_c3, r2_c2, r2_c3, r3_c2, r3_c3]
+//!              GROUP × PACK (4 × 2 = 8)
+//!              <----------------------------->
+//!
+//!              +-----------------------------+    ^
+//!              | a0 a1  b0 b1  c0 c1  d0 d1  |    |  col-pair (0, 1)
+//!              | a2 a3  b2 b3  c2 c3  d2 d3  |    |  col-pair (2, 3)
+//!    Block 0   | a4 __  b4 __  c4 __  d4 __  |    |  col-pair (4, pad)
+//!    (Full)    +-----------------------------+    v
+//!              +-----------------------------+
+//!              | e0 e1  f0 f1  XX XX  XX XX  |       col-pair (0, 1)
+//!    Block 1   | e2 e3  f2 f3  XX XX  XX XX  |       col-pair (2, 3)
+//!    (Partial) | e4 __  f4 __  XX XX  XX XX  |       col-pair (4, pad)
+//!              +-----------------------------+
+//!
+//!    __ = zero (column padding)    XX = zero (row padding)
+//!    padded_ncols = 6  (5 rounded up to next multiple of PACK)
+//!    Block Size  = padded_ncols / PACK = 3 physical rows per block
 //! ```
 //!
-//! If `ncols` is not a multiple of `PACK`, the last column-group is zero-padded.
+//! Each physical row of a block holds one column-pair across all `GROUP` rows.
+//! For example, the first physical row stores columns `(0, 1)` for rows
+//! `a, b, c, d` interleaved as `[a0, a1, b0, b1, c0, c1, d0, d1]`.
+//!
+//! Because `ncols = 5` is odd (not a multiple of `PACK = 2`), the last
+//! column-pair `(4, pad)` is zero-padded: `[a4, 0, b4, 0, c4, 0, d4, 0]`.
 //!
 //! # Constraints
 //!
@@ -69,18 +93,34 @@ use crate::utils;
 /// Round `ncols` up to the next multiple of `PACK`.
 #[inline]
 fn padded_ncols<const PACK: usize>(ncols: usize) -> usize {
-    utils::div_round_up(ncols, PACK) * PACK
+    ncols.next_multiple_of(PACK)
 }
 
 /// Compute the total number of `T` elements required to store a block-transposed matrix
 /// of `nrows x ncols` with group size `GROUP` and packing factor `PACK`.
 ///
+/// This is the **unchecked** flavor — it assumes the caller has already validated that
+/// the dimensions do not overflow (e.g. after construction). For use in the constructor,
+/// prefer [`checked_compute_capacity`].
+///
 /// Compile-time constraints (`GROUP > 0`, `PACK > 0`, `GROUP % PACK == 0`) are enforced
-/// by [`BlockTransposed::_ASSERTIONS`]; this function does **not** duplicate them.
+/// by [`BlockTransposedRepr::_ASSERTIONS`]; this function does **not** duplicate them.
 #[inline]
 fn compute_capacity<const GROUP: usize, const PACK: usize>(nrows: usize, ncols: usize) -> usize {
-    let num_blocks = utils::div_round_up(nrows, GROUP);
-    GROUP * padded_ncols::<PACK>(ncols) * num_blocks
+    nrows.next_multiple_of(GROUP) * padded_ncols::<PACK>(ncols)
+}
+
+/// Checked variant of [`compute_capacity`] that returns `None` if any intermediate
+/// arithmetic overflows. Used by the constructor to reject impossibly large dimensions
+/// before committing to an allocation.
+#[inline]
+fn checked_compute_capacity<const GROUP: usize, const PACK: usize>(
+    nrows: usize,
+    ncols: usize,
+) -> Option<usize> {
+    nrows
+        .checked_next_multiple_of(GROUP)?
+        .checked_mul(ncols.checked_next_multiple_of(PACK)?)
 }
 
 /// Compute the linear index for the element at logical `(row, col)` in a block-transposed
@@ -106,28 +146,18 @@ fn col_offset<const GROUP: usize, const PACK: usize>(col: usize) -> usize {
     (col / PACK) * GROUP * PACK + (col % PACK)
 }
 
-/// Metadata for block-transposed matrices with optional packing.
+/// Internal layout descriptor for block-transposed matrices.
 ///
-/// Type parameter `T` is the element type (must be `Copy`), `GROUP` is the blocking
-/// factor (number of logical rows per block), and `PACK` is the column packing factor
-/// (number of adjacent columns interleaved within each group).
-///
-/// # Row Types
-///
-/// Because rows are not contiguous in memory, the row types are proxy structs:
-///
-/// - `Row<'a>`: [`BlockTransposedRow`] — a `Copy` handle supporting `Index<usize>` and
-///   `.iter()`.
-/// - `RowMut<'a>`: [`BlockTransposedRowMut`] — a mutable handle supporting
-///   `IndexMut<usize>`.
+/// This is not part of the public API — use [`BlockTransposed`], [`BlockTransposedRef`],
+/// or [`BlockTransposedMut`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlockTransposed<T, const GROUP: usize, const PACK: usize = 1> {
+pub(crate) struct BlockTransposedRepr<T, const GROUP: usize, const PACK: usize = 1> {
     nrows: usize,
     ncols: usize,
     _elem: PhantomData<T>,
 }
 
-impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, PACK> {
+impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRepr<T, GROUP, PACK> {
     // Compile-time assertions — evaluated whenever any method references this constant.
     const _ASSERTIONS: () = {
         assert!(GROUP > 0, "group size GROUP must be positive");
@@ -138,18 +168,15 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
         );
     };
 
-    /// Create a new `BlockTransposed` descriptor.
+    /// Create a new `BlockTransposedRepr` descriptor.
     ///
     /// Successful construction requires that the total memory for the backing allocation
     /// does not exceed `isize::MAX`.
     pub fn new(nrows: usize, ncols: usize) -> Result<Self, Overflow> {
         let () = Self::_ASSERTIONS;
-        // Use the *capacity* (which includes padding for partial blocks and column
-        // padding) for the overflow check so that the layout is always valid.
-        let capacity = compute_capacity::<GROUP, PACK>(nrows, ncols);
-        // Re-use Overflow::check but with the artificial "capacity x 1" shape so
-        // the byte-budget is checked correctly.
-        Overflow::check::<T>(capacity, 1)?;
+        let capacity = checked_compute_capacity::<GROUP, PACK>(nrows, ncols)
+            .ok_or_else(|| Overflow::for_type::<T>(nrows, ncols))?;
+        Overflow::check_byte_budget::<T>(capacity, nrows, ncols)?;
         Ok(Self {
             nrows,
             ncols,
@@ -166,52 +193,50 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     }
 
     /// Number of logical rows.
+    #[inline]
     fn nrows(&self) -> usize {
         self.nrows
     }
 
     /// Number of logical columns (dimensionality).
+    #[inline]
     pub fn ncols(&self) -> usize {
         self.ncols
     }
 
     /// Number of physical (padded) columns — logical columns rounded up to
     /// the next multiple of `PACK`.
+    #[inline]
     pub fn padded_ncols(&self) -> usize {
         padded_ncols::<PACK>(self.ncols)
     }
 
-    /// The group size (number of logical rows per complete block).
-    pub const fn group_size() -> usize {
-        GROUP
-    }
-
-    /// The packing factor.
-    pub const fn pack_size() -> usize {
-        PACK
-    }
-
     /// Number of completely full blocks.
+    #[inline]
     pub fn full_blocks(&self) -> usize {
         self.nrows / GROUP
     }
 
     /// Total number of blocks including a possible partially-filled tail.
+    #[inline]
     pub fn num_blocks(&self) -> usize {
-        utils::div_round_up(self.nrows, GROUP)
+        self.nrows.div_ceil(GROUP)
     }
 
     /// Number of valid elements in the last block, or 0 if all blocks are full.
+    #[inline]
     pub fn remainder(&self) -> usize {
         self.nrows % GROUP
     }
 
     /// The stride (in elements) between the start of consecutive blocks.
+    #[inline]
     fn block_stride(&self) -> usize {
         GROUP * self.padded_ncols()
     }
 
     /// The linear offset of the start of `block`.
+    #[inline]
     fn block_offset(&self, block: usize) -> usize {
         block * self.block_stride()
     }
@@ -237,8 +262,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     unsafe fn box_to_mat(self, b: Box<[T]>) -> Mat<Self> {
         debug_assert_eq!(b.len(), self.storage_len(), "safety contract violated");
 
-        // SAFETY: Box guarantees the returned pointer is non-null.
-        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(b)) }.cast::<u8>();
+        let ptr = utils::box_into_nonnull(b);
 
         // SAFETY: `ptr` is properly aligned and compatible with our layout.
         unsafe { Mat::from_raw_parts(self, ptr) }
@@ -246,22 +270,22 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Row proxy types
+// Row view types
 // ════════════════════════════════════════════════════════════════════
 
 /// An immutable view of a single logical row in a block-transposed matrix.
 ///
 /// Because the elements of a logical row are strided (not contiguous), this struct
-/// acts as a lightweight proxy that supports indexed access and iteration.
+/// provides indexed access and iteration over the row's elements.
 #[derive(Debug, Clone, Copy)]
-pub struct BlockTransposedRow<'a, T, const GROUP: usize, const PACK: usize = 1> {
+pub struct Row<'a, T, const GROUP: usize, const PACK: usize = 1> {
     /// Pointer to the element at `(row, col=0)` in the backing allocation.
     base: *const T,
     ncols: usize,
     _lifetime: PhantomData<&'a T>,
 }
 
-impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRow<'_, T, GROUP, PACK> {
+impl<T: Copy, const GROUP: usize, const PACK: usize> Row<'_, T, GROUP, PACK> {
     /// Number of elements (columns) in this row.
     #[inline]
     pub fn len(&self) -> usize {
@@ -287,8 +311,8 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRow<'_, T, G
 
     /// Return an iterator over the elements of this row.
     #[inline]
-    pub fn iter(&self) -> BlockTransposedRowIter<'_, T, GROUP, PACK> {
-        BlockTransposedRowIter {
+    pub fn iter(&self) -> RowIter<'_, T, GROUP, PACK> {
+        RowIter {
             base: self.base,
             col: 0,
             ncols: self.ncols,
@@ -298,7 +322,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRow<'_, T, G
 }
 
 impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<usize>
-    for BlockTransposedRow<'_, T, GROUP, PACK>
+    for Row<'_, T, GROUP, PACK>
 {
     type Output = T;
 
@@ -314,18 +338,16 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<usize>
     }
 }
 
-/// Iterator over the elements of a [`BlockTransposedRow`].
+/// Iterator over the elements of a [`Row`].
 #[derive(Debug, Clone)]
-pub struct BlockTransposedRowIter<'a, T, const GROUP: usize, const PACK: usize = 1> {
+pub struct RowIter<'a, T, const GROUP: usize, const PACK: usize = 1> {
     base: *const T,
     col: usize,
     ncols: usize,
     _lifetime: PhantomData<&'a T>,
 }
 
-impl<T: Copy, const GROUP: usize, const PACK: usize> Iterator
-    for BlockTransposedRowIter<'_, T, GROUP, PACK>
-{
+impl<T: Copy, const GROUP: usize, const PACK: usize> Iterator for RowIter<'_, T, GROUP, PACK> {
     type Item = T;
 
     #[inline]
@@ -347,23 +369,23 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> Iterator
 }
 
 impl<T: Copy, const GROUP: usize, const PACK: usize> ExactSizeIterator
-    for BlockTransposedRowIter<'_, T, GROUP, PACK>
+    for RowIter<'_, T, GROUP, PACK>
 {
 }
 impl<T: Copy, const GROUP: usize, const PACK: usize> std::iter::FusedIterator
-    for BlockTransposedRowIter<'_, T, GROUP, PACK>
+    for RowIter<'_, T, GROUP, PACK>
 {
 }
 
 /// A mutable view of a single logical row in a block-transposed matrix.
 #[derive(Debug)]
-pub struct BlockTransposedRowMut<'a, T, const GROUP: usize, const PACK: usize = 1> {
+pub struct RowMut<'a, T, const GROUP: usize, const PACK: usize = 1> {
     base: *mut T,
     ncols: usize,
     _lifetime: PhantomData<&'a mut T>,
 }
 
-impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRowMut<'_, T, GROUP, PACK> {
+impl<T: Copy, const GROUP: usize, const PACK: usize> RowMut<'_, T, GROUP, PACK> {
     /// Number of elements (columns) in this row.
     #[inline]
     pub fn len(&self) -> usize {
@@ -405,7 +427,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRowMut<'_, T
 }
 
 impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<usize>
-    for BlockTransposedRowMut<'_, T, GROUP, PACK>
+    for RowMut<'_, T, GROUP, PACK>
 {
     type Output = T;
 
@@ -422,7 +444,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<usize>
 }
 
 impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::IndexMut<usize>
-    for BlockTransposedRowMut<'_, T, GROUP, PACK>
+    for RowMut<'_, T, GROUP, PACK>
 {
     #[inline]
     fn index_mut(&mut self, col: usize) -> &mut Self::Output {
@@ -440,47 +462,35 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::IndexMut<usize>
 // Send / Sync
 // ════════════════════════════════════════════════════════════════════
 
-// SAFETY: `BlockTransposedRow` holds a `*const T` with shared-reference (`&'a T`)
+// SAFETY: `Row` holds a `*const T` with shared-reference (`&'a T`)
 // semantics. Sending it across threads is safe when `T: Sync` (the data behind the
 // shared reference may be observed from another thread).
-unsafe impl<T: Sync, const GROUP: usize, const PACK: usize> Send
-    for BlockTransposedRow<'_, T, GROUP, PACK>
-{
-}
+unsafe impl<T: Sync, const GROUP: usize, const PACK: usize> Send for Row<'_, T, GROUP, PACK> {}
 
-// SAFETY: Sharing `&BlockTransposedRow` across threads is safe when `T: Sync`, because
+// SAFETY: Sharing `&Row` across threads is safe when `T: Sync`, because
 // it only allows read access to the underlying `T` values.
-unsafe impl<T: Sync, const GROUP: usize, const PACK: usize> Sync
-    for BlockTransposedRow<'_, T, GROUP, PACK>
-{
-}
+unsafe impl<T: Sync, const GROUP: usize, const PACK: usize> Sync for Row<'_, T, GROUP, PACK> {}
 
-// SAFETY: `BlockTransposedRowMut` holds a `*mut T` with exclusive-reference (`&'a mut T`)
+// SAFETY: `RowMut` holds a `*mut T` with exclusive-reference (`&'a mut T`)
 // semantics. Sending it across threads is safe when `T: Send` (ownership of the exclusive
 // reference is transferred to the other thread).
-unsafe impl<T: Send, const GROUP: usize, const PACK: usize> Send
-    for BlockTransposedRowMut<'_, T, GROUP, PACK>
-{
-}
+unsafe impl<T: Send, const GROUP: usize, const PACK: usize> Send for RowMut<'_, T, GROUP, PACK> {}
 
-// SAFETY: Sharing `&BlockTransposedRowMut` across threads is safe when `T: Sync`,
+// SAFETY: Sharing `&RowMut` across threads is safe when `T: Sync`,
 // because shared access provides only read-only (`Index`) access to the `T` values.
-unsafe impl<T: Sync, const GROUP: usize, const PACK: usize> Sync
-    for BlockTransposedRowMut<'_, T, GROUP, PACK>
-{
-}
+unsafe impl<T: Sync, const GROUP: usize, const PACK: usize> Sync for RowMut<'_, T, GROUP, PACK> {}
 
 // ════════════════════════════════════════════════════════════════════
 // Repr / ReprMut / ReprOwned
 // ════════════════════════════════════════════════════════════════════
 
-// SAFETY: `get_row` produces a valid `BlockTransposedRow` for valid indices. The layout
+// SAFETY: `get_row` produces a valid `Row` for valid indices. The layout
 // reports the correct capacity for the block-transposed backing allocation.
 unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> Repr
-    for BlockTransposed<T, GROUP, PACK>
+    for BlockTransposedRepr<T, GROUP, PACK>
 {
     type Row<'a>
-        = BlockTransposedRow<'a, T, GROUP, PACK>
+        = Row<'a, T, GROUP, PACK>
     where
         Self: 'a;
 
@@ -502,7 +512,7 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> Repr
         // least `self.storage_len()` elements, so the computed offset is in bounds.
         let row_base = unsafe { base_ptr.add(offset) };
 
-        BlockTransposedRow {
+        Row {
             base: row_base,
             ncols: self.ncols,
             _lifetime: PhantomData,
@@ -510,14 +520,14 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> Repr
     }
 }
 
-// SAFETY: `get_row_mut` produces a valid `BlockTransposedRowMut`. Disjoint row indices
+// SAFETY: `get_row_mut` produces a valid `RowMut`. Disjoint row indices
 // produce disjoint base pointers because each row within a block starts at a unique
 // offset modulo GROUP.
 unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprMut
-    for BlockTransposed<T, GROUP, PACK>
+    for BlockTransposedRepr<T, GROUP, PACK>
 {
     type RowMut<'a>
-        = BlockTransposedRowMut<'a, T, GROUP, PACK>
+        = RowMut<'a, T, GROUP, PACK>
     where
         Self: 'a;
 
@@ -531,7 +541,7 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprMut
         // the backing allocation. Same reasoning as `get_row`.
         let row_base = unsafe { base_ptr.add(offset) };
 
-        BlockTransposedRowMut {
+        RowMut {
             base: row_base,
             ncols: self.ncols,
             _lifetime: PhantomData,
@@ -542,7 +552,7 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprMut
 // SAFETY: Memory is deallocated by reconstructing the `Box<[T]>` that was created during
 // `NewOwned`.
 unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprOwned
-    for BlockTransposed<T, GROUP, PACK>
+    for BlockTransposedRepr<T, GROUP, PACK>
 {
     unsafe fn drop(self, ptr: NonNull<u8>) {
         // SAFETY: `ptr` was obtained from `Box::into_raw` with length `self.storage_len()`.
@@ -560,7 +570,7 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprOwned
 
 // SAFETY: The returned `Mat` contains a `Box` with exactly `self.storage_len()` elements.
 unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewOwned<T>
-    for BlockTransposed<T, GROUP, PACK>
+    for BlockTransposedRepr<T, GROUP, PACK>
 {
     type Error = crate::error::Infallible;
 
@@ -574,7 +584,7 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewOwned<T>
 
 // SAFETY: This safely re-uses `<Self as NewOwned<T>>`.
 unsafe impl<T: Copy + Default, const GROUP: usize, const PACK: usize> NewOwned<Defaulted>
-    for BlockTransposed<T, GROUP, PACK>
+    for BlockTransposedRepr<T, GROUP, PACK>
 {
     type Error = crate::error::Infallible;
 
@@ -585,16 +595,12 @@ unsafe impl<T: Copy + Default, const GROUP: usize, const PACK: usize> NewOwned<D
 
 // SAFETY: This checks slice length against storage_len.
 unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewRef<T>
-    for BlockTransposed<T, GROUP, PACK>
+    for BlockTransposedRepr<T, GROUP, PACK>
 {
     type Error = SliceError;
 
     fn new_ref(self, data: &[T]) -> Result<MatRef<'_, Self>, Self::Error> {
         self.check_slice(data)?;
-
-        // `as_nonnull` relies on slices having non-null base pointers; sanity-check
-        // that an empty allocation is only used with a zero-capacity repr.
-        debug_assert!(!data.is_empty() || self.storage_len() == 0);
 
         // SAFETY: `check_slice` verified the length.
         Ok(unsafe { MatRef::from_raw_parts(self, utils::as_nonnull(data).cast::<u8>()) })
@@ -603,15 +609,12 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewRef<T>
 
 // SAFETY: This checks slice length against storage_len.
 unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewMut<T>
-    for BlockTransposed<T, GROUP, PACK>
+    for BlockTransposedRepr<T, GROUP, PACK>
 {
     type Error = SliceError;
 
     fn new_mut(self, data: &mut [T]) -> Result<MatMut<'_, Self>, Self::Error> {
         self.check_slice(data)?;
-
-        // See `new_ref` for rationale.
-        debug_assert!(!data.is_empty() || self.storage_len() == 0);
 
         // SAFETY: `check_slice` verified the length.
         Ok(unsafe { MatMut::from_raw_parts(self, utils::as_nonnull_mut(data).cast::<u8>()) })
@@ -619,160 +622,535 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewMut<T>
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Inherent methods on Mat / MatRef / MatMut
+// Public wrapper types
 // ════════════════════════════════════════════════════════════════════
 
-/// Shared helper methods available on all three matrix flavours.
-macro_rules! impl_block_transposed_accessors {
-    ($ty:ident $(<$lt:lifetime>)? , $ptr_method:ident, $cast:ty) => {
-        impl<$($lt,)? T: Copy, const GROUP: usize, const PACK: usize>
-            $ty<$($lt,)? BlockTransposed<T, GROUP, PACK>>
-        {
-            /// Returns the number of logical rows.
-            pub fn nrows(&self) -> usize {
-                self.repr.nrows()
-            }
-
-            /// Returns the number of logical columns (dimensionality).
-            pub fn ncols(&self) -> usize {
-                self.repr.ncols()
-            }
-
-            /// Returns the number of physical (padded) columns.
-            pub fn padded_ncols(&self) -> usize {
-                self.repr.padded_ncols()
-            }
-
-            /// Alias for [`ncols`](Self::ncols) — the number of logical columns.
-            pub fn block_size(&self) -> usize {
-                self.repr.ncols()
-            }
-
-            /// Group size (blocking factor `GROUP`).
-            pub const fn group_size(&self) -> usize {
-                GROUP
-            }
-
-            /// Group size (blocking factor `GROUP`) as a `const` function on the *type*.
-            pub const fn const_group_size() -> usize {
-                GROUP
-            }
-
-            /// Packing factor `PACK`.
-            pub const fn pack_size(&self) -> usize {
-                PACK
-            }
-
-            /// Number of completely full blocks.
-            pub fn full_blocks(&self) -> usize {
-                self.repr.full_blocks()
-            }
-
-            /// Total number of blocks including any partially-filled tail.
-            pub fn num_blocks(&self) -> usize {
-                self.repr.num_blocks()
-            }
-
-            /// Number of valid elements in the last partially-full block, or 0 if all
-            /// blocks are full.
-            pub fn remainder(&self) -> usize {
-                self.repr.remainder()
-            }
-
-            /// Return a raw typed pointer to the start of the backing data.
-            pub fn as_ptr(&self) -> *const T {
-                self.ptr.as_ptr().cast::<T>()
-            }
-
-            /// Return a pointer to the start of the given block.
-            ///
-            /// The caller may assume that for the returned pointer `ptr`,
-            /// `[ptr, ptr + GROUP * padded_ncols)` points to valid memory, even for the
-            /// remainder block.
-            ///
-            /// # Safety
-            ///
-            /// `block` must be less than `self.num_blocks()`. No bounds check is
-            /// performed in release builds; callers must verify the index themselves
-            /// (e.g. by iterating `0..self.num_blocks()`).
-            pub unsafe fn block_ptr_unchecked(&self, block: usize) -> *const T {
-                debug_assert!(block < self.num_blocks());
-                // SAFETY: Caller asserts `block < self.num_blocks()`.
-                unsafe { self.as_ptr().add(self.repr.block_offset(block)) }
-            }
-
-            /// Return a view over a full block as a [`MatrixView`].
-            ///
-            /// The returned view has `padded_ncols / PACK` rows and `GROUP * PACK`
-            /// columns. For `PACK == 1` this simplifies to `ncols` rows and `GROUP`
-            /// columns (the standard transposed interpretation).
-            ///
-            /// # Panics
-            ///
-            /// Panics if `block >= self.full_blocks()`.
-            #[allow(clippy::expect_used)]
-            pub fn block(&self, block: usize) -> MatrixView<'_, T> {
-                assert!(block < self.full_blocks());
-                let offset = self.repr.block_offset(block);
-                let stride = self.repr.block_stride();
-                // SAFETY: `block < full_blocks()` (asserted above) guarantees
-                // `offset + stride` is within the backing allocation.
-                let data: &[T] = unsafe {
-                    std::slice::from_raw_parts(self.as_ptr().add(offset), stride)
-                };
-                MatrixView::try_from(data, self.padded_ncols() / PACK, GROUP * PACK)
-                    .expect("base data should have been sized correctly")
-            }
-
-            /// Return a view over the remainder block, or `None` if there is no
-            /// remainder.
-            ///
-            /// The returned view has the same dimensions as [`block()`](Self::block):
-            /// `padded_ncols / PACK` rows and `GROUP * PACK` columns.
-            #[allow(clippy::expect_used)]
-            pub fn remainder_block(&self) -> Option<MatrixView<'_, T>> {
-                if self.remainder() == 0 {
-                    None
-                } else {
-                    let offset = self.repr.block_offset(self.full_blocks());
-                    let stride = self.repr.block_stride();
-                    // SAFETY: The remainder block exists (`remainder() != 0`),
-                    // so `offset + stride` is within the backing allocation.
-                    let data: &[T] = unsafe {
-                        std::slice::from_raw_parts(self.as_ptr().add(offset), stride)
-                    };
-                    Some(
-                        MatrixView::try_from(data, self.padded_ncols() / PACK, GROUP * PACK)
-                            .expect("base data should have been sized correctly")
-                    )
-                }
-            }
-
-            /// Retrieve the value at the logical `(row, col)`.
-            ///
-            /// # Panics
-            ///
-            /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-            #[inline]
-            pub fn get_element(&self, row: usize, col: usize) -> T {
-                assert!(row < self.nrows(), "row {row} out of bounds (nrows = {})", self.nrows());
-                assert!(col < self.ncols(), "col {col} out of bounds (ncols = {})", self.ncols());
-                let idx = linear_index::<GROUP, PACK>(row, col, self.ncols());
-                // SAFETY: bounds checked above.
-                unsafe { *self.as_ptr().add(idx) }
-            }
-        }
-    };
+/// An owning block-transposed matrix.
+///
+/// Wraps an owned allocation of `T` elements laid out in block-transposed order.
+/// See the [module-level documentation](self) for layout details.
+///
+/// For shared and mutable views, see [`BlockTransposedRef`] and [`BlockTransposedMut`].
+///
+/// # Row Types
+///
+/// Because rows are not contiguous in memory, the row types are view structs:
+///
+/// - [`Row`] — a `Copy` handle supporting `Index<usize>` and `.iter()`.
+/// - [`RowMut`] — a mutable handle supporting `IndexMut<usize>`.
+#[derive(Debug)]
+pub struct BlockTransposed<T: Copy, const GROUP: usize, const PACK: usize = 1> {
+    data: Mat<BlockTransposedRepr<T, GROUP, PACK>>,
 }
 
-impl_block_transposed_accessors!(Mat, as_raw_ptr, *const u8);
-impl_block_transposed_accessors!(MatRef<'a>, as_raw_ptr, *const u8);
-impl_block_transposed_accessors!(MatMut<'a>, as_raw_ptr, *const u8);
+/// A shared (immutable) view of a block-transposed matrix.
+///
+/// Created by [`BlockTransposed::as_view`].
+#[derive(Debug, Clone, Copy)]
+pub struct BlockTransposedRef<'a, T: Copy, const GROUP: usize, const PACK: usize = 1> {
+    data: MatRef<'a, BlockTransposedRepr<T, GROUP, PACK>>,
+}
 
-/// Mutable-specific block helpers and factory methods.
-impl<T: Copy + Default, const GROUP: usize, const PACK: usize>
-    Mat<BlockTransposed<T, GROUP, PACK>>
-{
+/// A mutable view of a block-transposed matrix.
+///
+/// Created by [`BlockTransposed::as_view_mut`].
+pub struct BlockTransposedMut<'a, T: Copy, const GROUP: usize, const PACK: usize = 1> {
+    data: MatMut<'a, BlockTransposedRepr<T, GROUP, PACK>>,
+}
+
+// ── BlockTransposedRef (core read implementations) ───────────────
+
+impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, T, GROUP, PACK> {
+    /// Returns the number of logical rows.
+    #[inline]
+    pub fn nrows(&self) -> usize {
+        self.data.repr().nrows()
+    }
+
+    /// Returns the number of logical columns (dimensionality).
+    #[inline]
+    pub fn ncols(&self) -> usize {
+        self.data.repr().ncols()
+    }
+
+    /// Returns the number of physical (padded) columns.
+    #[inline]
+    pub fn padded_ncols(&self) -> usize {
+        self.data.repr().padded_ncols()
+    }
+
+    /// Alias for [`ncols`](Self::ncols) — the number of logical columns.
+    #[inline]
+    pub fn block_size(&self) -> usize {
+        self.data.repr().ncols()
+    }
+
+    /// Group size (blocking factor `GROUP`).
+    pub const fn group_size(&self) -> usize {
+        GROUP
+    }
+
+    /// Group size (blocking factor `GROUP`) as a `const` function on the *type*.
+    pub const fn const_group_size() -> usize {
+        GROUP
+    }
+
+    /// Packing factor `PACK`.
+    pub const fn pack_size(&self) -> usize {
+        PACK
+    }
+
+    /// Number of completely full blocks.
+    #[inline]
+    pub fn full_blocks(&self) -> usize {
+        self.data.repr().full_blocks()
+    }
+
+    /// Total number of blocks including any partially-filled tail.
+    #[inline]
+    pub fn num_blocks(&self) -> usize {
+        self.data.repr().num_blocks()
+    }
+
+    /// Number of valid elements in the last partially-full block, or 0 if all
+    /// blocks are full.
+    #[inline]
+    pub fn remainder(&self) -> usize {
+        self.data.repr().remainder()
+    }
+
+    /// Return a raw typed pointer to the start of the backing data.
+    #[inline]
+    pub fn as_ptr(&self) -> *const T {
+        self.data.as_raw_ptr().cast::<T>()
+    }
+
+    /// Return the backing data as a shared slice.
+    ///
+    /// The returned slice has `storage_len()` elements — this includes all padding
+    /// for partial blocks and column-group alignment.
+    #[inline]
+    pub fn as_slice(&self) -> &'a [T] {
+        let len = self.data.repr().storage_len();
+        // SAFETY: The backing allocation has exactly `storage_len()` elements of type T.
+        unsafe { std::slice::from_raw_parts(self.as_ptr(), len) }
+    }
+
+    /// Return a pointer to the start of the given block.
+    ///
+    /// The caller may assume that for the returned pointer `ptr`,
+    /// `[ptr, ptr + GROUP * padded_ncols)` points to valid memory, even for the
+    /// remainder block.
+    ///
+    /// # Safety
+    ///
+    /// `block` must be less than `self.num_blocks()`. No bounds check is
+    /// performed in release builds; callers must verify the index themselves
+    /// (e.g. by iterating `0..self.num_blocks()`).
+    #[inline]
+    pub unsafe fn block_ptr_unchecked(&self, block: usize) -> *const T {
+        debug_assert!(block < self.num_blocks());
+        // SAFETY: Caller asserts `block < self.num_blocks()`.
+        unsafe { self.as_ptr().add(self.data.repr().block_offset(block)) }
+    }
+
+    /// Return a view over a full block as a [`MatrixView`].
+    ///
+    /// The returned view has `padded_ncols / PACK` rows and `GROUP * PACK`
+    /// columns. For `PACK == 1` this simplifies to `ncols` rows and `GROUP`
+    /// columns (the standard transposed interpretation).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `block >= self.full_blocks()`.
+    #[allow(clippy::expect_used)]
+    pub fn block(&self, block: usize) -> MatrixView<'a, T> {
+        assert!(block < self.full_blocks());
+        let offset = self.data.repr().block_offset(block);
+        let stride = self.data.repr().block_stride();
+        // SAFETY: `block < full_blocks()` (asserted above) guarantees
+        // `offset + stride` is within the backing allocation.
+        let data: &[T] = unsafe { std::slice::from_raw_parts(self.as_ptr().add(offset), stride) };
+        MatrixView::try_from(data, self.padded_ncols() / PACK, GROUP * PACK)
+            .expect("base data should have been sized correctly")
+    }
+
+    /// Return a view over the remainder block, or `None` if there is no
+    /// remainder.
+    ///
+    /// The returned view has the same dimensions as [`block()`](Self::block):
+    /// `padded_ncols / PACK` rows and `GROUP * PACK` columns.
+    #[allow(clippy::expect_used)]
+    pub fn remainder_block(&self) -> Option<MatrixView<'a, T>> {
+        if self.remainder() == 0 {
+            None
+        } else {
+            let offset = self.data.repr().block_offset(self.full_blocks());
+            let stride = self.data.repr().block_stride();
+            // SAFETY: The remainder block exists (`remainder() != 0`),
+            // so `offset + stride` is within the backing allocation.
+            let data: &[T] =
+                unsafe { std::slice::from_raw_parts(self.as_ptr().add(offset), stride) };
+            Some(
+                MatrixView::try_from(data, self.padded_ncols() / PACK, GROUP * PACK)
+                    .expect("base data should have been sized correctly"),
+            )
+        }
+    }
+
+    /// Retrieve the value at the logical `(row, col)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
+    #[inline]
+    pub fn get_element(&self, row: usize, col: usize) -> T {
+        assert!(
+            row < self.nrows(),
+            "row {row} out of bounds (nrows = {})",
+            self.nrows()
+        );
+        assert!(
+            col < self.ncols(),
+            "col {col} out of bounds (ncols = {})",
+            self.ncols()
+        );
+        let idx = linear_index::<GROUP, PACK>(row, col, self.ncols());
+        // SAFETY: bounds checked above.
+        unsafe { *self.as_ptr().add(idx) }
+    }
+
+    /// Get an immutable row view, or `None` if `i` is out of bounds.
+    #[inline]
+    pub fn get_row(&self, i: usize) -> Option<Row<'_, T, GROUP, PACK>> {
+        self.data.get_row(i)
+    }
+}
+
+// ── BlockTransposedMut ───────────────────────────────────────────
+
+impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, T, GROUP, PACK> {
+    /// Borrow as an immutable [`BlockTransposedRef`].
+    #[inline]
+    pub fn as_view(&self) -> BlockTransposedRef<'_, T, GROUP, PACK> {
+        BlockTransposedRef {
+            data: self.data.as_view(),
+        }
+    }
+
+    // ── Delegated read methods ───────────────────────────────────
+
+    /// Returns the number of logical rows.
+    pub fn nrows(&self) -> usize {
+        self.as_view().nrows()
+    }
+
+    /// Returns the number of logical columns (dimensionality).
+    pub fn ncols(&self) -> usize {
+        self.as_view().ncols()
+    }
+
+    /// Returns the number of physical (padded) columns.
+    pub fn padded_ncols(&self) -> usize {
+        self.as_view().padded_ncols()
+    }
+
+    /// Alias for [`ncols`](Self::ncols).
+    pub fn block_size(&self) -> usize {
+        self.as_view().block_size()
+    }
+
+    /// Group size (blocking factor `GROUP`).
+    pub const fn group_size(&self) -> usize {
+        GROUP
+    }
+
+    /// Group size as `const` function on the *type*.
+    pub const fn const_group_size() -> usize {
+        GROUP
+    }
+
+    /// Packing factor `PACK`.
+    pub const fn pack_size(&self) -> usize {
+        PACK
+    }
+
+    /// Number of completely full blocks.
+    #[inline]
+    pub fn full_blocks(&self) -> usize {
+        self.as_view().full_blocks()
+    }
+
+    /// Total number of blocks including any partially-filled tail.
+    #[inline]
+    pub fn num_blocks(&self) -> usize {
+        self.as_view().num_blocks()
+    }
+
+    /// Number of valid elements in the last partially-full block.
+    #[inline]
+    pub fn remainder(&self) -> usize {
+        self.as_view().remainder()
+    }
+
+    /// Raw typed pointer to the start of the backing data.
+    #[inline]
+    pub fn as_ptr(&self) -> *const T {
+        self.as_view().as_ptr()
+    }
+
+    /// The backing data as a shared slice.
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
+        self.as_view().as_slice()
+    }
+
+    /// Return a pointer to the start of the given block.
+    ///
+    /// # Safety
+    ///
+    /// `block` must be less than `self.num_blocks()`.
+    #[inline]
+    pub unsafe fn block_ptr_unchecked(&self, block: usize) -> *const T {
+        // SAFETY: Caller asserts block < num_blocks.
+        unsafe { self.as_view().block_ptr_unchecked(block) }
+    }
+
+    /// Return a view over a full block.
+    #[allow(clippy::expect_used)]
+    pub fn block(&self, block: usize) -> MatrixView<'_, T> {
+        self.as_view().block(block)
+    }
+
+    /// Return a view over the remainder block, or `None` if there is no remainder.
+    #[allow(clippy::expect_used)]
+    pub fn remainder_block(&self) -> Option<MatrixView<'_, T>> {
+        self.as_view().remainder_block()
+    }
+
+    /// Retrieve the value at the logical `(row, col)`.
+    #[inline]
+    pub fn get_element(&self, row: usize, col: usize) -> T {
+        self.as_view().get_element(row, col)
+    }
+
+    /// Get an immutable row view, or `None` if `i` is out of bounds.
+    #[inline]
+    pub fn get_row(&self, i: usize) -> Option<Row<'_, T, GROUP, PACK>> {
+        self.data.get_row(i)
+    }
+
+    // ── Mutable methods ──────────────────────────────────────────
+
+    /// Return the backing data as a mutable slice.
+    ///
+    /// The returned slice has `storage_len()` elements (including all padding).
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        let len = self.data.repr().storage_len();
+        // SAFETY: We have `&mut self` so exclusive access is guaranteed.
+        unsafe { std::slice::from_raw_parts_mut(self.data.as_raw_mut_ptr().cast::<T>(), len) }
+    }
+
+    /// Return a mutable view over a full block.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `block >= self.full_blocks()`.
+    #[allow(clippy::expect_used)]
+    pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
+        let repr = *self.data.repr();
+        assert!(block < repr.full_blocks());
+        let offset = repr.block_offset(block);
+        let stride = repr.block_stride();
+        let pncols = repr.padded_ncols();
+        // SAFETY: `block < full_blocks()`, so the range is within the allocation.
+        let data: &mut [T] = unsafe {
+            std::slice::from_raw_parts_mut(
+                self.data.as_raw_mut_ptr().cast::<T>().add(offset),
+                stride,
+            )
+        };
+        MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
+            .expect("base data should have been sized correctly")
+    }
+
+    /// Return a mutable view over the remainder block, or `None` if there is no
+    /// remainder.
+    #[allow(clippy::expect_used)]
+    pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
+        let repr = *self.data.repr();
+        if repr.remainder() == 0 {
+            None
+        } else {
+            let offset = repr.block_offset(repr.full_blocks());
+            let stride = repr.block_stride();
+            let pncols = repr.padded_ncols();
+            // SAFETY: Remainder block exists, so the range is within the allocation.
+            let data: &mut [T] = unsafe {
+                std::slice::from_raw_parts_mut(
+                    self.data.as_raw_mut_ptr().cast::<T>().add(offset),
+                    stride,
+                )
+            };
+            Some(
+                MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
+                    .expect("base data should have been sized correctly"),
+            )
+        }
+    }
+
+    /// Get a mutable row view, or `None` if `i` is out of bounds.
+    #[inline]
+    pub fn get_row_mut(&mut self, i: usize) -> Option<RowMut<'_, T, GROUP, PACK>> {
+        self.data.get_row_mut(i)
+    }
+}
+
+// ── BlockTransposed (owned) ──────────────────────────────────────
+
+impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, PACK> {
+    /// Borrow as an immutable [`BlockTransposedRef`].
+    pub fn as_view(&self) -> BlockTransposedRef<'_, T, GROUP, PACK> {
+        BlockTransposedRef {
+            data: self.data.as_view(),
+        }
+    }
+
+    /// Borrow as a mutable [`BlockTransposedMut`].
+    pub fn as_view_mut(&mut self) -> BlockTransposedMut<'_, T, GROUP, PACK> {
+        BlockTransposedMut {
+            data: self.data.as_view_mut(),
+        }
+    }
+
+    // ── Delegated read methods ───────────────────────────────────
+
+    /// Returns the number of logical rows.
+    pub fn nrows(&self) -> usize {
+        self.as_view().nrows()
+    }
+
+    /// Returns the number of logical columns (dimensionality).
+    pub fn ncols(&self) -> usize {
+        self.as_view().ncols()
+    }
+
+    /// Returns the number of physical (padded) columns.
+    pub fn padded_ncols(&self) -> usize {
+        self.as_view().padded_ncols()
+    }
+
+    /// Alias for [`ncols`](Self::ncols).
+    pub fn block_size(&self) -> usize {
+        self.as_view().block_size()
+    }
+
+    /// Group size (blocking factor `GROUP`).
+    pub const fn group_size(&self) -> usize {
+        GROUP
+    }
+
+    /// Group size (blocking factor `GROUP`) as a `const` function on the *type*.
+    pub const fn const_group_size() -> usize {
+        GROUP
+    }
+
+    /// Packing factor `PACK`.
+    pub const fn pack_size(&self) -> usize {
+        PACK
+    }
+
+    /// Number of completely full blocks.
+    #[inline]
+    pub fn full_blocks(&self) -> usize {
+        self.as_view().full_blocks()
+    }
+
+    /// Total number of blocks including any partially-filled tail.
+    #[inline]
+    pub fn num_blocks(&self) -> usize {
+        self.as_view().num_blocks()
+    }
+
+    /// Number of valid elements in the last partially-full block, or 0 if all
+    /// blocks are full.
+    #[inline]
+    pub fn remainder(&self) -> usize {
+        self.as_view().remainder()
+    }
+
+    /// Raw typed pointer to the start of the backing data.
+    #[inline]
+    pub fn as_ptr(&self) -> *const T {
+        self.as_view().as_ptr()
+    }
+
+    /// The backing data as a shared slice.
+    ///
+    /// The returned slice has `storage_len()` elements — this includes all padding
+    /// for partial blocks and column-group alignment.
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
+        self.as_view().as_slice()
+    }
+
+    /// Return a pointer to the start of the given block.
+    ///
+    /// # Safety
+    ///
+    /// `block` must be less than `self.num_blocks()`.
+    #[inline]
+    pub unsafe fn block_ptr_unchecked(&self, block: usize) -> *const T {
+        // SAFETY: Caller asserts block < num_blocks.
+        unsafe { self.as_view().block_ptr_unchecked(block) }
+    }
+
+    /// Return a view over a full block as a [`MatrixView`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `block >= self.full_blocks()`.
+    #[allow(clippy::expect_used)]
+    pub fn block(&self, block: usize) -> MatrixView<'_, T> {
+        self.as_view().block(block)
+    }
+
+    /// Return a view over the remainder block, or `None` if there is no
+    /// remainder.
+    #[allow(clippy::expect_used)]
+    pub fn remainder_block(&self) -> Option<MatrixView<'_, T>> {
+        self.as_view().remainder_block()
+    }
+
+    /// Retrieve the value at the logical `(row, col)`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
+    #[inline]
+    pub fn get_element(&self, row: usize, col: usize) -> T {
+        self.as_view().get_element(row, col)
+    }
+
+    /// Get an immutable row view, or `None` if `i` is out of bounds.
+    #[inline]
+    pub fn get_row(&self, i: usize) -> Option<Row<'_, T, GROUP, PACK>> {
+        self.data.get_row(i)
+    }
+
+    // ── Mutable methods ──────────────────────────────────────────
+
+    /// Return the backing data as a mutable slice.
+    ///
+    /// The returned slice has `storage_len()` elements (including all padding).
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        let len = self.data.repr().storage_len();
+        // SAFETY: We have `&mut self` so exclusive access is guaranteed.
+        unsafe { std::slice::from_raw_parts_mut(self.data.as_raw_mut_ptr().cast::<T>(), len) }
+    }
+
     /// Return a mutable view over a full block.
     ///
     /// The view has `padded_ncols / PACK` rows and `GROUP * PACK` columns.
@@ -782,14 +1160,18 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize>
     /// Panics if `block >= self.full_blocks()`.
     #[allow(clippy::expect_used)]
     pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
-        assert!(block < self.full_blocks());
-        let offset = self.repr.block_offset(block);
-        let stride = self.repr.block_stride();
-        let pncols = self.padded_ncols();
+        let repr = *self.data.repr();
+        assert!(block < repr.full_blocks());
+        let offset = repr.block_offset(block);
+        let stride = repr.block_stride();
+        let pncols = repr.padded_ncols();
         // SAFETY: `block < full_blocks()` (asserted above), so `offset + stride`
         // lies within the owned allocation. We have `&mut self` so no aliasing.
         let data: &mut [T] = unsafe {
-            std::slice::from_raw_parts_mut(self.ptr.as_ptr().cast::<T>().add(offset), stride)
+            std::slice::from_raw_parts_mut(
+                self.data.as_raw_mut_ptr().cast::<T>().add(offset),
+                stride,
+            )
         };
         MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
             .expect("base data should have been sized correctly")
@@ -801,16 +1183,20 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize>
     /// The view has the same dimensions as [`block_mut()`](Self::block_mut).
     #[allow(clippy::expect_used)]
     pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
-        if self.remainder() == 0 {
+        let repr = *self.data.repr();
+        if repr.remainder() == 0 {
             None
         } else {
-            let offset = self.repr.block_offset(self.full_blocks());
-            let stride = self.repr.block_stride();
-            let pncols = self.padded_ncols();
+            let offset = repr.block_offset(repr.full_blocks());
+            let stride = repr.block_stride();
+            let pncols = repr.padded_ncols();
             // SAFETY: Remainder block exists, so `offset + stride` is in bounds.
             // `&mut self` guarantees exclusive access.
             let data: &mut [T] = unsafe {
-                std::slice::from_raw_parts_mut(self.ptr.as_ptr().cast::<T>().add(offset), stride)
+                std::slice::from_raw_parts_mut(
+                    self.data.as_raw_mut_ptr().cast::<T>().add(offset),
+                    stride,
+                )
             };
             Some(
                 MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
@@ -819,17 +1205,39 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize>
         }
     }
 
-    // ── Factory methods ──────────────────────────────────────────────
+    /// Get a mutable row view, or `None` if `i` is out of bounds.
+    #[inline]
+    pub fn get_row_mut(&mut self, i: usize) -> Option<RowMut<'_, T, GROUP, PACK>> {
+        self.data.get_row_mut(i)
+    }
+}
 
+// ── Factory methods ──────────────────────────────────────────────
+
+impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, PACK> {
     /// Construct a default-initialized block-transposed matrix from dimensions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dimensions overflow the allocation budget.
     #[allow(clippy::expect_used)]
-    pub fn new_block_transposed(nrows: usize, ncols: usize) -> Self {
-        let repr = BlockTransposed::<T, GROUP, PACK>::new(nrows, ncols)
+    pub fn new(nrows: usize, ncols: usize) -> Self {
+        let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, ncols)
             .expect("dimensions should not overflow");
-        Mat::new(repr, Defaulted).expect("infallible")
+        Self {
+            data: Mat::new(repr, Defaulted).expect("infallible"),
+        }
     }
 
-    /// Construct a block-transposed matrix by copying data from a `StridedView`.
+    /// Fallible variant of [`new`](Self::new).
+    pub fn try_new(nrows: usize, ncols: usize) -> Result<Self, Overflow> {
+        let repr = BlockTransposedRepr::<T, GROUP, PACK>::new(nrows, ncols)?;
+        Ok(Self {
+            data: Mat::new(repr, Defaulted).expect("infallible"),
+        })
+    }
+
+    /// Construct a block-transposed matrix by copying data from a [`StridedView`].
     ///
     /// Each source element at `(row, col)` is placed at the correct offset in the
     /// block-transposed layout. Padding positions (both partial-block rows and
@@ -838,11 +1246,11 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize>
     pub fn from_strided(v: StridedView<'_, T>) -> Self {
         let nrows = v.nrows();
         let ncols = v.ncols();
-        let mat = Self::new_block_transposed(nrows, ncols);
+        let mut mat = Self::new(nrows, ncols);
 
         // Fill using linear_index. The allocation is default-initialized so padding
         // positions already hold `T::default()`.
-        let base: *mut T = mat.ptr.as_ptr().cast::<T>();
+        let base: *mut T = mat.data.as_raw_mut_ptr().cast::<T>();
         for row in 0..nrows {
             for col in 0..ncols {
                 let idx = linear_index::<GROUP, PACK>(row, col, ncols);
@@ -854,18 +1262,18 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize>
         mat
     }
 
-    /// Construct a block-transposed matrix by copying data from a `MatrixView`.
+    /// Construct a block-transposed matrix by copying data from a [`MatrixView`].
     pub fn from_matrix_view(v: MatrixView<'_, T>) -> Self {
         Self::from_strided(v.into())
     }
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Index<(usize, usize)> for Mat
+// Index<(usize, usize)> for BlockTransposed
 // ════════════════════════════════════════════════════════════════════
 
 impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<(usize, usize)>
-    for Mat<BlockTransposed<T, GROUP, PACK>>
+    for BlockTransposed<T, GROUP, PACK>
 {
     type Output = T;
 
@@ -904,8 +1312,7 @@ mod tests {
             .enumerate()
             .for_each(|(i, d)| *d = i as f32);
 
-        let mut transpose: Mat<BlockTransposed<f32, GROUP>> =
-            Mat::from_strided(data.as_view().into());
+        let mut transpose = BlockTransposed::<f32, GROUP>::from_strided(data.as_view().into());
 
         // Verify query methods.
         assert_eq!(transpose.nrows(), nrows, "{}", context);
@@ -948,22 +1355,22 @@ mod tests {
             }
         }
 
-        // Check row proxy.
+        // Check row view.
         let view = transpose.as_view();
         for row in 0..nrows {
-            let proxy = view.get_row(row).unwrap();
-            assert_eq!(proxy.len(), ncols);
+            let row_view = view.get_row(row).unwrap();
+            assert_eq!(row_view.len(), ncols);
             for col in 0..ncols {
                 assert_eq!(
                     data[(row, col)],
-                    proxy[col],
-                    "row proxy failed for ({}, {})",
+                    row_view[col],
+                    "row view failed for ({}, {})",
                     row,
                     col,
                 );
             }
             // Test iterator.
-            let collected: Vec<f32> = proxy.iter().collect();
+            let collected: Vec<f32> = row_view.iter().collect();
             assert_eq!(collected.len(), ncols);
             for col in 0..ncols {
                 assert_eq!(data[(row, col)], collected[col]);
@@ -1035,9 +1442,7 @@ mod tests {
         }
 
         // The entire backing store should now be zeroed.
-        let raw: &[f32] =
-            unsafe { std::slice::from_raw_parts(transpose.as_ptr(), transpose.repr.storage_len()) };
-        assert!(raw.iter().all(|i| *i == 0.0));
+        assert!(transpose.as_slice().iter().all(|i| *i == 0.0));
     }
 
     #[test]
@@ -1069,9 +1474,9 @@ mod tests {
     }
 
     #[test]
-    fn test_row_proxy_empty() {
-        // A 0-column matrix should yield empty row proxies.
-        let mat: Mat<BlockTransposed<f32, 16>> = Mat::new_block_transposed(4, 0);
+    fn test_row_view_empty() {
+        // A 0-column matrix should yield empty row views.
+        let mat = BlockTransposed::<f32, 16>::new(4, 0);
         let view = mat.as_view();
         for i in 0..4 {
             let row = view.get_row(i).unwrap();
@@ -1100,8 +1505,7 @@ mod tests {
             .enumerate()
             .for_each(|(i, d)| *d = (i + 1) as f32);
 
-        let transpose: Mat<BlockTransposed<f32, GROUP, PACK>> =
-            Mat::from_strided(data.as_view().into());
+        let transpose = BlockTransposed::<f32, GROUP, PACK>::from_strided(data.as_view().into());
 
         // Check query methods.
         assert_eq!(transpose.nrows(), nrows, "{}", context);
@@ -1149,22 +1553,22 @@ mod tests {
             }
         }
 
-        // Check row proxy + iterator.
+        // Check row view + iterator.
         let view = transpose.as_view();
         for row in 0..nrows {
-            let proxy = view.get_row(row).unwrap();
-            assert_eq!(proxy.len(), ncols, "{}", context);
+            let row_view = view.get_row(row).unwrap();
+            assert_eq!(row_view.len(), ncols, "{}", context);
             for col in 0..ncols {
                 assert_eq!(
                     data[(row, col)],
-                    proxy[col],
-                    "row proxy failed for ({}, {}) -- {}",
+                    row_view[col],
+                    "row view failed for ({}, {}) -- {}",
                     row,
                     col,
                     context,
                 );
             }
-            let collected: Vec<f32> = proxy.iter().collect();
+            let collected: Vec<f32> = row_view.iter().collect();
             assert_eq!(collected.len(), ncols, "{}", context);
             for col in 0..ncols {
                 assert_eq!(data[(row, col)], collected[col], "{}", context);
@@ -1172,8 +1576,7 @@ mod tests {
         }
 
         // Verify padding positions are zero.
-        let raw: &[f32] =
-            unsafe { std::slice::from_raw_parts(transpose.as_ptr(), transpose.repr.storage_len()) };
+        let raw: &[f32] = transpose.as_slice();
         // Check that padded "columns" within each data row are zero.
         for row in 0..nrows {
             for col in ncols..expected_padded {
@@ -1239,8 +1642,8 @@ mod tests {
             .enumerate()
             .for_each(|(i, d)| *d = (i + 1) as f32);
 
-        let mut transpose: Mat<BlockTransposed<f32, GROUP, PACK>> =
-            Mat::from_strided(data.as_view().into());
+        let mut transpose =
+            BlockTransposed::<f32, GROUP, PACK>::from_strided(data.as_view().into());
 
         let expected_view_nrows = transpose.padded_ncols() / PACK;
         let expected_view_ncols = GROUP * PACK;
@@ -1252,6 +1655,7 @@ mod tests {
             assert_eq!(block.ncols(), expected_view_ncols, "{}", context);
 
             // block_ptr_unchecked should point to the same memory.
+            // SAFETY: `b < full_blocks() <= num_blocks()`.
             let ptr = unsafe { transpose.block_ptr_unchecked(b) };
             assert_eq!(ptr, block.as_slice().as_ptr(), "{}", context);
 
@@ -1287,8 +1691,7 @@ mod tests {
                 .as_mut_slice()
                 .fill(0.0);
         }
-        let raw: &[f32] =
-            unsafe { std::slice::from_raw_parts(transpose.as_ptr(), transpose.repr.storage_len()) };
+        let raw: &[f32] = transpose.as_slice();
         assert!(
             raw.iter().all(|v| *v == 0.0),
             "not fully zeroed -- {}",
@@ -1330,24 +1733,24 @@ mod tests {
 
     // ── Send / Sync static assertions ───────────────────────────────
 
-    /// Compile-time proof that row proxy types implement `Send` and `Sync`
+    /// Compile-time proof that row view types implement `Send` and `Sync`
     /// when `T` satisfies the required bounds.
     #[test]
-    fn test_row_proxy_send_sync() {
+    fn test_row_view_send_sync() {
         fn assert_send<T: Send>() {}
         fn assert_sync<T: Sync>() {}
 
-        // BlockTransposedRow: T: Sync → Send + Sync.
-        assert_send::<BlockTransposedRow<'_, f32, 16>>();
-        assert_sync::<BlockTransposedRow<'_, f32, 16>>();
-        assert_send::<BlockTransposedRow<'_, u8, 8, 2>>();
-        assert_sync::<BlockTransposedRow<'_, u8, 8, 2>>();
+        // Row: T: Sync → Send + Sync.
+        assert_send::<Row<'_, f32, 16>>();
+        assert_sync::<Row<'_, f32, 16>>();
+        assert_send::<Row<'_, u8, 8, 2>>();
+        assert_sync::<Row<'_, u8, 8, 2>>();
 
-        // BlockTransposedRowMut: T: Send → Send; T: Sync → Sync.
-        assert_send::<BlockTransposedRowMut<'_, f32, 16>>();
-        assert_sync::<BlockTransposedRowMut<'_, f32, 16>>();
-        assert_send::<BlockTransposedRowMut<'_, i32, 4, 4>>();
-        assert_sync::<BlockTransposedRowMut<'_, i32, 4, 4>>();
+        // RowMut: T: Send → Send; T: Sync → Sync.
+        assert_send::<RowMut<'_, f32, 16>>();
+        assert_sync::<RowMut<'_, f32, 16>>();
+        assert_send::<RowMut<'_, i32, 4, 4>>();
+        assert_sync::<RowMut<'_, i32, 4, 4>>();
     }
 
     // ── Generic element type (non-f32) ──────────────────────────────
@@ -1358,17 +1761,14 @@ mod tests {
         let nrows = 10;
         let ncols = 7;
 
-        // Build via NewOwned + manual fill (StridedView is f32-centric in the
-        // test helpers, so we exercise the generic path through new_block_transposed
-        // and row-mut set).
-        let repr = BlockTransposed::<i32, 4>::new(nrows, ncols).unwrap();
-        let mut mat: Mat<BlockTransposed<i32, 4>> = Mat::new(repr, Defaulted).expect("infallible");
+        // Build via the wrapper constructor and manual fill.
+        let mut mat = BlockTransposed::<i32, 4>::new(nrows, ncols);
 
-        // Fill via mutable row proxy.
+        // Fill via mutable row view.
         for row in 0..nrows {
-            let mut proxy = mat.get_row_mut(row).unwrap();
+            let mut row_view = mat.get_row_mut(row).unwrap();
             for col in 0..ncols {
-                proxy.set(col, (row * ncols + col) as i32);
+                row_view.set(col, (row * ncols + col) as i32);
             }
         }
 
@@ -1386,13 +1786,13 @@ mod tests {
             }
         }
 
-        // Verify row proxy iteration.
+        // Verify row view iteration.
         let view = mat.as_view();
         for row in 0..nrows {
-            let proxy = view.get_row(row).unwrap();
-            let collected: Vec<i32> = proxy.iter().collect();
-            for col in 0..ncols {
-                assert_eq!(collected[col], (row * ncols + col) as i32);
+            let row_view = view.get_row(row).unwrap();
+            let collected: Vec<i32> = row_view.iter().collect();
+            for (col, &val) in collected.iter().enumerate() {
+                assert_eq!(val, (row * ncols + col) as i32);
             }
         }
     }
@@ -1403,14 +1803,12 @@ mod tests {
         let nrows = 12;
         let ncols = 5;
 
-        let repr = BlockTransposed::<u8, 4, 2>::new(nrows, ncols).unwrap();
-        let mut mat: Mat<BlockTransposed<u8, 4, 2>> =
-            Mat::new(repr, Defaulted).expect("infallible");
+        let mut mat = BlockTransposed::<u8, 4, 2>::new(nrows, ncols);
 
         for row in 0..nrows {
-            let mut proxy = mat.get_row_mut(row).unwrap();
+            let mut row_view = mat.get_row_mut(row).unwrap();
             for col in 0..ncols {
-                proxy.set(col, ((row * ncols + col) % 256) as u8);
+                row_view.set(col, ((row * ncols + col) % 256) as u8);
             }
         }
 
@@ -1422,8 +1820,7 @@ mod tests {
 
         // Padding columns should be zero (u8::default()).
         let expected_padded = div_round_up(ncols, 2) * 2; // 6
-        let raw: &[u8] =
-            unsafe { std::slice::from_raw_parts(mat.as_ptr(), mat.repr.storage_len()) };
+        let raw: &[u8] = mat.as_slice();
         for row in 0..nrows {
             for col in ncols..expected_padded {
                 let idx = linear_index::<4, 2>(row, col, ncols);
@@ -1438,15 +1835,16 @@ mod tests {
     fn test_new_ref_and_new_mut() {
         let nrows = 5;
         let ncols = 3;
-        let repr = BlockTransposed::<f32, 4>::new(nrows, ncols).unwrap();
+        let repr = BlockTransposedRepr::<f32, 4>::new(nrows, ncols).unwrap();
 
         // Build an owned mat and get its raw backing slice.
-        let mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(nrows, ncols);
-        let raw: &[f32] =
-            unsafe { std::slice::from_raw_parts(mat.as_ptr(), mat.repr.storage_len()) };
+        let mat = BlockTransposed::<f32, 4>::new(nrows, ncols);
+        let raw: &[f32] = mat.as_slice();
 
-        // Construct a MatRef from the slice.
-        let mat_ref = repr.new_ref(raw).unwrap();
+        // Construct a BlockTransposedRef from the inner MatRef.
+        let mat_ref = BlockTransposedRef {
+            data: repr.new_ref(raw).unwrap(),
+        };
         assert_eq!(mat_ref.nrows(), nrows);
         assert_eq!(mat_ref.ncols(), ncols);
         for row in 0..nrows {
@@ -1455,9 +1853,11 @@ mod tests {
             }
         }
 
-        // Construct a MatMut from a mutable slice.
+        // Construct a BlockTransposedMut from a mutable slice.
         let mut buf = raw.to_vec();
-        let mat_mut = repr.new_mut(&mut buf).unwrap();
+        let mat_mut = BlockTransposedMut {
+            data: repr.new_mut(&mut buf).unwrap(),
+        };
         assert_eq!(mat_mut.nrows(), nrows);
         assert_eq!(mat_mut.ncols(), ncols);
 
@@ -1467,43 +1867,42 @@ mod tests {
         assert!(repr.new_mut(&mut short).is_err());
     }
 
-    // ── Row proxy get() / set() ─────────────────────────────────────
+    // ── Row view get() / set() ─────────────────────────────────────
 
     #[test]
-    fn test_row_proxy_get_and_set() {
+    fn test_row_view_get_and_set() {
         let nrows = 6;
         let ncols = 4;
 
-        let repr = BlockTransposed::<f32, 4>::new(nrows, ncols).unwrap();
-        let mut mat: Mat<BlockTransposed<f32, 4>> = Mat::new(repr, Defaulted).expect("infallible");
+        let mut mat = BlockTransposed::<f32, 4>::new(nrows, ncols);
 
         // Fill via set().
         for row in 0..nrows {
-            let mut proxy = mat.get_row_mut(row).unwrap();
+            let mut row_view = mat.get_row_mut(row).unwrap();
             for col in 0..ncols {
-                proxy.set(col, (row * 100 + col) as f32);
+                row_view.set(col, (row * 100 + col) as f32);
             }
         }
 
         // Read via get() — in-bounds.
         let view = mat.as_view();
         for row in 0..nrows {
-            let proxy = view.get_row(row).unwrap();
+            let row_view = view.get_row(row).unwrap();
             for col in 0..ncols {
-                assert_eq!(proxy.get(col), Some((row * 100 + col) as f32));
+                assert_eq!(row_view.get(col), Some((row * 100 + col) as f32));
             }
             // Out-of-bounds returns None.
-            assert_eq!(proxy.get(ncols), None);
-            assert_eq!(proxy.get(usize::MAX), None);
+            assert_eq!(row_view.get(ncols), None);
+            assert_eq!(row_view.get(usize::MAX), None);
         }
 
-        // Mutable proxy get() also works.
+        // Mutable row view get() also works.
         for row in 0..nrows {
-            let proxy = mat.get_row_mut(row).unwrap();
+            let row_view = mat.get_row_mut(row).unwrap();
             for col in 0..ncols {
-                assert_eq!(proxy.get(col), Some((row * 100 + col) as f32));
+                assert_eq!(row_view.get(col), Some((row * 100 + col) as f32));
             }
-            assert_eq!(proxy.get(ncols), None);
+            assert_eq!(row_view.get(ncols), None);
         }
     }
 
@@ -1519,7 +1918,7 @@ mod tests {
             .enumerate()
             .for_each(|(i, d)| *d = i as f32);
 
-        let transpose: Mat<BlockTransposed<f32, 4>> = Mat::from_matrix_view(data.as_view());
+        let transpose = BlockTransposed::<f32, 4>::from_matrix_view(data.as_view());
 
         for row in 0..nrows {
             for col in 0..ncols {
@@ -1532,8 +1931,8 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "column index 3 out of bounds")]
-    fn test_row_proxy_index_oob() {
-        let mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+    fn test_row_view_index_oob() {
+        let mat = BlockTransposed::<f32, 4>::new(4, 3);
         let view = mat.as_view();
         let row = view.get_row(0).unwrap();
         let _ = row[3]; // ncols = 3, so index 3 is OOB
@@ -1541,24 +1940,24 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "column index 3 out of bounds")]
-    fn test_row_proxy_mut_index_oob() {
-        let mut mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+    fn test_row_view_mut_index_oob() {
+        let mut mat = BlockTransposed::<f32, 4>::new(4, 3);
         let row = mat.get_row_mut(0).unwrap();
         let _ = row[3];
     }
 
     #[test]
     #[should_panic(expected = "column index 3 out of bounds")]
-    fn test_row_proxy_mut_index_mut_oob() {
-        let mut mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+    fn test_row_view_mut_index_mut_oob() {
+        let mut mat = BlockTransposed::<f32, 4>::new(4, 3);
         let mut row = mat.get_row_mut(0).unwrap();
         row[3] = 1.0;
     }
 
     #[test]
     #[should_panic(expected = "column index 3 out of bounds")]
-    fn test_row_proxy_set_oob() {
-        let mut mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+    fn test_row_view_set_oob() {
+        let mut mat = BlockTransposed::<f32, 4>::new(4, 3);
         let mut row = mat.get_row_mut(0).unwrap();
         row.set(3, 1.0);
     }
@@ -1566,28 +1965,28 @@ mod tests {
     #[test]
     #[should_panic(expected = "row 4 out of bounds")]
     fn test_get_element_row_oob() {
-        let mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+        let mat = BlockTransposed::<f32, 4>::new(4, 3);
         mat.get_element(4, 0);
     }
 
     #[test]
     #[should_panic(expected = "col 3 out of bounds")]
     fn test_get_element_col_oob() {
-        let mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+        let mat = BlockTransposed::<f32, 4>::new(4, 3);
         mat.get_element(0, 3);
     }
 
     #[test]
     #[should_panic(expected = "assertion failed")]
     fn test_index_tuple_row_oob() {
-        let mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+        let mat = BlockTransposed::<f32, 4>::new(4, 3);
         let _ = mat[(4, 0)];
     }
 
     #[test]
     #[should_panic(expected = "assertion failed")]
     fn test_index_tuple_col_oob() {
-        let mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+        let mat = BlockTransposed::<f32, 4>::new(4, 3);
         let _ = mat[(0, 3)];
     }
 
@@ -1595,14 +1994,14 @@ mod tests {
     #[should_panic]
     fn test_block_oob() {
         // 4 rows with GROUP=4 → 1 full block (index 0). Accessing block 1 should panic.
-        let mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+        let mat = BlockTransposed::<f32, 4>::new(4, 3);
         let _ = mat.block(1);
     }
 
     #[test]
     #[should_panic]
     fn test_block_mut_oob() {
-        let mut mat: Mat<BlockTransposed<f32, 4>> = Mat::new_block_transposed(4, 3);
+        let mut mat = BlockTransposed::<f32, 4>::new(4, 3);
         let _ = mat.block_mut(1);
     }
 }

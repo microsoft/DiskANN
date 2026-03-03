@@ -173,8 +173,7 @@ where
     fn new_owned(self, _: Defaulted) -> Result<Mat<Self>, Self::Error> {
         let b: Box<[u8]> = (0..self.bytes()).map(|_| u8::default()).collect();
 
-        // SAFETY: Box guarantees that its pointer us non-null.
-        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(b)) }.cast::<u8>();
+        let ptr = utils::box_into_nonnull(b);
 
         // SAFETY: `ptr` points to a properly sized slice that is compatible with the drop
         // logic in `Self as ReprOwned`.

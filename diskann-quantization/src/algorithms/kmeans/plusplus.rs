@@ -17,7 +17,7 @@ use rand::{
 use thiserror::Error;
 
 use super::common::square_norm;
-use crate::multi_vector::{BlockTransposed, Mat};
+use crate::multi_vector::{BlockTransposed, BlockTransposedRef};
 
 /// An internal trait implemented for `BlockTransposed` used to accelerate
 ///
@@ -236,7 +236,7 @@ impl MicroKernel for BlockTransposed<f32, 16> {
 /// Return the sum of the new `square_distances`.
 fn update_distances<const N: usize>(
     square_distances: &mut [f32],
-    transpose: &Mat<BlockTransposed<f32, N>>,
+    transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
     this: &[f32],
     this_square_norm: f32,
@@ -380,7 +380,7 @@ impl KMeansPlusPlusError {
 pub(crate) fn kmeans_plusplus_into_inner<const N: usize>(
     mut points: MutMatrixView<'_, f32>,
     data: StridedView<'_, f32>,
-    transpose: &Mat<BlockTransposed<f32, N>>,
+    transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
     rng: &mut dyn RngCore,
 ) -> Result<(), KMeansPlusPlusError>
@@ -514,8 +514,8 @@ pub fn kmeans_plusplus_into(
         *n = square_norm(d);
     }
 
-    let transpose = Mat::<BlockTransposed<f32, GROUPSIZE>>::from_matrix_view(data);
-    kmeans_plusplus_into_inner(centers, data.into(), &transpose, &norms, rng)
+    let transpose = BlockTransposed::<f32, GROUPSIZE>::from_matrix_view(data);
+    kmeans_plusplus_into_inner(centers, data.into(), transpose.as_view(), &norms, rng)
 }
 
 #[cfg(test)]
@@ -618,7 +618,7 @@ mod tests {
         let mut samples = Matrix::<f32>::new(0.0, num_samples, dim);
         let mut distances = vec![f32::INFINITY; num_points];
         let distribution = Uniform::<u32>::new(0, (num_points + dim) as u32).unwrap();
-        let transpose = Mat::<BlockTransposed<f32, N>>::from_matrix_view(data.as_view());
+        let transpose = BlockTransposed::<f32, N>::from_matrix_view(data.as_view());
 
         let mut last_residual = f64::INFINITY;
         for i in 0..num_samples {
@@ -632,7 +632,13 @@ mod tests {
             let row = samples.row(i);
             let norm = square_norm(row);
 
-            let residual = update_distances(&mut distances, &transpose, &square_norms, row, norm);
+            let residual = update_distances(
+                &mut distances,
+                transpose.as_view(),
+                &square_norms,
+                row,
+                norm,
+            );
 
             // Make sure all the distances are correct.
             for (n, (d, data)) in std::iter::zip(distances.iter(), data.row_iter()).enumerate() {
@@ -1016,7 +1022,7 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &norms,
             &this,
             this_square_norm,
@@ -1035,7 +1041,7 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &norms,
             &this,
             this_square_norm,
@@ -1054,7 +1060,7 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            &Mat::<BlockTransposed<f32, 16>>::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &norms,
             &this,
             this_square_norm,

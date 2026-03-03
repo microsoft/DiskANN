@@ -37,6 +37,19 @@ pub(crate) fn as_nonnull_mut<T>(slice: &mut [T]) -> NonNull<T> {
     unsafe { NonNull::new_unchecked(slice.as_mut_ptr()) }
 }
 
+/// Leak a `Box<[T]>` and return the pointer as a `NonNull<u8>`.
+///
+/// This is the owned-allocation counterpart of [`as_nonnull`]: it consumes the
+/// box, preventing its destructor from running, and hands back a non-null byte
+/// pointer suitable for storing inside a [`Mat`](super::multi_vector::matrix::Mat).
+///
+/// To reclaim the memory later, reconstruct the `Box` via
+/// `Box::from_raw(slice_from_raw_parts_mut(ptr, len))`.
+pub(crate) fn box_into_nonnull<T>(b: Box<[T]>) -> NonNull<u8> {
+    // SAFETY: `Box::into_raw` guarantees the returned pointer is non-null.
+    unsafe { NonNull::new_unchecked(Box::into_raw(b)) }.cast::<u8>()
+}
+
 /// Perform the computation `ceil(x / y)` where `x`, `y`, and the returned value are all
 /// integers.
 ///

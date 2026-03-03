@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Row-major matrix types for multi-vector representations.
 //!
@@ -329,9 +331,7 @@ impl<T: Copy> Standard<T> {
     unsafe fn box_to_mat(self, b: Box<[T]>) -> Mat<Self> {
         debug_assert_eq!(b.len(), self.num_elements(), "safety contract violated");
 
-        // SAFETY: Box [guarantees](https://doc.rust-lang.org/std/boxed/struct.Box.html#method.into_raw)
-        // the returned pointer is non-null.
-        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(b)) }.cast::<u8>();
+        let ptr = utils::box_into_nonnull(b);
 
         // SAFETY: `ptr` is properly aligned and points to a slice of the required length.
         // Additionally, it is dropped via `Box::from_raw`, which is compatible with obtaining
@@ -349,25 +349,40 @@ pub struct Overflow {
 }
 
 impl Overflow {
-    pub(crate) fn check<T>(nrows: usize, ncols: usize) -> Result<(), Self> {
-        let elsize = std::mem::size_of::<T>();
-        // Guard the element count itself so that `num_elements()` can never overflow.
-        let elements = nrows.checked_mul(ncols).ok_or(Self {
+    /// Construct an `Overflow` error for the given dimensions and element type.
+    pub(crate) fn for_type<T>(nrows: usize, ncols: usize) -> Self {
+        Self {
             nrows,
             ncols,
-            elsize,
-        })?;
+            elsize: std::mem::size_of::<T>(),
+        }
+    }
 
-        let bytes = elsize.saturating_mul(elements);
+    /// Verify that `capacity` elements of type `T` fit within the `isize::MAX` byte
+    /// budget required by Rust's allocation APIs.
+    ///
+    /// On failure the error reports the original `(nrows, ncols)` dimensions rather
+    /// than the padded capacity.
+    pub(crate) fn check_byte_budget<T>(
+        capacity: usize,
+        nrows: usize,
+        ncols: usize,
+    ) -> Result<(), Self> {
+        let bytes = std::mem::size_of::<T>().saturating_mul(capacity);
         if bytes <= isize::MAX as usize {
             Ok(())
         } else {
-            Err(Self {
-                nrows,
-                ncols,
-                elsize,
-            })
+            Err(Self::for_type::<T>(nrows, ncols))
         }
+    }
+
+    pub(crate) fn check<T>(nrows: usize, ncols: usize) -> Result<(), Self> {
+        // Guard the element count itself so that `num_elements()` can never overflow.
+        let capacity = nrows
+            .checked_mul(ncols)
+            .ok_or_else(|| Self::for_type::<T>(nrows, ncols))?;
+
+        Self::check_byte_budget::<T>(capacity, nrows, ncols)
     }
 }
 
@@ -675,6 +690,11 @@ impl<T: ReprOwned> Mat<T> {
     pub fn as_raw_ptr(&self) -> *const u8 {
         self.ptr.as_ptr()
     }
+
+    /// Return a mutable base pointer for the [`Mat`].
+    pub(crate) fn as_raw_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
 }
 
 impl<T: ReprOwned> Drop for Mat<T> {
@@ -716,10 +736,10 @@ impl<T: Copy> Mat<Standard<T>> {
 /// - [`rows`](Self::rows): Iterate over all rows.
 #[derive(Debug, Clone, Copy)]
 pub struct MatRef<'a, T: Repr> {
-    pub(crate) ptr: NonNull<u8>,
-    pub(crate) repr: T,
+    ptr: NonNull<u8>,
+    repr: T,
     /// Marker to tie the lifetime to the borrowed data.
-    pub(crate) _lifetime: PhantomData<&'a T>,
+    _lifetime: PhantomData<&'a T>,
 }
 
 // SAFETY: [`Repr`] is required to propagate its `Send` bound.
@@ -863,10 +883,10 @@ impl<'this, 'a, T: Repr> Reborrow<'this> for MatRef<'a, T> {
 /// - [`rows`](Self::rows), [`rows_mut`](Self::rows_mut): Iterate over rows.
 #[derive(Debug)]
 pub struct MatMut<'a, T: ReprMut> {
-    pub(crate) ptr: NonNull<u8>,
-    pub(crate) repr: T,
+    ptr: NonNull<u8>,
+    repr: T,
     /// Marker to tie the lifetime to the mutably borrowed data.
-    pub(crate) _lifetime: PhantomData<&'a mut T>,
+    _lifetime: PhantomData<&'a mut T>,
 }
 
 // SAFETY: [`ReprMut`] is required to propagate its `Send` bound.
@@ -985,6 +1005,11 @@ impl<'a, T: ReprMut> MatMut<'a, T> {
 
     /// Return the base pointer for the [`MatMut`].
     pub fn as_raw_ptr(&self) -> *const u8 {
+        self.ptr.as_ptr()
+    }
+
+    /// Return a mutable base pointer for the [`MatMut`].
+    pub(crate) fn as_raw_mut_ptr(&mut self) -> *mut u8 {
         self.ptr.as_ptr()
     }
 }

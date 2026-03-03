@@ -1,5 +1,7 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT license.
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 //! Multi-vector matrix types and distance functions.
 //!
@@ -14,6 +16,9 @@
 //! | [`MatRef`] | Immutable borrowed view  |
 //! | [`MatMut`] | Mutable borrowed view |
 //! | [`Repr`] | Trait defining row layout (e.g., [`Standard`]) |
+//! | [`BlockTransposed`] | Owning block-transposed matrix |
+//! | [`BlockTransposedRef`] | Immutable view of a block-transposed matrix |
+//! | [`BlockTransposedMut`] | Mutable view of a block-transposed matrix |
 //! | [`QueryMatRef`] | Query wrapper for asymmetric distances |
 //! | [`MaxSim`] | Per-query-vector max similarity computation |
 //! | [`Chamfer`] | Asymmetric Chamfer distance (sum of MaxSim) |
@@ -65,9 +70,7 @@ pub mod block_transposed;
 pub mod distance;
 pub(crate) mod matrix;
 
-pub use block_transposed::{
-    BlockTransposed, BlockTransposedRow, BlockTransposedRowIter, BlockTransposedRowMut,
-};
+pub use block_transposed::{BlockTransposed, BlockTransposedMut, BlockTransposedRef};
 pub use distance::{Chamfer, MaxSim, MaxSimError, QueryMatRef};
 pub use matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewCloned, NewMut, NewOwned, NewRef, Overflow,
