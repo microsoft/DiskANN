@@ -92,7 +92,7 @@ impl FreeSpaceMap {
 
             for &byte in block.iter().rev() {
                 for bidx in (0..8).rev() {
-                    let used = (byte >> (7 - bidx)) & 0x1 == 0x1;
+                    let used = bit_used(byte, bidx);
                     if used {
                         last_used_id = last_used_id.max(id as i64);
                     } else if (id as i64) < last_used_id && self.fast_free_list.push(id).is_err() {
@@ -149,13 +149,7 @@ impl FreeSpaceMap {
             ctx.term(Term::Metadata),
             block_key,
             BLOCK_SIZE_BYTES,
-            |data: &mut [u8]| {
-                let mask = 0x1 << (7 - bit_idx);
-                let value = (used as u8) << (7 - bit_idx);
-                changed = used && data[byte_idx] & mask == 0 || !used && data[byte_idx] & mask != 0;
-                data[byte_idx] &= !mask;
-                data[byte_idx] |= value;
-            },
+            |data: &mut [u8]| changed = update_status(used, &mut data[byte_idx], bit_idx),
         ) {
             return Err(FsmError::Garnet(GarnetError::Write));
         }
@@ -191,7 +185,7 @@ impl FreeSpaceMap {
             return Err(FsmError::Garnet(GarnetError::Read));
         }
 
-        let free = (block[byte_idx] >> (7 - bit_idx)) & 0x1 == 0x0;
+        let free = !bit_used(block[byte_idx], bit_idx);
 
         Ok(free)
     }
@@ -303,8 +297,8 @@ impl FreeSpaceMap {
                     continue;
                 }
 
-                for bit_mask in [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01] {
-                    if byte & bit_mask == 0 {
+                for bidx in 0..8 {
+                    if !bit_used(byte, bidx) {
                         has_free_ids = true;
                         self.has_free_ids.store(true, Ordering::Release);
                         if self.fast_free_list.push(id).is_err() {
@@ -349,6 +343,21 @@ impl FreeSpaceMap {
 
         Ok(())
     }
+}
+
+/// Return whether the `bidx`th bit is set in byte, where bits are labeled from left to right.
+fn bit_used(byte: u8, bidx: usize) -> bool {
+    (byte >> (7 - bidx)) & 0x1 == 0x1
+}
+
+/// Update the `bidx`th bit to match `used`, returning whether the value changed.
+fn update_status(used: bool, byte: &mut u8, bidx: usize) -> bool {
+    let mask = 0x1 << (7 - bidx);
+    let value = (used as u8) << (7 - bidx);
+    let changed = used && *byte & mask == 0 || !used && *byte & mask != 0;
+    *byte &= !mask;
+    *byte |= value;
+    changed
 }
 
 #[cfg(test)]

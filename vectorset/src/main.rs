@@ -103,7 +103,7 @@ struct IngestArgs {
     no_header_with_dim: Option<usize>,
 
     /// Paths to base vectors
-    base_paths: Vec<PathBuf>,
+    base_path: PathBuf,
 }
 
 #[derive(Args)]
@@ -319,12 +319,7 @@ async fn ingest<T: Element>(
     info: redis::ConnectionInfo,
     cred: Option<ExpiringCredential>,
 ) -> Result<()> {
-    let ds = if let Some(dim) = args.no_header_with_dim {
-        DatasetLoader::new_with_headerless_dim(&args.base_paths, Some(dim)).await?
-    } else {
-        DatasetLoader::new(&args.base_paths).await?
-    };
-
+    let ds = DatasetLoader::new(&args.base_path).await?;
     let parallelism = args.tasks.unwrap_or(thread::available_parallelism()?.get());
     let vset = Arc::new(args.set.clone());
     let (tx, mut rx) = mpsc::channel(parallelism);
@@ -471,7 +466,7 @@ async fn query<T: Element>(
     let (tx, mut rx) = mpsc::channel(parallelism);
 
     let queries = DatasetLoader::<T>::load(&args.query_path).await?;
-    let truth = loader::load_groundtruth(&args.gt_path).await?;
+    let truth = DatasetLoader::<T>::load_groundtruth(&args.gt_path).await?;
     let total_queries = args.total_queries.unwrap_or(queries.len());
 
     let mut tasks = JoinSet::<Result<Vec<(usize, usize, usize, Duration)>>>::new();

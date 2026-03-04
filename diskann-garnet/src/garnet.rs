@@ -11,7 +11,6 @@ pub const TERM_BITMASK: u64 = (1 << 3) - 1;
 pub enum Term {
     Vector = 0,
     Neighbors = 1,
-    #[allow(dead_code)]
     Quantized = 2,
     Attributes = 3,
     Metadata = 4,
@@ -46,8 +45,6 @@ pub struct Callbacks {
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
 }
-
-// TODO: read_iid, read_eid, read_wid,
 
 impl Callbacks {
     pub fn new(
@@ -319,6 +316,12 @@ impl Callbacks {
         unsafe { (self.delete_callback)(ctx.0, id.as_ptr(), id.len()) }
     }
 
+    /// Modify a value in Garnet by internal ID.
+    ///
+    /// The provided function `f` will receive the current value, which it can then modify. If no
+    /// value exists, zero-initialized value of length `write_len` will be passed in.
+    ///
+    /// `f` should not panic.
     #[must_use]
     pub fn rmw_iid<'a, F, T>(&self, ctx: Context, id: u32, write_len: usize, mut f: F) -> bool
     where
@@ -342,6 +345,12 @@ impl Callbacks {
         }
     }
 
+    /// Modify a value in Garnet by wide ID.
+    ///
+    /// The provided function `f` will receive the current value, which it can then modify. If no
+    /// value exists, zero-initialized value of length `write_len` will be passed in.
+    ///
+    /// `f` should not panic.
     #[must_use]
     pub fn rmw_wid<'a, F, T>(&self, ctx: Context, key: u64, write_len: usize, mut f: F) -> bool
     where
@@ -370,8 +379,10 @@ impl Callbacks {
     /// The provided function `f` will receive the current value, which it can then modify. If no
     /// value exists, zero-initialized value of length `write_len` will be passed in.
     ///
-    /// NOTE: The key bytes must be preceded by 4 valid bytes that Garnet can write into.
+    /// The key bytes must be preceded by 4 valid bytes that Garnet can write into.
     /// This invariant must be checked by the caller.
+    ///
+    /// `f` should not panic.
     #[must_use]
     unsafe fn rmw_raw<'a, F>(&self, ctx: Context, key: &[u8], write_len: usize, mut f: F) -> bool
     where

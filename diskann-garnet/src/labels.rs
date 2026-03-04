@@ -6,10 +6,9 @@
 //!
 //! ## Design
 //!
-//! Unlike CDB-DiskANN which calls back to C++ via `AreDocumentsIncluded()`,
 //! Garnet sends a **pre-computed dense bitmap** where each bit position
 //! corresponds to a DiskANN internal ID (`u32`). This makes `is_match()`
-//! a simple bit lookup — no cross-FFI callback needed.
+//! a simple bit lookup — no cross-FFI callback is needed.
 //!
 //! ## Bitmap Layout
 //!

@@ -23,3 +23,15 @@ unsafe impl AllocatorCore for AlignToEight {
         unsafe { GlobalAllocator.deallocate(ptr, layout) }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::alloc::AlignToEight;
+    use diskann_quantization::alloc::Poly;
+
+    #[test]
+    fn test_align_8() {
+        let poly = Poly::broadcast(0u8, 128, AlignToEight).unwrap();
+        assert!((poly.as_ptr() as usize).is_multiple_of(8));
+    }
+}

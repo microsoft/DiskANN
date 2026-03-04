@@ -1,15 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Version History
-    | 1.0.0 | Sep 2025 | Initial version |
--->
 <package>
   <metadata>
     <id>diskann-garnet</id>
     <version>1.0.25</version>
     <readme>docs/README.md</readme>
-    <authors>DiskANN Team</authors>
-    <owners>Encyclopedia@service.microsoft.com</owners>
-    <projectUrl>https://msdata.visualstudio.com/CosmosDB/_git/diskann-garnet</projectUrl>
+    <authors>Microsoft</authors>
+    <projectUrl>https://github.com/microsoft/DiskANN</projectUrl>
     <description>DiskANN FFI and Data Provider for Garnet</description>
     <copyright>© Microsoft Corporation. All rights reserved.</copyright>
     <tags>microsoft diskann garnet</tags>
