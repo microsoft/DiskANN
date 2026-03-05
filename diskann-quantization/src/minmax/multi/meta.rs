@@ -173,7 +173,7 @@ where
     fn new_owned(self, _: Defaulted) -> Result<Mat<Self>, Self::Error> {
         let b: Box<[u8]> = (0..self.bytes()).map(|_| u8::default()).collect();
 
-        let ptr = utils::box_into_nonnull(b);
+        let ptr = utils::box_into_nonnull(b).cast::<u8>();
 
         // SAFETY: `ptr` points to a properly sized slice that is compatible with the drop
         // logic in `Self as ReprOwned`.

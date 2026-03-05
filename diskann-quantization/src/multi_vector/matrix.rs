@@ -331,7 +331,7 @@ impl<T: Copy> Standard<T> {
     unsafe fn box_to_mat(self, b: Box<[T]>) -> Mat<Self> {
         debug_assert_eq!(b.len(), self.num_elements(), "safety contract violated");
 
-        let ptr = utils::box_into_nonnull(b);
+        let ptr = utils::box_into_nonnull(b).cast::<u8>();
 
         // SAFETY: `ptr` is properly aligned and points to a slice of the required length.
         // Additionally, it is dropped via `Box::from_raw`, which is compatible with obtaining

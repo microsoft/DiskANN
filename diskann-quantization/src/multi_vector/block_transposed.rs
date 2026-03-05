@@ -88,6 +88,7 @@ use super::matrix::{
     Defaulted, LayoutError, Mat, MatMut, MatRef, NewMut, NewOwned, NewRef, Overflow, Repr, ReprMut,
     ReprOwned, SliceError,
 };
+use crate::bits::{AsMutPtr, AsPtr, MutSlicePtr, SlicePtr};
 use crate::utils;
 
 /// Round `ncols` up to the next multiple of `PACK`.
@@ -262,7 +263,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRepr<T, GROU
     unsafe fn box_to_mat(self, b: Box<[T]>) -> Mat<Self> {
         debug_assert_eq!(b.len(), self.storage_len(), "safety contract violated");
 
-        let ptr = utils::box_into_nonnull(b);
+        let ptr = utils::box_into_nonnull(b).cast::<u8>();
 
         // SAFETY: `ptr` is properly aligned and compatible with our layout.
         unsafe { Mat::from_raw_parts(self, ptr) }
@@ -280,9 +281,8 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRepr<T, GROU
 #[derive(Debug, Clone, Copy)]
 pub struct Row<'a, T, const GROUP: usize, const PACK: usize = 1> {
     /// Pointer to the element at `(row, col=0)` in the backing allocation.
-    base: *const T,
+    base: SlicePtr<'a, T>,
     ncols: usize,
-    _lifetime: PhantomData<&'a T>,
 }
 
 impl<T: Copy, const GROUP: usize, const PACK: usize> Row<'_, T, GROUP, PACK> {
@@ -298,12 +298,12 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> Row<'_, T, GROUP, PACK> {
         self.ncols == 0
     }
 
-    /// Get the element at column `col`, or `None` if out of bounds.
+    /// Get a reference to the element at column `col`, or `None` if out of bounds.
     #[inline]
-    pub fn get(&self, col: usize) -> Option<T> {
+    pub fn get(&self, col: usize) -> Option<&T> {
         if col < self.ncols {
             // SAFETY: bounds checked, offset computed from validated layout.
-            Some(unsafe { *self.base.add(col_offset::<GROUP, PACK>(col)) })
+            Some(unsafe { &*self.base.as_ptr().add(col_offset::<GROUP, PACK>(col)) })
         } else {
             None
         }
@@ -316,7 +316,6 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> Row<'_, T, GROUP, PACK> {
             base: self.base,
             col: 0,
             ncols: self.ncols,
-            _lifetime: PhantomData,
         }
     }
 }
@@ -327,24 +326,19 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<usize>
     type Output = T;
 
     #[inline]
+    #[allow(clippy::panic)] // Index is expected to panic on OOB
     fn index(&self, col: usize) -> &Self::Output {
-        assert!(
-            col < self.ncols,
-            "column index {col} out of bounds (ncols = {})",
-            self.ncols
-        );
-        // SAFETY: bounds checked.
-        unsafe { &*self.base.add(col_offset::<GROUP, PACK>(col)) }
+        self.get(col)
+            .unwrap_or_else(|| panic!("column index {col} out of bounds (ncols = {})", self.ncols))
     }
 }
 
 /// Iterator over the elements of a [`Row`].
 #[derive(Debug, Clone)]
 pub struct RowIter<'a, T, const GROUP: usize, const PACK: usize = 1> {
-    base: *const T,
+    base: SlicePtr<'a, T>,
     col: usize,
     ncols: usize,
-    _lifetime: PhantomData<&'a T>,
 }
 
 impl<T: Copy, const GROUP: usize, const PACK: usize> Iterator for RowIter<'_, T, GROUP, PACK> {
@@ -356,7 +350,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> Iterator for RowIter<'_, T,
             return None;
         }
         // SAFETY: col < ncols means the offset is within the backing allocation.
-        let val = unsafe { *self.base.add(col_offset::<GROUP, PACK>(self.col)) };
+        let val = unsafe { *self.base.as_ptr().add(col_offset::<GROUP, PACK>(self.col)) };
         self.col += 1;
         Some(val)
     }
@@ -380,9 +374,8 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::iter::FusedIterator
 /// A mutable view of a single logical row in a block-transposed matrix.
 #[derive(Debug)]
 pub struct RowMut<'a, T, const GROUP: usize, const PACK: usize = 1> {
-    base: *mut T,
+    base: MutSlicePtr<'a, T>,
     ncols: usize,
-    _lifetime: PhantomData<&'a mut T>,
 }
 
 impl<T: Copy, const GROUP: usize, const PACK: usize> RowMut<'_, T, GROUP, PACK> {
@@ -398,12 +391,23 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> RowMut<'_, T, GROUP, PACK> 
         self.ncols == 0
     }
 
-    /// Get the element at column `col`, or `None` if out of bounds.
+    /// Get a reference to the element at column `col`, or `None` if out of bounds.
     #[inline]
-    pub fn get(&self, col: usize) -> Option<T> {
+    pub fn get(&self, col: usize) -> Option<&T> {
         if col < self.ncols {
             // SAFETY: bounds checked.
-            Some(unsafe { *self.base.add(col_offset::<GROUP, PACK>(col)) })
+            Some(unsafe { &*self.base.as_ptr().add(col_offset::<GROUP, PACK>(col)) })
+        } else {
+            None
+        }
+    }
+
+    /// Get a mutable reference to the element at column `col`, or `None` if out of bounds.
+    #[inline]
+    pub fn get_mut(&mut self, col: usize) -> Option<&mut T> {
+        if col < self.ncols {
+            // SAFETY: bounds checked.
+            Some(unsafe { &mut *self.base.as_mut_ptr().add(col_offset::<GROUP, PACK>(col)) })
         } else {
             None
         }
@@ -422,7 +426,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> RowMut<'_, T, GROUP, PACK> 
             self.ncols
         );
         // SAFETY: bounds checked.
-        unsafe { *self.base.add(col_offset::<GROUP, PACK>(col)) = value };
+        unsafe { *self.base.as_mut_ptr().add(col_offset::<GROUP, PACK>(col)) = value };
     }
 }
 
@@ -432,14 +436,10 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<usize>
     type Output = T;
 
     #[inline]
+    #[allow(clippy::panic)] // Index is expected to panic on OOB
     fn index(&self, col: usize) -> &Self::Output {
-        assert!(
-            col < self.ncols,
-            "column index {col} out of bounds (ncols = {})",
-            self.ncols
-        );
-        // SAFETY: bounds checked.
-        unsafe { &*self.base.add(col_offset::<GROUP, PACK>(col)) }
+        self.get(col)
+            .unwrap_or_else(|| panic!("column index {col} out of bounds (ncols = {})", self.ncols))
     }
 }
 
@@ -447,38 +447,13 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::IndexMut<usize>
     for RowMut<'_, T, GROUP, PACK>
 {
     #[inline]
+    #[allow(clippy::panic)] // IndexMut is expected to panic on OOB
     fn index_mut(&mut self, col: usize) -> &mut Self::Output {
-        assert!(
-            col < self.ncols,
-            "column index {col} out of bounds (ncols = {})",
-            self.ncols
-        );
-        // SAFETY: bounds checked.
-        unsafe { &mut *self.base.add(col_offset::<GROUP, PACK>(col)) }
+        let ncols = self.ncols;
+        self.get_mut(col)
+            .unwrap_or_else(|| panic!("column index {col} out of bounds (ncols = {ncols})"))
     }
 }
-
-// ════════════════════════════════════════════════════════════════════
-// Send / Sync
-// ════════════════════════════════════════════════════════════════════
-
-// SAFETY: `Row` holds a `*const T` with shared-reference (`&'a T`)
-// semantics. Sending it across threads is safe when `T: Sync` (the data behind the
-// shared reference may be observed from another thread).
-unsafe impl<T: Sync, const GROUP: usize, const PACK: usize> Send for Row<'_, T, GROUP, PACK> {}
-
-// SAFETY: Sharing `&Row` across threads is safe when `T: Sync`, because
-// it only allows read access to the underlying `T` values.
-unsafe impl<T: Sync, const GROUP: usize, const PACK: usize> Sync for Row<'_, T, GROUP, PACK> {}
-
-// SAFETY: `RowMut` holds a `*mut T` with exclusive-reference (`&'a mut T`)
-// semantics. Sending it across threads is safe when `T: Send` (ownership of the exclusive
-// reference is transferred to the other thread).
-unsafe impl<T: Send, const GROUP: usize, const PACK: usize> Send for RowMut<'_, T, GROUP, PACK> {}
-
-// SAFETY: Sharing `&RowMut` across threads is safe when `T: Sync`,
-// because shared access provides only read-only (`Index`) access to the `T` values.
-unsafe impl<T: Sync, const GROUP: usize, const PACK: usize> Sync for RowMut<'_, T, GROUP, PACK> {}
 
 // ════════════════════════════════════════════════════════════════════
 // Repr / ReprMut / ReprOwned
@@ -513,9 +488,10 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> Repr
         let row_base = unsafe { base_ptr.add(offset) };
 
         Row {
-            base: row_base,
+            // SAFETY: `row_base` is derived from a `NonNull<u8>` with a valid offset,
+            // so it is non-null. The lifetime is tied to the caller's `'a`.
+            base: unsafe { SlicePtr::new_unchecked(NonNull::new_unchecked(row_base)) },
             ncols: self.ncols,
-            _lifetime: PhantomData,
         }
     }
 }
@@ -542,9 +518,10 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprMut
         let row_base = unsafe { base_ptr.add(offset) };
 
         RowMut {
-            base: row_base,
+            // SAFETY: `row_base` is derived from a `NonNull<u8>` with a valid offset,
+            // so it is non-null. The lifetime is tied to the caller's `'a`.
+            base: unsafe { MutSlicePtr::new_unchecked(NonNull::new_unchecked(row_base)) },
             ncols: self.ncols,
-            _lifetime: PhantomData,
         }
     }
 }
@@ -1243,19 +1220,50 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
     /// block-transposed layout. Padding positions (both partial-block rows and
     /// column-group padding when `ncols % PACK != 0`) are filled with
     /// `T::default()`.
+    ///
+    /// The loop iterates in physical (block-transposed) order — block, column-group,
+    /// row-within-block, pack-lane — so that writes to the backing allocation are
+    /// sequential. Source reads stride across rows of the [`StridedView`], which is
+    /// acceptable because read-side prefetch is more effective than write-side.
     pub fn from_strided(v: StridedView<'_, T>) -> Self {
         let nrows = v.nrows();
         let ncols = v.ncols();
         let mut mat = Self::new(nrows, ncols);
 
-        // Fill using linear_index. The allocation is default-initialized so padding
-        // positions already hold `T::default()`.
-        let base: *mut T = mat.data.as_raw_mut_ptr().cast::<T>();
-        for row in 0..nrows {
-            for col in 0..ncols {
-                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
-                // SAFETY: idx < storage_len by construction, base points to a valid allocation.
-                unsafe { *base.add(idx) = v[(row, col)] };
+        let repr = *mat.data.repr();
+        let num_blocks = repr.num_blocks();
+        let pncols = repr.padded_ncols();
+        let num_col_groups = pncols / PACK;
+
+        // Walk the backing allocation in physical order so that writes are
+        // sequential. The allocation is default-initialized, so padding positions
+        // already hold `T::default()` and can be skipped.
+        let mut dst = mat.data.as_raw_mut_ptr().cast::<T>();
+        for block in 0..num_blocks {
+            let row_base = block * GROUP;
+            for cg in 0..num_col_groups {
+                let col_base = cg * PACK;
+                for rib in 0..GROUP {
+                    let row = row_base + rib;
+                    if row < nrows {
+                        // SAFETY: row < nrows is checked by the enclosing `if` condition.
+                        let src_row = unsafe { v.get_row_unchecked(row) };
+                        for p in 0..PACK {
+                            let col = col_base + p;
+                            if col < ncols {
+                                // SAFETY: dst advances sequentially through the
+                                // backing allocation which has exactly `storage_len`
+                                // elements, and our loop visits each position once.
+                                unsafe { *dst = src_row[col] };
+                            }
+                            // Advance even for padding — the default is already there.
+                            dst = dst.wrapping_add(1);
+                        }
+                    } else {
+                        // Entire row is padding — skip PACK positions.
+                        dst = dst.wrapping_add(PACK);
+                    }
+                }
             }
         }
 
@@ -1889,7 +1897,7 @@ mod tests {
         for row in 0..nrows {
             let row_view = view.get_row(row).unwrap();
             for col in 0..ncols {
-                assert_eq!(row_view.get(col), Some((row * 100 + col) as f32));
+                assert_eq!(row_view.get(col), Some(&((row * 100 + col) as f32)));
             }
             // Out-of-bounds returns None.
             assert_eq!(row_view.get(ncols), None);
@@ -1900,7 +1908,7 @@ mod tests {
         for row in 0..nrows {
             let row_view = mat.get_row_mut(row).unwrap();
             for col in 0..ncols {
-                assert_eq!(row_view.get(col), Some((row * 100 + col) as f32));
+                assert_eq!(row_view.get(col), Some(&((row * 100 + col) as f32)));
             }
             assert_eq!(row_view.get(ncols), None);
         }
@@ -2003,5 +2011,305 @@ mod tests {
     fn test_block_mut_oob() {
         let mut mat = BlockTransposed::<f32, 4>::new(4, 3);
         let _ = mat.block_mut(1);
+    }
+
+    // ── Row-padding verification for PACK > 1 ───────────────────────
+
+    /// Verify that row-padding positions (rows in `nrows..padded_nrows`) are zero.
+    ///
+    /// The `from_strided` loop skips writing to row-padding positions, relying on
+    /// default-initialization. This test confirms those positions stay zero.
+    #[test]
+    fn test_packed_row_padding_is_zero() {
+        // GROUP=8, PACK=2, nrows=5, ncols=3 → 3 padding rows (rows 5, 6, 7).
+        const GROUP: usize = 8;
+        const PACK: usize = 2;
+        let nrows = 5;
+        let ncols = 3;
+
+        let mut data = Matrix::new(0.0_f32, nrows, ncols);
+        data.as_mut_slice()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, d)| *d = (i + 1) as f32); // Use nonzero values
+
+        let transpose = BlockTransposed::<f32, GROUP, PACK>::from_strided(data.as_view().into());
+
+        let padded_nrows = nrows.next_multiple_of(GROUP); // 8
+        let padded_ncols = ncols.next_multiple_of(PACK); // 4
+        let raw: &[f32] = transpose.as_slice();
+
+        // Check that row-padding positions (rows 5..8) across all columns (0..4) are zero.
+        for row in nrows..padded_nrows {
+            for col in 0..padded_ncols {
+                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
+                assert_eq!(
+                    raw[idx], 0.0,
+                    "row-padding at ({}, {}) should be zero, got {}",
+                    row, col, raw[idx],
+                );
+            }
+        }
+
+        // Also verify that data rows have correct values.
+        for row in 0..nrows {
+            for col in 0..ncols {
+                let expected = (row * ncols + col + 1) as f32;
+                assert_eq!(
+                    transpose[(row, col)],
+                    expected,
+                    "data at ({}, {}) should be {}, got {}",
+                    row,
+                    col,
+                    expected,
+                    transpose[(row, col)],
+                );
+            }
+        }
+    }
+
+    // ── from_strided with non-unit stride ───────────────────────────
+
+    /// Test `from_strided` with a source that has `cstride > ncols` (non-contiguous rows).
+    ///
+    /// This validates that the new loop's `v.get_row_unchecked(row)` + `src_row[col]`
+    /// reads correctly from a strided source.
+    #[test]
+    fn test_from_strided_nonunit_stride() {
+        use diskann_utils::strided::StridedView;
+
+        const GROUP: usize = 4;
+        const PACK: usize = 2;
+        let nrows = 5;
+        let ncols = 3;
+        let cstride = 8; // Each row occupies 8 elements in the source, but only 3 are data
+
+        // Build a flat buffer with the strided layout:
+        // Row 0: data at [0..3], padding at [3..8]
+        // Row 1: data at [8..11], padding at [11..16]
+        // etc.
+        // linear_length = (nrows - 1) * cstride + ncols = 4 * 8 + 3 = 35
+        let required_len = (nrows - 1) * cstride + ncols;
+        let mut flat = vec![0.0_f32; required_len];
+
+        // Fill data positions with row * 100 + col + 1 (nonzero, distinguishable).
+        for row in 0..nrows {
+            for col in 0..ncols {
+                flat[row * cstride + col] = (row * 100 + col + 1) as f32;
+            }
+        }
+
+        let strided = StridedView::try_shrink_from(&flat, nrows, ncols, cstride)
+            .expect("should construct strided view");
+
+        let transpose = BlockTransposed::<f32, GROUP, PACK>::from_strided(strided);
+
+        // Verify dimensions.
+        assert_eq!(transpose.nrows(), nrows);
+        assert_eq!(transpose.ncols(), ncols);
+
+        // Verify every (row, col) matches expected.
+        for row in 0..nrows {
+            for col in 0..ncols {
+                let expected = (row * 100 + col + 1) as f32;
+                assert_eq!(
+                    transpose[(row, col)],
+                    expected,
+                    "mismatch at ({}, {}): expected {}, got {}",
+                    row,
+                    col,
+                    expected,
+                    transpose[(row, col)],
+                );
+            }
+        }
+
+        // Verify column padding is zero.
+        let padded_ncols = ncols.next_multiple_of(PACK); // 4
+        let raw: &[f32] = transpose.as_slice();
+        for row in 0..nrows {
+            for col in ncols..padded_ncols {
+                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
+                assert_eq!(
+                    raw[idx], 0.0,
+                    "column-padding at ({}, {}) should be zero",
+                    row, col
+                );
+            }
+        }
+    }
+
+    // ── RowMut::get_mut() coverage ──────────────────────────────────
+
+    /// Test `RowMut::get_mut()` returns `Some(&mut T)` for in-bounds, `None` for OOB,
+    /// and that mutations through the reference are visible.
+    #[test]
+    fn test_row_view_get_mut() {
+        let nrows = 4;
+        let ncols = 3;
+        let mut mat = BlockTransposed::<f32, 4>::new(nrows, ncols);
+
+        // Fill with initial values.
+        for row in 0..nrows {
+            let mut row_view = mat.get_row_mut(row).unwrap();
+            for col in 0..ncols {
+                row_view.set(col, (row * 10 + col) as f32);
+            }
+        }
+
+        // Test get_mut() in-bounds — mutate through the reference.
+        {
+            let mut row_view = mat.get_row_mut(1).unwrap();
+            for col in 0..ncols {
+                let ptr = row_view.get_mut(col);
+                assert!(ptr.is_some(), "get_mut({}) should be Some", col);
+                *ptr.unwrap() += 1000.0;
+            }
+        }
+
+        // Verify mutations are visible via immutable Row::get().
+        let view = mat.as_view();
+        let row_view = view.get_row(1).unwrap();
+        for col in 0..ncols {
+            let expected = (10 + col) as f32 + 1000.0;
+            assert_eq!(row_view.get(col), Some(&expected));
+        }
+
+        // Test get_mut() OOB returns None.
+        {
+            let mut row_view = mat.get_row_mut(0).unwrap();
+            assert_eq!(row_view.get_mut(ncols), None);
+            assert_eq!(row_view.get_mut(usize::MAX), None);
+        }
+    }
+
+    // ── Concurrent multi-row mutation ───────────────────────────────
+
+    /// Verify that `RowMut` views for distinct rows can be used concurrently
+    /// without data races. Uses `std::thread::scope` to spawn threads that each
+    /// write to non-overlapping rows via `RowMut`.
+    ///
+    /// Under Miri (`-Zmiri-strict-provenance`), this validates no aliasing UB.
+    #[test]
+    fn test_concurrent_row_mutation() {
+        use std::ptr::NonNull;
+
+        const GROUP: usize = 8;
+        const PACK: usize = 2;
+
+        // Reduce dimensions under Miri for faster execution.
+        let (nrows, ncols, num_threads) = if cfg!(miri) { (8, 4, 2) } else { (64, 16, 4) };
+
+        let mut mat = BlockTransposed::<f32, GROUP, PACK>::new(nrows, ncols);
+
+        // Get the repr and raw pointer for constructing RowMut in threads.
+        let repr = *mat.data.repr();
+        // Convert raw pointer to usize for Send across thread boundaries.
+        // SAFETY: We reconstruct the pointer inside each thread scope and use it
+        // only for non-overlapping row accesses.
+        let ptr_addr = mat.data.as_raw_mut_ptr() as usize;
+
+        // Each thread writes to a contiguous range of rows.
+        let rows_per_thread = nrows / num_threads;
+
+        std::thread::scope(|s| {
+            for thread_id in 0..num_threads {
+                let start_row = thread_id * rows_per_thread;
+                let end_row = if thread_id == num_threads - 1 {
+                    nrows // Last thread takes any remainder
+                } else {
+                    (thread_id + 1) * rows_per_thread
+                };
+
+                s.spawn(move || {
+                    for row in start_row..end_row {
+                        // Reconstruct the pointer from the usize address.
+                        let ptr = ptr_addr as *mut u8;
+                        // SAFETY: Each thread operates on distinct rows. Rows in
+                        // the block-transposed layout occupy non-overlapping memory
+                        // regions, so distinct-row `RowMut`s don't alias. The
+                        // pointer is valid for the lifetime of the scope because
+                        // `mat` outlives the `thread::scope` block.
+                        let mut row_view: RowMut<'_, f32, GROUP, PACK> =
+                            unsafe { repr.get_row_mut(NonNull::new_unchecked(ptr), row) };
+                        for col in 0..ncols {
+                            // Write a pattern: thread_id * 10000 + row * 100 + col
+                            let value = (thread_id * 10000 + row * 100 + col) as f32;
+                            row_view.set(col, value);
+                        }
+                    }
+                });
+            }
+        });
+
+        // After all threads complete, verify every (row, col) has the expected value.
+        for row in 0..nrows {
+            let thread_id = row / rows_per_thread;
+            // Adjust for last thread taking remainder
+            let thread_id = thread_id.min(num_threads - 1);
+            for col in 0..ncols {
+                let expected = (thread_id * 10000 + row * 100 + col) as f32;
+                assert_eq!(
+                    mat.get_element(row, col),
+                    expected,
+                    "mismatch at ({}, {}): expected {}, got {}",
+                    row,
+                    col,
+                    expected,
+                    mat.get_element(row, col),
+                );
+            }
+        }
+    }
+
+    // ── from_matrix_view with PACK > 1 ──────────────────────────────
+
+    /// Test `from_matrix_view` with packed layouts (PACK > 1).
+    #[test]
+    fn test_from_matrix_view_packed() {
+        let nrows = 10;
+        let ncols = 5;
+
+        let mut data = Matrix::new(0.0_f32, nrows, ncols);
+        data.as_mut_slice()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, d)| *d = (i + 1) as f32);
+
+        // Test GROUP=8, PACK=2
+        {
+            let transpose = BlockTransposed::<f32, 8, 2>::from_matrix_view(data.as_view());
+            assert_eq!(transpose.nrows(), nrows);
+            assert_eq!(transpose.ncols(), ncols);
+            for row in 0..nrows {
+                for col in 0..ncols {
+                    assert_eq!(data[(row, col)], transpose[(row, col)]);
+                }
+            }
+        }
+
+        // Test GROUP=4, PACK=4
+        {
+            let transpose = BlockTransposed::<f32, 4, 4>::from_matrix_view(data.as_view());
+            assert_eq!(transpose.nrows(), nrows);
+            assert_eq!(transpose.ncols(), ncols);
+            for row in 0..nrows {
+                for col in 0..ncols {
+                    assert_eq!(data[(row, col)], transpose[(row, col)]);
+                }
+            }
+        }
+
+        // Test GROUP=16, PACK=2
+        {
+            let transpose = BlockTransposed::<f32, 16, 2>::from_matrix_view(data.as_view());
+            assert_eq!(transpose.nrows(), nrows);
+            assert_eq!(transpose.ncols(), ncols);
+            for row in 0..nrows {
+                for col in 0..ncols {
+                    assert_eq!(data[(row, col)], transpose[(row, col)]);
+                }
+            }
+        }
     }
 }
