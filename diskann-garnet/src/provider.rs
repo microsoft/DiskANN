@@ -1,8 +1,7 @@
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    future, mem,
-    ops::{Deref, DerefMut},
-};
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
 use dashmap::DashMap;
 use diskann::{
@@ -27,6 +26,11 @@ use diskann::{
 };
 use diskann_providers::model::graph::provider::async_::common::{FullPrecision, Internal};
 use diskann_vector::{PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    future, mem,
+    ops::{Deref, DerefMut},
+};
 use thiserror::Error;
 
 use crate::{

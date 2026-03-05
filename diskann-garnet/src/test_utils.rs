@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 use crate::garnet::{Callbacks, ReadDataCallback, RmwDataCallback, TERM_BITMASK};
 use core::slice;
 use dashmap::DashMap;

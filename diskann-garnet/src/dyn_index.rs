@@ -1,5 +1,14 @@
-use std::sync::Arc;
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
 
+use crate::{
+    SearchResults,
+    garnet::{Context, GarnetId},
+    labels::GarnetQueryLabelProvider,
+    provider::{self, GarnetProvider},
+};
 use diskann::{
     ANNError, ANNResult,
     graph::{InplaceDeleteMethod, glue::SearchStrategy, index::SearchStats, search},
@@ -10,13 +19,7 @@ use diskann_providers::{
     index::wrapped_async::DiskANNIndex,
     model::graph::provider::{async_::common::FullPrecision, layers::BetaFilter},
 };
-
-use crate::{
-    SearchResults,
-    garnet::{Context, GarnetId},
-    labels::GarnetQueryLabelProvider,
-    provider::{self, GarnetProvider},
-};
+use std::sync::Arc;
 
 /// Type-erased version of `DiskANNIndex<GarnetProvider>`.
 /// All vector data is passed as untyped byte slices.

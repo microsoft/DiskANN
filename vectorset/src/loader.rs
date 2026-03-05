@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 use anyhow::{Result, anyhow};
 use std::{
     collections::HashMap,

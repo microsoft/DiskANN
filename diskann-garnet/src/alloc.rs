@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 use diskann_quantization::alloc::{AllocatorCore, AllocatorError, GlobalAllocator};
 use std::ptr::NonNull;
 

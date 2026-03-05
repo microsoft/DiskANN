@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 //! Garnet label filtering for DiskANN vector search.
 //!
 //! This module provides [`GarnetQueryLabelProvider`], an implementation of DiskANN's

@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 //! Free space map.
 //!
 //! The free space map tracks the status for each ID, which can be one of Free,

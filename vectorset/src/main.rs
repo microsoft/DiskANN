@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 use anyhow::Result;
 use azure_core::{credentials::TokenCredential, time::OffsetDateTime};
 use azure_identity::AzureCliCredential;
