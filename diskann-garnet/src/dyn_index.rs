@@ -30,7 +30,7 @@ pub trait DynIndex: Send + Sync {
         context: &Context,
         data: &[u8],
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider<'static>, f32)>,
+        filter: Option<(&GarnetQueryLabelProvider, f32)>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
@@ -39,7 +39,7 @@ pub trait DynIndex: Send + Sync {
         context: &Context,
         id: &GarnetId,
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider<'static>, f32)>,
+        filter: Option<(&GarnetQueryLabelProvider, f32)>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats>;
 
@@ -79,7 +79,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         context: &Context,
         data: &[u8],
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider<'static>, f32)>,
+        filter: Option<(&GarnetQueryLabelProvider, f32)>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         let query = bytemuck::cast_slice::<u8, T>(data);
@@ -96,7 +96,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
         context: &Context,
         id: &GarnetId,
         params: &search::Knn,
-        filter: Option<(&GarnetQueryLabelProvider<'static>, f32)>,
+        filter: Option<(&GarnetQueryLabelProvider, f32)>,
         output: &mut SearchResults<'_>,
     ) -> ANNResult<SearchStats> {
         let rt = tokio::runtime::Builder::new_current_thread()
