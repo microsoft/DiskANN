@@ -1,7 +1,22 @@
 //! Free space map.
 //!
-//! The free space map tracks the status for each ID, which can be one of Free, Occupied, or
-//! Deleted.
+//! The free space map tracks the status for each ID, which can be one of Free,
+//! Occupied, or Deleted.
+//!
+//! Individual read/write/rmw operations in Garnet are atomic, but sequences of
+//! these operations are not. To ensure the FSM is accurate, we try to order
+//! operations so that concurrency conflicts are benign.
+//!
+//! Additionally, in order to keep inserts fast, we don't want to repeatedly
+//! scan the FSM to find ids to use. For this case we employ thread-safe
+//! in-memory views of certain state that is updated atomically: a queue which
+//! keeps track of a fixed number of IDs available for reused, and an atomic
+//! counter which tracks the next new ID.
+//!
+//! The atomic `next_id` also prevents minting duplicate IDs to concurrent
+//! inserts. While this operation could be done via RMW and retry on conflict
+//! detection, the atomic is much faster and just as accurate since this code is
+//! the only place where the FSM is read or written to.
 
 use crossbeam::queue::ArrayQueue;
 use std::sync::{
