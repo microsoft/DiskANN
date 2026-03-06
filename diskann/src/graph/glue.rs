@@ -76,14 +76,15 @@
 //!
 //!   Like insertion, this trait delegates pruning to a dedicated `PruneStrategy`.
 
-use std::future::Future;
+use std::{future::Future, sync::Arc};
 
+use diskann_utils::Reborrow;
 use diskann_utils::future::AssertSend;
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 
 use crate::{
     ANNError, ANNResult,
-    error::{ErrorExt, RankedError, StandardError, ToRanked, TransientError},
+    error::{ErrorExt, StandardError},
     graph::{AdjacencyList, SearchOutputBuffer, workingset::Fill},
     neighbor::Neighbor,
     provider::{
@@ -251,10 +252,7 @@ impl<T> HybridPredicate<T> for NotInMut<'_, T> where T: Clone + Eq + std::hash::
 /// ## Error Handling
 ///
 /// Transient errors yielded by `distances_unordered` are acknowledged and not escalated.
-pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized
-where
-    T: ?Sized,
-{
+pub trait ExpandBeam<T>: BuildQueryComputer<T> + AsNeighbor + Sized {
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
@@ -302,7 +300,6 @@ pub trait SearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId
     Send + Sync
 where
     Provider: DataProvider,
-    T: ?Sized,
     O: Send,
 {
     /// The computer used by the associated accessor.
@@ -347,7 +344,6 @@ where
 pub trait SearchPostProcess<A, T, O = <A as HasId>::Id>
 where
     A: BuildQueryComputer<T>,
-    T: ?Sized,
 {
     type Error: StandardError;
 
@@ -356,7 +352,7 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: &T,
+        query: T,
         computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -374,13 +370,12 @@ pub struct CopyIds;
 impl<A, T> SearchPostProcess<A, T> for CopyIds
 where
     A: BuildQueryComputer<T>,
-    T: ?Sized,
 {
     type Error = std::convert::Infallible;
     fn post_process<I, B>(
         &self,
         _accessor: &mut A,
-        _query: &T,
+        _query: T,
         _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -400,7 +395,6 @@ where
 pub trait SearchPostProcessStep<A, T, O = <A as HasId>::Id>
 where
     A: BuildQueryComputer<T>,
-    T: ?Sized,
 {
     /// A potentially modified version of the error yielded by the next state in the
     /// processing pipeline.
@@ -417,7 +411,7 @@ where
         &self,
         next: &Next,
         accessor: &mut A,
-        query: &T,
+        query: T,
         computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -435,7 +429,7 @@ pub struct FilterStartPoints;
 impl<A, T, O> SearchPostProcessStep<A, T, O> for FilterStartPoints
 where
     A: BuildQueryComputer<T> + SearchExt,
-    T: Send + Sync + ?Sized,
+    T: Copy + Send + Sync,
 {
     /// A this level, sub-errors are converted into [`ANNError`] to provide additional
     /// context idenfying the problem as occurring in a sub-process of filtering.
@@ -451,7 +445,7 @@ where
         &self,
         next: &Next,
         accessor: &mut A,
-        query: &T,
+        query: T,
         computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -504,7 +498,6 @@ impl<Head, Tail> Pipeline<Head, Tail> {
 impl<A, T, O, Head, Tail> SearchPostProcess<A, T, O> for Pipeline<Head, Tail>
 where
     A: BuildQueryComputer<T>,
-    T: ?Sized,
     Head: SearchPostProcessStep<A, T, O>,
     Tail: SearchPostProcess<Head::NextAccessor, T, O> + Sync,
 {
@@ -513,7 +506,7 @@ where
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: &T,
+        query: T,
         computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -535,7 +528,6 @@ where
 pub trait InsertStrategy<Provider, T>: SearchStrategy<Provider, T> + 'static
 where
     Provider: DataProvider,
-    T: ?Sized,
 {
     /// The pruning strategy associated with the insertion strategy.
     type PruneStrategy: PruneStrategy<Provider>;
@@ -612,24 +604,30 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError>;
 }
 
-/// For compatibility with [`crate::index::diskann_async::DiskANNIndex::multi_insert`],
-/// we need the ability to take vectors supplied directly from the insert batch and use those
-/// vectors directly in pruning.
-///
-/// Vectors for `multi_insert` are constrained to be slices, but `Accessor::Element`
-/// is an opaque type. This trait works as a bridge from the input slices to
-/// `Accessor::Element` and often can be implemented cheaply.
-///
-/// This trait also accepts the internal id of the vector and is guaranteed to be called
-/// after [`SetElement`]. This allows the provider to simply retrieve a pre-processed
-/// vector from the internal store if that is more efficient.
-pub trait AsElement<T>: Accessor {
-    type Error: ToRanked + std::fmt::Debug + Send + Sync;
-    fn as_element(
-        &mut self,
-        vector: T,
-        id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send;
+pub trait Batch: Send + Sync + 'static {
+    type Element<'a>: Copy;
+
+    fn len(&self) -> usize;
+    fn get(&self, i: usize) -> Self::Element<'_>;
+}
+
+pub trait MultiInsertStrategy<Provider, B>: Send + Sync
+where
+    Provider: DataProvider,
+    B: Batch,
+{
+    type State: Send + Sync + 'static;
+    type InsertStrategy: for<'a> InsertStrategy<
+            Provider,
+            B::Element<'a>,
+            PruneStrategy: PruneStrategy<Provider, State = Self::State>,
+        >;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy;
+
+    fn finish<Itr>(&self, batch: &Arc<B>, ids: Itr) -> Self::State
+    where
+        Itr: ExactSizeIterator<Item = Provider::InternalId>;
 }
 
 /// A strategy for supporting inplace deletes.
@@ -650,29 +648,18 @@ where
     /// The type provided to the search portion of inplace-deletion and used to instantiate
     /// the required `SearchStrategy`.
     ///
-    /// This is allowed to be different then `DeleteElementGuard` so we can support types
-    /// without lifetimes.
-    type DeleteElement<'a>: Send + Sync + ?Sized;
+    /// With the by-value `T` parameter design, `DeleteElement<'a>` is expected to be a
+    /// sized, `Copy` type (typically a reference like `&'a [f32]`).
+    type DeleteElement<'a>: Copy + Send + Sync;
 
-    /// Why do we need the `Lower` bound here?
+    /// The guard type returned by `get_delete_element`.
     ///
-    /// The answer is that search strategies are implemented to `T: ?Sized`, but the return
-    /// type of an accessor can never be `?Sized`.
-    ///
-    /// This presents a conundrum because if we implement, for example,
-    /// [`SearchStrategy<[f32]>`], we would like to be able to reuse that search strategy
-    /// for the search portion of inplace deletes.
-    ///
-    /// This means that we need to be able to transform the value returned by
-    /// [`Accessor::get_element`] to be able to decay to a non-reference type.
-    ///
-    /// Note that it is possible for particular `DeleteElements` to `Deref` to themselves.
-    ///
-    /// Additionally, the `Deref` bound allows a guard to be returned instead of the raw
-    /// type while still dispatching to an unguarded search routine.
+    /// The guard holds the retrieved element data and must be convertible to
+    /// `DeleteElement<'a>` via [`Reborrow`]. This allows the guard's lifetime to scope the
+    /// validity of the extracted element.
     type DeleteElementGuard: Send
         + Sync
-        + for<'a> diskann_utils::reborrow::AsyncLower<'a, Self::DeleteElement<'a>>
+        + for<'a> Reborrow<'a, Target = Self::DeleteElement<'a>>
         + 'static;
 
     /// Error type for accessing for search.
@@ -717,16 +704,6 @@ where
     fn id_iterator(&mut self) -> impl std::future::Future<Output = Result<I, ANNError>>;
 }
 
-pub mod aliases {
-    use super::*;
-
-    /// A convenience alias returning the prune accessor for an insert strategy `Strategy`.
-    pub type InsertPruneAccessor<'a, Strategy, Provider, T> = <<Strategy as InsertStrategy<
-        Provider,
-        T,
-    >>::PruneStrategy as PruneStrategy<Provider>>::PruneAccessor<'a>;
-}
-
 ///////////
 // Tests //
 ///////////
@@ -744,7 +721,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        ANNResult, neighbor,
+        ANNResult, neighbor, error::{TransientError, RankedError, ToRanked},
         provider::{DelegateNeighbor, ExecutionContext, HasId, NeighborAccessor},
     };
 
@@ -775,6 +752,7 @@ mod tests {
         type InternalId = u32;
         type ExternalId = u32;
         type Error = ANNError;
+        type Guard = crate::provider::NoopGuard<u32>;
 
         /// Translate an external id to its corresponding internal id.
         fn to_internal_id(
@@ -937,7 +915,7 @@ mod tests {
     impl BuildQueryComputer<f32> for Retriever<'_> {
         type QueryComputerError = ANNError;
         type QueryComputer = QueryComputer;
-        fn build_query_computer(&self, _from: &f32) -> Result<QueryComputer, ANNError> {
+        fn build_query_computer(&self, _from: f32) -> Result<QueryComputer, ANNError> {
             Ok(QueryComputer)
         }
     }
@@ -1008,7 +986,7 @@ mod tests {
         ctx.clear();
 
         let query = 11.5;
-        let computer = accessor.build_query_computer(&query).unwrap();
+        let computer = accessor.build_query_computer(query).unwrap();
 
         for input_len in 0..10 {
             let input: Vec<_> = (0..input_len)
@@ -1021,7 +999,7 @@ mod tests {
                     .post_processor()
                     .post_process(
                         &mut accessor,
-                        &query,
+                        query,
                         &computer,
                         input.iter().copied(),
                         &mut neighbor::BackInserter::new(output.as_mut_slice()),

@@ -604,6 +604,7 @@ impl provider::DataProvider for Provider {
     type ExternalId = u32;
 
     type Error = InvalidId;
+    type Guard = provider::NoopGuard<u32>;
 
     fn to_internal_id(&self, _context: &Context, gid: &u32) -> Result<u32, InvalidId> {
         let valid = self.terms.contains_key(gid);
@@ -680,9 +681,8 @@ impl provider::Delete for Provider {
     }
 }
 
-impl provider::SetElement<[f32]> for Provider {
+impl provider::SetElement<&[f32]> for Provider {
     type SetError = ANNError;
-    type Guard = provider::NoopGuard<u32>;
 
     async fn set_element(
         &self,
@@ -900,7 +900,7 @@ impl<'a> provider::DelegateNeighbor<'a> for Accessor<'_> {
     }
 }
 
-impl provider::BuildQueryComputer<[f32]> for Accessor<'_> {
+impl provider::BuildQueryComputer<&[f32]> for Accessor<'_> {
     type QueryComputerError = Infallible;
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
 
@@ -936,7 +936,7 @@ impl glue::SearchExt for Accessor<'_> {
     }
 }
 
-impl glue::ExpandBeam<[f32]> for Accessor<'_> {}
+impl glue::ExpandBeam<&[f32]> for Accessor<'_> {}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Strategy {
@@ -949,7 +949,7 @@ impl Strategy {
     }
 }
 
-impl glue::SearchStrategy<Provider, [f32]> for Strategy {
+impl glue::SearchStrategy<Provider, &[f32]> for Strategy {
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
     type PostProcessor = glue::CopyIds;
     type SearchAccessorError = Infallible;
@@ -987,7 +987,7 @@ impl glue::PruneStrategy<Provider> for Strategy {
     }
 }
 
-impl glue::InsertStrategy<Provider, [f32]> for Strategy {
+impl glue::InsertStrategy<Provider, &[f32]> for Strategy {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -1003,19 +1003,8 @@ impl glue::InsertStrategy<Provider, [f32]> for Strategy {
     }
 }
 
-impl<'a> glue::AsElement<&'a [f32]> for Accessor<'a> {
-    type Error = Infallible;
-    fn as_element(
-        &mut self,
-        vector: &'a [f32],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send {
-        std::future::ready(Ok(vector))
-    }
-}
-
 impl glue::InplaceDeleteStrategy<Provider> for Strategy {
-    type DeleteElement<'a> = [f32];
+    type DeleteElement<'a> = &'a [f32];
     type DeleteElementGuard = Box<[f32]>;
     type DeleteElementError = AccessedInvalidId;
     type PruneStrategy = Self;

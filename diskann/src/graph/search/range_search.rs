@@ -170,7 +170,7 @@ impl Range {
 impl<DP, S, T, O> Search<DP, S, T, O, ()> for Range
 where
     DP: DataProvider,
-    T: Sync + ?Sized,
+    T: Copy + Send + Sync,
     S: SearchStrategy<DP, T, O>,
     O: Send + Default + Clone,
 {
@@ -181,7 +181,7 @@ where
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         _output: &mut (),
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
@@ -318,7 +318,6 @@ pub(crate) async fn range_search_internal<I, A, T>(
 where
     I: crate::utils::VectorId,
     A: ExpandBeam<T, Id = I> + SearchExt,
-    T: ?Sized,
 {
     let beam_width = search_params.beam_width().unwrap_or(1);
 

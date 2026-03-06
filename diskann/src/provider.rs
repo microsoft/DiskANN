@@ -171,6 +171,13 @@ pub trait DataProvider: Sized + Send + Sync + 'static {
 
     type Error: ToRanked + std::fmt::Debug + Send + Sync + 'static;
 
+    /// The operation guard returned by [`SetElement::set_element`] to notify `self` if an
+    /// operation fails.
+    ///
+    /// This is required to be `'static` for multi-insert compatibility (where it is required
+    /// to cross spawn boundaries).
+    type Guard: Guard<Id = Self::InternalId> + 'static;
+
     /// Translate an external id to its corresponding internal id.
     ///
     /// The vector referenced by `gid` must already have been added to the provider via
@@ -304,18 +311,9 @@ where
 ////////////////
 
 /// An overloadable `DataProvider` sub-trait allowing element assignment.
-pub trait SetElement<T>: DataProvider
-where
-    T: ?Sized,
-{
+pub trait SetElement<T>: DataProvider {
     /// The kind of error yielded by `set_element`.
     type SetError: ToRanked + std::fmt::Debug + Send + Sync + 'static;
-
-    /// The operation guard returned by `set_element` to notify `self` if an operation fails.
-    ///
-    /// This is required to be '`static` for multi-insert compatibility (where it is required
-    /// to cross spawn boundaries).
-    type Guard: Guard<Id = Self::InternalId> + 'static;
 
     /// Internally store the value of `element` and associate it with `id`.
     ///
@@ -332,7 +330,7 @@ where
         &self,
         context: &Self::Context,
         id: &Self::ExternalId,
-        element: &T,
+        element: T,
     ) -> impl std::future::Future<Output = Result<Self::Guard, Self::SetError>> + Send;
 }
 
@@ -557,10 +555,7 @@ pub trait BuildDistanceComputer: Accessor {
 ///
 /// Query computers are allowed to preprocess the query to enable more efficient distance
 /// computations.
-pub trait BuildQueryComputer<T>: Accessor
-where
-    T: ?Sized,
-{
+pub trait BuildQueryComputer<T>: Accessor {
     /// The error type (if any) associated with distance computer construction.
     type QueryComputerError: std::error::Error + Into<ANNError> + Send + Sync + 'static;
 
@@ -577,7 +572,7 @@ where
     /// invoked once per search or graph insert.
     fn build_query_computer(
         &self,
-        from: &T,
+        from: T,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError>;
 
     /// Compute the distances for the elements in the iterator `itr` using the
@@ -1071,6 +1066,7 @@ mod tests {
         type InternalId = u32;
         type ExternalId = u32;
         type Error = ANNError;
+        type Guard = NoopGuard<u32>;
 
         fn to_internal_id(&self, _context: &DefaultContext, gid: &u32) -> Result<u32, ANNError> {
             Ok(*gid)

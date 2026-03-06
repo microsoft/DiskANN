@@ -146,7 +146,7 @@ impl Knn {
 impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for Knn
 where
     DP: DataProvider,
-    T: Sync + ?Sized,
+    T: Copy + Send + Sync,
     S: SearchStrategy<DP, T, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send + ?Sized,
@@ -182,7 +182,7 @@ where
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
@@ -249,7 +249,7 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
 impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
-    T: Sync + ?Sized,
+    T: Copy + Send + Sync,
     S: SearchStrategy<DP, T, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send + ?Sized,
@@ -262,7 +262,7 @@ where
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {

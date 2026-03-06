@@ -14,8 +14,7 @@ use std::{
 
 use diskann_utils::{
     Reborrow,
-    future::{AssertSend, AsyncFriendly, SendFuture, boxit},
-    reborrow::AsyncLower,
+    future::{AssertSend, SendFuture, boxit},
 };
 use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 use futures_util::FutureExt;
@@ -26,8 +25,8 @@ use tokio::task::JoinSet;
 use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod,
     glue::{
-        self, AsElement, ExpandBeam, IdIterator, InplaceDeleteStrategy, InsertStrategy,
-        PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
+        self, Batch, ExpandBeam, IdIterator, InplaceDeleteStrategy, InsertStrategy,
+        MultiInsertStrategy, PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
@@ -36,13 +35,13 @@ use super::{
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
     search_output_buffer,
-    workingset::{ScopedMap, Fill},
+    workingset::{Fill, ScopedMap},
 };
 
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
-    error::{ErrorExt, IntoANNResult, RankedError, ToRanked, TransientError},
-    internal::chain,
+    error::{ErrorExt, RankedError, IntoANNResult, ToRanked, TransientError},
+    internal,
     neighbor::{self, Neighbor, NeighborPriorityQueue, NeighborQueue},
     provider::{
         Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
@@ -52,7 +51,7 @@ use crate::{
     tracked_debug, tracked_error, tracked_trace,
     utils::{
         IntoUsize, TryIntoVectorId, VectorId,
-        async_tools::{self, DynamicBalancer, VectorIdBoxSlice},
+        async_tools::{self, DynamicBalancer},
         object_pool::{ObjectPool, PooledRef},
     },
 };
@@ -207,19 +206,6 @@ type BatchResult<T> = Result<T, (T, ANNError)>;
 ///   type parameter because the type of the query computer depends on the type of the query.
 pub type PagedSearchState<DP, S, C> = SearchState<<DP as DataProvider>::InternalId, (S, C)>;
 
-/// The result of invoking [`DiskANNIndex::set_elements`], which invokes [`SetElement`] on
-/// a batch of vector ids and returns the guards for the batch (as well as the batch data
-/// with the appropriate internal ids.
-struct SetBatchElements<G, I, T> {
-    /// The [`SetElement::Guard`]s for every item in the set.
-    guards: Vec<G>,
-
-    /// The batch with the corresponding internal ids. The elements here have a position-wide
-    /// correspondence with guards. That is, the guard at index `i` is the guard for
-    /// the data vector as index `i`.
-    batch: Arc<[VectorIdBoxSlice<I, T>]>,
-}
-
 impl<DP> DiskANNIndex<DP>
 where
     DP: DataProvider,
@@ -302,11 +288,11 @@ where
         strategy: S,
         context: &DP::Context,
         id: &DP::ExternalId,
-        vector: &T,
+        vector: T,
     ) -> impl SendFuture<ANNResult<()>>
     where
         S: InsertStrategy<DP, T>,
-        T: Sync + ?Sized,
+        T: Copy + Send + Sync,
         DP: SetElement<T>,
     {
         async move {
@@ -428,693 +414,672 @@ where
         }
     }
 
-    // /// Perform a search for the given `vector_id, vector`, prune and return the visited set.
-    // /// Returns a tuple of the `vector_id` and a list of nodes from which to append an edge to `vector_id`.
-    // fn search_and_prune<S, T>(
-    //     &self,
-    //     strategy: &S,
-    //     context: &DP::Context,
-    //     vector_id_pair: &VectorIdBoxSlice<DP::InternalId, T>,
-    //     position: usize,
-    //     batch: &[VectorIdBoxSlice<DP::InternalId, T>],
-    //     prune_scratch: &mut prune::Scratch<DP::InternalId>,
-    // ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
-    // where
-    //     T: Sync,
-    //     DP: SetElement<[T]>,
-    //     S: InsertStrategy<DP, [T]>,
-    //     for<'a> aliases::InsertPruneAccessor<'a, S, DP, [T]>: AsElement<&'a [T]>,
-    // {
-    //     async move {
-    //         // Copy vectors to the vector provider, quantize them and set quant vec provider if necessary
-    //         let internal_id = vector_id_pair.vector_id;
-    //         let vector = vector_id_pair.vector.as_ref();
+    /// Perform a search for the given `vector_id, vector`, prune and return the visited set.
+    /// Returns a tuple of the `vector_id` and a list of nodes from which to append an edge to `vector_id`.
+    fn search_and_prune<S, B, State>(
+        &self,
+        strategy: &S,
+        context: &DP::Context,
+        batch: &B,
+        ids: &[DP::InternalId],
+        position: usize,
+        state: &mut State,
+        prune_scratch: &mut prune::Scratch<DP::InternalId>,
+    ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
+    where
+        S: for<'a> InsertStrategy<
+                DP,
+                B::Element<'a>,
+                PruneStrategy: PruneStrategy<DP, State = State>,
+            >,
+        B: Batch,
+        State: Send + Sync,
+    {
+        async move {
+            // Copy vectors to the vector provider, quantize them and set quant vec provider if necessary
+            let internal_id = ids[position];
 
-    //         // NOTE: Use the `insert_search_accessor` API to allow insert-specific customization.
-    //         let mut accessor = strategy
-    //             .insert_search_accessor(&self.data_provider, context)
-    //             .into_ann_result()?;
+            // NOTE: Use the `insert_search_accessor` API to allow insert-specific customization.
+            let mut accessor = strategy
+                .insert_search_accessor(&self.data_provider, context)
+                .into_ann_result()?;
 
-    //         let computer = accessor.build_query_computer(vector).into_ann_result()?;
-    //         let start_ids = accessor.starting_points().await?;
+            let computer = accessor
+                .build_query_computer(batch.get(position))
+                .into_ann_result()?;
+            let start_ids = accessor.starting_points().await?;
 
-    //         let mut scratch = self.search_scratch(self.l_build(), start_ids.len());
-    //         let mut search_l = scratch.best.search_l();
+            let mut scratch = self.search_scratch(self.l_build(), start_ids.len());
+            let mut search_l = scratch.best.search_l();
 
-    //         // NOTE: We don't filter the start points out of `visited_nodes`, as those are
-    //         // needed to generate out edges from the start points.
-    //         let mut new_out_neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
+            // If the experimental config is present, use it to obtain the maximum number
+            // of retries. Otherwise, we stick with the default of 1.
+            let insert_retry = self.config.experimental_insert_retry();
+            let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
 
-    //         // If the experimental config is present, use it to obtain the maximum number
-    //         // of retries. Otherwise, we stick with the default of 1.
-    //         let insert_retry = self.config.experimental_insert_retry();
-    //         let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
+            for attempt in 0..num_insert_attempts {
+                let mut search_record = VisitedSearchRecord::new(
+                    self.estimate_visited_set_capacity(Some(scratch.best.search_l())),
+                );
 
-    //         for attempt in 0..num_insert_attempts {
-    //             let mut search_record = VisitedSearchRecord::new(
-    //                 self.estimate_visited_set_capacity(Some(scratch.best.search_l())),
-    //             );
+                self.search_internal(
+                    None, // beam_width
+                    &start_ids,
+                    &mut accessor,
+                    &computer,
+                    &mut scratch,
+                    &mut search_record,
+                )
+                .await?;
 
-    //             self.search_internal(
-    //                 None, // beam_width
-    //                 &start_ids,
-    //                 &mut accessor,
-    //                 &computer,
-    //                 &mut scratch,
-    //                 &mut search_record,
-    //             )
-    //             .await?;
+                // Add other vector id pairs in the mini batch to the candidate pool
+                let prune_strategy = strategy.prune_strategy();
+                let mut prune_accessor = prune_strategy
+                    .prune_accessor(&self.data_provider, context)
+                    .into_ann_result()?;
 
-    //             // Add other vector id pairs in the mini batch to the candidate pool
-    //             let prune_strategy = strategy.prune_strategy();
-    //             let mut prune_accessor = prune_strategy
-    //                 .prune_accessor(&self.data_provider, context)
-    //                 .into_ann_result()?;
+                // N.B.: If `candidates == 0`, then `async_tools::around` naturally returns
+                // an empty iterator and `robust_prune_with` will skip the addidtional
+                // distandce computations.
+                let candidates = self.config.intra_batch_candidates().get(batch.len());
 
-    //             let mut working_set = prune_accessor.state(None);
-    //             let candidates = self.config.intra_batch_candidates().get(batch.len());
-    //             if candidates != 0 {
-    //                 let prune_computer =
-    //                     prune_accessor.build_distance_computer().into_ann_result()?;
-    //                 let this_vector: <
-    //                     <S::PruneStrategy as PruneStrategy<DP>>::PruneAccessor<'_> as Accessor>::Extended = prune_accessor
-    //                     .as_element(vector, internal_id)
-    //                     .await
-    //                     .escalate("Retrieving the inserted vector must succeed")?
-    //                     .into();
+                let options = prune::Options {
+                    force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
+                };
 
-    //                 for other in async_tools::around(batch, position, candidates) {
-    //                     let id = other.vector_id;
-    //                     if let Some(element) = prune_accessor
-    //                         .as_element(&other.vector, id)
-    //                         .await
-    //                         .allow_transient(
-    //                             "Failure to retrieve others in the batch is acceptable",
-    //                         )?
-    //                     {
-    //                         search_record.push(Neighbor::new(
-    //                             id,
-    //                             prune_computer.evaluate_similarity(
-    //                                 this_vector.reborrow(),
-    //                                 element.reborrow(),
-    //                             ),
-    //                         ));
+                self.robust_prune_with(
+                    &mut prune_accessor,
+                    internal_id,
+                    async_tools::around(ids, position, candidates).copied(),
+                    &mut search_record,
+                    prune_scratch,
+                    state,
+                    options,
+                )
+                .await
+                .unwrap();
 
-    //                         working_set.insert(id, element.into());
-    //                     }
-    //                 }
-    //             }
+                let should_retry = insert_retry
+                    .is_some_and(|v| v.should_retry(attempt, prune_scratch.neighbors.len()));
+                if !should_retry {
+                    break;
+                }
 
-    //             let context = prune::Context {
-    //                 pool: SortedNeighbors::new(
-    //                     &mut search_record.visited,
-    //                     self.max_occlusion_size(),
-    //                 ),
-    //                 occlude_factor: &mut prune_scratch.occlude_factor,
-    //                 neighbors: &mut new_out_neighbors,
-    //                 last_checked: &mut prune_scratch.last_checked,
-    //             };
+                search_l *= 2;
+                scratch.resize(search_l);
+                scratch.clear();
+            }
 
-    //             let options = prune::Options {
-    //                 force_saturate: insert_retry.is_some_and(|v| v.should_saturate(attempt)),
-    //             };
+            Ok(PendingEdge::new(
+                internal_id,
+                std::mem::take(&mut prune_scratch.neighbors),
+            ))
+        }
+    }
 
-    //             self.robust_prune(
-    //                 &mut prune_accessor,
-    //                 internal_id,
-    //                 context,
-    //                 &mut working_set,
-    //                 options,
-    //             )
-    //             .await?;
+    /// Invoke `DP::set_element` for each vector in `vectors`. For each vector `v, returns:
+    ///
+    /// 1. The [`SetElement::Guard`] associated with the insertion.
+    /// 2. The raw data of the vector.
+    ///
+    /// These results are aggregated into a vector, with an error being returned should any
+    /// call to [`DP::set_element`] fail.
+    ///
+    /// This is the leaf task for the batch [`Self::set_elements`] method.
+    async fn set_chunk<B>(
+        &self,
+        context: &DP::Context,
+        batch: &B,
+        ids: &[DP::ExternalId],
+        range: Range<usize>,
+    ) -> ANNResult<Vec<DP::Guard>>
+    where
+        B: Batch,
+        DP: for<'a> SetElement<B::Element<'a>>,
+    {
+        let mut output = Vec::with_capacity(range.len());
+        for i in range {
+            let guard = self
+                .provider()
+                .set_element(context, &ids[i], batch.get(i))
+                .await
+                .escalate("cannot support failures during `set_element` in multi-insert")
+                .into_ann_result()?;
 
-    //             let should_retry =
-    //                 insert_retry.is_some_and(|v| v.should_retry(attempt, new_out_neighbors.len()));
-    //             if !should_retry {
-    //                 break;
-    //             }
+            output.push(guard);
+        }
+        Ok(output)
+    }
 
-    //             search_l *= 2;
-    //             scratch.resize(search_l);
-    //             scratch.clear();
-    //         }
+    /// Parallelise the invocation of applying [`DP::set_element`] to all vectors `v` in
+    /// `vectors` using up to `ntasks` tasks.
+    ///
+    /// Return a pair consisting of the [`DP::set_element`] guards for each vector `v` in
+    /// vectors and an [`Arc`] slice of the translated vectors. This function bails if any
+    /// invocation of [`DP::set_element`] fails.
+    ///
+    /// The ordering of the guards will be consistent with the ordering of the translated
+    /// vectors, though this need not necessarily be the order of the input vectors.
+    ///
+    /// The data backing each translated vector will be the same as that in `vectors`. That
+    /// is, the backing data is *moved* internally, not copied.
+    fn set_elements<B>(
+        self: &Arc<Self>,
+        context: &DP::Context,
+        batch: &Arc<B>,
+        ids: &Arc<[DP::ExternalId]>,
+        ntasks: NonZeroUsize,
+    ) -> impl SendFuture<ANNResult<Vec<DP::Guard>>>
+    where
+        Self: 'static,
+        B: Batch,
+        DP: for<'a> SetElement<B::Element<'a>>,
+    {
+        async move {
+            if batch.len() != ids.len() {
+                panic!("todo: return ann error with a local error type");
+            }
 
-    //         Ok(PendingEdge::new(internal_id, new_out_neighbors))
-    //     }
-    // }
+            let partitions = async_tools::PartitionIter::new(batch.len(), ntasks);
 
-    // /// Invoke `DP::set_element` for each vector in `vectors`. For each vector `v, returns:
-    // ///
-    // /// 1. The [`SetElement::Guard`] associated with the insertion.
-    // /// 2. The raw data of the vector.
-    // ///
-    // /// These results are aggregated into a vector, with an error being returned should any
-    // /// call to [`DP::set_element`] fail.
-    // ///
-    // /// This is the leaf task for the batch [`Self::set_elements`] method.
-    // async fn set_chunk<T>(
-    //     &self,
-    //     context: &DP::Context,
-    //     vectors: Vec<VectorIdBoxSlice<DP::ExternalId, T>>,
-    // ) -> ANNResult<Vec<(DP::Guard, Box<[T]>)>>
-    // where
-    //     DP: SetElement<[T]>,
-    // {
-    //     let mut output = Vec::with_capacity(vectors.len());
-    //     for pair in vectors {
-    //         let id = pair.vector_id;
-    //         let data = pair.vector;
+            let handles: Vec<_> = partitions
+                .map(|r| {
+                    let self_clone = self.clone();
+                    let context_clone = context.clone();
+                    let batch_clone = batch.clone();
+                    let ids_clone = ids.clone();
 
-    //         let guard = self
-    //             .provider()
-    //             .set_element(context, &id, &data)
-    //             .await
-    //             .escalate("cannot support failures during `set_element` in multi-insert")
-    //             .into_ann_result()?;
+                    // The task assigned to each round of `set_element`.
+                    let future = async move {
+                        self_clone
+                            .set_chunk(&context_clone, &batch_clone, &ids_clone, r)
+                            .await
+                    };
 
-    //         output.push((guard, data));
-    //     }
-    //     Ok(output)
-    // }
+                    tokio::spawn(context.wrap_spawn(future))
+                })
+                .collect();
 
-    // /// Parallelise the invocation of applying [`DP::set_element`] to all vectors `v` in
-    // /// `vectors` using up to `ntasks` tasks.
-    // ///
-    // /// Return a pair consisting of the [`DP::set_element`] guards for each vector `v` in
-    // /// vectors and an [`Arc`] slice of the translated vectors. This function bails if any
-    // /// invocation of [`DP::set_element`] fails.
-    // ///
-    // /// The ordering of the guards will be consistent with the ordering of the translated
-    // /// vectors, though this need not necessarily be the order of the input vectors.
-    // ///
-    // /// The data backing each translated vector will be the same as that in `vectors`. That
-    // /// is, the backing data is *moved* internally, not copied.
-    // fn set_elements<T>(
-    //     self: &Arc<Self>,
-    //     context: &DP::Context,
-    //     vectors: Box<[VectorIdBoxSlice<DP::ExternalId, T>]>,
-    //     ntasks: NonZeroUsize,
-    // ) -> impl SendFuture<ANNResult<SetBatchElements<DP::Guard, DP::InternalId, T>>>
-    // where
-    //     Self: 'static,
-    //     T: AsyncFriendly,
-    //     DP: SetElement<[T]>,
-    // {
-    //     async move {
-    //         let len = vectors.len();
-    //         let partitions = async_tools::PartitionIter::new(vectors.len(), ntasks);
+            // The collection of all the insert guards for the batch.
+            let mut guards = Vec::with_capacity(batch.len());
 
-    //         // In the loop below, we chunk `itr` according to the lengths in `partitions`.
-    //         let mut itr = vectors.into_iter();
-    //         let handles: Vec<_> = partitions
-    //             .map(|r| {
-    //                 let self_clone = self.clone();
+            for h in handles {
+                let processed = h
+                    .await
+                    .map_err(|err| ANNError::new(ANNErrorKind::IndexError, err))??;
+                for guard in processed {
+                    guards.push(guard);
+                }
+            }
 
-    //                 // Note: `by_ref`: avoids consuming `itr` but still take ownership of the
-    //                 // yielded elements.
-    //                 let chunk: Vec<_> = itr.by_ref().take(r.len()).collect();
-    //                 let context_clone = context.clone();
+            Ok(guards)
+        }
+    }
 
-    //                 // The task assigned to each round of `set_element`.
-    //                 let future = async move { self_clone.set_chunk(&context_clone, chunk).await };
+    /// Continually retrieve items from `work`, invoking `search_and_prune` on each claimed
+    /// item. Return a vector of all results processed by this task.
+    ///
+    /// # Return Value and Error Handling
+    ///
+    /// Returns a pair `(edges, result)`. Whether or not `result` is an error, `edges` will
+    /// contain all edges successfully processed by this task.
+    fn search_and_prune_batch<S, B, State>(
+        &self,
+        strategy: &S,
+        context: &DP::Context,
+        batch: &B,
+        work: &DynamicBalancer<DP::InternalId>,
+        state: &mut State,
+    ) -> impl SendFuture<BatchResult<Vec<PendingEdge<DP::InternalId>>>>
+    where
+        B: Batch,
+        S: for<'a> InsertStrategy<
+                DP,
+                B::Element<'a>,
+                PruneStrategy: PruneStrategy<DP, State = State>,
+            >,
+        State: Send + Sync,
+    {
+        async move {
+            let mut output = Vec::new();
+            let mut prune_scratch = prune::Scratch::new();
+            while let Some((_, position)) = work.next() {
+                match self
+                    .search_and_prune(
+                        strategy,
+                        context,
+                        &batch,
+                        work.all(),
+                        position,
+                        state,
+                        &mut prune_scratch,
+                    )
+                    .await
+                {
+                    Ok(item) => output.push(item),
+                    Err(err) => return Err((output, err)),
+                }
+            }
+            Ok(output)
+        }
+    }
 
-    //                 tokio::spawn(context.wrap_spawn(future))
-    //             })
-    //             .collect();
+    /// The leaf element for the multi-insert bootstrapping algorithm.
+    ///
+    /// This algorithm:
+    ///
+    /// 1. Constructs a new candidates array from (A) the `current` pending edge and
+    ///    (B) all other members in the `batch`.
+    /// 2. Runs pruning on the aggregated list.
+    /// 3. Returns the new pruned result as a replacement for `current`.
+    fn multi_insert_bootstrap_leaf<S>(
+        &self,
+        strategy: &S,
+        context: &DP::Context,
+        current: &PendingEdge<DP::InternalId>,
+        batch: &[PendingEdge<DP::InternalId>],
+    ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
+    where
+        S: PruneStrategy<DP>,
+    {
+        async move {
+            // Collect all the current edges and all elements in the batch.
+            let candidates =
+                AdjacencyList::from_iter_untrusted(current.edges.iter().copied().chain(
+                    batch.iter().filter_map(|i| {
+                        // Avoid self loops.
+                        if i.source == current.source {
+                            None
+                        } else {
+                            Some(i.source)
+                        }
+                    }),
+                ));
 
-    //         // The collection of all the insert guards for the batch.
-    //         let mut guards = Vec::with_capacity(len);
+            let mut accessor = strategy
+                .prune_accessor(&self.data_provider, context)
+                .into_ann_result()?;
 
-    //         // The repackage input data.
-    //         let mut batch = Vec::with_capacity(len);
+            let mut prune_scratch = prune::Scratch::new();
+            let mut working_set = strategy.create_state(None);
 
-    //         for h in handles {
-    //             let processed = h
-    //                 .await
-    //                 .map_err(|err| ANNError::new(ANNErrorKind::IndexError, err))??;
-    //             for (guard, data) in processed {
-    //                 let id = guard.id();
-    //                 guards.push(guard);
-    //                 batch.push(VectorIdBoxSlice {
-    //                     vector_id: id,
-    //                     vector: data,
-    //                 });
-    //             }
-    //         }
+            // During bootstrap, we want the graph to be as dense as possible to aid
+            // in early navigation.
+            //
+            // Enabling saturation help achieve that.
+            let options = prune::Options {
+                force_saturate: true,
+            };
 
-    //         Ok(SetBatchElements {
-    //             guards,
-    //             batch: batch.into(),
-    //         })
-    //     }
-    // }
+            self.robust_prune_list(
+                &mut accessor,
+                current.source,
+                &candidates,
+                &mut prune_scratch,
+                &mut working_set,
+                options,
+            )
+            .await
+            .escalate("retrieving inserted vector must succeed")?;
 
-    // /// Continually retrieve items from `work`, invoking `search_and_prune` on each claimed
-    // /// item. Return a vector of all results processed by this task.
-    // ///
-    // /// # Return Value and Error Handling
-    // ///
-    // /// Returns a pair `(edges, result)`. Whether or not `result` is an error, `edges` will
-    // /// contain all edges successfully processed by this task.
-    // fn search_and_prune_batch<S, T>(
-    //     &self,
-    //     strategy: &S,
-    //     context: &DP::Context,
-    //     work: &DynamicBalancer<VectorIdBoxSlice<DP::InternalId, T>>,
-    // ) -> impl SendFuture<BatchResult<Vec<PendingEdge<DP::InternalId>>>>
-    // where
-    //     T: Send + Sync,
-    //     DP: SetElement<[T]>,
-    //     S: InsertStrategy<DP, [T]>,
-    //     for<'a> aliases::InsertPruneAccessor<'a, S, DP, [T]>: AsElement<&'a [T]>,
-    // {
-    //     async move {
-    //         let mut output = Vec::new();
-    //         let mut prune_scratch = prune::Scratch::new();
-    //         while let Some((vector, position)) = work.next() {
-    //             match self
-    //                 .search_and_prune(
-    //                     strategy,
-    //                     context,
-    //                     vector,
-    //                     position,
-    //                     work.all(),
-    //                     &mut prune_scratch,
-    //                 )
-    //                 .await
-    //             {
-    //                 Ok(item) => output.push(item),
-    //                 Err(err) => return Err((output, err)),
-    //             }
-    //         }
-    //         Ok(output)
-    //     }
-    // }
+            Ok(PendingEdge::new(current.source, prune_scratch.neighbors))
+        }
+    }
 
-    // /// The leaf element for the multi-insert bootstrapping algorithm.
-    // ///
-    // /// This algorithm:
-    // ///
-    // /// 1. Constructs a new candidates array from (A) the `current` pending edge and
-    // ///    (B) all other members in the `batch`.
-    // /// 2. Runs pruning on the aggregated list.
-    // /// 3. Returns the new pruned result as a replacement for `current`.
-    // fn multi_insert_bootstrap_leaf<S>(
-    //     &self,
-    //     strategy: &S,
-    //     context: &DP::Context,
-    //     current: &PendingEdge<DP::InternalId>,
-    //     batch: &[PendingEdge<DP::InternalId>],
-    // ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
-    // where
-    //     S: PruneStrategy<DP>,
-    // {
-    //     async move {
-    //         // Collect all the current edges and all elements in the batch.
-    //         let candidates =
-    //             AdjacencyList::from_iter_untrusted(current.edges.iter().copied().chain(
-    //                 batch.iter().filter_map(|i| {
-    //                     // Avoid self loops.
-    //                     if i.source == current.source {
-    //                         None
-    //                     } else {
-    //                         Some(i.source)
-    //                     }
-    //                 }),
-    //             ));
+    /// Task level step in multi-insert bootstrap.
+    ///
+    /// This algorithm constructs a new candidates array from the `current` pending edge
+    /// and all other members in the `batch`, runs pruning, and returns the new pruned result.
+    fn multi_insert_bootstrap_task<S>(
+        &self,
+        strategy: &S,
+        context: &DP::Context,
+        work: &DynamicBalancer<PendingEdge<DP::InternalId>>,
+    ) -> impl SendFuture<BatchResult<Vec<PendingEdge<DP::InternalId>>>>
+    where
+        S: PruneStrategy<DP>,
+    {
+        async move {
+            let mut output = Vec::new();
+            while let Some((pending, _)) = work.next() {
+                let item = match self
+                    .multi_insert_bootstrap_leaf::<S>(strategy, context, pending, work.all())
+                    .await
+                {
+                    Ok(item) => item,
+                    Err(err) => return Err((output, err)),
+                };
+                output.push(item);
+            }
+            Ok(output)
+        }
+    }
 
-    //         let mut accessor = strategy
-    //             .prune_accessor(&self.data_provider, context)
-    //             .into_ann_result()?;
+    /// Entry point for the mulit-insert bootstrap routine and a parallelized version of
+    /// [`Self::multi_insert_bootstrap_task`]. Refer to that method for documentation on the
+    /// routine applied to each edge in `edges`.
+    ///
+    /// If `self.config.max_minibatch_par()` is 1 or `edge.len() == 1`, then no additional
+    /// spawns are made by this function.
+    fn multi_insert_bootstrap<F, S>(
+        self: Arc<Self>,
+        f: F,
+        context: DP::Context,
+        edges: Vec<PendingEdge<DP::InternalId>>,
+    ) -> impl SendFuture<ANNResult<Vec<PendingEdge<DP::InternalId>>>>
+    where
+        F: Fn() -> S + Send + Sync,
+        S: PruneStrategy<DP>,
+    {
+        async move {
+            let num_items = edges.len();
+            let work = Arc::new(DynamicBalancer::new(edges.into()));
+            let num_tasks = self.config.max_minibatch_par().get().min(num_items).max(1);
 
-    //         let mut prune_scratch = prune::Scratch::new();
-    //         let mut working_set = HashMap::new();
+            // Note: `num_tasks - 1` cannot underflow because `num_tasks` is guaranteed
+            // to be at least 1.
+            let handles: Vec<_> = (0..num_tasks - 1)
+                .map(|_| {
+                    let self_clone = self.clone();
+                    let strategy = f();
+                    let context_clone = context.clone();
+                    let work_clone = work.clone();
+                    tokio::spawn(context.wrap_spawn(async move {
+                        self_clone
+                            .multi_insert_bootstrap_task(
+                                &strategy,
+                                &context_clone,
+                                &work_clone,
+                            )
+                            .await
+                    }))
+                })
+                .collect();
 
-    //         // During bootstrap, we want the graph to be as dense as possible to aid
-    //         // in early navigation.
-    //         //
-    //         // Enabling saturation help achieve that.
-    //         let options = prune::Options {
-    //             force_saturate: true,
-    //         };
+            // Process work on this thread.
+            let mut next = match self
+                .multi_insert_bootstrap_task(&f(), &context, &work)
+                .await
+            {
+                Ok(v) => v,
+                Err((v, err)) => {
+                    tracked_error!("main bootstrap task failed: {}", err);
+                    v
+                }
+            };
 
-    //         self.robust_prune_list(
-    //             &mut accessor,
-    //             current.source,
-    //             &candidates,
-    //             &mut prune_scratch,
-    //             &mut working_set,
-    //             options,
-    //         )
-    //         .await
-    //         .escalate("retrieving inserted vector must succeed")?;
+            for h in handles {
+                match h.await {
+                    Ok(maybe_ok) => match maybe_ok {
+                        Ok(mut v) => next.append(&mut v),
+                        Err((mut v, err)) => {
+                            next.append(&mut v);
+                            tracked_error!("bootstrap task failed: {}", err);
+                        }
+                    },
+                    Err(err) => tracked_error!("boostrap spawn failed: {}", err),
+                }
+            }
+            Ok(next)
+        }
+    }
 
-    //         Ok(PendingEdge::new(current.source, prune_scratch.neighbors))
-    //     }
-    // }
+    /// Insert a small set of vectors into the index. The call parallelizes the search for
+    /// each vector as well as the subsequent pruning and edge addition.
+    ///
+    /// Each `multi_insert` makes at most one update (either `set` or `append`) per id to
+    /// the [`DataProvider`]. The algorithm resolves conflicting updates to adjacency lists
+    /// caused by multiple inserts without involving the provider in the resolution.
+    ///
+    /// This method receives `self` by `Arc` to allow cloning for parallel task spawns.
+    ///
+    /// - `strategy`: The [`InsertStrategy`] to use for insert searches and prunes.
+    /// - `context` is the context to pass through to providers.
+    /// - `vectors` the vectors and associated ids to insert.
+    ///
+    /// # Configuration
+    ///
+    /// Multi-insert specific configuration includes:
+    ///
+    /// 1. [`diskann::index::Config::max_minibatch_par()`]: Control the maximum number
+    ///    of concurrent task spawns used by the implementation. This puts an upper bound
+    ///    on the extracted parallelism of this function.
+    ///
+    /// 2. [`diskann::index::Config::intra_batch_candidates()`]: Controls the maximum
+    ///    number of candidates from within the batch that are considered as neighbors.
+    ///
+    ///    When the batch size is very high or the inserted data has high self similarity,
+    ///    it is recommended to set this a moderate value such as 32 to ensure edges are
+    ///    formed within a batch. However, setting this too high can slow down ingestion
+    ///    for high batch sizes.
+    ///
+    ///    If this is set to zero, then candidates will not be considered among the batch
+    ///    **unless** the number of unique back edge sources is fewer than eight times the
+    ///    batch size. This helps with initial graph formation when the index is initially
+    ///    empty. The value "8" is a rough heuristic, chosen to trigger frequently during
+    ///    the initial phases of build but rarely again.
+    ///
+    /// # Error Handling
+    ///
+    /// The error handling for this function is currently undergoing a revision. Currently,
+    /// errors encountered during tasks spawns are suppressed. The revision will inform
+    /// the caller of failed insertions in a more precise manner.
+    ///
+    /// # Dev-Docs on Flow
+    ///
+    /// Multi-Insert works in three phases: (1) Set Elements, (2) Candidate Generation, and
+    /// (3) graph update.
+    ///
+    /// ## Set Elements
+    ///
+    /// Vectors taken from external sources need to be inserted into the underlying data
+    /// provider and an internal ID needs to be generated for these items. This phase
+    /// parallelizes the insertion and collects the internal IDs for the inserted vectors.
+    ///
+    /// ## Candidate Generation
+    ///
+    /// This is made up of a graph search followed by a prune on the resulting candidate
+    /// list. If [`diskann::index::Config::intra_batch_candidates()`] is non-zero, then
+    /// candidates from within the batch are added at this step prior to prune.
+    ///
+    /// ### Bootstrap
+    ///
+    /// If no intra-batch candidates are to be used, the optional bootstrap routine (defined
+    /// in the above section titled "configuration") is run after the initial candidate
+    /// generation.
+    ///
+    /// ## Graph Update
+    ///
+    /// After all candidates have been retrieved, backedges are aggregated and the graph is
+    /// updated. First with the generated candidates, and second to commit the backedges,
+    /// triggering secondary prunes if necessary. This phase is partitioned so each parallel
+    /// task updates a disjoint set of elements.
+    pub fn multi_insert<S, B>(
+        self: &Arc<Self>,
+        strategy: S,
+        context: &DP::Context,
+        vectors: Arc<B>,
+        ids: Arc<[DP::ExternalId]>,
+    ) -> impl SendFuture<ANNResult<()>>
+    where
+        Self: 'static,
+        S: MultiInsertStrategy<DP, B>,
+        B: Batch,
+        DP: for<'a> SetElement<B::Element<'a>>,
+    {
+        async move {
+            let num_tasks = self.config.max_minibatch_par();
 
-    // /// Task level step in multi-insert bootstrap.
-    // ///
-    // /// This algorithm constructs a new candidates array from the `current` pending edge
-    // /// and all other members in the `batch`, runs pruning, and returns the new pruned result.
-    // fn multi_insert_bootstrap_task<S>(
-    //     &self,
-    //     strategy: &S,
-    //     context: &DP::Context,
-    //     work: &DynamicBalancer<PendingEdge<DP::InternalId>>,
-    // ) -> impl SendFuture<BatchResult<Vec<PendingEdge<DP::InternalId>>>>
-    // where
-    //     S: PruneStrategy<DP>,
-    // {
-    //     async move {
-    //         let mut output = Vec::new();
-    //         while let Some((pending, _)) = work.next() {
-    //             let item = match self
-    //                 .multi_insert_bootstrap_leaf::<S>(strategy, context, pending, work.all())
-    //                 .await
-    //             {
-    //                 Ok(item) => item,
-    //                 Err(err) => return Err((output, err)),
-    //             };
-    //             output.push(item);
-    //         }
-    //         Ok(output)
-    //     }
-    // }
+            //--------------//
+            // Set Elements //
+            //--------------//
 
-    // /// Entry point for the mulit-insert bootstrap routine and a parallelized version of
-    // /// [`Self::multi_insert_bootstrap_task`]. Refer to that method for documentation on the
-    // /// routine applied to each edge in `edges`.
-    // ///
-    // /// If `self.config.max_minibatch_par()` is 1 or `edge.len() == 1`, then no additional
-    // /// spawns are made by this function.
-    // fn multi_insert_bootstrap<S>(
-    //     self: Arc<Self>,
-    //     strategy: S,
-    //     context: DP::Context,
-    //     edges: Vec<PendingEdge<DP::InternalId>>,
-    // ) -> impl SendFuture<ANNResult<Vec<PendingEdge<DP::InternalId>>>>
-    // where
-    //     S: PruneStrategy<DP> + Clone,
-    // {
-    //     async move {
-    //         let num_items = edges.len();
-    //         let work = Arc::new(DynamicBalancer::new(edges.into()));
-    //         let num_tasks = self.config.max_minibatch_par().get().min(num_items).max(1);
+            let guards = boxit(self.set_elements(context, &vectors, &ids, num_tasks)).await?;
 
-    //         // Note: `num_tasks - 1` cannot underflow because `num_tasks` is guaranteed
-    //         // to be at least 1.
-    //         let handles: Vec<_> = (0..num_tasks - 1)
-    //             .map(|_| {
-    //                 let self_clone = self.clone();
-    //                 let strategy_clone = strategy.clone();
-    //                 let context_clone = context.clone();
-    //                 let work_clone = work.clone();
-    //                 tokio::spawn(context.wrap_spawn(async move {
-    //                     self_clone
-    //                         .multi_insert_bootstrap_task(
-    //                             &strategy_clone,
-    //                             &context_clone,
-    //                             &work_clone,
-    //                         )
-    //                         .await
-    //                 }))
-    //             })
-    //             .collect();
+            //----------------------//
+            // Candidate Generation //
+            //----------------------//
 
-    //         // Process work on this thread.
-    //         let mut next = match self
-    //             .multi_insert_bootstrap_task(&strategy, &context, &work)
-    //             .await
-    //         {
-    //             Ok(v) => v,
-    //             Err((v, err)) => {
-    //                 tracked_error!("main bootstrap task failed: {}", err);
-    //                 v
-    //             }
-    //         };
+            // Dynamically partition the work across tasks. The time spent processing each
+            // item (measured in the hundreds of micro-seconds) likely far exceeds the
+            // synchronization overhead of the atomic increment.
+            let work = Arc::new(DynamicBalancer::new(guards.iter().map(|g| g.id()).collect()));
 
-    //         for h in handles {
-    //             match h.await {
-    //                 Ok(maybe_ok) => match maybe_ok {
-    //                     Ok(mut v) => next.append(&mut v),
-    //                     Err((mut v, err)) => {
-    //                         next.append(&mut v);
-    //                         tracked_error!("bootstrap task failed: {}", err);
-    //                     }
-    //                 },
-    //                 Err(err) => tracked_error!("boostrap spawn failed: {}", err),
-    //             }
-    //         }
-    //         Ok(next)
-    //     }
-    // }
+            // Launch `max_minibatch_par - 1` tasks to do work, running the last task on
+            // the local thread.
+            let handles: Vec<_> = (0..num_tasks.get() - 1)
+                .map(|_| {
+                    let self_clone = self.clone();
+                    let insert_strategy = strategy.insert_strategy();
+                    let context_clone = context.clone();
+                    let vectors_clone = vectors.clone();
+                    let work_clone = work.clone();
+                    let mut state = strategy.finish(&vectors, guards.iter().map(|g| g.id()));
 
-    // /// Insert a small set of vectors into the index. The call parallelizes the search for
-    // /// each vector as well as the subsequent pruning and edge addition.
-    // ///
-    // /// Each `multi_insert` makes at most one update (either `set` or `append`) per id to
-    // /// the [`DataProvider`]. The algorithm resolves conflicting updates to adjacency lists
-    // /// caused by multiple inserts without involving the provider in the resolution.
-    // ///
-    // /// This method receives `self` by `Arc` to allow cloning for parallel task spawns.
-    // ///
-    // /// - `strategy`: The [`InsertStrategy`] to use for insert searches and prunes.
-    // /// - `context` is the context to pass through to providers.
-    // /// - `vectors` the vectors and associated ids to insert.
-    // ///
-    // /// # Configuration
-    // ///
-    // /// Multi-insert specific configuration includes:
-    // ///
-    // /// 1. [`diskann::index::Config::max_minibatch_par()`]: Control the maximum number
-    // ///    of concurrent task spawns used by the implementation. This puts an upper bound
-    // ///    on the extracted parallelism of this function.
-    // ///
-    // /// 2. [`diskann::index::Config::intra_batch_candidates()`]: Controls the maximum
-    // ///    number of candidates from within the batch that are considered as neighbors.
-    // ///
-    // ///    When the batch size is very high or the inserted data has high self similarity,
-    // ///    it is recommended to set this a moderate value such as 32 to ensure edges are
-    // ///    formed within a batch. However, setting this too high can slow down ingestion
-    // ///    for high batch sizes.
-    // ///
-    // ///    If this is set to zero, then candidates will not be considered among the batch
-    // ///    **unless** the number of unique back edge sources is fewer than eight times the
-    // ///    batch size. This helps with initial graph formation when the index is initially
-    // ///    empty. The value "8" is a rough heuristic, chosen to trigger frequently during
-    // ///    the initial phases of build but rarely again.
-    // ///
-    // /// # Error Handling
-    // ///
-    // /// The error handling for this function is currently undergoing a revision. Currently,
-    // /// errors encountered during tasks spawns are suppressed. The revision will inform
-    // /// the caller of failed insertions in a more precise manner.
-    // ///
-    // /// # Dev-Docs on Flow
-    // ///
-    // /// Multi-Insert works in three phases: (1) Set Elements, (2) Candidate Generation, and
-    // /// (3) graph update.
-    // ///
-    // /// ## Set Elements
-    // ///
-    // /// Vectors taken from external sources need to be inserted into the underlying data
-    // /// provider and an internal ID needs to be generated for these items. This phase
-    // /// parallelizes the insertion and collects the internal IDs for the inserted vectors.
-    // ///
-    // /// ## Candidate Generation
-    // ///
-    // /// This is made up of a graph search followed by a prune on the resulting candidate
-    // /// list. If [`diskann::index::Config::intra_batch_candidates()`] is non-zero, then
-    // /// candidates from within the batch are added at this step prior to prune.
-    // ///
-    // /// ### Bootstrap
-    // ///
-    // /// If no intra-batch candidates are to be used, the optional bootstrap routine (defined
-    // /// in the above section titled "configuration") is run after the initial candidate
-    // /// generation.
-    // ///
-    // /// ## Graph Update
-    // ///
-    // /// After all candidates have been retrieved, backedges are aggregated and the graph is
-    // /// updated. First with the generated candidates, and second to commit the backedges,
-    // /// triggering secondary prunes if necessary. This phase is partitioned so each parallel
-    // /// task updates a disjoint set of elements.
-    // pub fn multi_insert<S, T>(
-    //     self: &Arc<Self>,
-    //     strategy: S,
-    //     context: &DP::Context,
-    //     vectors: Box<[VectorIdBoxSlice<DP::ExternalId, T>]>,
-    // ) -> impl SendFuture<ANNResult<()>>
-    // where
-    //     Self: 'static,
-    //     T: AsyncFriendly,
-    //     S: InsertStrategy<DP, [T]> + Clone + AsyncFriendly,
-    //     DP: SetElement<[T]>,
-    //     S::PruneStrategy: Clone,
-    //     for<'a> aliases::InsertPruneAccessor<'a, S, DP, [T]>: AsElement<&'a [T]>,
-    // {
-    //     async move {
-    //         let num_tasks = self.config.max_minibatch_par();
+                    let future = async move {
+                        self_clone
+                            .search_and_prune_batch(
+                                &insert_strategy,
+                                &context_clone,
+                                &vectors_clone,
+                                &work_clone,
+                                &mut state,
+                            )
+                            .await
+                    };
+                    tokio::spawn(context.wrap_spawn(future))
+                })
+                .collect();
 
-    //         //--------------//
-    //         // Set Elements //
-    //         //--------------//
+            // Defer dealing with the `result` until after we have joined the other tasks.
+            let mut state = strategy.finish(&vectors, guards.iter().map(|g| g.id()));
+            let mut edges = match self.search_and_prune_batch(
+                &strategy.insert_strategy(),
+                context,
+                &vectors,
+                &work,
+                &mut state,
+            ).await {
+                Ok(v) => v,
+                Err((v, err)) => {
+                    tracked_error!("search_prune_and_search main failed: {}", err);
+                    v
+                }
+            };
 
-    //         let SetBatchElements { guards, batch } =
-    //             boxit(self.set_elements(context, vectors, num_tasks)).await?;
+            // At this point - all the other tasks should be close to completing.
+            for h in handles {
+                match h.await {
+                    Ok(Ok(mut v)) => edges.append(&mut v),
+                    Ok(Err((mut v, err))) => {
+                        edges.append(&mut v);
+                        tracked_error!("search_prune_and_search failed: {}", err)
+                    }
+                    Err(err) => tracked_error!("Tokio spawned task join error: {}", err),
+                }
+            }
 
-    //         //----------------------//
-    //         // Candidate Generation //
-    //         //----------------------//
+            let mut backedges = aggregate_backedges(&edges);
 
-    //         // Dynamically partition the work across tasks. The time spent processing each
-    //         // item (measured in the hundreds of micro-seconds) likely far exceeds the
-    //         // synchronization overhead of the atomic increment.
-    //         let work = Arc::new(DynamicBalancer::new(batch));
+            //-----------//
+            // Bootstrap //
+            //-----------//
 
-    //         // Launch `max_minibatch_par - 1` tasks to do work, running the last task on
-    //         // the local thread.
-    //         let handles: Vec<_> = (0..num_tasks.get() - 1)
-    //             .map(|_| {
-    //                 let self_clone = self.clone();
-    //                 let strategy_clone = strategy.clone();
-    //                 let context_clone = context.clone();
-    //                 let work_clone = work.clone();
-    //                 let future = async move {
-    //                     self_clone
-    //                         .search_and_prune_batch(&strategy_clone, &context_clone, &work_clone)
-    //                         .await
-    //                 };
-    //                 tokio::spawn(context.wrap_spawn(future))
-    //             })
-    //             .collect();
+            // Check if number of unique back edges source is very small. If so, we do kick
+            // off the bootstrap routine and add edges from within the batch.
+            //
+            // If `work.len() == 1`, then there is nothing to bootstrap since there are no
+            // other edges in the batch.
+            if self.config.intra_batch_candidates().is_none()
+                && backedges.len().div_ceil(8) <= work.len() /* NB: update docs if 8 changes */
+                && work.len() != 1
+            {
+                edges = boxit(self.clone().multi_insert_bootstrap(
+                    || strategy.insert_strategy().prune_strategy(),
+                    context.clone(),
+                    edges,
+                ))
+                .await?;
 
-    //         // Defer dealing with the `result` until after we have joined the other tasks.
-    //         let mut edges = match self.search_and_prune_batch(&strategy, context, &work).await {
-    //             Ok(v) => v,
-    //             Err((v, err)) => {
-    //                 tracked_error!("search_prune_and_search main failed: {}", err);
-    //                 v
-    //             }
-    //         };
+                backedges = aggregate_backedges(&edges);
+            }
 
-    //         // At this point - all the other tasks should be close to completing.
-    //         for h in handles {
-    //             match h.await {
-    //                 Ok(Ok(mut v)) => edges.append(&mut v),
-    //                 Ok(Err((mut v, err))) => {
-    //                     edges.append(&mut v);
-    //                     tracked_error!("search_prune_and_search failed: {}", err)
-    //                 }
-    //                 Err(err) => tracked_error!("Tokio spawned task join error: {}", err),
-    //             }
-    //         }
+            let backedges = Arc::new(backedges);
 
-    //         let mut backedges = aggregate_backedges(&edges);
+            //--------------//
+            // Graph Update //
+            //--------------//
 
-    //         //-----------//
-    //         // Bootstrap //
-    //         //-----------//
+            // Sequential assignment of the current neighbors. This does not yet appear
+            // to be a huge bottleneck (compared to backedge aggregation).
+            {
+                let prune_strategy = strategy.insert_strategy().prune_strategy();
+                let accessor = &mut prune_strategy
+                    .prune_accessor(&self.data_provider, context)
+                    .into_ann_result()?;
+                accessor
+                    .set_neighbors_bulk(
+                        edges
+                            .into_iter()
+                            .map(|PendingEdge { source, edges }| (source, edges)),
+                    )
+                    .await?;
+            }
 
-    //         // Check if number of unique back edges source is very small. If so, we do kick
-    //         // off the bootstrap routine and add edges from within the batch.
-    //         //
-    //         // If `work.len() == 1`, then there is nothing to bootstrap since there are no
-    //         // other edges in the batch.
-    //         if self.config.intra_batch_candidates().is_none()
-    //             && backedges.len().div_ceil(8) <= work.len() /* NB: update docs if 8 changes */
-    //             && work.len() != 1
-    //         {
-    //             edges = boxit(self.clone().multi_insert_bootstrap(
-    //                 strategy.prune_strategy(),
-    //                 context.clone(),
-    //                 edges,
-    //             ))
-    //             .await?;
+            // Spawn backedge insertions.
+            let handles: Vec<_> = (0..num_tasks.get())
+                .map(|i| {
+                    let self_clone = self.clone();
+                    let context_clone = context.clone();
+                    let strategy_clone = strategy.insert_strategy().prune_strategy();
+                    let backedges_clone = backedges.clone();
+                    let mut state = strategy.finish(&vectors, guards.iter().map(|g| g.id()));
 
-    //             backedges = aggregate_backedges(&edges);
-    //         }
+                    tokio::spawn(context.wrap_spawn(async move {
+                        // Get the range of items to process in this task.
+                        let range = async_tools::partition(backedges_clone.len(), num_tasks, i)?;
+                        let itr = backedges_clone.iter().skip(range.start).take(range.len());
 
-    //         let backedges = Arc::new(backedges);
+                        let mut prune_scratch = prune::Scratch::new();
+                        for (source, adj_list) in itr {
+                            self_clone
+                                .add_edge_and_prune(
+                                    &strategy_clone,
+                                    &context_clone,
+                                    adj_list,
+                                    *source,
+                                    &mut prune_scratch,
+                                    &mut state,
+                                    None,
+                                )
+                                .await?;
+                        }
+                        ANNResult::<()>::Ok(())
+                    }))
+                })
+                .collect();
 
-    //         //--------------//
-    //         // Graph Update //
-    //         //--------------//
+            for handle in handles {
+                let result = handle.await;
+                match result {
+                    Err(err) => {
+                        tracked_error!("Tokio task error in multi_insert: {}", err);
+                    }
+                    Ok(Err(err)) => {
+                        tracked_error!("Error in `add_edge_and_prune: {}", err);
+                    }
+                    Ok(Ok(())) => {}
+                }
+            }
 
-    //         // Sequential assignment of the current neighbors. This does not yet appear
-    //         // to be a huge bottleneck (compared to backedge aggregation).
-    //         {
-    //             let prune_strategy = strategy.prune_strategy();
-    //             let accessor = &mut prune_strategy
-    //                 .prune_accessor(&self.data_provider, context)
-    //                 .into_ann_result()?;
-    //             accessor
-    //                 .set_neighbors_bulk(
-    //                     edges
-    //                         .into_iter()
-    //                         .map(|PendingEdge { source, edges }| (source, edges)),
-    //                 )
-    //                 .await?;
-    //         }
+            // Indicate the batch as complete.
+            for guard in guards {
+                guard.complete().await;
+            }
 
-    //         // Spawn backedge insertions.
-    //         let handles: Vec<_> = (0..num_tasks.get())
-    //             .map(|i| {
-    //                 let self_clone = self.clone();
-    //                 let context_clone = context.clone();
-    //                 let strategy_clone = strategy.prune_strategy();
-    //                 let backedges_clone = backedges.clone();
-    //                 tokio::spawn(context.wrap_spawn(async move {
-    //                     // Get the range of items to process in this task.
-    //                     let range = async_tools::partition(backedges_clone.len(), num_tasks, i)?;
-    //                     let itr = backedges_clone.iter().skip(range.start).take(range.len());
-
-    //                     let mut prune_scratch = prune::Scratch::new();
-    //                     let mut working_set = HashMap::new();
-
-    //                     for (source, adj_list) in itr {
-    //                         // FIXME: Give providers control over the size of the working
-    //                         // set.
-    //                         working_set.clear();
-    //                         self_clone
-    //                             .add_edge_and_prune(
-    //                                 &strategy_clone,
-    //                                 &context_clone,
-    //                                 adj_list,
-    //                                 *source,
-    //                                 &mut prune_scratch,
-    //                                 &mut working_set,
-    //                                 None,
-    //                             )
-    //                             .await?;
-    //                     }
-    //                     ANNResult::<()>::Ok(())
-    //                 }))
-    //             })
-    //             .collect();
-
-    //         for handle in handles {
-    //             let result = handle.await;
-    //             match result {
-    //                 Err(err) => {
-    //                     tracked_error!("Tokio task error in multi_insert: {}", err);
-    //                 }
-    //                 Ok(Err(err)) => {
-    //                     tracked_error!("Error in `add_edge_and_prune: {}", err);
-    //                 }
-    //                 Ok(Ok(())) => {}
-    //             }
-    //         }
-
-    //         // Indicate the batch as complete.
-    //         for guard in guards {
-    //             guard.complete().await;
-    //         }
-
-    //         Ok(())
-    //     }
-    // }
+            Ok(())
+        }
+    }
 
     pub fn is_any_neighbor_deleted<NA>(
         &self,
@@ -1276,7 +1241,7 @@ where
                 .into_ann_result()?;
 
             let computer = search_accessor
-                .build_query_computer(&v.async_lower())
+                .build_query_computer(v.reborrow())
                 .into_ann_result()?;
 
             let start_ids = search_accessor.starting_points().await?;
@@ -1297,12 +1262,11 @@ where
 
             // NOTE: We rely on `post_process` to remove deleted items from the results
             // placed into the output.
-            let proxy = v.async_lower();
             let num_results = search_strategy
                 .post_processor()
                 .post_process(
                     &mut search_accessor,
-                    &*proxy,
+                    v.reborrow(),
                     &computer,
                     scratch.best.iter(),
                     &mut neighbor::BackInserter::new(output.as_mut_slice()),
@@ -1743,8 +1707,8 @@ where
             let working_set = accessor
                 .fill(
                     &mut working_set_state,
-                    chain::Chain::new(
-                        chain::Chain::new(
+                    internal::chain(
+                        internal::chain(
                             replace_candidates.iter().copied(),
                             in_neighbors.iter().copied(),
                         ),
@@ -2017,7 +1981,6 @@ where
     ) -> impl SendFuture<ANNResult<InternalSearchStats>>
     where
         A: ExpandBeam<T, Id = DP::InternalId> + SearchExt,
-        T: ?Sized,
         SR: SearchRecord<DP::InternalId> + ?Sized,
         Q: NeighborQueue<DP::InternalId>,
     {
@@ -2143,12 +2106,11 @@ where
         search_params: P,
         strategy: &S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
         P: super::search::Search<DP, S, T, O, OB>,
-        T: ?Sized,
         OB: ?Sized,
     {
         search_params.search(self, strategy, context, query, output)
@@ -2185,13 +2147,13 @@ where
         &'a self,
         strategy: &'a S,
         context: &'a DP::Context,
-        query: &T,
+        query: T,
         vector_filter: &(dyn Fn(&DP::ExternalId) -> bool + Send + Sync),
         search_params: &Knn,
         output: &mut OB,
     ) -> ANNResult<SearchStats>
     where
-        T: ?Sized,
+        T: Copy + Send + Sync,
         S: SearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>,
         I: Iterator<Item = <DP as DataProvider>::InternalId>,
         O: Send,
@@ -2255,12 +2217,12 @@ where
         &self,
         strategy: S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         l_value: usize,
     ) -> impl SendFuture<ANNResult<PagedSearchState<DP, S, S::QueryComputer>>>
     where
         S: SearchStrategy<DP, T> + 'static,
-        T: Sync + ?Sized,
+        T: Copy + Send + Sync,
     {
         async move {
             self.start_paged_search_with_init_ids(strategy, context, query, l_value, None)
@@ -2272,13 +2234,13 @@ where
         &self,
         strategy: S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         l_value: usize,
         init_ids: Option<&[DP::InternalId]>,
     ) -> impl SendFuture<ANNResult<PagedSearchState<DP, S, S::QueryComputer>>>
     where
         S: SearchStrategy<DP, T> + 'static,
-        T: Sync + ?Sized,
+        T: Copy + Send + Sync,
     {
         async move {
             let (computer, scratch) = {
@@ -2340,7 +2302,7 @@ where
     ) -> impl SendFuture<ANNResult<usize>>
     where
         S: SearchStrategy<DP, T>,
-        T: Send + Sync + ?Sized,
+        T: Copy + Send + Sync,
     {
         async move {
             if k > search_state.search_param_l {
@@ -2761,9 +2723,68 @@ where
         }
     }
 
+    fn robust_prune_with<A, State, Itr>(
+        &self,
+        accessor: &mut A,
+        internal_id: DP::InternalId,
+        extras: Itr,
+        record: &mut VisitedSearchRecord<DP::InternalId>,
+        scratch: &mut prune::Scratch<DP::InternalId>,
+        state: &mut State,
+        options: prune::Options,
+    ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
+    where
+        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<State>,
+        State: Send + Sync,
+        Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
+    {
+        async move {
+            let computer = accessor.build_distance_computer().unwrap();
+            let working_set = accessor
+                .fill(
+                    state,
+                    internal::chain(extras.clone(), record.ids()).take(self.max_occlusion_size()),
+                )
+                .await
+                .into_ann_result()?;
+
+            if extras.len() != 0 {
+                let this_vector = working_set
+                    .get(internal_id)
+                    .expect("this should really succeed");
+                for id in extras {
+                    if let Some(element) = working_set.get(id) {
+                        record.push(Neighbor::new(
+                            id,
+                            computer
+                                .evaluate_similarity(this_vector.reborrow(), element.reborrow()),
+                        ))
+                    }
+                }
+            }
+
+            let mut context = prune::Context {
+                pool: SortedNeighbors::new(&mut record.visited, self.max_occlusion_size()),
+                occlude_factor: &mut scratch.occlude_factor,
+                last_checked: &mut scratch.last_checked,
+                neighbors: &mut scratch.neighbors,
+            };
+
+            self.occlude_list::<A::Set<'_>, _, _>(
+                &computer,
+                &mut context,
+                working_set,
+                |id| id == internal_id,
+                options,
+            );
+
+            Ok(())
+        }
+    }
+
     /// Private implementation of the DiskANN pruning algorithm.
     ///
-    /// Run the pruning algorithm using [`prune::Context::pool`] as the list of candidate.
+    /// Run the pruning algorithm {using [`prune::Context::pool`] as the list of candidate.
     /// The `computer` will be used to perform distance computations, pulling elements
     /// from `map`. The closure `exclude` can be used to filter out unwanted ids from
     /// the candidates list.

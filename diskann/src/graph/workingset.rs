@@ -15,7 +15,7 @@ use hashbrown::hash_map;
 
 use crate::{
     ANNError,
-    error::{RankedError, StandardError, ToRanked, TransientError},
+    error::{RankedError, ToRanked, TransientError},
     provider::Accessor,
 };
 
@@ -169,11 +169,7 @@ where
     /// Insert into the mutable map layer. If the key exists in the batch, this is
     /// a no-op (batch keys and map keys are disjoint).
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        if self
-            .batch
-            .as_ref()
-            .map_or(false, |b| b.contains_key(&key))
-        {
+        if self.batch.as_ref().map_or(false, |b| b.contains_key(&key)) {
             return None;
         }
         self.map.insert(key, value)
@@ -181,20 +177,13 @@ where
 
     /// Returns `true` if the key is in the batch overlay or the map.
     pub fn contains_key(&self, key: &K) -> bool {
-        self.batch
-            .as_ref()
-            .map_or(false, |b| b.contains_key(key))
-            || self.map.contains_key(key)
+        self.batch.as_ref().map_or(false, |b| b.contains_key(key)) || self.map.contains_key(key)
     }
 
     /// Batch-aware entry API. Returns [`Entry::Occupied`] if the key is in the
     /// batch or the map, [`Entry::Vacant`] only if absent from both.
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
-        if self
-            .batch
-            .as_ref()
-            .map_or(false, |b| b.contains_key(&key))
-        {
+        if self.batch.as_ref().map_or(false, |b| b.contains_key(&key)) {
             return Entry::Occupied;
         }
         match self.map.entry(key) {
@@ -220,8 +209,7 @@ pub struct VacantEntry<'a, K, V> {
     entry: hash_map::VacantEntry<'a, K, V>,
 }
 
-impl<K, V> VacantEntry<'_, K, V>
-{
+impl<K, V> VacantEntry<'_, K, V> {
     pub fn insert(self, value: V)
     where
         K: Hash + Eq,

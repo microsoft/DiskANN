@@ -17,9 +17,17 @@ pub(crate) struct Chain<A, B> {
 }
 
 impl<A, B> Chain<A, B> {
-    pub fn new(a: A, b: B) -> Self {
+    fn new(a: A, b: B) -> Self {
         Self { a, b }
     }
+}
+
+pub(crate) fn chain<T, U>(a: T, b: U) -> Chain<T::IntoIter, U::IntoIter>
+where
+    T: IntoIterator,
+    U: IntoIterator<Item = T::Item>,
+{
+    Chain::new(a.into_iter(), b.into_iter())
 }
 
 impl<A, B> Iterator for Chain<A, B>

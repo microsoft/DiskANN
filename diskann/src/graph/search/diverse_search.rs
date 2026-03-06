@@ -95,7 +95,7 @@ where
 impl<DP, S, T, O, OB, P> Search<DP, S, T, O, OB> for Diverse<P>
 where
     DP: DataProvider,
-    T: Sync + ?Sized,
+    T: Copy + Send + Sync,
     S: SearchStrategy<DP, T, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send,
@@ -108,7 +108,7 @@ where
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {

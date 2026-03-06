@@ -48,7 +48,7 @@ pub(crate) mod scratch;
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
 /// - [`MultihopSearch`] - Label-filtered search with multi-hop expansion
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
-pub trait Search<DP, S, T: ?Sized, O, OB: ?Sized>
+pub trait Search<DP, S, T, O, OB: ?Sized>
 where
     DP: DataProvider,
 {
@@ -82,7 +82,7 @@ where
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>;
 }

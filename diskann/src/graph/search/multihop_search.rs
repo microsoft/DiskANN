@@ -56,7 +56,7 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
 impl<'q, DP, S, T, O, OB> Search<DP, S, T, O, OB> for MultihopSearch<'q, DP::InternalId>
 where
     DP: DataProvider,
-    T: Sync + ?Sized,
+    T: Copy + Send + Sync,
     S: SearchStrategy<DP, T, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send,
@@ -68,7 +68,7 @@ where
         index: &DiskANNIndex<DP>,
         strategy: &S,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
@@ -181,7 +181,6 @@ pub(crate) async fn multihop_search_internal<I, A, T, SR>(
 where
     I: VectorId,
     A: ExpandBeam<T, Id = I> + SearchExt,
-    T: ?Sized,
     SR: SearchRecord<I> + ?Sized,
 {
     let beam_width = search_params.beam_width().get();
