@@ -18,7 +18,7 @@ use thiserror::Error;
 use crate::{
     ANNError, ANNResult,
     error::{Infallible, message},
-    graph::{AdjacencyList, glue, test::synthetic},
+    graph::{AdjacencyList, glue, test::synthetic, workingset},
     internal::counter::{Counter, LocalCounter},
     provider,
     utils::VectorRepr,
@@ -937,7 +937,6 @@ impl glue::SearchExt for Accessor<'_> {
 }
 
 impl glue::ExpandBeam<[f32]> for Accessor<'_> {}
-impl glue::FillSet for Accessor<'_> {}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Strategy {
@@ -970,9 +969,14 @@ impl glue::SearchStrategy<Provider, [f32]> for Strategy {
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {
+    type State = workingset::Map<u32, Box<[f32]>>;
     type DistanceComputer = <f32 as VectorRepr>::Distance;
     type PruneAccessor<'a> = Accessor<'a>;
     type PruneAccessorError = Infallible;
+
+    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+        workingset::Map::new()
+    }
 
     fn prune_accessor<'a>(
         &'a self,

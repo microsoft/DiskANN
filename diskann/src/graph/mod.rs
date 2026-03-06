@@ -28,6 +28,7 @@ pub use misc::DiverseSearchParams;
 
 pub mod glue;
 pub mod search;
+pub mod workingset;
 
 // Re-export the Search trait and error/output types only.
 // Search parameter types (Knn, Range, Diverse, etc.) should be accessed via `graph::search::`.
