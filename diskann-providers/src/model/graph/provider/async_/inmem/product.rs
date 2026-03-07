@@ -3,13 +3,16 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashMap, future::Future, sync::Arc};
+use std::{future::Future, sync::Arc};
 
 use diskann::{
     ANNError, ANNResult,
-    graph::glue::{
-        self, ExpandBeam, FilterStartPoints, InplaceDeleteStrategy, InsertStrategy,
-        PruneStrategy, SearchExt, SearchStrategy,
+    graph::{
+        glue::{
+            self, ExpandBeam, FilterStartPoints, InplaceDeleteStrategy, InsertStrategy,
+            PruneStrategy, SearchExt, SearchStrategy,
+        },
+        workingset,
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -32,7 +35,7 @@ use crate::model::{
             distances,
             inmem::{
                 DefaultProvider, FullPrecisionProvider, FullPrecisionStore, GetFullPrecision,
-                Rerank,
+                PassThrough, Rerank,
             },
             postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
         },
@@ -451,6 +454,92 @@ where
 //     }
 // }
 
+impl<T, D, Ctx> workingset::Fill<PassThrough> for HybridAccessor<'_, T, D, Ctx>
+where
+    T: VectorRepr,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type Error = std::convert::Infallible;
+    type Set<'a>
+        = &'a Self
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        _state: &'a mut PassThrough,
+        _itr: Itr,
+    ) -> Result<Self::Set<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        Ok(self)
+    }
+}
+
+impl<T, D, Ctx> workingset::ScopedMap<u32> for &HybridAccessor<'_, T, D, Ctx>
+where
+    T: VectorRepr,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type ElementRef<'a> = distances::pq::Hybrid<&'a [T], &'a [u8]>;
+    type Element<'a>
+        = distances::pq::Hybrid<&'a [T], &'a [u8]>
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<Self::Element<'_>> {
+        Some(unsafe {
+            distances::pq::Hybrid::Full(self.provider.base_vectors.get_vector_sync(id.into_usize()))
+        })
+    }
+}
+
+impl<V, D, Ctx> workingset::Fill<PassThrough> for QuantAccessor<'_, V, D, Ctx>
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type Error = std::convert::Infallible;
+    type Set<'a>
+        = &'a Self
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        _state: &'a mut PassThrough,
+        _itr: Itr,
+    ) -> Result<Self::Set<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        Ok(self)
+    }
+}
+
+impl<V, D, Ctx> workingset::ScopedMap<u32> for &QuantAccessor<'_, V, D, Ctx>
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly,
+    Ctx: ExecutionContext,
+{
+    type ElementRef<'a> = &'a [u8];
+    type Element<'a>
+        = &'a [u8]
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<&[u8]> {
+        Some(unsafe { self.provider.aux_vectors.get_vector_sync(id.into_usize()) })
+    }
+}
+
 ////////////////
 // Strategies //
 ////////////////
@@ -525,6 +614,11 @@ where
     type DistanceComputer = distances::pq::HybridComputer<T>;
     type PruneAccessor<'a> = HybridAccessor<'a, T, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
+    type State = PassThrough;
+
+    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+        PassThrough
+    }
 
     fn prune_accessor<'a>(
         &'a self,
@@ -547,6 +641,34 @@ where
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+}
+
+impl<T, D, Ctx, B> glue::MultiInsertStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, B>
+    for Hybrid
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    B: glue::Batch,
+    Self: for<'a> InsertStrategy<
+            FullPrecisionProvider<T, DefaultQuant, D, Ctx>,
+            B::Element<'a>,
+            PruneStrategy = Self,
+        >,
+{
+    type State = PassThrough;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::State
+    where
+        Itr: ExactSizeIterator<Item = u32>,
+    {
+        PassThrough
     }
 }
 
@@ -619,6 +741,11 @@ where
     type DistanceComputer = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
     type PruneAccessor<'a> = QuantAccessor<'a, NoStore, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
+    type State = PassThrough;
+
+    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+        PassThrough
+    }
 
     fn prune_accessor<'a>(
         &'a self,
@@ -638,5 +765,32 @@ where
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+}
+
+impl<D, Ctx, B> glue::MultiInsertStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, B>
+    for Quantized
+where
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    B: glue::Batch,
+    Self: for<'a> InsertStrategy<
+            DefaultProvider<NoStore, DefaultQuant, D, Ctx>,
+            B::Element<'a>,
+            PruneStrategy = Self,
+        >,
+{
+    type State = PassThrough;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::State
+    where
+        Itr: ExactSizeIterator<Item = u32>,
+    {
+        PassThrough
     }
 }

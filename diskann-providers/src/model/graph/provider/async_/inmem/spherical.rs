@@ -10,9 +10,12 @@ use std::{future::Future, sync::Mutex};
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
-    graph::glue::{
-        self, ExpandBeam, FilterStartPoints, InsertStrategy, PruneStrategy, SearchExt,
-        SearchStrategy,
+    graph::{
+        glue::{
+            self, ExpandBeam, FilterStartPoints, InsertStrategy, PruneStrategy, SearchExt,
+            SearchStrategy,
+        },
+        workingset,
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -29,7 +32,7 @@ use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
 use thiserror::Error;
 
-use super::{GetFullPrecision, Rerank};
+use super::{GetFullPrecision, PassThrough, Rerank};
 use crate::{
     common::IgnoreLockPoison,
     model::graph::{
@@ -614,6 +617,11 @@ where
         UnwrapErr<spherical::iface::DistanceComputer, spherical::iface::DistanceError>;
     type PruneAccessor<'a> = QuantAccessor<'a, V, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
+    type State = PassThrough;
+
+    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+        PassThrough
+    }
 
     fn prune_accessor<'a>(
         &'a self,
@@ -622,6 +630,48 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         let build = Self::build();
         Ok(QuantAccessor::new(provider, build.layout, build.is_search))
+    }
+}
+
+impl<V, D, Ctx> workingset::Fill<PassThrough> for QuantAccessor<'_, V, D, Ctx>
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    type Error = std::convert::Infallible;
+    type Set<'a>
+        = &'a Self
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        _state: &'a mut PassThrough,
+        _itr: Itr,
+    ) -> Result<Self::Set<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        Ok(self)
+    }
+}
+
+impl<V, D, Ctx> workingset::ScopedMap<u32> for &QuantAccessor<'_, V, D, Ctx>
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    type ElementRef<'a> = spherical::iface::Opaque<'a>;
+    type Element<'a>
+        = spherical::iface::Opaque<'a>
+    where
+        Self: 'a;
+
+    fn get(&self, id: u32) -> Option<Self::Element<'_>> {
+        self.provider.aux_vectors.get_vector(id.into_usize()).ok()
     }
 }
 
@@ -635,6 +685,34 @@ where
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+}
+
+impl<V, D, Ctx, B> glue::MultiInsertStrategy<DefaultProvider<V, SphericalStore, D, Ctx>, B>
+    for Quantized
+where
+    V: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    B: glue::Batch,
+    Self: for<'a> InsertStrategy<
+            DefaultProvider<V, SphericalStore, D, Ctx>,
+            B::Element<'a>,
+            PruneStrategy = Self,
+        >,
+{
+    type State = PassThrough;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::State
+    where
+        Itr: ExactSizeIterator<Item = u32>,
+    {
+        PassThrough
     }
 }
 

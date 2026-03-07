@@ -611,6 +611,18 @@ pub trait Batch: Send + Sync + 'static {
     fn get(&self, i: usize) -> Self::Element<'_>;
 }
 
+impl<T: Send + Sync + 'static> Batch for diskann_utils::views::Matrix<T> {
+    type Element<'a> = &'a [T];
+
+    fn len(&self) -> usize {
+        self.nrows()
+    }
+
+    fn get(&self, i: usize) -> Self::Element<'_> {
+        self.row(i)
+    }
+}
+
 pub trait MultiInsertStrategy<Provider, B>: Send + Sync
 where
     Provider: DataProvider,
@@ -721,7 +733,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        ANNResult, neighbor, error::{TransientError, RankedError, ToRanked},
+        ANNResult,
+        error::{RankedError, ToRanked, TransientError},
+        neighbor,
         provider::{DelegateNeighbor, ExecutionContext, HasId, NeighborAccessor},
     };
 

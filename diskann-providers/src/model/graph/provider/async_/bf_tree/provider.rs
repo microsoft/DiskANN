@@ -21,8 +21,8 @@ use diskann::{
     graph::{
         AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
-            SearchExt, SearchStrategy,
+            self, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchExt,
+            SearchStrategy,
         },
     },
     neighbor::Neighbor,

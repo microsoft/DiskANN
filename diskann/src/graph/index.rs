@@ -40,7 +40,7 @@ use super::{
 
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
-    error::{ErrorExt, RankedError, IntoANNResult, ToRanked, TransientError},
+    error::{ErrorExt, IntoANNResult, RankedError, ToRanked, TransientError},
     internal,
     neighbor::{self, Neighbor, NeighborPriorityQueue, NeighborQueue},
     provider::{
@@ -786,11 +786,7 @@ where
                     let work_clone = work.clone();
                     tokio::spawn(context.wrap_spawn(async move {
                         self_clone
-                            .multi_insert_bootstrap_task(
-                                &strategy,
-                                &context_clone,
-                                &work_clone,
-                            )
+                            .multi_insert_bootstrap_task(&strategy, &context_clone, &work_clone)
                             .await
                     }))
                 })
@@ -923,7 +919,9 @@ where
             // Dynamically partition the work across tasks. The time spent processing each
             // item (measured in the hundreds of micro-seconds) likely far exceeds the
             // synchronization overhead of the atomic increment.
-            let work = Arc::new(DynamicBalancer::new(guards.iter().map(|g| g.id()).collect()));
+            let work = Arc::new(DynamicBalancer::new(
+                guards.iter().map(|g| g.id()).collect(),
+            ));
 
             // Launch `max_minibatch_par - 1` tasks to do work, running the last task on
             // the local thread.
@@ -953,13 +951,16 @@ where
 
             // Defer dealing with the `result` until after we have joined the other tasks.
             let mut state = strategy.finish(&vectors, guards.iter().map(|g| g.id()));
-            let mut edges = match self.search_and_prune_batch(
-                &strategy.insert_strategy(),
-                context,
-                &vectors,
-                &work,
-                &mut state,
-            ).await {
+            let mut edges = match self
+                .search_and_prune_batch(
+                    &strategy.insert_strategy(),
+                    context,
+                    &vectors,
+                    &work,
+                    &mut state,
+                )
+                .await
+            {
                 Ok(v) => v,
                 Err((v, err)) => {
                     tracked_error!("search_prune_and_search main failed: {}", err);

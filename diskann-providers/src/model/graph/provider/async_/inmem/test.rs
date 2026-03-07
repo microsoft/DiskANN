@@ -8,9 +8,9 @@ use std::{future::Future, sync::Mutex};
 use diskann::{
     ANNError, ANNResult,
     error::{RankedError, ToRanked, TransientError},
-    graph::glue::{
-        CopyIds, ExpandBeam, InsertStrategy, PruneStrategy, SearchExt,
-        SearchStrategy,
+    graph::{
+        glue::{CopyIds, ExpandBeam, InsertStrategy, PruneStrategy, SearchExt, SearchStrategy},
+        workingset,
     },
     neighbor::Neighbor,
     provider::{
@@ -158,7 +158,7 @@ impl HasId for FlakyAccessor<'_> {
 }
 
 impl<'a> Accessor for FlakyAccessor<'a> {
-    type Extended = &'a [f32];
+    type Extended = Box<[f32]>;
 
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
@@ -211,19 +211,20 @@ impl<'a> BuildDistanceComputer for FlakyAccessor<'a> {
     }
 }
 
-impl<'a> BuildQueryComputer<[f32]> for FlakyAccessor<'a> {
-    type QueryComputerError = <FullAccessor<'a> as BuildQueryComputer<[f32]>>::QueryComputerError;
-    type QueryComputer = <FullAccessor<'a> as BuildQueryComputer<[f32]>>::QueryComputer;
+impl<'a, 'b> BuildQueryComputer<&'a [f32]> for FlakyAccessor<'b> {
+    type QueryComputerError =
+        <FullAccessor<'b> as BuildQueryComputer<&'a [f32]>>::QueryComputerError;
+    type QueryComputer = <FullAccessor<'b> as BuildQueryComputer<&'a [f32]>>::QueryComputer;
 
     fn build_query_computer(
         &self,
-        from: &[f32],
+        from: &'a [f32],
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         self.as_full().build_query_computer(from)
     }
 }
 
-impl ExpandBeam<[f32]> for FlakyAccessor<'_> {}
+impl ExpandBeam<&[f32]> for FlakyAccessor<'_> {}
 
 impl<'a> DelegateNeighbor<'a> for FlakyAccessor<'_> {
     type Delegate = &'a SimpleNeighborProviderAsync<u32>;
@@ -232,8 +233,8 @@ impl<'a> DelegateNeighbor<'a> for FlakyAccessor<'_> {
     }
 }
 
-impl SearchStrategy<TestProvider, [f32]> for Flaky {
-    type QueryComputer = <FullAccessor<'static> as BuildQueryComputer<[f32]>>::QueryComputer;
+impl<'x> SearchStrategy<TestProvider, &'x [f32]> for Flaky {
+    type QueryComputer = <FullAccessor<'static> as BuildQueryComputer<&'x [f32]>>::QueryComputer;
     type SearchAccessor<'a> = FlakyAccessor<'a>;
     type SearchAccessorError = ANNError;
     type PostProcessor = CopyIds;
@@ -264,6 +265,7 @@ impl PruneStrategy<TestProvider> for Flaky {
     type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
     type PruneAccessor<'a> = FlakyAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
+    type State = workingset::Map<u32, Box<[f32]>>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -279,13 +281,43 @@ impl PruneStrategy<TestProvider> for Flaky {
 
         Ok(FlakyAccessor::new(provider, STATIC_PRUNE_THRESHOLD, start))
     }
+
+    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+        Self::State::default()
+    }
 }
 
-impl InsertStrategy<TestProvider, [f32]> for Flaky {
+impl InsertStrategy<TestProvider, &[f32]> for Flaky {
     type PruneStrategy = Self;
 
     fn prune_strategy(&self) -> Self {
         *self
+    }
+}
+
+impl diskann::graph::glue::MultiInsertStrategy<TestProvider, diskann_utils::views::Matrix<f32>>
+    for Flaky
+{
+    type State = workingset::Map<u32, Box<[f32]>>;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(
+        &self,
+        batch: &std::sync::Arc<diskann_utils::views::Matrix<f32>>,
+        ids: Itr,
+    ) -> Self::State
+    where
+        Itr: ExactSizeIterator<Item = u32>,
+    {
+        let overlay: hashbrown::HashMap<u32, Box<[f32]>> = ids
+            .enumerate()
+            .map(|(i, id)| (id, Box::from(batch.row(i))))
+            .collect();
+        workingset::Map::with_batch(std::sync::Arc::new(overlay))
     }
 }
 
@@ -296,6 +328,7 @@ impl PruneStrategy<TestProvider> for SuperFlaky {
     type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
     type PruneAccessor<'a> = FlakyAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
+    type State = workingset::Map<u32, Box<[f32]>>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -303,5 +336,9 @@ impl PruneStrategy<TestProvider> for SuperFlaky {
         _context: &'a DefaultContext,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(FlakyAccessor::new(provider, 1, 1))
+    }
+
+    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+        Self::State::default()
     }
 }

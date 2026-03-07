@@ -323,11 +323,7 @@ where
     }
 }
 
-impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner>
-where
-    Inner: BuildQueryComputer<T> + AsNeighbor,
-{
-}
+impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner> where Inner: BuildQueryComputer<T> + AsNeighbor {}
 
 /// A [`PreprocessedDistanceFunction`] that applied `beta` filtering to the inner computer.
 pub struct BetaComputer<Inner, I: VectorId> {
@@ -386,7 +382,7 @@ mod tests {
         ANNError, ANNResult, always_escalate,
         graph::AdjacencyList,
         graph::glue::CopyIds,
-        provider::{DefaultContext, NeighborAccessor},
+        provider::{DefaultContext, NeighborAccessor, NoopGuard},
     };
     use futures_util::future;
     use thiserror::Error;
@@ -399,6 +395,7 @@ mod tests {
         type Context = DefaultContext;
         type InternalId = u32;
         type ExternalId = u64;
+        type Guard = NoopGuard<u32>;
 
         type Error = ANNError;
 
@@ -521,9 +518,9 @@ mod tests {
 
         fn build_query_computer(
             &self,
-            from: &u64,
+            from: u64,
         ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-            Ok(AddingComputer(*from))
+            Ok(AddingComputer(from))
         }
     }
 
@@ -623,7 +620,7 @@ mod tests {
 
         // Computation.
         let query = 10;
-        let computer = accessor.build_query_computer(&query).unwrap();
+        let computer = accessor.build_query_computer(query).unwrap();
 
         assert_eq!(
             computer.evaluate_similarity(accessor.get_element(10).await.unwrap()),

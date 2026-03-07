@@ -1,33 +1,33 @@
-/*
- * Copyright (c) Microsoft Corporation.
- * Licensed under the MIT license.
- */
-
-use std::{num::NonZeroUsize, sync::Arc};
-
-use diskann::{
-    ANNResult,
-    graph::{
-        self, ConsolidateKind, InplaceDeleteMethod,
-        glue::{
-            self, InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchStrategy,
-        },
-        index::{DegreeStats, PartitionedNeighbors, SearchState, SearchStats},
-        search::Knn,
-        search_output_buffer,
-    },
-    neighbor::Neighbor,
-    provider::{AsNeighbor, AsNeighborMut, DataProvider, Delete, SetElement},
-    utils::{ONE, async_tools::VectorIdBoxSlice},
-};
-
-pub struct DiskANNIndex<DP: DataProvider> {
-    /// The underlying async DiskANNIndex.
-    pub inner: Arc<graph::DiskANNIndex<DP>>,
-    _runtime: Option<tokio::runtime::Runtime>,
-    handle: tokio::runtime::Handle,
-}
-
+// /*
+//  * Copyright (c) Microsoft Corporation.
+//  * Licensed under the MIT license.
+//  */
+//
+// use std::{num::NonZeroUsize, sync::Arc};
+//
+// use diskann::{
+//     ANNResult,
+//     graph::{
+//         self, ConsolidateKind, InplaceDeleteMethod,
+//         glue::{
+//             self, InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchStrategy,
+//         },
+//         index::{DegreeStats, PartitionedNeighbors, SearchState, SearchStats},
+//         search::Knn,
+//         search_output_buffer,
+//     },
+//     neighbor::Neighbor,
+//     provider::{AsNeighbor, AsNeighborMut, DataProvider, Delete, SetElement},
+//     utils::{ONE, async_tools::VectorIdBoxSlice},
+// };
+//
+// pub struct DiskANNIndex<DP: DataProvider> {
+//     /// The underlying async DiskANNIndex.
+//     pub inner: Arc<graph::DiskANNIndex<DP>>,
+//     _runtime: Option<tokio::runtime::Runtime>,
+//     handle: tokio::runtime::Handle,
+// }
+//
 // impl<DP> DiskANNIndex<DP>
 // where
 //     DP: DataProvider,

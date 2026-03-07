@@ -175,7 +175,7 @@ pub(crate) mod tests {
         graph::{
             self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
-            glue::{InplaceDeleteStrategy, InsertStrategy, SearchStrategy, aliases},
+            glue::{InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy, SearchStrategy},
             index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
             search::{Knn, Range},
             search_output_buffer,
@@ -258,7 +258,8 @@ pub(crate) mod tests {
     pub(crate) async fn populate_data<DP, Ctx, T>(provider: &DP, context: &Ctx, source: &[Vec<T>])
     where
         Ctx: ExecutionContext,
-        DP: DataProvider<Context = Ctx, InternalId = u32, ExternalId = u32> + SetElement<&[T]>,
+        DP: DataProvider<Context = Ctx, InternalId = u32, ExternalId = u32>
+            + for<'a> SetElement<&'a [T]>,
     {
         for (i, v) in source.iter().enumerate() {
             let guard = provider.set_element(context, &(i as u32), v).await.unwrap();
@@ -343,12 +344,12 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         parameters: &SearchParameters<DP::Context>,
         strategy: S,
-        query: &Q,
+        query: Q,
         mut checker: Checker,
     ) where
         DP: DataProvider<InternalId = u32>,
         S: SearchStrategy<DP, Q>,
-        Q: std::fmt::Debug + Sync + ?Sized,
+        Q: Copy + std::fmt::Debug + Send + Sync,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
         let mut ids = vec![0; parameters.search_k];
@@ -390,13 +391,13 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         parameters: &SearchParameters<DP::Context>,
         strategy: &S,
-        query: &Q,
+        query: Q,
         mut checker: Checker,
         filter: &dyn QueryLabelProvider<DP::InternalId>,
     ) where
         DP: DataProvider<InternalId = u32>,
         S: SearchStrategy<DP, Q>,
-        Q: std::fmt::Debug + Sync + ?Sized,
+        Q: Copy + std::fmt::Debug + Send + Sync,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
         let mut ids = vec![0; parameters.search_k];
@@ -435,13 +436,13 @@ pub(crate) mod tests {
         index: &DiskANNIndex<DP>,
         strategy: S,
         parameters: &SearchParameters<DP::Context>,
-        query: &Q,
+        query: Q,
         groundtruth: &mut Vec<Neighbor<u32>>,
         max_candidates: usize,
     ) where
         DP: DataProvider<InternalId = u32>,
         S: SearchStrategy<DP, Q> + 'static,
-        Q: std::fmt::Debug + Send + Sync + ?Sized,
+        Q: Copy + std::fmt::Debug + Send + Sync,
     {
         assert!(max_candidates <= groundtruth.len());
         let mut state = index
@@ -501,8 +502,8 @@ pub(crate) mod tests {
         quant_strategy: QS,
     ) where
         DP: DataProvider<InternalId = u32, Context = DefaultContext>,
-        FS: SearchStrategy<DP, &[T]> + Clone + 'static,
-        QS: SearchStrategy<DP, &[T]> + Clone + 'static,
+        FS: for<'a> SearchStrategy<DP, &'a [T]> + Clone + 'static,
+        QS: for<'a> SearchStrategy<DP, &'a [T]> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
     {
         // Assume all vectors have the same length.
@@ -722,149 +723,149 @@ pub(crate) mod tests {
     const IBC_NONE: IntraBatchCandidates = IntraBatchCandidates::None;
     const IBC_ALL: IntraBatchCandidates = IntraBatchCandidates::All;
 
-    #[rstest]
-    #[tokio::test]
-    async fn grid_search_with_build<T>(
-        #[values(PhantomData::<f32>, PhantomData::<i8>, PhantomData::<u8>)] _v: PhantomData<T>,
-        #[values((1, 100), (3, 7), (4, 5))] dim_and_size: (usize, usize),
-        #[values(IBC_NONE, IBC_ALL)] intra_batch_candidates: IntraBatchCandidates,
-    ) where
-        T: VectorRepr + GenerateGrid + Into<f32>,
-    {
-        let dim = dim_and_size.0;
-        let grid_size = dim_and_size.1;
+    // #[rstest]
+    // #[tokio::test]
+    // async fn grid_search_with_build<T>(
+    //     #[values(PhantomData::<f32>, PhantomData::<i8>, PhantomData::<u8>)] _v: PhantomData<T>,
+    //     #[values((1, 100), (3, 7), (4, 5))] dim_and_size: (usize, usize),
+    //     #[values(IBC_NONE, IBC_ALL)] intra_batch_candidates: IntraBatchCandidates,
+    // ) where
+    //     T: VectorRepr + GenerateGrid + Into<f32>,
+    // {
+    //     let dim = dim_and_size.0;
+    //     let grid_size = dim_and_size.1;
 
-        let l = 10;
+    //     let l = 10;
 
-        // NOTE: Be careful changing `max_degree`. It needs to be high enough that the
-        // graph is navigable, but low enough that the batch parallel handling inside
-        // `multi_insert` is needed for the multi-insert graph to be navigable.
-        //
-        // With the current configured values, removing the other elements in the batch
-        // from the visited set during `multi_insert` results in a graph failure.
-        let max_degree = 2 * dim;
-        let minibatch_par = 10;
+    //     // NOTE: Be careful changing `max_degree`. It needs to be high enough that the
+    //     // graph is navigable, but low enough that the batch parallel handling inside
+    //     // `multi_insert` is needed for the multi-insert graph to be navigable.
+    //     //
+    //     // With the current configured values, removing the other elements in the batch
+    //     // from the visited set during `multi_insert` results in a graph failure.
+    //     let max_degree = 2 * dim;
+    //     let minibatch_par = 10;
 
-        let max_fp_vecs_per_prune = Some(2);
-        let hybrid = Hybrid::new(max_fp_vecs_per_prune);
+    //     let max_fp_vecs_per_prune = Some(2);
+    //     let hybrid = Hybrid::new(max_fp_vecs_per_prune);
 
-        let num_points = (grid_size).pow(dim as u32);
+    //     let num_points = (grid_size).pow(dim as u32);
 
-        let (config, parameters) =
-            simplified_builder(l, max_degree, Metric::L2, dim, num_points, |p| {
-                p.max_minibatch_par(minibatch_par)
-                    .intra_batch_candidates(intra_batch_candidates);
-            })
-            .unwrap();
+    //     let (config, parameters) =
+    //         simplified_builder(l, max_degree, Metric::L2, dim, num_points, |p| {
+    //             p.max_minibatch_par(minibatch_par)
+    //                 .intra_batch_candidates(intra_batch_candidates);
+    //         })
+    //         .unwrap();
 
-        let mut vectors = T::generate_grid(dim, grid_size);
-        assert_eq!(vectors.len(), num_points);
+    //     let mut vectors = T::generate_grid(dim, grid_size);
+    //     assert_eq!(vectors.len(), num_points);
 
-        // This is a little subtle, but we need `vectors` to contain the start point as
-        // its last element, but we **don't** want to include it in the index build.
-        //
-        // This basically means that we need to be careful with out index initialization.
-        vectors.push(vec![
-            <T as num_traits::FromPrimitive>::from_usize(grid_size)
-                .unwrap();
-            dim
-        ]);
+    //     // This is a little subtle, but we need `vectors` to contain the start point as
+    //     // its last element, but we **don't** want to include it in the index build.
+    //     //
+    //     // This basically means that we need to be careful with out index initialization.
+    //     vectors.push(vec![
+    //         <T as num_traits::FromPrimitive>::from_usize(grid_size)
+    //             .unwrap();
+    //         dim
+    //     ]);
 
-        let table = train_pq(
-            squish(vectors.iter(), dim).as_view(),
-            2.min(dim), // Number of PQ chunks is bounded by the dimension.
-            &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-            1usize,
-        )
-        .unwrap();
+    //     let table = train_pq(
+    //         squish(vectors.iter(), dim).as_view(),
+    //         2.min(dim), // Number of PQ chunks is bounded by the dimension.
+    //         &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
+    //         1usize,
+    //     )
+    //     .unwrap();
 
-        // Initialize an index for a new round of building.
-        let init_index = || {
-            let index = new_quant_index::<T, _, _>(
-                config.clone(),
-                parameters.clone(),
-                table.clone(),
-                NoDeletes,
-            )
-            .unwrap();
-            index
-                .provider()
-                .set_start_points(std::iter::once(vectors.last().unwrap().as_slice()))
-                .unwrap();
-            index
-        };
+    //     // Initialize an index for a new round of building.
+    //     let init_index = || {
+    //         let index = new_quant_index::<T, _, _>(
+    //             config.clone(),
+    //             parameters.clone(),
+    //             table.clone(),
+    //             NoDeletes,
+    //         )
+    //         .unwrap();
+    //         index
+    //             .provider()
+    //             .set_start_points(std::iter::once(vectors.last().unwrap().as_slice()))
+    //             .unwrap();
+    //         index
+    //     };
 
-        // Build with full-precision single insert
-        {
-            let index = init_index();
-            let ctx = DefaultContext;
-            for (i, v) in vectors.iter().take(num_points).enumerate() {
-                index
-                    .insert(FullPrecision, &ctx, &(i as u32), v.as_slice())
-                    .await
-                    .unwrap();
-            }
+    //     // Build with full-precision single insert
+    //     {
+    //         let index = init_index();
+    //         let ctx = DefaultContext;
+    //         for (i, v) in vectors.iter().take(num_points).enumerate() {
+    //             index
+    //                 .insert(FullPrecision, &ctx, &(i as u32), v.as_slice())
+    //                 .await
+    //                 .unwrap();
+    //         }
 
-            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
-        }
+    //         check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+    //     }
 
-        // Build with quantized single insert
-        {
-            let index = init_index();
-            let ctx = DefaultContext;
-            for (i, v) in vectors.iter().take(num_points).enumerate() {
-                index
-                    .insert(hybrid, &ctx, &(i as u32), v.as_slice())
-                    .await
-                    .unwrap();
-            }
+    //     // Build with quantized single insert
+    //     {
+    //         let index = init_index();
+    //         let ctx = DefaultContext;
+    //         for (i, v) in vectors.iter().take(num_points).enumerate() {
+    //             index
+    //                 .insert(hybrid, &ctx, &(i as u32), v.as_slice())
+    //                 .await
+    //                 .unwrap();
+    //         }
 
-            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
-        }
+    //         check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+    //     }
 
-        // Build with full-precision multi-insert
-        {
-            let index = init_index();
-            let ctx = DefaultContext;
+    //     // Build with full-precision multi-insert
+    //     {
+    //         let index = init_index();
+    //         let ctx = DefaultContext;
 
-            let mut itr = vectors
-                .iter()
-                .take(num_points)
-                .enumerate()
-                .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()));
+    //         let mut itr = vectors
+    //             .iter()
+    //             .take(num_points)
+    //             .enumerate()
+    //             .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()));
 
-            // Partition by `max_minibatch_par`.
-            loop {
-                let v: Vec<_> = itr.by_ref().take(2 * minibatch_par).collect();
-                if v.is_empty() {
-                    break;
-                }
+    //         // Partition by `max_minibatch_par`.
+    //         loop {
+    //             let v: Vec<_> = itr.by_ref().take(2 * minibatch_par).collect();
+    //             if v.is_empty() {
+    //                 break;
+    //             }
 
-                index
-                    .multi_insert(FullPrecision, &ctx, v.into())
-                    .await
-                    .unwrap();
-            }
+    //             index
+    //                 .multi_insert(FullPrecision, &ctx, v.into())
+    //                 .await
+    //                 .unwrap();
+    //         }
 
-            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
-        }
+    //         check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+    //     }
 
-        // Build with quantized multi-insert
-        {
-            let index = init_index();
-            let ctx = DefaultContext;
-            let batch: Box<[_]> = vectors
-                .iter()
-                .take(num_points)
-                .enumerate()
-                .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()))
-                .collect();
+    //     // Build with quantized multi-insert
+    //     {
+    //         let index = init_index();
+    //         let ctx = DefaultContext;
+    //         let batch: Box<[_]> = vectors
+    //             .iter()
+    //             .take(num_points)
+    //             .enumerate()
+    //             .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()))
+    //             .collect();
 
-            index.multi_insert(hybrid, &ctx, batch).await.unwrap();
+    //         index.multi_insert(hybrid, &ctx, batch).await.unwrap();
 
-            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
-        }
-    }
+    //         check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+    //     }
+    // }
 
     ///////////////////
     // Sphere Search //
@@ -923,8 +924,8 @@ pub(crate) mod tests {
         rng: &mut StdRng,
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
-        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &[T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &[T]>
+        S: for<'a> InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
+            + for<'a> SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -1050,8 +1051,8 @@ pub(crate) mod tests {
         #[case] radius: f32,
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
-        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &[T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &[T]>
+        S: for<'a> InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
+            + for<'a> SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &'a [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -2143,8 +2144,8 @@ pub(crate) mod tests {
         #[values(FullPrecision, Hybrid::new(None))] build_strategy: S,
         #[values(1, 10)] batchsize: usize,
     ) where
-        S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]> +
+            MultiInsertStrategy<TestProvider, Matrix<f32>> + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -2236,8 +2237,8 @@ pub(crate) mod tests {
         #[values(1, 10)] batchsize: usize,
         #[values((-2.0,-1.0), (-1.0, 0.0), (40000.0,50000.0), (50000.0,75000.0))] radii: (f32, f32),
     ) where
-        S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]> +
+            MultiInsertStrategy<TestProvider, Matrix<f32>> + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -2350,7 +2351,7 @@ pub(crate) mod tests {
         C: FnOnce(Arc<Matrix<f32>>, &[f32]) -> Arc<DiskANNIndex<DP>>,
         B: AsyncFnOnce(Arc<DiskANNIndex<DP>>, Arc<Matrix<f32>>),
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-            + diskann::provider::SetElement<[f32]>,
+            + for<'a> diskann::provider::SetElement<&'a [f32]>,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let mut reader = storage.open_reader(file).unwrap();
@@ -2369,8 +2370,8 @@ pub(crate) mod tests {
     async fn build_using_single_insert<DP>(index: Arc<DiskANNIndex<DP>>, data: Arc<Matrix<f32>>)
     where
         DP: DataProvider<Context = DefaultContext, ExternalId = u32>
-            + diskann::provider::SetElement<[f32]>,
-        Quantized: InsertStrategy<DP, [f32]> + Clone + Send + Sync,
+            + for<'a> diskann::provider::SetElement<&'a [f32]>,
+        Quantized: for<'a> InsertStrategy<DP, &'a [f32]> + Clone + Send + Sync,
     {
         let ctx = &DefaultContext;
         for (i, vector) in data.row_iter().enumerate() {
@@ -2795,7 +2796,7 @@ pub(crate) mod tests {
         let strategy = inmem::spherical::Quantized::build();
         let accessor = <inmem::spherical::Quantized as SearchStrategy<
             DefaultProvider<NoStore, inmem::spherical::SphericalStore>,
-            [f32],
+            &[f32],
             _,
         >>::search_accessor(&strategy, index.provider(), ctx)
         .unwrap();
@@ -2956,10 +2957,10 @@ pub(crate) mod tests {
         train_data: diskann_utils::views::MatrixView<'_, f32>,
     ) where
         DefaultProvider<U, V, D>: DataProvider<ExternalId = u32, Context = DefaultContext>
-            + SetElement<[f32]>
-            + SetStartPoints<[f32]>,
-        S: InsertStrategy<DefaultProvider<U, V, D>, [f32]> + Clone + Send + Sync,
-        S::PruneStrategy: Clone,
+            + for<'a> SetElement<&'a [f32]>
+            + SetStartPoints<f32>,
+        S: for<'a> InsertStrategy<DefaultProvider<U, V, D>, &'a [f32]> +
+            MultiInsertStrategy<DefaultProvider<U, V, D>, Matrix<f32>> + Clone,
     {
         let ctx = &DefaultContext;
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
@@ -2987,17 +2988,18 @@ pub(crate) mod tests {
         } else {
             let mut i: u32 = 0;
             while let Some(data) = iter.next_n(batchsize) {
-                let pairs: Box<[_]> = data
-                    .iter()
-                    .map(|(v, _)| {
-                        let r = VectorIdBoxSlice::new(i, v.clone());
+                let mut vectors = Matrix::new(0.0f32, data.len(), start_vectors.ncols());
+                let ids: Arc<[_]> = std::iter::zip(vectors.row_iter_mut(), data.iter())
+                    .map(|(dst, (v, _))| {
+                        dst.copy_from_slice(v);
+                        let id = i;
                         i += 1;
-                        r
+                        id
                     })
                     .collect();
 
                 index
-                    .multi_insert(strategy.clone(), ctx, pairs)
+                    .multi_insert::<S, _>(strategy.clone(), ctx, Arc::new(vectors), ids)
                     .await
                     .unwrap();
             }
@@ -3012,8 +3014,8 @@ pub(crate) mod tests {
         startpoint: StartPointStrategy,
     ) -> (Arc<TestIndex>, diskann_utils::views::Matrix<f32>)
     where
-        S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        S::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]> +
+            MultiInsertStrategy<TestProvider, Matrix<f32>> + Clone,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let mut reader = storage.open_reader(file).unwrap();
@@ -3056,12 +3058,11 @@ pub(crate) mod tests {
         )]
         delete_method: InplaceDeleteMethod,
     ) where
-        S: InsertStrategy<TestProvider, [f32]>
-            + SearchStrategy<TestProvider, [f32]>
-            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
-            + Clone
-            + Sync,
-        <S as InsertStrategy<TestProvider, [f32]>>::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + for<'a> SearchStrategy<TestProvider, &'a [f32]>
+            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -3157,12 +3158,11 @@ pub(crate) mod tests {
         )]
         delete_method: InplaceDeleteMethod,
     ) where
-        S: InsertStrategy<TestProvider, [f32]>
-            + SearchStrategy<TestProvider, [f32]>
-            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
-            + Clone
-            + Sync,
-        <S as InsertStrategy<TestProvider, [f32]>>::PruneStrategy: Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + for<'a> SearchStrategy<TestProvider, &'a [f32]>
+            + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {

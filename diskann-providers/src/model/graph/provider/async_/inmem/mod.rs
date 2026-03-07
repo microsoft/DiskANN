@@ -6,8 +6,13 @@
 //! Native (DiskANN built-in) data providers and strategies for async index build and search.
 
 mod provider;
-
 pub use provider::{DefaultProvider, DefaultProviderParameters, SetStartPoints};
+
+/// The in-mem providers pass through prune elements straight back to their underlying
+/// providers. This is the working-set precursor and is a ZST because ... it doesn't need to
+/// do anything!
+#[derive(Debug, Clone, Copy)]
+pub struct PassThrough;
 
 // Extensions
 mod scalar;

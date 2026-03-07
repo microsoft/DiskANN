@@ -67,8 +67,8 @@ use diskann::{
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, Pipeline,
-            PruneStrategy, SearchExt, SearchPostProcessStep, SearchStrategy,
+            self, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, Pipeline, PruneStrategy,
+            SearchExt, SearchPostProcessStep, SearchStrategy,
         },
     },
     neighbor::Neighbor,
