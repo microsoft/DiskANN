@@ -16,7 +16,7 @@ use diskann::{
     graph::{
         AdjacencyList,
         glue::{
-            AsElement, ExpandBeam, FillSet, FilterStartPoints, InplaceDeleteStrategy,
+            ExpandBeam, FilterStartPoints, InplaceDeleteStrategy,
             InsertStrategy, Pipeline, PruneStrategy, SearchExt, SearchStrategy,
         },
     },
@@ -680,7 +680,6 @@ impl BuildQueryComputer<[f32]> for FullAccessor<'_> {
 }
 
 impl ExpandBeam<[f32]> for FullAccessor<'_> {}
-impl FillSet for FullAccessor<'_> {}
 
 impl postprocess::AsDeletionCheck for FullAccessor<'_> {
     type Checker = DebugProvider;
@@ -847,40 +846,40 @@ impl BuildDistanceComputer for HybridAccessor<'_> {
     }
 }
 
-impl FillSet for HybridAccessor<'_> {
-    async fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> Result<(), Self::GetError>
-    where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
-    {
-        let threshold = 1; // one full vec per fill
-        let data = self.provider.data();
-        itr.enumerate().for_each(|(i, id)| {
-            let e = set.entry(id);
-            if i < threshold {
-                e.and_modify(|v| {
-                    if !v.is_full() {
-                        let element = data.get(&id).unwrap();
-                        *v = Hybrid::Full(element.full().to_owned());
-                    }
-                })
-                .or_insert_with(|| {
-                    let element = data.get(&id).unwrap();
-                    Hybrid::Full(element.full().to_owned())
-                });
-            } else {
-                e.or_insert_with(|| {
-                    let element = data.get(&id).unwrap();
-                    Hybrid::Quant(element.quant().to_owned())
-                });
-            }
-        });
-        Ok(())
-    }
-}
+// impl FillSet for HybridAccessor<'_> {
+//     async fn fill_set<Itr>(
+//         &mut self,
+//         set: &mut HashMap<Self::Id, Self::Extended>,
+//         itr: Itr,
+//     ) -> Result<(), Self::GetError>
+//     where
+//         Itr: Iterator<Item = Self::Id> + Send + Sync,
+//     {
+//         let threshold = 1; // one full vec per fill
+//         let data = self.provider.data();
+//         itr.enumerate().for_each(|(i, id)| {
+//             let e = set.entry(id);
+//             if i < threshold {
+//                 e.and_modify(|v| {
+//                     if !v.is_full() {
+//                         let element = data.get(&id).unwrap();
+//                         *v = Hybrid::Full(element.full().to_owned());
+//                     }
+//                 })
+//                 .or_insert_with(|| {
+//                     let element = data.get(&id).unwrap();
+//                     Hybrid::Full(element.full().to_owned())
+//                 });
+//             } else {
+//                 e.or_insert_with(|| {
+//                     let element = data.get(&id).unwrap();
+//                     Hybrid::Quant(element.quant().to_owned())
+//                 });
+//             }
+//         });
+//         Ok(())
+//     }
+// }
 
 ////////////////
 // Strategies //
@@ -976,17 +975,6 @@ impl PruneStrategy<DebugProvider> for FullPrecision {
     }
 }
 
-impl<'a> AsElement<&'a [f32]> for FullAccessor<'a> {
-    type Error = Panics;
-    fn as_element(
-        &mut self,
-        vector: &'a [f32],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send {
-        std::future::ready(Ok(vector))
-    }
-}
-
 impl PruneStrategy<DebugProvider> for Quantized {
     type DistanceComputer = distances::pq::HybridComputer<f32>;
     type PruneAccessor<'a> = HybridAccessor<'a>;
@@ -998,17 +986,6 @@ impl PruneStrategy<DebugProvider> for Quantized {
         _context: &'a <DebugProvider as DataProvider>::Context,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(HybridAccessor::new(provider))
-    }
-}
-
-impl<'a> AsElement<&'a [f32]> for HybridAccessor<'a> {
-    type Error = Panics;
-    fn as_element(
-        &mut self,
-        vector: &'a [f32],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'a>, Self::Error>> + Send {
-        std::future::ready(Ok(Hybrid::Full(vector.to_vec())))
     }
 }
 

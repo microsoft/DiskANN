@@ -10,7 +10,7 @@ use diskann::{
     graph::{
         SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, FilterStartPoints, InplaceDeleteStrategy, InsertStrategy,
+            self, ExpandBeam, FilterStartPoints, InplaceDeleteStrategy, InsertStrategy,
             PruneStrategy, SearchExt, SearchStrategy,
         },
     },
@@ -294,7 +294,7 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> BuildQueryComputer<[T]> for FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> BuildQueryComputer<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -312,7 +312,7 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> ExpandBeam<[T]> for FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> ExpandBeam<&[T]> for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -321,29 +321,29 @@ where
 {
 }
 
-impl<T, Q, D, Ctx> FillSet for FullAccessor<'_, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    async fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> Result<(), Self::GetError>
-    where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
-    {
-        for i in itr {
-            set.entry(i).or_insert_with(|| unsafe {
-                self.provider.base_vectors.get_vector_sync(i.into_usize())
-            });
-        }
-        Ok(())
-    }
-}
+// impl<T, Q, D, Ctx> FillSet for FullAccessor<'_, T, Q, D, Ctx>
+// where
+//     T: VectorRepr,
+//     Q: AsyncFriendly,
+//     D: AsyncFriendly,
+//     Ctx: ExecutionContext,
+// {
+//     async fn fill_set<Itr>(
+//         &mut self,
+//         set: &mut HashMap<Self::Id, Self::Extended>,
+//         itr: Itr,
+//     ) -> Result<(), Self::GetError>
+//     where
+//         Itr: Iterator<Item = Self::Id> + Send + Sync,
+//     {
+//         for i in itr {
+//             set.entry(i).or_insert_with(|| unsafe {
+//                 self.provider.base_vectors.get_vector_sync(i.into_usize())
+//             });
+//         }
+//         Ok(())
+//     }
+// }
 
 //-------------------//
 // In-mem Extensions //
@@ -379,17 +379,17 @@ pub trait GetFullPrecision {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Rerank;
 
-impl<A, T> glue::SearchPostProcess<A, [T]> for Rerank
+impl<'a, A, T> glue::SearchPostProcess<A, &'a [T]> for Rerank
 where
     T: VectorRepr,
-    A: BuildQueryComputer<[T], Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
+    A: BuildQueryComputer<&'a [T], Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
 {
     type Error = Panics;
 
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
-        query: &[T],
+        query: &'a [T],
         _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -442,7 +442,7 @@ where
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]>
+impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, &[T]>
     for Internal<FullPrecision>
 where
     T: VectorRepr,
@@ -471,7 +471,7 @@ where
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
+impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -517,25 +517,7 @@ where
     }
 }
 
-/// Implementing this trait allows `FullPrecision` to be used for multi-insert.
-impl<'a, T, Q, D, Ctx> glue::AsElement<&'a [T]> for FullAccessor<'a, T, Q, D, Ctx>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-    type Error = diskann::error::Infallible;
-    fn as_element(
-        &mut self,
-        vector: &'a [T],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'a>, Self::Error>> + Send {
-        std::future::ready(Ok(vector))
-    }
-}
-
-impl<T, Q, D, Ctx> InsertStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
+impl<T, Q, D, Ctx> InsertStrategy<FullPrecisionProvider<T, Q, D, Ctx>, &[T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -557,7 +539,7 @@ where
     Ctx: ExecutionContext,
 {
     type DeleteElementError = Panics;
-    type DeleteElement<'a> = [T];
+    type DeleteElement<'a> = &'a [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
     type SearchStrategy = Internal<Self>;

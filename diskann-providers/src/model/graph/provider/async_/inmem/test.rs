@@ -9,7 +9,7 @@ use diskann::{
     ANNError, ANNResult,
     error::{RankedError, ToRanked, TransientError},
     graph::glue::{
-        AsElement, CopyIds, ExpandBeam, FillSet, InsertStrategy, PruneStrategy, SearchExt,
+        CopyIds, ExpandBeam, InsertStrategy, PruneStrategy, SearchExt,
         SearchStrategy,
     },
     neighbor::Neighbor,
@@ -255,8 +255,6 @@ impl SearchStrategy<TestProvider, [f32]> for Flaky {
     }
 }
 
-impl FillSet for FlakyAccessor<'_> {}
-
 const STATIC_PRUNE_THRESHOLD: usize = 5;
 /// We need to tune the flakiness of the `Prune` accessor so that occasionally, the first
 /// item retrieved is a failure.
@@ -288,17 +286,6 @@ impl InsertStrategy<TestProvider, [f32]> for Flaky {
 
     fn prune_strategy(&self) -> Self {
         *self
-    }
-}
-
-impl<'a> AsElement<&'a [f32]> for FlakyAccessor<'a> {
-    type Error = TestError;
-    fn as_element(
-        &mut self,
-        vector: &'a [f32],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'a>, Self::Error>> + Send {
-        std::future::ready(Ok(vector))
     }
 }
 

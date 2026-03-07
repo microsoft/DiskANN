@@ -9,7 +9,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
-        self, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy, PruneStrategy, SearchExt,
+        self, ExpandBeam, FilterStartPoints, InsertStrategy, PruneStrategy, SearchExt,
         SearchStrategy,
     },
     provider::{
@@ -526,7 +526,7 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx, T> BuildQueryComputer<[T]>
+impl<const NBITS: usize, V, D, Ctx, T> BuildQueryComputer<&[T]>
     for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     T: VectorRepr,
@@ -551,7 +551,7 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx, T> ExpandBeam<[T]> for QuantAccessor<'_, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx, T> ExpandBeam<&[T]> for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     T: VectorRepr,
     V: AsyncFriendly,
@@ -601,7 +601,7 @@ where
 /// the quantized store. This allows reranking using original vectors after
 /// approximate search, so the post-processing step includes a [`Rerank`] stage.
 impl<const NBITS: usize, D, Ctx, T>
-    SearchStrategy<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    SearchStrategy<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -631,7 +631,7 @@ where
 /// Since no full-precision vectors exist, reranking is not possible and the
 /// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
 impl<const NBITS: usize, D, Ctx, T>
-    SearchStrategy<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    SearchStrategy<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -679,17 +679,17 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx> FillSet for QuantAccessor<'_, NBITS, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-    Unsigned: Representation<NBITS>,
-{
-}
+// impl<const NBITS: usize, V, D, Ctx> FillSet for QuantAccessor<'_, NBITS, V, D, Ctx>
+// where
+//     V: AsyncFriendly,
+//     D: AsyncFriendly + DeletionCheck,
+//     Ctx: ExecutionContext,
+//     Unsigned: Representation<NBITS>,
+// {
+// }
 
 impl<const NBITS: usize, V, D, Ctx, T>
-    InsertStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    InsertStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     V: AsyncFriendly,
@@ -699,7 +699,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
     DistanceComputer: for<'a, 'b> DistanceFunction<CVRef<'a, NBITS>, CVRef<'b, NBITS>, f32>,
-    Quantized: SearchStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, [T]>,
+    Quantized: for<'a> SearchStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, &'a [T]>,
 {
     type PruneStrategy = Self;
 

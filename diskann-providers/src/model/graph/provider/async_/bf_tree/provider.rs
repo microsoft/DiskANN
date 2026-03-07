@@ -21,7 +21,7 @@ use diskann::{
     graph::{
         AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
+            self, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
             SearchExt, SearchStrategy,
         },
     },
@@ -105,7 +105,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     phase, a hybrid of quantized and full-precision vectors are used.
 ///
 ///     The ratio of full-precision and quantized vectors is controlled by the
-///     `max_fp_vecs_per_prune` parameter, which adjusts the implementation of [`FillSet`].
+///     `max_fp_vecs_per_prune` parameter, which adjusts the implementation of [`Fill`].
 ///
 /// # Examples
 ///
@@ -748,7 +748,7 @@ impl NeighborAccessorMut for &NeighborProvider<u32> {
 
 /// Assign to both the full-precision and quant vector stores
 ///
-impl<T, D> SetElement<[T]> for BfTreeProvider<T, QuantVectorProvider, D>
+impl<T, D> SetElement<&[T]> for BfTreeProvider<T, QuantVectorProvider, D>
 where
     T: VectorRepr,
     D: AsyncFriendly,
@@ -786,7 +786,7 @@ where
 
 /// Assign to just the full-precision store
 ///
-impl<T, D> SetElement<[T]> for BfTreeProvider<T, NoStore, D>
+impl<T, D> SetElement<&[T]> for BfTreeProvider<T, NoStore, D>
 where
     T: VectorRepr,
     D: AsyncFriendly,
@@ -925,7 +925,7 @@ where
     /// The host provider.
     provider: &'a BfTreeProvider<T, Q, D>,
     /// A buffer to store retrieved elements.
-    element: Box<[T]>,
+    element: Box<&[T]>,
 }
 
 impl<T, Q, D> HasId for FullAccessor<'_, T, Q, D>
@@ -984,7 +984,7 @@ where
     D: AsyncFriendly,
 {
     /// The lifetime extended version requires an allocation.
-    type Extended = Box<[T]>;
+    type Extended = Box<&[T]>;
 
     /// This accessor returns a reference to a local copy of the vector.
     type Element<'a>
@@ -1040,7 +1040,7 @@ where
     }
 }
 
-impl<T, Q, D> BuildQueryComputer<[T]> for FullAccessor<'_, T, Q, D>
+impl<T, Q, D> BuildQueryComputer<&[T]> for FullAccessor<'_, T, Q, D>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1056,7 +1056,7 @@ where
         Ok(T::query_distance(from, self.provider.metric))
     }
 }
-impl<T, Q, D> ExpandBeam<[T]> for FullAccessor<'_, T, Q, D>
+impl<T, Q, D> ExpandBeam<&[T]> for FullAccessor<'_, T, Q, D>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1064,33 +1064,33 @@ where
 {
 }
 
-impl<T, Q, D> FillSet for FullAccessor<'_, T, Q, D>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-{
-    async fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> Result<(), Self::GetError>
-    where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
-    {
-        for i in itr {
-            set.entry(i).or_insert_with(|| {
-                #[allow(clippy::expect_used)]
-                self.provider
-                    .full_vectors
-                    .get_vector_sync(i.into_usize())
-                    .expect("Full vector provider failed to retrieve element")
-                    .into()
-            });
-        }
-        Ok(())
-    }
-}
+// impl<T, Q, D> FillSet for FullAccessor<'_, T, Q, D>
+// where
+//     T: VectorRepr,
+//     Q: AsyncFriendly,
+//     D: AsyncFriendly,
+// {
+//     async fn fill_set<Itr>(
+//         &mut self,
+//         set: &mut HashMap<Self::Id, Self::Extended>,
+//         itr: Itr,
+//     ) -> Result<(), Self::GetError>
+//     where
+//         Itr: Iterator<Item = Self::Id> + Send + Sync,
+//     {
+//         for i in itr {
+//             set.entry(i).or_insert_with(|| {
+//                 #[allow(clippy::expect_used)]
+//                 self.provider
+//                     .full_vectors
+//                     .get_vector_sync(i.into_usize())
+//                     .expect("Full vector provider failed to retrieve element")
+//                     .into()
+//             });
+//         }
+//         Ok(())
+//     }
+// }
 
 impl<'a, T, Q, D> AsDeletionCheck for FullAccessor<'a, T, Q, D>
 where
@@ -1234,7 +1234,7 @@ where
     }
 }
 
-impl<T, D> BuildQueryComputer<[T]> for QuantAccessor<'_, T, D>
+impl<T, D> BuildQueryComputer<&[T]> for QuantAccessor<'_, T, D>
 where
     T: VectorRepr,
     D: AsyncFriendly,
@@ -1250,7 +1250,7 @@ where
     }
 }
 
-impl<T, D> ExpandBeam<[T]> for QuantAccessor<'_, T, D>
+impl<T, D> ExpandBeam<&[T]> for QuantAccessor<'_, T, D>
 where
     T: VectorRepr,
     D: AsyncFriendly,
@@ -1280,7 +1280,7 @@ where
 /// * [`Accessor`] for the [`BfTreeProvider`].
 /// * [`BuildDistanceComputer`] for computing distances among [`distances::pq::Hybrid`]
 ///   element types.
-/// * [`FillSet`] for populating a mixture of full-precision and quant vectors.
+/// * [`Fill`] for populating a mixture of full-precision and quant vectors.
 ///
 pub struct HybridAccessor<'a, T, D>
 where
@@ -1343,7 +1343,7 @@ where
     type GetError = Panics;
 
     /// The default behavior of `get_element` returns a full-precision vector. The
-    /// implementation of [`FillSet`] is how the `max_fp_vecs_per_fill` is used
+    /// implementation of [`Fill`] is how the `max_fp_vecs_per_fill` is used
     ///
     fn get_element(
         &mut self,
@@ -1380,84 +1380,84 @@ where
     }
 }
 
-impl<T, D> FillSet for HybridAccessor<'_, T, D>
-where
-    T: VectorRepr,
-    D: AsyncFriendly,
-{
-    /// Fill up to `max_fp_per_prune` as full precision. The rest are quantized.
-    ///
-    /// if a full-precision vector already exists regardless of whether a full-precision
-    /// vector or quant vector is needed, it is left as-is
-    ///
-    async fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> Result<(), Self::GetError>
-    where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
-    {
-        let threshold = self.provider.max_fp_vecs_per_fill;
-        itr.enumerate().for_each(|(i, id)| {
-            let e = set.entry(id);
-
-            // Below the threshold, we try to fetch full-precision vectors.
-            //
-            if i < threshold {
-                // If the item already exists but is not full precision, make it full
-                // precision.
-                e.and_modify(|v| {
-                    if !v.is_full() {
-                        // SAFETY: We've decided to live with UB (undefined behavior) that
-                        // can result from potentially mixing unsynchronized reads and
-                        // writes on the underlying memory.
-                        //
-                        #[allow(clippy::expect_used)]
-                        let vec = self
-                            .provider
-                            .full_vectors
-                            .get_vector_sync(id.into_usize())
-                            .expect("Full vector provider failed to retrieve element");
-                        *v = distances::pq::Hybrid::Full(vec);
-                    }
-                })
-                .or_insert_with(|| {
-                    // Only invoke this method if the entry is not occupied.
-                    //
-                    // SAFETY: We've decided to live with UB (undefined behavior) that
-                    // can result from potentially mixing unsynchronized reads and
-                    // writes on the underlying memory.
-                    //
-                    #[allow(clippy::expect_used)]
-                    let vec = self
-                        .provider
-                        .full_vectors
-                        .get_vector_sync(id.into_usize())
-                        .expect("Full vector provider failed to retrieve element");
-                    distances::pq::Hybrid::Full(vec)
-                });
-            } else {
-                // Otherwise, only insert into the cache if the entry is not occupied.
-                //
-                e.or_insert_with(|| {
-                    // SAFETY: We've decided to live with UB (undefined behavior) that
-                    // can result from potentially mixing unsynchronized reads and
-                    // writes on the underlying memory.
-                    //
-                    #[allow(clippy::expect_used)]
-                    distances::pq::Hybrid::Quant(
-                        self.provider
-                            .quant_vectors
-                            .get_vector_sync(id.into_usize())
-                            .expect("Fail to retrieve a quant vector during fillset"),
-                    )
-                });
-            }
-        });
-        Ok(())
-    }
-}
+// impl<T, D> FillSet for HybridAccessor<'_, T, D>
+// where
+//     T: VectorRepr,
+//     D: AsyncFriendly,
+// {
+//     /// Fill up to `max_fp_per_prune` as full precision. The rest are quantized.
+//     ///
+//     /// if a full-precision vector already exists regardless of whether a full-precision
+//     /// vector or quant vector is needed, it is left as-is
+//     ///
+//     async fn fill_set<Itr>(
+//         &mut self,
+//         set: &mut HashMap<Self::Id, Self::Extended>,
+//         itr: Itr,
+//     ) -> Result<(), Self::GetError>
+//     where
+//         Itr: Iterator<Item = Self::Id> + Send + Sync,
+//     {
+//         let threshold = self.provider.max_fp_vecs_per_fill;
+//         itr.enumerate().for_each(|(i, id)| {
+//             let e = set.entry(id);
+//
+//             // Below the threshold, we try to fetch full-precision vectors.
+//             //
+//             if i < threshold {
+//                 // If the item already exists but is not full precision, make it full
+//                 // precision.
+//                 e.and_modify(|v| {
+//                     if !v.is_full() {
+//                         // SAFETY: We've decided to live with UB (undefined behavior) that
+//                         // can result from potentially mixing unsynchronized reads and
+//                         // writes on the underlying memory.
+//                         //
+//                         #[allow(clippy::expect_used)]
+//                         let vec = self
+//                             .provider
+//                             .full_vectors
+//                             .get_vector_sync(id.into_usize())
+//                             .expect("Full vector provider failed to retrieve element");
+//                         *v = distances::pq::Hybrid::Full(vec);
+//                     }
+//                 })
+//                 .or_insert_with(|| {
+//                     // Only invoke this method if the entry is not occupied.
+//                     //
+//                     // SAFETY: We've decided to live with UB (undefined behavior) that
+//                     // can result from potentially mixing unsynchronized reads and
+//                     // writes on the underlying memory.
+//                     //
+//                     #[allow(clippy::expect_used)]
+//                     let vec = self
+//                         .provider
+//                         .full_vectors
+//                         .get_vector_sync(id.into_usize())
+//                         .expect("Full vector provider failed to retrieve element");
+//                     distances::pq::Hybrid::Full(vec)
+//                 });
+//             } else {
+//                 // Otherwise, only insert into the cache if the entry is not occupied.
+//                 //
+//                 e.or_insert_with(|| {
+//                     // SAFETY: We've decided to live with UB (undefined behavior) that
+//                     // can result from potentially mixing unsynchronized reads and
+//                     // writes on the underlying memory.
+//                     //
+//                     #[allow(clippy::expect_used)]
+//                     distances::pq::Hybrid::Quant(
+//                         self.provider
+//                             .quant_vectors
+//                             .get_vector_sync(id.into_usize())
+//                             .expect("Fail to retrieve a quant vector during fillset"),
+//                     )
+//                 });
+//             }
+//         });
+//         Ok(())
+//     }
+// }
 
 ////////////////
 // Strategies //
@@ -1466,7 +1466,7 @@ where
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T, Q, D> SearchStrategy<BfTreeProvider<T, Q, D>, [T]> for Internal<FullPrecision>
+impl<T, Q, D> SearchStrategy<BfTreeProvider<T, Q, D>, &[T]> for Internal<FullPrecision>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1493,7 +1493,7 @@ where
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T, Q, D> SearchStrategy<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
+impl<T, Q, D> SearchStrategy<BfTreeProvider<T, Q, D>, &[T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1521,7 +1521,7 @@ where
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Rerank;
 
-impl<'a, T, D> glue::SearchPostProcess<QuantAccessor<'a, T, D>, [T]> for Rerank
+impl<'a, T, D> glue::SearchPostProcess<QuantAccessor<'a, T, D>, &[T]> for Rerank
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -1572,7 +1572,7 @@ where
 ///
 /// Starting points are not filtered out of the final results but results are reranked using
 /// the full-precision data.
-impl<T, D> SearchStrategy<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Internal<Hybrid>
+impl<T, D> SearchStrategy<BfTreeProvider<T, QuantVectorProvider, D>, &[T]> for Internal<Hybrid>
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -1599,7 +1599,7 @@ where
 ///
 /// Starting points are are filtered out of the final results and results are reranked using
 /// the full-precision data.
-impl<T, D> SearchStrategy<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
+impl<T, D> SearchStrategy<BfTreeProvider<T, QuantVectorProvider, D>, &[T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -1642,24 +1642,6 @@ where
     }
 }
 
-/// Implementing this trait allows `FullPrecision` to be used for multi-insert
-///
-impl<'a, T, Q, D> glue::AsElement<&'a [T]> for FullAccessor<'a, T, Q, D>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly,
-{
-    type Error = diskann::error::Infallible;
-    fn as_element(
-        &mut self,
-        vector: &'a [T],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send {
-        std::future::ready(Ok(vector))
-    }
-}
-
 impl<T, D> PruneStrategy<BfTreeProvider<T, QuantVectorProvider, D>> for Hybrid
 where
     T: VectorRepr,
@@ -1678,24 +1660,7 @@ where
     }
 }
 
-/// Implementing this trait allows `Hybrid` to be used for multi-insert.
-///
-impl<'a, T, D> glue::AsElement<&'a [T]> for HybridAccessor<'a, T, D>
-where
-    T: VectorRepr,
-    D: AsyncFriendly,
-{
-    type Error = diskann::error::Infallible;
-    fn as_element(
-        &mut self,
-        vector: &'a [T],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send {
-        std::future::ready(Ok(distances::pq::Hybrid::Full(vector.to_vec())))
-    }
-}
-
-impl<T, Q, D> InsertStrategy<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
+impl<T, Q, D> InsertStrategy<BfTreeProvider<T, Q, D>, &[T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1707,7 +1672,7 @@ where
     }
 }
 
-impl<T, D> InsertStrategy<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
+impl<T, D> InsertStrategy<BfTreeProvider<T, QuantVectorProvider, D>, &[T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -1727,8 +1692,8 @@ where
     D: AsyncFriendly + DeletionCheck,
 {
     type DeleteElementError = Panics;
-    type DeleteElement<'a> = [T];
-    type DeleteElementGuard = Box<[T]>;
+    type DeleteElement<'a> = &'a [T];
+    type DeleteElementGuard = Box<&[T]>;
     type PruneStrategy = Self;
     type SearchStrategy = Internal<Self>;
     fn search_strategy(&self) -> Self::SearchStrategy {
@@ -1761,8 +1726,8 @@ where
     D: AsyncFriendly + DeletionCheck,
 {
     type DeleteElementError = Panics;
-    type DeleteElement<'a> = [T];
-    type DeleteElementGuard = Box<[T]>;
+    type DeleteElement<'a> = &'a [T];
+    type DeleteElementGuard = Box<&[T]>;
     type PruneStrategy = Self;
     type SearchStrategy = Internal<Self>;
     fn search_strategy(&self) -> Self::SearchStrategy {

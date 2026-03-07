@@ -175,7 +175,7 @@ pub(crate) mod tests {
         graph::{
             self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
-            glue::{AsElement, InplaceDeleteStrategy, InsertStrategy, SearchStrategy, aliases},
+            glue::{InplaceDeleteStrategy, InsertStrategy, SearchStrategy, aliases},
             index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
             search::{Knn, Range},
             search_output_buffer,
@@ -258,7 +258,7 @@ pub(crate) mod tests {
     pub(crate) async fn populate_data<DP, Ctx, T>(provider: &DP, context: &Ctx, source: &[Vec<T>])
     where
         Ctx: ExecutionContext,
-        DP: DataProvider<Context = Ctx, InternalId = u32, ExternalId = u32> + SetElement<[T]>,
+        DP: DataProvider<Context = Ctx, InternalId = u32, ExternalId = u32> + SetElement<&[T]>,
     {
         for (i, v) in source.iter().enumerate() {
             let guard = provider.set_element(context, &(i as u32), v).await.unwrap();
@@ -501,8 +501,8 @@ pub(crate) mod tests {
         quant_strategy: QS,
     ) where
         DP: DataProvider<InternalId = u32, Context = DefaultContext>,
-        FS: SearchStrategy<DP, [T]> + Clone + 'static,
-        QS: SearchStrategy<DP, [T]> + Clone + 'static,
+        FS: SearchStrategy<DP, &[T]> + Clone + 'static,
+        QS: SearchStrategy<DP, &[T]> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
     {
         // Assume all vectors have the same length.
@@ -923,8 +923,8 @@ pub(crate) mod tests {
         rng: &mut StdRng,
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
-        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &[T]>
+            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &[T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -1050,8 +1050,8 @@ pub(crate) mod tests {
         #[case] radius: f32,
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
-        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+        S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, &[T]>
+            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, &[T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -2144,7 +2144,6 @@ pub(crate) mod tests {
         #[values(1, 10)] batchsize: usize,
     ) where
         S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
         S::PruneStrategy: Clone,
     {
         let ctx = &DefaultContext;
@@ -2238,7 +2237,6 @@ pub(crate) mod tests {
         #[values((-2.0,-1.0), (-1.0, 0.0), (40000.0,50000.0), (50000.0,75000.0))] radii: (f32, f32),
     ) where
         S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
         S::PruneStrategy: Clone,
     {
         let ctx = &DefaultContext;
@@ -2961,8 +2959,6 @@ pub(crate) mod tests {
             + SetElement<[f32]>
             + SetStartPoints<[f32]>,
         S: InsertStrategy<DefaultProvider<U, V, D>, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, DefaultProvider<U, V, D>, [f32]>:
-            AsElement<&'a [f32]>,
         S::PruneStrategy: Clone,
     {
         let ctx = &DefaultContext;
@@ -3017,7 +3013,6 @@ pub(crate) mod tests {
     ) -> (Arc<TestIndex>, diskann_utils::views::Matrix<f32>)
     where
         S: InsertStrategy<TestProvider, [f32]> + Clone + Send + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
         S::PruneStrategy: Clone,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
@@ -3066,7 +3061,6 @@ pub(crate) mod tests {
             + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
             + Clone
             + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
         <S as InsertStrategy<TestProvider, [f32]>>::PruneStrategy: Clone,
     {
         let ctx = &DefaultContext;
@@ -3168,7 +3162,6 @@ pub(crate) mod tests {
             + for<'a> InplaceDeleteStrategy<TestProvider, DeleteElement<'a> = [f32]>
             + Clone
             + Sync,
-        for<'a> aliases::InsertPruneAccessor<'a, S, TestProvider, [f32]>: AsElement<&'a [f32]>,
         <S as InsertStrategy<TestProvider, [f32]>>::PruneStrategy: Clone,
     {
         let ctx = &DefaultContext;

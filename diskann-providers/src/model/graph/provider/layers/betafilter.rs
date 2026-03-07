@@ -70,7 +70,6 @@ pub struct Unwrap;
 /// Delegate post-processing to the inner strategy's post-processing routine.
 impl<A, T, O> SearchPostProcessStep<BetaAccessor<A>, T, O> for Unwrap
 where
-    T: ?Sized,
     A: BuildQueryComputer<T>,
 {
     type Error<NextError>
@@ -84,7 +83,7 @@ where
         &self,
         next: &Next,
         accessor: &mut BetaAccessor<A>,
-        query: &T,
+        query: T,
         computer: &BetaComputer<A::QueryComputer, A::Id>,
         candidates: I,
         output: &mut B,
@@ -114,7 +113,7 @@ where
 /// distance accordingly.
 impl<Provider, Strategy, T, I, O> SearchStrategy<Provider, T, O> for BetaFilter<Strategy, I>
 where
-    T: ?Sized,
+    T: Copy + Send + Sync,
     I: VectorId,
     O: Send,
     Provider: DataProvider<InternalId = I>,
@@ -308,7 +307,6 @@ where
 impl<Inner, T> BuildQueryComputer<T> for BetaAccessor<Inner>
 where
     Inner: BuildQueryComputer<T>,
-    T: ?Sized,
 {
     /// Use a [`BetaComputer`] to apply filtering.
     type QueryComputer = BetaComputer<Inner::QueryComputer, Self::Id>;
@@ -317,7 +315,7 @@ where
 
     fn build_query_computer(
         &self,
-        from: &T,
+        from: T,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         self.inner
             .build_query_computer(from)
@@ -328,7 +326,6 @@ where
 impl<Inner, T> ExpandBeam<T> for BetaAccessor<Inner>
 where
     Inner: BuildQueryComputer<T> + AsNeighbor,
-    T: ?Sized,
 {
 }
 

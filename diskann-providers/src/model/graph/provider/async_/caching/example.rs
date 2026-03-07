@@ -201,24 +201,10 @@ impl<'a> cache_provider::AsCacheAccessorFor<'a, debug_provider::FullAccessor<'a>
     }
 }
 
-impl<'a> cache_provider::CachedFillSet<CacheAccessor<'a, bf_cache::VecCacher<f32>>>
-    for debug_provider::FullAccessor<'a>
-{
-}
-
-impl<'a> cache_provider::CachedAsElement<&'a [f32], CacheAccessor<'a, bf_cache::VecCacher<f32>>>
-    for debug_provider::FullAccessor<'a>
-{
-    type Error = CachingError<Self::GetError, CacheAccessError>;
-    async fn cached_as_element<'b>(
-        &'b mut self,
-        cache: &'b mut CacheAccessor<'a, bf_cache::VecCacher<f32>>,
-        _vector: &'a [f32],
-        id: u32,
-    ) -> Result<Self::Element<'b>, Self::Error> {
-        cache_provider::get_or_insert(self, cache, id).await
-    }
-}
+// impl<'a> cache_provider::CachedFillSet<CacheAccessor<'a, bf_cache::VecCacher<f32>>>
+//     for debug_provider::FullAccessor<'a>
+// {
+// }
 
 ///////////
 // Tests //

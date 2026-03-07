@@ -25,11 +25,9 @@
 //! * [`AsCacheAccessorFor`]: Create a cache accessor for a [`DataProvider`]/element type
 //!   combination.
 //!
-//! * [`CachedFillSet`]: The caching version of [`FillSet`]. A provided implementation can
+//! * [`CachedFill`]: The caching version of [`Fill`]. A provided implementation can
 //!   be used if desired, or the behavior can be customized per [`Accessor`]/cache accessor
 //!   pair.
-//!
-//! * [`CachedAsElement`]: The caching version of [`AsElement`].
 //!
 //! To make use of a caching provider, after creating the inner [`DataProvider`] (`DP`),
 //! create a cache `C` that implements the above traits for `DP` and the accessors whose
@@ -69,7 +67,7 @@ use diskann::{
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{
-            self, AsElement, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy, Pipeline,
+            self, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, Pipeline,
             PruneStrategy, SearchExt, SearchPostProcessStep, SearchStrategy,
         },
     },
@@ -327,74 +325,56 @@ where
     ) -> Result<CachingAccessor<A, Self::Accessor>, Self::Error>;
 }
 
-/// The caching equivalent of [`diskann::glue::FillSet`], implemented by the
-/// **inner** [`Accessor`] for a cache accessor `C`. This allows the [`Accessor`] to
-///
-/// customize the interaction with the cache.
-///
-/// # Provided
-///
-/// The provided implementation iterates through `itr` and only attempts to mutate ids that
-/// are not already present in `set`. The cache will first be checked and if an item is
-/// not present, it will be retrieved via [`Self::get_element`] and inserted into the cache.
-///
-/// **ALL** errors are propagated eagerly by this method.
-pub trait CachedFillSet<C>: CacheableAccessor
-where
-    C: ElementCache<Self::Id, Self::Map>,
-{
-    fn cached_fill_set<Itr>(
-        &mut self,
-        cache: &mut C,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> impl SendFuture<Result<(), CachingError<Self::GetError, C::Error>>>
-    where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
-    {
-        async move {
-            for i in itr {
-                if let Entry::Vacant(e) = set.entry(i) {
-                    match cache.try_get(i).map_err(CachingError::Cache)? {
-                        // Conversion chain:
-                        //
-                        // * `C::Element -> A::Element<'_>` via `CacheableAccessor`.
-                        // * `A::Element<'_> -> A::Extended` via `Into`.
-                        MaybeCached::Present(element) => {
-                            e.insert(Self::from_cached(element).into());
-                        }
-                        MaybeCached::Missing(missing) => {
-                            let element = self.get_element(i).await.map_err(CachingError::Inner)?;
-                            missing
-                                .set(Self::as_cached(&element))
-                                .map_err(CachingError::Cache)?;
-                            e.insert(element.into());
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
-}
-
-/// The caching equivalent of [`diskann::glue::AsElement`], implemented by the
-/// **underlying** [`Accessor`]. This allows the [`Accessor`] to customize the interaction
-/// with the cache.
-pub trait CachedAsElement<T, C>: CacheableAccessor
-where
-    T: Send,
-{
-    type Error: ToRanked + std::fmt::Debug + Send + Sync;
-
-    /// Efficiently convert `vector` with corresponding internal `id` to `Self::Element`.
-    fn cached_as_element<'a>(
-        &'a mut self,
-        cache: &'a mut C,
-        vector: T,
-        id: Self::Id,
-    ) -> impl SendFuture<Result<Self::Element<'a>, Self::Error>>;
-}
+// /// The caching equivalent of [`diskann::glue::Fill`], implemented by the
+// /// **inner** [`Accessor`] for a cache accessor `C`. This allows the [`Accessor`] to
+// ///
+// /// customize the interaction with the cache.
+// ///
+// /// # Provided
+// ///
+// /// The provided implementation iterates through `itr` and only attempts to mutate ids that
+// /// are not already present in `set`. The cache will first be checked and if an item is
+// /// not present, it will be retrieved via [`Self::get_element`] and inserted into the cache.
+// ///
+// /// **ALL** errors are propagated eagerly by this method.
+// pub trait CachedFillSet<C>: CacheableAccessor
+// where
+//     C: ElementCache<Self::Id, Self::Map>,
+// {
+//     fn cached_fill_set<Itr>(
+//         &mut self,
+//         cache: &mut C,
+//         set: &mut HashMap<Self::Id, Self::Extended>,
+//         itr: Itr,
+//     ) -> impl SendFuture<Result<(), CachingError<Self::GetError, C::Error>>>
+//     where
+//         Itr: Iterator<Item = Self::Id> + Send + Sync,
+//     {
+//         async move {
+//             for i in itr {
+//                 if let Entry::Vacant(e) = set.entry(i) {
+//                     match cache.try_get(i).map_err(CachingError::Cache)? {
+//                         // Conversion chain:
+//                         //
+//                         // * `C::Element -> A::Element<'_>` via `CacheableAccessor`.
+//                         // * `A::Element<'_> -> A::Extended` via `Into`.
+//                         MaybeCached::Present(element) => {
+//                             e.insert(Self::from_cached(element).into());
+//                         }
+//                         MaybeCached::Missing(missing) => {
+//                             let element = self.get_element(i).await.map_err(CachingError::Inner)?;
+//                             missing
+//                                 .set(Self::as_cached(&element))
+//                                 .map_err(CachingError::Cache)?;
+//                             e.insert(element.into());
+//                         }
+//                     }
+//                 }
+//             }
+//             Ok(())
+//         }
+//     }
+// }
 
 ///////////////
 // New Types //
@@ -415,9 +395,7 @@ where
 /// * [`AsCacheAccessorFor`]: Create an accessor for the underlying cache targeting the
 ///   underlying provider with a specific element type.
 ///
-/// * [`CachedFillSet`]: [`diskann::glue::FillSet`] specialization for the cache.
-///
-/// * [`CachedAsElement`]: [`diskann::glue::AsElement`] specialization for the cache.
+/// * [`CachedFill`]: [`diskann::glue::Fill`] specialization for the cache.
 pub struct CachingProvider<T, C> {
     provider: T,
     cache: C,
@@ -829,40 +807,22 @@ where
     }
 }
 
-impl<T, A, C> AsElement<T> for CachingAccessor<A, C>
-where
-    A: CachedAsElement<T, C>,
-    C: ElementCache<A::Id, A::Map>,
-    T: Send,
-{
-    type Error = <A as CachedAsElement<T, C>>::Error;
-    async fn as_element(
-        &mut self,
-        vector: T,
-        id: Self::Id,
-    ) -> Result<Self::Element<'_>, Self::Error> {
-        self.inner
-            .cached_as_element(&mut self.cache, vector, id)
-            .await
-    }
-}
-
-impl<A, C> FillSet for CachingAccessor<A, C>
-where
-    A: CacheableAccessor + CachedFillSet<C>,
-    C: ElementCache<A::Id, A::Map>,
-{
-    fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> impl Future<Output = Result<(), Self::GetError>> + Send
-    where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
-    {
-        self.inner.cached_fill_set(&mut self.cache, set, itr)
-    }
-}
+// impl<A, C> FillSet for CachingAccessor<A, C>
+// where
+//     A: CacheableAccessor + CachedFillSet<C>,
+//     C: ElementCache<A::Id, A::Map>,
+// {
+//     fn fill_set<Itr>(
+//         &mut self,
+//         set: &mut HashMap<Self::Id, Self::Extended>,
+//         itr: Itr,
+//     ) -> impl Future<Output = Result<(), Self::GetError>> + Send
+//     where
+//         Itr: Iterator<Item = Self::Id> + Send + Sync,
+//     {
+//         self.inner.cached_fill_set(&mut self.cache, set, itr)
+//     }
+// }
 
 impl<A, C, T> ExpandBeam<T> for CachingAccessor<A, C>
 where
@@ -993,7 +953,7 @@ where
 /// implementation of `ElementCache` that is compatible with `E` and allows mutation of the
 /// cached graph.
 ///
-/// Finally, the underlying [`PruneAccessor`] needs to implement [`CachedFillSet`] for the
+/// Finally, the underlying [`PruneAccessor`] needs to implement [`CachedFill`] for the
 /// corresponding cached accessor.
 impl<DP, C, S, E> PruneStrategy<CachingProvider<DP, C>> for Cached<S>
 where
@@ -1006,7 +966,7 @@ where
             Error = E,
         > + AsyncFriendly,
     for<'a> S::PruneAccessor<'a>:
-        CachedFillSet<<C as AsCacheAccessorFor<'a, PruneAccessor<'a, S, DP>>>::Accessor>,
+        CachedFill<<C as AsCacheAccessorFor<'a, PruneAccessor<'a, S, DP>>>::Accessor>,
     E: StandardError,
 {
     type DistanceComputer = S::DistanceComputer;

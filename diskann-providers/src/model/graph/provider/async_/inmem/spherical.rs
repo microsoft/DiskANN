@@ -11,7 +11,7 @@ use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::glue::{
-        self, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy, PruneStrategy, SearchExt,
+        self, ExpandBeam, FilterStartPoints, InsertStrategy, PruneStrategy, SearchExt,
         SearchStrategy,
     },
     provider::{
@@ -441,7 +441,7 @@ where
     }
 }
 
-impl<V, D, Ctx, T> BuildQueryComputer<[T]> for QuantAccessor<'_, V, D, Ctx>
+impl<V, D, Ctx, T> BuildQueryComputer<&[T]> for QuantAccessor<'_, V, D, Ctx>
 where
     T: VectorRepr,
     V: AsyncFriendly,
@@ -464,7 +464,7 @@ where
     }
 }
 
-impl<V, D, Ctx, T> ExpandBeam<[T]> for QuantAccessor<'_, V, D, Ctx>
+impl<V, D, Ctx, T> ExpandBeam<&[T]> for QuantAccessor<'_, V, D, Ctx>
 where
     T: VectorRepr,
     V: AsyncFriendly,
@@ -551,7 +551,7 @@ impl Quantized {
 /// SearchStrategy for quantized search when a full-precision store exists alongside
 /// the quantized store. This allows reranking using original vectors after
 /// approximate search, so the post-processing step includes a [`Rerank`] stage.
-impl<D, Ctx, T> SearchStrategy<FullPrecisionProvider<T, SphericalStore, D, Ctx>, [T]> for Quantized
+impl<D, Ctx, T> SearchStrategy<FullPrecisionProvider<T, SphericalStore, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -579,7 +579,7 @@ where
 /// SearchStrategy for quantized search when only the quantized store is present.
 /// Since no full-precision vectors exist, reranking is not possible and the
 /// post-processing step just copies candidate IDs forward via [`RemoveDeletedIdsAndCopy`].
-impl<D, Ctx, T> SearchStrategy<DefaultProvider<NoStore, SphericalStore, D, Ctx>, [T]> for Quantized
+impl<D, Ctx, T> SearchStrategy<DefaultProvider<NoStore, SphericalStore, D, Ctx>, &[T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -625,20 +625,12 @@ where
     }
 }
 
-impl<V, D, Ctx> FillSet for QuantAccessor<'_, V, D, Ctx>
-where
-    V: AsyncFriendly,
-    D: AsyncFriendly,
-    Ctx: ExecutionContext,
-{
-}
-
-impl<V, D, Ctx, T> InsertStrategy<DefaultProvider<V, SphericalStore, D, Ctx>, [T]> for Quantized
+impl<V, D, Ctx, T> InsertStrategy<DefaultProvider<V, SphericalStore, D, Ctx>, &[T]> for Quantized
 where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
-    Quantized: SearchStrategy<DefaultProvider<V, SphericalStore, D, Ctx>, [T]>,
+    Quantized: for<'a> SearchStrategy<DefaultProvider<V, SphericalStore, D, Ctx>, &'a [T]>,
 {
     type PruneStrategy = Self;
     fn prune_strategy(&self) -> Self::PruneStrategy {
