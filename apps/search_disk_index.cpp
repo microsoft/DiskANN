@@ -179,7 +179,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
     std::string recall_string = "Recall@" + std::to_string(recall_at);
     diskann::cout << std::setw(6) << "L" << std::setw(12) << "Beamwidth" << std::setw(16) << "QPS" << std::setw(16)
                   << "Mean Latency" << std::setw(16) << "99.9 Latency" << std::setw(16) << "Mean IOs" << std::setw(16)
-                  << "Mean IO (us)" << std::setw(16) << "CPU (s)";
+                  << "Mean IO (us)" << std::setw(16) << "CPU (s)" << std::setw(16)<< "PQ Training(s)";
     if (calc_recall_flag)
     {
         diskann::cout << std::setw(16) << recall_string << std::endl;
@@ -272,6 +272,8 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
         auto mean_io_us = diskann::get_mean_stats<float>(stats, query_num,
                                                          [](const diskann::QueryStats &stats) { return stats.io_us; });
+        auto mean_pq_training_us = diskann::get_mean_stats<float>(stats, query_num,
+                                                         [](const diskann::QueryStats &stats) { return stats.pq_training_us; });
 
         double recall = 0;
         if (calc_recall_flag)
@@ -283,7 +285,7 @@ int search_disk_index(diskann::Metric &metric, const std::string &index_path_pre
 
         diskann::cout << std::setw(6) << L << std::setw(12) << optimized_beamwidth << std::setw(16) << qps
                       << std::setw(16) << mean_latency << std::setw(16) << latency_999 << std::setw(16) << mean_ios
-                      << std::setw(16) << mean_io_us << std::setw(16) << mean_cpuus;
+                      << std::setw(16) << mean_io_us << std::setw(16) << mean_cpuus << std::setw(16) << mean_pq_training_us;
         if (calc_recall_flag)
         {
             diskann::cout << std::setw(16) << recall << std::endl;
