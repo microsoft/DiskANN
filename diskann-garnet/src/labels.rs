@@ -35,6 +35,7 @@ use diskann::graph::index::QueryLabelProvider;
 /// The bitmap pointer must remain valid and unmodified for the lifetime of
 /// this struct. In practice, the struct is created and dropped within a
 /// single FFI search call.
+#[derive(Debug)]
 pub struct GarnetQueryLabelProvider {
     data: *const u8,
     len: usize,
@@ -44,14 +45,6 @@ pub struct GarnetQueryLabelProvider {
 // is valid for the duration of the search call.
 unsafe impl Send for GarnetQueryLabelProvider {}
 unsafe impl Sync for GarnetQueryLabelProvider {}
-
-impl std::fmt::Debug for GarnetQueryLabelProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GarnetQueryLabelProvider")
-            .field("len", &self.len)
-            .finish()
-    }
-}
 
 impl Clone for GarnetQueryLabelProvider {
     fn clone(&self) -> Self {
