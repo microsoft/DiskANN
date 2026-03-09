@@ -206,10 +206,11 @@ pub(crate) mod tests {
             },
             layers::BetaFilter,
         },
+        storage::StorageReadProvider,
         test_utils::{
             assert_range_results_exactly_match, assert_top_k_exactly_match, groundtruth, is_match,
         },
-        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests, file_util},
+        utils::{self, VectorDataIterator, create_rnd_from_seed_in_tests},
     };
 
     // Callbacks for use with `simplified_builder`.
@@ -2354,9 +2355,8 @@ pub(crate) mod tests {
             + diskann::provider::SetElement<[f32]>,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
-        let (data_vec, npoints, dim) = file_util::load_bin(&storage, file, 0).unwrap();
-        let data =
-            Arc::new(Matrix::<f32>::try_from(data_vec.into_boxed_slice(), npoints, dim).unwrap());
+        let mut reader = storage.open_reader(file).unwrap();
+        let data = Arc::new(diskann_utils::io::read_bin::<f32>(&mut reader).unwrap());
 
         let rng = &mut create_rnd_from_seed_in_tests(0xe058c9c57864dd1e);
         let random_index = rand::Rng::random_range(rng, 0..data.nrows());
@@ -3021,13 +3021,12 @@ pub(crate) mod tests {
         S::PruneStrategy: Clone,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
-        let (train_data, npoints, dim) = file_util::load_bin(&storage, file, 0).unwrap();
-
-        let train_data_view =
-            diskann_utils::views::MatrixView::try_from(&train_data, npoints, dim).unwrap();
+        let mut reader = storage.open_reader(file).unwrap();
+        let train_data = diskann_utils::io::read_bin::<f32>(&mut reader).unwrap();
+        let (npoints, dim) = (train_data.nrows(), train_data.ncols());
 
         let table = train_pq(
-            train_data_view,
+            train_data.as_view(),
             num_pq_chunks,
             &mut create_rnd_from_seed_in_tests(0xe3c52ef001bc7ade),
             1,
@@ -3043,11 +3042,11 @@ pub(crate) mod tests {
             parameters,
             file,
             startpoint,
-            train_data_view,
+            train_data.as_view(),
         )
         .await;
 
-        (index, train_data_view.to_owned())
+        (index, train_data)
     }
 
     #[rstest]
@@ -4380,5 +4379,98 @@ pub(crate) mod tests {
             "search should have terminated early, got {} visits",
             filter.visit_count()
         );
+    }
+
+    #[tokio::test]
+    async fn vectors_with_infinity_values_should_be_inserted_and_searched_without_panic() {
+        let l_build: usize = 20;
+        // We need to insert more points than l_build to ensure that the priority queue gets filled in.
+        let insert_count = l_build + 10;
+        const VECTORS_DIMENSION: usize = 384;
+        // Last third of inserted vectors will have infinity values.
+        let vector_value_start: f32 = half::f16::MAX.to_f32() - insert_count as f32 / 3.0;
+
+        let (config, mut parameters) = simplified_builder(
+            l_build,
+            32,
+            Metric::L2,
+            VECTORS_DIMENSION,
+            insert_count,
+            |_| {},
+        )
+        .unwrap();
+
+        parameters.frozen_points = NonZeroUsize::new(1).unwrap();
+        let index = new_index::<half::f16, _>(config, parameters, NoDeletes).unwrap();
+
+        let vectors = (0..insert_count)
+            .map(move |i| [half::f16::from_f32(vector_value_start + i as f32); VECTORS_DIMENSION])
+            .collect::<Vec<_>>();
+
+        assert_ne!(
+            vectors[0][0],
+            half::f16::INFINITY,
+            "First vector should not have infinity value"
+        );
+        assert_eq!(
+            vectors[vectors.len() - 1][0],
+            half::f16::INFINITY,
+            "Last vector should have infinity value"
+        );
+
+        for (i, vector) in vectors.iter().take(insert_count).enumerate() {
+            let vector_id = i as u32;
+            index
+                .insert(FullPrecision, &DefaultContext, &vector_id, vector)
+                .await
+                .unwrap();
+        }
+
+        let query_count: usize = 1;
+        let mut queries = crate::common::AlignedBoxWithSlice::<half::f16>::new(
+            query_count * VECTORS_DIMENSION,
+            32,
+        )
+        .unwrap();
+
+        for i in 0..query_count {
+            for val in queries.as_mut_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION]
+                .iter_mut()
+            {
+                *val = half::f16::from_f32(0f32);
+            }
+        }
+
+        let top_k = l_build;
+        let search_l = l_build;
+        let mut ids = vec![0; top_k];
+        let mut distances = vec![0.0; top_k];
+        let ctx = DefaultContext;
+        let search_params = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        for i in 0..query_count {
+            let query_vector =
+                &queries.as_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
+
+            let mut result_output_buffer =
+                search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+
+            // Full Precision Search.
+            let search_result = index
+                .search(
+                    search_params,
+                    &FullPrecision,
+                    &ctx,
+                    query_vector,
+                    &mut result_output_buffer,
+                )
+                .await
+                .unwrap();
+
+            assert!(
+                search_result.result_count > 0,
+                "Expected non-empty result for query {}",
+                i
+            );
+        }
     }
 }

@@ -17,11 +17,12 @@ use diskann_providers::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann_providers::{
     common::AlignedBoxWithSlice,
     model::graph::traits::GraphDataType,
-    utils::{
-        create_thread_pool, file_util, write_metadata, ParallelIteratorInPool, VectorDataIterator,
-    },
+    utils::{create_thread_pool, file_util, ParallelIteratorInPool, VectorDataIterator},
 };
-use diskann_utils::views::Matrix;
+use diskann_utils::{
+    io::{read_bin, Metadata},
+    views::Matrix,
+};
 use diskann_vector::{distance::Metric, DistanceFunction};
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -121,10 +122,10 @@ pub fn compute_ground_truth_from_datafiles<
     };
 
     // Load the query file
-    let (raw_query_data, query_num, query_dim) = file_util::load_bin::<
-        Data::VectorDataType,
-        StorageProvider,
-    >(storage_provider, query_file, 0)?;
+    let query_data =
+        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
+    let query_num = query_data.nrows();
+    let query_dim = query_data.ncols();
 
     let mut query_bitmaps: Option<Vec<BitSet>> = None;
     if let (Some(base_file_labels), Some(query_file_labels)) = (base_file_labels, query_file_labels)
@@ -135,7 +136,7 @@ pub fn compute_ground_truth_from_datafiles<
         )?);
     }
 
-    let queries: Vec<_> = raw_query_data.chunks(query_dim).collect();
+    let queries: Vec<_> = query_data.row_iter().collect();
 
     // Load the vector filters
     let vector_filters = match vector_filters_file {
@@ -375,11 +376,11 @@ pub fn compute_range_search_ground_truth_from_datafiles<
     )?;
 
     // Load the query file
-    let (raw_query_data, query_num, query_dim) = file_util::load_bin::<
-        Data::VectorDataType,
-        StorageProvider,
-    >(storage_provider, query_file, 0)?;
-    let queries: Vec<_> = raw_query_data.chunks(query_dim).collect();
+    let query_data =
+        read_bin::<Data::VectorDataType>(&mut storage_provider.open_reader(query_file)?)?;
+    let query_num = query_data.nrows();
+    let query_dim = query_data.ncols();
+    let queries: Vec<_> = query_data.row_iter().collect();
 
     let query_aligned_dim = query_dim.next_multiple_of(8);
     let ground_truth_result = compute_range_search_ground_truth_from_data::<
@@ -427,7 +428,7 @@ fn write_range_search_ground_truth<StorageProvider: StorageReadProvider + Storag
     let total_number_of_neighbors: usize = queue_sizes.iter().sum::<u32>() as usize;
 
     // Metadata
-    write_metadata(&mut file, number_of_queries, total_number_of_neighbors)?;
+    Metadata::new(number_of_queries, total_number_of_neighbors)?.write(&mut file)?;
 
     // Write queue sizes array.
     let mut queue_sizes_buffer = vec![0; queue_sizes.len() * size_of::<u32>()];
@@ -467,7 +468,7 @@ fn write_ground_truth<Data: GraphDataType>(
 ) -> CMDResult<()> {
     let mut file = storage_provider.create_for_write(ground_truth_file)?;
 
-    write_metadata(&mut file, number_of_queries, number_of_neighbors)?;
+    Metadata::new(number_of_queries, number_of_neighbors)?.write(&mut file)?;
 
     let mut gt_ids: Vec<u32> = Vec::with_capacity(number_of_neighbors * number_of_queries);
     let mut gt_distances: Vec<f32> = Vec::with_capacity(number_of_neighbors * number_of_queries);
