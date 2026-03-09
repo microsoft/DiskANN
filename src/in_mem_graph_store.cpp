@@ -23,9 +23,10 @@ std::tuple<uint32_t, uint32_t, size_t> InMemGraphStore::load(const std::string &
     return load_impl(index_path_prefix, num_points);
 }
 int InMemGraphStore::store(const std::string &index_path_prefix, const size_t num_points,
-                           const size_t num_frozen_points, const uint32_t start)
+                           const size_t /*num_frozen_points*/, const uint32_t start)
 {
-    return save_graph(index_path_prefix, num_points, num_frozen_points, start);
+    // set num_frozen_points = 1 to compatible with rust implementation, which doesn't have frozen points concept and always write 1 as num_frozen_points in graph file.
+    return save_graph(index_path_prefix, num_points, 1, start);
 }
 const NeighborList InMemGraphStore::get_neighbours(const location_t i) const
 {
