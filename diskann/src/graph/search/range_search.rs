@@ -13,7 +13,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, DefaultPostProcess, ExpandBeam, PostProcess, SearchExt},
+        glue::{self, ExpandBeam, PostProcess, SearchExt},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer,
@@ -167,12 +167,13 @@ impl Range {
     }
 }
 
-impl<DP, S, T, O> Search<DP, S, T, O, ()> for Range
+impl<DP, S, T, O, PP> Search<DP, S, T, O, (), PP> for Range
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: PostProcess<DP, T, DefaultPostProcess, O>,
+    S: PostProcess<DP, T, PP, O>,
     O: Send + Default + Clone,
+    PP: Send + Sync,
 {
     type Output = RangeSearchOutput<O>;
 
@@ -180,6 +181,7 @@ where
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        processor: &PP,
         context: &DP::Context,
         query: &T,
         _output: &mut (),
@@ -252,7 +254,7 @@ where
 
             let _ = strategy
                 .post_process_with(
-                    &DefaultPostProcess,
+                    processor,
                     &mut accessor,
                     query,
                     &computer,

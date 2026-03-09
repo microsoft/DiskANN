@@ -197,13 +197,14 @@ impl Knn {
     }
 }
 
-impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for Knn
+impl<DP, S, T, O, OB, PP> Search<DP, S, T, O, OB, PP> for Knn
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: PostProcess<DP, T, DefaultPostProcess, O>,
+    S: PostProcess<DP, T, PP, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send + ?Sized,
+    PP: Send + Sync,
 {
     type Output = SearchStats;
 
@@ -212,12 +213,13 @@ where
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        processor: &PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>> {
         async move {
-            self.search_core(index, strategy, context, query, output, &DefaultPostProcess)
+            self.search_core(index, strategy, context, query, output, processor)
                 .await
         }
     }
@@ -245,14 +247,15 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
     }
 }
 
-impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedKnn<'r, SR>
+impl<'r, DP, S, T, O, OB, SR, PP> Search<DP, S, T, O, OB, PP> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: PostProcess<DP, T, DefaultPostProcess, O>,
+    S: PostProcess<DP, T, PP, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send + ?Sized,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
+    PP: Send + Sync,
 {
     type Output = SearchStats;
 
@@ -260,6 +263,7 @@ where
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        processor: &PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
@@ -287,7 +291,7 @@ where
 
             let result_count = strategy
                 .post_process_with(
-                    &DefaultPostProcess,
+                    processor,
                     &mut accessor,
                     query,
                     &computer,
@@ -330,7 +334,7 @@ impl<PP> KnnWith<PP> {
     }
 }
 
-impl<DP, S, T, O, OB, PP> Search<DP, S, T, O, OB> for KnnWith<PP>
+impl<DP, S, T, O, OB, PP> Search<DP, S, T, O, OB, DefaultPostProcess> for KnnWith<PP>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
@@ -346,6 +350,7 @@ where
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        _processor: &DefaultPostProcess,
         context: &DP::Context,
         query: &T,
         output: &mut OB,

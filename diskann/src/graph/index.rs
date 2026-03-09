@@ -2152,11 +2152,37 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: super::search::Search<DP, S, T, O, OB>,
+        P: super::search::Search<DP, S, T, O, OB, glue::DefaultPostProcess>,
         T: ?Sized,
         OB: ?Sized,
     {
-        search_params.search(self, strategy, context, query, output)
+        self.search_with(
+            search_params,
+            strategy,
+            &glue::DefaultPostProcess,
+            context,
+            query,
+            output,
+        )
+    }
+
+    /// Execute a search with an explicit post-processor parameter.
+    pub fn search_with<S, T, O, OB, P, PP>(
+        &self,
+        search_params: P,
+        strategy: &S,
+        processor: &PP,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<P::Output>>
+    where
+        P: super::search::Search<DP, S, T, O, OB, PP>,
+        PP: Send + Sync,
+        T: ?Sized,
+        OB: ?Sized,
+    {
+        search_params.search(self, strategy, processor, context, query, output)
     }
 
     /// Performs a brute-force flat search over the points matching a provided filter function.

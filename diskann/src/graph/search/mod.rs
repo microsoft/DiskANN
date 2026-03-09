@@ -49,9 +49,10 @@ pub(crate) mod scratch;
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
 /// - [`MultihopSearch`] - Label-filtered search with multi-hop expansion
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
-pub trait Search<DP, S, T: ?Sized, O, OB: ?Sized>
+pub trait Search<DP, S, T: ?Sized, O, OB: ?Sized, PP = crate::graph::glue::DefaultPostProcess>
 where
     DP: DataProvider,
+    PP: Send + Sync,
 {
     /// The result type returned by this search.
     type Output;
@@ -82,6 +83,7 @@ where
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        processor: &PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
