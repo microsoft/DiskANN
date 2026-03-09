@@ -17,7 +17,7 @@ use std::{
 use diskann::{
     graph::{
         SearchOutputBuffer,
-        config::{self, defaults::GRAPH_SLACK_FACTOR},
+        config::{self, defaults::{FILTER_BETA, GRAPH_SLACK_FACTOR}},
         search,
     },
     utils::VectorRepr,
@@ -47,12 +47,6 @@ mod labels;
 mod provider;
 #[cfg(test)]
 mod test_utils;
-
-/// Default beta factor for BetaFilter filtered search.
-/// Values < 1.0 bias the search toward vectors matching the filter bitmap.
-const DEFAULT_FILTER_BETA: f32 = 0.5;
-
-// TODO: Decide on using the page API or switch to the multi-hop approach which eliminates the need for the beta value.
 
 enum IndexState {
     NoStartPoints,
@@ -548,7 +542,7 @@ pub unsafe extern "C" fn search_vector(
     } else {
         None
     };
-    let filter = labels.as_ref().map(|l| (l, DEFAULT_FILTER_BETA));
+    let filter = labels.as_ref().map(|l| (l, FILTER_BETA));
 
     let res = index
         .inner
@@ -612,7 +606,7 @@ pub unsafe extern "C" fn search_element(
     } else {
         None
     };
-    let filter = labels.as_ref().map(|l| (l, DEFAULT_FILTER_BETA));
+    let filter = labels.as_ref().map(|l| (l, FILTER_BETA));
 
     let res = index
         .inner
