@@ -6,7 +6,7 @@
 //! Label-filtered search using multi-hop expansion.
 
 use diskann_utils::Reborrow;
-use diskann_utils::future::{AssertSend, SendFuture};
+use diskann_utils::future::SendFuture;
 use diskann_vector::PreprocessedDistanceFunction;
 use hashbrown::HashSet;
 
@@ -16,8 +16,8 @@ use crate::{
     error::{ErrorExt, IntoANNResult},
     graph::{
         glue::{
-            self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
-            SearchPostProcess, SearchStrategy,
+            self, DefaultPostProcess, ExpandBeam, HybridPredicate, PostProcess, Predicate,
+            PredicateMut, SearchExt,
         },
         index::{
             DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
@@ -57,7 +57,7 @@ impl<'q, DP, S, T, O, OB> Search<DP, S, T, O, OB> for MultihopSearch<'q, DP::Int
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
+    S: PostProcess<DP, T, DefaultPostProcess, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send,
 {
@@ -93,17 +93,15 @@ where
             .await?;
 
             let result_count = strategy
-                .post_processor()
-                .post_process(
+                .post_process_with(
+                    &DefaultPostProcess,
                     &mut accessor,
                     query,
                     &computer,
                     scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )
-                .send()
-                .await
-                .into_ann_result()?;
+                .await?;
 
             Ok(stats.finish(result_count as u32))
         }

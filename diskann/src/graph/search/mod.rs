@@ -88,7 +88,7 @@ where
 }
 
 // Re-export search parameter types.
-pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
+pub use knn_search::{Knn, KnnSearchError, KnnWith, RecordedKnn};
 pub use multihop_search::MultihopSearch;
 pub use range_search::{Range, RangeSearchError, RangeSearchOutput};
 

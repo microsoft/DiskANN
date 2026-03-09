@@ -175,7 +175,10 @@ pub(crate) mod tests {
         graph::{
             self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
-            glue::{AsElement, InplaceDeleteStrategy, InsertStrategy, SearchStrategy, aliases},
+            glue::{
+                AsElement, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
+                SearchStrategy, aliases,
+            },
             index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
             search::{Knn, Range},
             search_output_buffer,
@@ -347,7 +350,7 @@ pub(crate) mod tests {
         mut checker: Checker,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<DP, Q>,
+        S: SearchStrategy<DP, Q> + HasDefaultProcessor<DP, Q>,
         Q: std::fmt::Debug + Sync + ?Sized,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
@@ -395,7 +398,7 @@ pub(crate) mod tests {
         filter: &dyn QueryLabelProvider<DP::InternalId>,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<DP, Q>,
+        S: SearchStrategy<DP, Q> + HasDefaultProcessor<DP, Q>,
         Q: std::fmt::Debug + Sync + ?Sized,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
@@ -501,8 +504,8 @@ pub(crate) mod tests {
         quant_strategy: QS,
     ) where
         DP: DataProvider<InternalId = u32, Context = DefaultContext>,
-        FS: SearchStrategy<DP, [T]> + Clone + 'static,
-        QS: SearchStrategy<DP, [T]> + Clone + 'static,
+        FS: SearchStrategy<DP, [T]> + HasDefaultProcessor<DP, [T]> + Clone + 'static,
+        QS: SearchStrategy<DP, [T]> + HasDefaultProcessor<DP, [T]> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
     {
         // Assume all vectors have the same length.
@@ -925,6 +928,7 @@ pub(crate) mod tests {
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
             + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+            + HasDefaultProcessor<FullPrecisionProvider<T, DefaultQuant>, [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -1052,6 +1056,7 @@ pub(crate) mod tests {
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
             + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+            + HasDefaultProcessor<FullPrecisionProvider<T, DefaultQuant>, [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,

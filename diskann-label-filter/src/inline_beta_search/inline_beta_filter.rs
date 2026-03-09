@@ -37,7 +37,6 @@ where
     Q: AsyncFriendly + Clone,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
-    type PostProcessor = FilterResults<Strategy::PostProcessor>;
     type SearchAccessorError = ANNError;
     type SearchAccessor<'a> = EncodedDocumentAccessor<Strategy::SearchAccessor<'a>>;
 
@@ -60,10 +59,25 @@ where
             self.beta,
         ))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
+/// [`HasDefaultProcessor`] delegation for [`InlineBetaStrategy`]. The processor wraps
+/// the inner strategy's default processor with [`FilterResults`].
+impl<DP, Strategy, Q>
+    diskann::graph::glue::HasDefaultProcessor<
+        DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
+        FilteredQuery<Q>,
+    > for InlineBetaStrategy<Strategy>
+where
+    DP: DataProvider,
+    Strategy: diskann::graph::glue::HasDefaultProcessor<DP, Q>,
+    Q: AsyncFriendly + Clone,
+{
+    type Processor = FilterResults<Strategy::Processor>;
+
+    fn create_processor(&self) -> Self::Processor {
         FilterResults {
-            inner_post_processor: self.inner.post_processor(),
+            inner_post_processor: self.inner.create_processor(),
         }
     }
 }

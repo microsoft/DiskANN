@@ -5,11 +5,12 @@
 
 use std::{collections::HashMap, future::Future, sync::Arc};
 
+use diskann::delegate_default_post_process;
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
-        self, ExpandBeam, FillSet, FilterStartPoints, InplaceDeleteStrategy, InsertStrategy,
-        PruneStrategy, SearchExt, SearchStrategy,
+        self, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor, InplaceDeleteStrategy,
+        InsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -473,7 +474,6 @@ where
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
     type SearchAccessor<'a> = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
     type SearchAccessorError = Panics;
-    type PostProcessor = Rerank;
 
     fn search_accessor<'a>(
         &'a self,
@@ -482,10 +482,16 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl<T, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]>
+    for Internal<Hybrid>
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    delegate_default_post_process!(Rerank);
 }
 
 /// Perform a search entirely in the quantized space.
@@ -501,7 +507,6 @@ where
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
     type SearchAccessor<'a> = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
     type SearchAccessorError = Panics;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, Rerank>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -510,10 +515,15 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl<T, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    delegate_default_post_process!(glue::Pipeline<FilterStartPoints, Rerank>);
 }
 
 impl<T, D, Ctx> PruneStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>> for Hybrid
@@ -578,6 +588,7 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
+    type SearchPostProcessor = diskann::graph::glue::DefaultPostProcess;
     type SearchStrategy = Internal<Self>;
     fn search_strategy(&self) -> Self::SearchStrategy {
         Internal(*self)
@@ -585,6 +596,10 @@ where
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        Default::default()
     }
 
     async fn get_delete_element<'a>(
@@ -613,7 +628,6 @@ where
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
     type SearchAccessor<'a> = QuantAccessor<'a, NoStore, D, Ctx>;
     type SearchAccessorError = Panics;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -622,10 +636,16 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl<T, D, Ctx> HasDefaultProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]>
+    for Quantized
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    delegate_default_post_process!(glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 impl<D, Ctx> PruneStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>> for Quantized

@@ -11,13 +11,15 @@ use std::{
     },
 };
 
+use diskann::delegate_default_post_process;
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     graph::{
         AdjacencyList,
         glue::{
-            AsElement, ExpandBeam, FillSet, FilterStartPoints, InplaceDeleteStrategy,
-            InsertStrategy, Pipeline, PruneStrategy, SearchExt, SearchStrategy,
+            AsElement, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor,
+            InplaceDeleteStrategy, InsertStrategy, Pipeline, PruneStrategy, SearchExt,
+            SearchStrategy,
         },
     },
     provider::{
@@ -888,7 +890,6 @@ impl FillSet for HybridAccessor<'_> {
 
 impl SearchStrategy<DebugProvider, [f32]> for Internal<FullPrecision> {
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type PostProcessor = postprocess::RemoveDeletedIdsAndCopy;
     type SearchAccessorError = Panics;
     type SearchAccessor<'a> = FullAccessor<'a>;
 
@@ -899,15 +900,14 @@ impl SearchStrategy<DebugProvider, [f32]> for Internal<FullPrecision> {
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl HasDefaultProcessor<DebugProvider, [f32]> for Internal<FullPrecision> {
+    delegate_default_post_process!(postprocess::RemoveDeletedIdsAndCopy);
 }
 
 impl SearchStrategy<DebugProvider, [f32]> for FullPrecision {
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type PostProcessor = Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>;
     type SearchAccessorError = Panics;
     type SearchAccessor<'a> = FullAccessor<'a>;
 
@@ -918,15 +918,14 @@ impl SearchStrategy<DebugProvider, [f32]> for FullPrecision {
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl HasDefaultProcessor<DebugProvider, [f32]> for FullPrecision {
+    delegate_default_post_process!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 
 impl SearchStrategy<DebugProvider, [f32]> for Internal<Quantized> {
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
-    type PostProcessor = postprocess::RemoveDeletedIdsAndCopy;
     type SearchAccessorError = Panics;
     type SearchAccessor<'a> = QuantAccessor<'a>;
 
@@ -937,15 +936,14 @@ impl SearchStrategy<DebugProvider, [f32]> for Internal<Quantized> {
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl HasDefaultProcessor<DebugProvider, [f32]> for Internal<Quantized> {
+    delegate_default_post_process!(postprocess::RemoveDeletedIdsAndCopy);
 }
 
 impl SearchStrategy<DebugProvider, [f32]> for Quantized {
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
-    type PostProcessor = Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>;
     type SearchAccessorError = Panics;
     type SearchAccessor<'a> = QuantAccessor<'a>;
 
@@ -956,10 +954,10 @@ impl SearchStrategy<DebugProvider, [f32]> for Quantized {
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl HasDefaultProcessor<DebugProvider, [f32]> for Quantized {
+    delegate_default_post_process!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 
 impl PruneStrategy<DebugProvider> for FullPrecision {
@@ -1051,6 +1049,7 @@ impl InplaceDeleteStrategy<DebugProvider> for FullPrecision {
     type DeleteElementGuard = Vec<f32>;
     type DeleteElementError = Panics;
     type PruneStrategy = Self;
+    type SearchPostProcessor = diskann::graph::glue::DefaultPostProcess;
     type SearchStrategy = Internal<Self>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -1059,6 +1058,10 @@ impl InplaceDeleteStrategy<DebugProvider> for FullPrecision {
 
     fn search_strategy(&self) -> Self::SearchStrategy {
         Internal(*self)
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        Default::default()
     }
 
     fn get_delete_element<'a>(
@@ -1077,6 +1080,7 @@ impl InplaceDeleteStrategy<DebugProvider> for Quantized {
     type DeleteElementGuard = Vec<f32>;
     type DeleteElementError = Panics;
     type PruneStrategy = Self;
+    type SearchPostProcessor = diskann::graph::glue::DefaultPostProcess;
     type SearchStrategy = Internal<Self>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -1085,6 +1089,10 @@ impl InplaceDeleteStrategy<DebugProvider> for Quantized {
 
     fn search_strategy(&self) -> Self::SearchStrategy {
         Internal(*self)
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        Default::default()
     }
 
     fn get_delete_element<'a>(

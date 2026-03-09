@@ -7,12 +7,13 @@
 
 use std::{future::Future, sync::Mutex};
 
+use diskann::delegate_default_post_process;
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::glue::{
-        self, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy, PruneStrategy, SearchExt,
-        SearchStrategy,
+        self, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor, InsertStrategy,
+        PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -561,7 +562,6 @@ where
         UnwrapErr<spherical::iface::QueryComputer, spherical::iface::QueryDistanceError>;
     type SearchAccessor<'a> = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, Rerank>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -570,10 +570,16 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, self.layout, self.is_search))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl<D, Ctx, T> HasDefaultProcessor<FullPrecisionProvider<T, SphericalStore, D, Ctx>, [T]>
+    for Quantized
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    delegate_default_post_process!(glue::Pipeline<FilterStartPoints, Rerank>);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
@@ -589,7 +595,6 @@ where
         UnwrapErr<spherical::iface::QueryComputer, spherical::iface::QueryDistanceError>;
     type SearchAccessor<'a> = QuantAccessor<'a, NoStore, D, Ctx>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -598,10 +603,16 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, self.layout, self.is_search))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl<D, Ctx, T> HasDefaultProcessor<DefaultProvider<NoStore, SphericalStore, D, Ctx>, [T]>
+    for Quantized
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    delegate_default_post_process!(glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 impl<V, D, Ctx> PruneStrategy<DefaultProvider<V, SphericalStore, D, Ctx>> for Quantized

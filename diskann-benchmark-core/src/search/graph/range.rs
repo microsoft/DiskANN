@@ -79,7 +79,10 @@ pub struct Metrics {}
 impl<DP, T, S> Search for Range<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: glue::SearchStrategy<DP, [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: glue::SearchStrategy<DP, [T], DP::ExternalId>
+        + glue::HasDefaultProcessor<DP, [T], DP::ExternalId>
+        + Clone
+        + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;

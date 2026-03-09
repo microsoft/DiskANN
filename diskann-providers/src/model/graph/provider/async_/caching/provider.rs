@@ -962,7 +962,6 @@ where
         <C as AsCacheAccessorFor<'a, SearchAccessor<'a, S, DP, T>>>::Accessor,
     >;
     type SearchAccessorError = CachingError<S::SearchAccessorError, E>;
-    type PostProcessor = Pipeline<Unwrap, S::PostProcessor>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -979,9 +978,28 @@ where
             .as_cache_accessor_for(inner)
             .map_err(CachingError::Cache)
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Pipeline::new(Unwrap, self.strategy.post_processor())
+/// [`HasDefaultProcessor`] delegation for [`Cached`]. The processor is composed by
+/// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
+impl<DP, C, T, S, E> glue::HasDefaultProcessor<CachingProvider<DP, C>, T> for Cached<S>
+where
+    T: ?Sized,
+    DP: DataProvider,
+    S: glue::HasDefaultProcessor<DP, T>
+        + for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>,
+    C: for<'a> AsCacheAccessorFor<
+            'a,
+            SearchAccessor<'a, S, DP, T>,
+            Accessor: NeighborCache<DP::InternalId>,
+            Error = E,
+        > + AsyncFriendly,
+    E: StandardError,
+{
+    type Processor = Pipeline<Unwrap, S::Processor>;
+
+    fn create_processor(&self) -> Self::Processor {
+        Pipeline::new(Unwrap, self.strategy.create_processor())
     }
 }
 
@@ -1066,6 +1084,7 @@ where
 
     type PruneStrategy = Cached<S::PruneStrategy>;
     type SearchStrategy = Cached<S::SearchStrategy>;
+    type SearchPostProcessor = S::SearchPostProcessor;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Cached {
@@ -1077,6 +1096,10 @@ where
         Cached {
             strategy: self.strategy.search_strategy(),
         }
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        self.strategy.search_post_processor()
     }
 
     fn get_delete_element<'a>(

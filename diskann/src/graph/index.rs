@@ -27,7 +27,7 @@ use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod,
     glue::{
         self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
-        PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
+        PostProcess, PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
@@ -1296,18 +1296,17 @@ where
             // NOTE: We rely on `post_process` to remove deleted items from the results
             // placed into the output.
             let proxy = v.async_lower();
+            let post_processor = strategy.search_post_processor();
             let num_results = search_strategy
-                .post_processor()
-                .post_process(
+                .post_process_with(
+                    &post_processor,
                     &mut search_accessor,
                     &*proxy,
                     &computer,
                     scratch.best.iter(),
                     &mut neighbor::BackInserter::new(output.as_mut_slice()),
                 )
-                .send()
-                .await
-                .into_ann_result()?;
+                .await?;
 
             let mut undeleted_ids: Vec<_> = output
                 .iter()
@@ -2198,7 +2197,8 @@ where
     ) -> ANNResult<SearchStats>
     where
         T: ?Sized,
-        S: SearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>,
+        S: SearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>
+            + glue::HasDefaultProcessor<DP, T, O>,
         I: Iterator<Item = <DP as DataProvider>::InternalId>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,
@@ -2233,7 +2233,7 @@ where
         }
 
         let result_count = strategy
-            .post_processor()
+            .create_processor()
             .post_process(
                 &mut accessor,
                 query,
