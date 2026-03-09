@@ -2053,12 +2053,14 @@ where
         let metric = Metric::from_str(&saved_params.metric)
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
-        let vector_config = saved_params
-            .params_vector
-            .to_config(&BfTreePaths::vectors_bftree(&saved_params.prefix), saved_params.is_memory);
-        let neighbor_config = saved_params
-            .params_neighbor
-            .to_config(&BfTreePaths::neighbors_bftree(&saved_params.prefix), saved_params.is_memory);
+        let vector_config = saved_params.params_vector.to_config(
+            &BfTreePaths::vectors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        );
+        let neighbor_config = saved_params.params_neighbor.to_config(
+            &BfTreePaths::neighbors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        );
 
         let vector_index = if saved_params.is_memory {
             BfTree::new_from_snapshot_disk_to_memory(
@@ -2253,15 +2255,18 @@ where
         let metric = Metric::from_str(&saved_params.metric)
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
-        let vector_config = saved_params
-            .params_vector
-            .to_config(&BfTreePaths::vectors_bftree(&saved_params.prefix), saved_params.is_memory);
-        let neighbor_config = saved_params
-            .params_neighbor
-            .to_config(&BfTreePaths::neighbors_bftree(&saved_params.prefix), saved_params.is_memory);
-        let quant_config = quant_params
-            .params_quant
-            .to_config(&BfTreePaths::quant_bftree(&saved_params.prefix), saved_params.is_memory);
+        let vector_config = saved_params.params_vector.to_config(
+            &BfTreePaths::vectors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        );
+        let neighbor_config = saved_params.params_neighbor.to_config(
+            &BfTreePaths::neighbors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        );
+        let quant_config = quant_params.params_quant.to_config(
+            &BfTreePaths::quant_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        );
 
         let vector_index = if saved_params.is_memory {
             BfTree::new_from_snapshot_disk_to_memory(
