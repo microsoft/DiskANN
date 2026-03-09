@@ -1983,6 +1983,13 @@ where
             is_memory: self.full_vectors.config().is_memory_backend(),
         };
 
+        // All stores must use the same storage backend.
+        debug_assert_eq!(
+            self.full_vectors.config().is_memory_backend(),
+            self.neighbor_provider.config().is_memory_backend(),
+            "Vector and neighbor stores have mismatched storage backends"
+        );
+
         // Save only essential parameters as JSON
         {
             let params_filename = BfTreePaths::params_json(&saved_params.prefix);
@@ -2158,6 +2165,18 @@ where
             graph_params: self.graph_params.clone(),
             is_memory: self.full_vectors.config().is_memory_backend(),
         };
+
+        // All stores must use the same storage backend.
+        debug_assert_eq!(
+            self.full_vectors.config().is_memory_backend(),
+            self.neighbor_provider.config().is_memory_backend(),
+            "Vector and neighbor stores have mismatched storage backends"
+        );
+        debug_assert_eq!(
+            self.full_vectors.config().is_memory_backend(),
+            self.quant_vectors.config().is_memory_backend(),
+            "Vector and quant stores have mismatched storage backends"
+        );
 
         // Save only essential parameters as JSON
         {
