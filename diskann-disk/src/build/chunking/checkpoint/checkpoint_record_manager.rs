@@ -99,6 +99,26 @@ mod tests {
     use super::super::NaiveCheckpointRecordManager;
     use super::*;
 
+    /// A test-only manager that always skips every stage (returns None for every
+    /// resumption-point query), simulating a checkpoint that has already advanced
+    /// past every queried stage.
+    #[derive(Default, Clone)]
+    struct AlwaysSkipManager;
+
+    impl CheckpointManager for AlwaysSkipManager {
+        fn get_resumption_point(&self, _stage: WorkStage) -> ANNResult<Option<usize>> {
+            Ok(None)
+        }
+
+        fn update(&mut self, _progress: Progress, _next_stage: WorkStage) -> ANNResult<()> {
+            Ok(())
+        }
+
+        fn mark_as_invalid(&mut self) -> ANNResult<()> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_checkpoint_manager_ext_execute_stage_with_resumption() {
         let mut manager = NaiveCheckpointRecordManager;
@@ -117,6 +137,54 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);
         assert!(executed);
+    }
+
+    #[test]
+    fn test_checkpoint_manager_ext_execute_stage_skip_when_stage_already_done() {
+        // When the checkpoint has already advanced past a stage, execute_stage must
+        // call skip_handler instead of operation.
+        let mut manager = AlwaysSkipManager;
+        let mut operation_called = false;
+        let mut skip_called = false;
+
+        let result = manager.execute_stage(
+            WorkStage::Start,
+            WorkStage::QuantizeFPV,
+            || {
+                operation_called = true;
+                Ok(1)
+            },
+            || {
+                skip_called = true;
+                Ok(0)
+            },
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0, "skip_handler return value should be used");
+        assert!(!operation_called, "operation should NOT be called when stage is already done");
+        assert!(skip_called, "skip_handler should be called when stage is already done");
+    }
+
+    #[test]
+    fn test_checkpoint_manager_ext_execute_stage_operation_failure_does_not_advance() {
+        // When the operation callback returns an error, execute_stage must propagate
+        // the error without calling update (i.e. the stage must not be advanced).
+        let mut manager = NaiveCheckpointRecordManager;
+        let mut skip_called = false;
+
+        let result: ANNResult<i32> = manager.execute_stage(
+            WorkStage::Start,
+            WorkStage::QuantizeFPV,
+            || Err(diskann::ANNError::log_index_error("simulated failure".to_string())),
+            || {
+                skip_called = true;
+                Ok(-1)
+            },
+        );
+
+        assert!(result.is_err(), "error from operation must be propagated");
+        assert!(!skip_called, "skip_handler must not be called when operation fails");
     }
 
     #[test]
