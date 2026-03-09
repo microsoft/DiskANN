@@ -80,6 +80,11 @@ impl QuantVectorProvider {
         self.quant_vector_index.snapshot()
     }
 
+    /// Snapshot an in-memory quant vector index to a file on disk.
+    pub fn snapshot_to_disk(&self, path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        self.quant_vector_index.snapshot_memory_to_disk(path)
+    }
+
     /// Create a new instance from an existing BfTree (for loading from snapshot)
     ///
     pub(crate) fn new_from_bftree(

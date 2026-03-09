@@ -58,6 +58,11 @@ impl<I: VectorId> NeighborProvider<I> {
         self.adjacency_list_index.snapshot()
     }
 
+    /// Snapshot an in-memory adjacency list index to a file on disk.
+    pub fn snapshot_to_disk(&self, path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        self.adjacency_list_index.snapshot_memory_to_disk(path)
+    }
+
     /// Return the maximum degree (number of neighbors per vector)
     ///
     pub fn max_degree(&self) -> u32 {

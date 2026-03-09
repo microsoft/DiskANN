@@ -108,6 +108,11 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
         self.vector_index.snapshot()
     }
 
+    /// Snapshot an in-memory vector index to a file on disk.
+    pub fn snapshot_to_disk(&self, path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
+        self.vector_index.snapshot_memory_to_disk(path)
+    }
+
     /// Set vector with Id, `i``, to `v`
     ///
     /// Errors if:
