@@ -1075,7 +1075,8 @@ where
     DP: DataProvider,
     S: InplaceDeleteStrategy<DP>,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
-    Cached<S::SearchStrategy>: for<'a> SearchStrategy<CachingProvider<DP, C>, S::DeleteElement<'a>>,
+    for<'a> Cached<S::SearchStrategy>:
+        glue::HasDefaultProcessor<CachingProvider<DP, C>, S::DeleteElement<'a>>,
     C: AsyncFriendly,
 {
     type DeleteElement<'a> = S::DeleteElement<'a>;
@@ -1084,7 +1085,7 @@ where
 
     type PruneStrategy = Cached<S::PruneStrategy>;
     type SearchStrategy = Cached<S::SearchStrategy>;
-    type SearchPostProcessor = S::SearchPostProcessor;
+    type SearchPostProcessor = glue::DefaultPostProcess;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Cached {
@@ -1099,7 +1100,7 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        self.strategy.search_post_processor()
+        glue::DefaultPostProcess
     }
 
     fn get_delete_element<'a>(

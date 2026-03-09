@@ -5,7 +5,7 @@
 
 //! Diversity-aware search.
 
-use diskann_utils::future::{AssertSend, SendFuture};
+use diskann_utils::future::SendFuture;
 use hashbrown::HashSet;
 
 use super::{Knn, Search, record::NoopSearchRecord, scratch::SearchScratch};
@@ -14,7 +14,7 @@ use crate::{
     error::IntoANNResult,
     graph::{
         DiverseSearchParams,
-        glue::{DefaultPostProcess, PostProcess, SearchExt, SearchStrategy},
+        glue::{DefaultPostProcess, PostProcess, SearchExt},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
