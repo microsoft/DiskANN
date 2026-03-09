@@ -16,13 +16,14 @@ use std::{
 };
 
 use diskann::{
+    error::IntoANNResult,
     graph::{
         self,
         glue::{
-            self, ExpandBeam, HasDefaultProcessor, IdIterator, SearchExt, SearchPostProcess,
-            SearchStrategy,
+            self, ExpandBeam, HasDefaultProcessor, IdIterator, PostProcess, SearchExt,
+            SearchPostProcess, SearchStrategy,
         },
-        search::Knn,
+        search::{determinant_diversity_post_process, DeterminantDiversitySearchParams, Knn},
         search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
     },
     neighbor::Neighbor,
@@ -387,6 +388,93 @@ where
 
     fn create_processor(&self) -> Self::Processor {
         RerankAndFilter::new(self.vector_filter)
+    }
+}
+
+impl<'this, Data, ProviderFactory>
+    PostProcess<
+        DiskProvider<Data>,
+        [Data::VectorDataType],
+        DeterminantDiversitySearchParams,
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    ProviderFactory: VertexProviderFactory<Data>,
+{
+    #[allow(clippy::manual_async_fn)]
+    fn post_process_with<'a, I, B>(
+        &self,
+        processor: &DeterminantDiversitySearchParams,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &[Data::VectorDataType],
+        _computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<<DiskProvider<Data> as DataProvider>::InternalId>> + Send,
+        B: SearchOutputBuffer<(
+                <DiskProvider<Data> as DataProvider>::InternalId,
+                Data::AssociatedDataType,
+            )> + Send
+            + ?Sized,
+    {
+        async move {
+            let provider = accessor.provider;
+            let query_f32 = Data::VectorDataType::as_f32(query)
+                .into_ann_result()?
+                .to_vec();
+
+            let filtered_ids: Vec<u32> = candidates
+                .map(|n| n.id)
+                .filter(|id| (self.vector_filter)(id))
+                .collect();
+
+            if filtered_ids.is_empty() {
+                return Ok(0);
+            }
+
+            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &filtered_ids)?;
+
+            let mut enriched: Vec<(u32, f32, Vec<f32>, Data::AssociatedDataType)> = Vec::new();
+            for id in filtered_ids {
+                let vector = accessor.scratch.vertex_provider.get_vector(&id)?;
+                let vector_f32 = Data::VectorDataType::as_f32(vector)
+                    .into_ann_result()?
+                    .to_vec();
+                let distance = provider
+                    .distance_comparer
+                    .evaluate_similarity(query, vector);
+                let assoc = *accessor.scratch.vertex_provider.get_associated_data(&id)?;
+                enriched.push((id, distance, vector_f32, assoc));
+            }
+
+            let borrowed: Vec<(u32, f32, &[f32])> = enriched
+                .iter()
+                .map(|(id, dist, vector, _)| (*id, *dist, vector.as_slice()))
+                .collect();
+
+            let reranked = determinant_diversity_post_process(
+                borrowed,
+                &query_f32,
+                processor.top_k,
+                processor.determinant_diversity_eta,
+                processor.determinant_diversity_power,
+            );
+
+            let mut pairs = Vec::with_capacity(reranked.len());
+            for (id, distance) in reranked {
+                if let Some((_, _, _, assoc)) = enriched.iter().find(|(eid, _, _, _)| *eid == id) {
+                    pairs.push(((id, *assoc), distance));
+                }
+            }
+
+            Ok(output.extend(pairs))
+        }
     }
 }
 
@@ -961,6 +1049,93 @@ where
         let mut search_result = SearchResult {
             results: Vec::with_capacity(return_list_size as usize),
             stats,
+        };
+
+        for ((vertex_id, distance), associated_data) in indices
+            .into_iter()
+            .zip(distances.into_iter())
+            .zip(associated_data.into_iter())
+        {
+            search_result.results.push(SearchResultItem {
+                vertex_id,
+                distance,
+                data: associated_data,
+            });
+        }
+
+        Ok(search_result)
+    }
+
+    /// Perform a determinant-diversity search on the disk index.
+    #[allow(clippy::too_many_arguments)]
+    pub fn search_determinant_diversity(
+        &self,
+        query: &[Data::VectorDataType],
+        return_list_size: u32,
+        search_list_size: u32,
+        beam_width: Option<usize>,
+        vector_filter: Option<VectorFilter<Data>>,
+        is_flat_search: bool,
+        processor: DeterminantDiversitySearchParams,
+    ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
+        let mut query_stats = QueryStatistics::default();
+        let mut indices = vec![0u32; return_list_size as usize];
+        let mut distances = vec![0f32; return_list_size as usize];
+        let mut associated_data =
+            vec![Data::AssociatedDataType::default(); return_list_size as usize];
+
+        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
+            &mut indices,
+            &mut distances,
+            &mut associated_data,
+        );
+
+        let vector_filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
+        let strategy = self.search_strategy(query, &*vector_filter);
+        let timer = Instant::now();
+        let k = return_list_size as usize;
+        let l = search_list_size as usize;
+
+        let stats = if is_flat_search {
+            self.runtime.block_on(self.index.flat_search(
+                &strategy,
+                &DefaultContext,
+                strategy.query,
+                strategy.vector_filter,
+                &Knn::new(k, l, beam_width)?,
+                &mut result_output_buffer,
+            ))?
+        } else {
+            let knn_search = Knn::new(k, l, beam_width)?;
+            self.runtime.block_on(self.index.search_with(
+                knn_search,
+                &strategy,
+                &processor,
+                &DefaultContext,
+                strategy.query,
+                &mut result_output_buffer,
+            ))?
+        };
+
+        query_stats.total_comparisons = stats.cmps;
+        query_stats.search_hops = stats.hops;
+        query_stats.total_execution_time_us = timer.elapsed().as_micros();
+        query_stats.io_time_us = IOTracker::time(&strategy.io_tracker.io_time_us) as u128;
+        query_stats.total_io_operations = strategy.io_tracker.io_count() as u32;
+        query_stats.total_vertices_loaded = strategy.io_tracker.io_count() as u32;
+        query_stats.query_pq_preprocess_time_us =
+            IOTracker::time(&strategy.io_tracker.preprocess_time_us) as u128;
+        query_stats.cpu_time_us = query_stats.total_execution_time_us
+            - query_stats.io_time_us
+            - query_stats.query_pq_preprocess_time_us;
+
+        let mut search_result = SearchResult {
+            results: Vec::with_capacity(return_list_size as usize),
+            stats: SearchResultStats {
+                cmps: query_stats.total_comparisons,
+                result_count: stats.result_count,
+                query_statistics: query_stats.clone(),
+            },
         };
 
         for ((vertex_id, distance), associated_data) in indices
