@@ -63,11 +63,67 @@ pub(crate) fn run<I>(
     Ok(all)
 }
 
+pub(crate) fn run_determinant_diversity<I>(
+    runner: &dyn DeterminantDiversityKnn<I>,
+    groundtruth: &dyn benchmark_core::recall::Rows<I>,
+    steps: SearchSteps<'_>,
+    eta: f64,
+    power: f64,
+    results_k: Option<usize>,
+) -> anyhow::Result<Vec<SearchResults>> {
+    let mut all = Vec::new();
+
+    for threads in steps.num_tasks.iter() {
+        for run in steps.runs.iter() {
+            let setup = core_search::Setup {
+                threads: *threads,
+                tasks: *threads,
+                reps: steps.reps,
+            };
+
+            let parameters: Vec<_> = run
+                .search_l
+                .iter()
+                .map(|search_l| {
+                    let base =
+                        diskann::graph::search::Knn::new(run.search_n, *search_l, None).unwrap();
+                    let processor = diskann::graph::search::DeterminantDiversitySearchParams::new(
+                        results_k.unwrap_or(run.search_n),
+                        eta,
+                        power,
+                    );
+                    let search_params = diskann::graph::search::KnnWith::new(base, processor);
+
+                    core_search::Run::new(search_params, setup.clone())
+                })
+                .collect();
+
+            all.extend(runner.search_all(parameters, groundtruth, run.recall_k, run.search_n)?);
+        }
+    }
+
+    Ok(all)
+}
+
 type Run = core_search::Run<diskann::graph::search::Knn>;
 pub(crate) trait Knn<I> {
     fn search_all(
         &self,
         parameters: Vec<Run>,
+        groundtruth: &dyn benchmark_core::recall::Rows<I>,
+        recall_k: usize,
+        recall_n: usize,
+    ) -> anyhow::Result<Vec<SearchResults>>;
+}
+
+type DeterminantRun = core_search::Run<
+    diskann::graph::search::KnnWith<diskann::graph::search::DeterminantDiversitySearchParams>,
+>;
+
+pub(crate) trait DeterminantDiversityKnn<I> {
+    fn search_all(
+        &self,
+        parameters: Vec<DeterminantRun>,
         groundtruth: &dyn benchmark_core::recall::Rows<I>,
         recall_k: usize,
         recall_n: usize,
@@ -127,5 +183,47 @@ where
         )?;
 
         Ok(results.into_iter().map(SearchResults::new).collect())
+    }
+}
+
+impl<DP, T, S> DeterminantDiversityKnn<DP::InternalId>
+    for Arc<core_search::graph::determinant_diversity::KNN<DP, T, S>>
+where
+    DP: diskann::provider::DataProvider,
+    core_search::graph::determinant_diversity::KNN<DP, T, S>: core_search::Search<
+        Id = DP::InternalId,
+        Parameters = diskann::graph::search::KnnWith<
+            diskann::graph::search::DeterminantDiversitySearchParams,
+        >,
+        Output = core_search::graph::knn::Metrics,
+    >,
+{
+    fn search_all(
+        &self,
+        parameters: Vec<
+            core_search::Run<
+                diskann::graph::search::KnnWith<
+                    diskann::graph::search::DeterminantDiversitySearchParams,
+                >,
+            >,
+        >,
+        groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
+        recall_k: usize,
+        recall_n: usize,
+    ) -> anyhow::Result<Vec<SearchResults>> {
+        let results = core_search::search_all(
+            self.clone(),
+            parameters.into_iter(),
+            core_search::graph::determinant_diversity::Aggregator::new(
+                groundtruth,
+                recall_k,
+                recall_n,
+            ),
+        )?;
+
+        Ok(results
+            .into_iter()
+            .map(SearchResults::new_determinant_diversity)
+            .collect())
     }
 }

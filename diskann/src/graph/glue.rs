@@ -339,7 +339,7 @@ where
 /// [`super::search::KnnWith`], etc.) bounds on.
 ///
 /// The blanket impl covers `P = DefaultPostProcess` for any strategy implementing
-/// [`HasDefaultProcessor`]. Custom processor types (e.g. `RagSearchParams`) can have
+/// [`HasDefaultProcessor`]. Custom processor types (e.g. `DeterminantDiversitySearchParams`) can have
 /// their own `PostProcess` impls without coherence conflicts.
 pub trait PostProcess<Provider, T, P, O = <Provider as DataProvider>::InternalId>:
     SearchStrategy<Provider, T, O>
