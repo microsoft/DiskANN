@@ -6,8 +6,8 @@
 // x86 intrinsics
 use std::arch::x86_64::*;
 
-use super::v3::{u8x16, u8x32};
 use super::V3;
+use super::v3::{u8x16, u8x32};
 use crate::traits::{Interleave, SIMDVector};
 
 /// Efficiently load the first `8 < bytes < 16` bytes from `ptr` without accessing memory

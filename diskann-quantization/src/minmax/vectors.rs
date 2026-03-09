@@ -203,7 +203,7 @@ pub type FullQueryMut<'a> = slice::SliceMut<'a, f32, FullQueryMeta>;
 // Compensated Distances //
 ///////////////////////////
 #[inline(always)]
-fn kernel<const N: usize, const M: usize , F>(
+fn kernel<const N: usize, const M: usize, F>(
     x: DataRef<'_, N>,
     y: DataRef<'_, M>,
     f: F,
