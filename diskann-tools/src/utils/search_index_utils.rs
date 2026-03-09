@@ -8,7 +8,7 @@ use bytemuck::cast_slice;
 use diskann::{ANNError, ANNResult};
 use diskann_providers::model::graph::traits::GraphDataType;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::utils::read_metadata;
+use diskann_utils::io::Metadata;
 use tracing::{error, info};
 
 use crate::utils::CMDToolError;
@@ -366,8 +366,8 @@ pub fn load_truthset(
     let actual_file_size = storage_provider.get_length(bin_file)? as usize;
     let mut file = storage_provider.open_reader(bin_file)?;
 
-    let metadata = read_metadata(&mut file)?;
-    let (npts, dim) = (metadata.npoints, metadata.ndims);
+    let metadata = Metadata::read(&mut file)?;
+    let (npts, dim) = metadata.into_dims();
 
     info!("Metadata: #pts = {npts}, #dims = {dim}... ");
 
@@ -420,8 +420,8 @@ pub fn load_truthset_with_associated_data<Data: GraphDataType>(
 ) -> ANNResult<TruthSetWithAssociatedData<Data>> {
     let mut file = storage_provider.open_reader(bin_file)?;
 
-    let metadata = read_metadata(&mut file)?;
-    let (npts, dim) = (metadata.npoints, metadata.ndims);
+    let metadata = Metadata::read(&mut file)?;
+    let (npts, dim) = metadata.into_dims();
 
     info!("Metadata: #pts = {}, #dims = {}...", npts, dim);
 
@@ -469,8 +469,8 @@ pub fn load_range_truthset(
 ) -> ANNResult<RangeSearchTruthSet> {
     let mut file = storage_provider.open_reader(bin_file)?;
 
-    let metadata = read_metadata(&mut file)?;
-    let (npts, total_ids) = (metadata.npoints, metadata.ndims);
+    let metadata = Metadata::read(&mut file)?;
+    let (npts, total_ids) = metadata.into_dims();
     let mut buffer = [0; size_of::<i32>()];
 
     info!("Metadata: #pts = {}, #totalIds = {}", npts, total_ids);

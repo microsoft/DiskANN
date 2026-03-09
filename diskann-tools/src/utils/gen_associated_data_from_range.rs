@@ -6,7 +6,7 @@
 use std::io::Write;
 
 use diskann_providers::storage::StorageWriteProvider;
-use diskann_providers::utils::write_metadata;
+use diskann_utils::io::Metadata;
 
 use super::CMDResult;
 
@@ -23,7 +23,7 @@ pub fn gen_associated_data_from_range<S: StorageWriteProvider>(
     let int_length: u32 = 1;
 
     // Write the number of integers and the length of each integer as little endian
-    write_metadata(&mut file, num_ints, int_length)?;
+    Metadata::new(num_ints, int_length)?.write(&mut file)?;
 
     // Write the integers from the range as little endian
     for i in start..=end {

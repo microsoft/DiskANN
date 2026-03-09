@@ -559,6 +559,7 @@ where
 pub struct Mat<T: ReprOwned> {
     ptr: NonNull<u8>,
     repr: T,
+    _invariant: PhantomData<fn(T) -> T>,
 }
 
 // SAFETY: [`Repr`] is required to propagate its `Send` bound.
@@ -663,7 +664,11 @@ impl<T: ReprOwned> Mat<T> {
     /// 1. Point to memory compatible with [`Repr::layout`].
     /// 2. Be compatible with the drop logic in [`ReprOwned`].
     pub(crate) unsafe fn from_raw_parts(repr: T, ptr: NonNull<u8>) -> Self {
-        Self { ptr, repr }
+        Self {
+            ptr,
+            repr,
+            _invariant: PhantomData,
+        }
     }
 
     /// Return the base pointer for the [`Mat`].
@@ -714,7 +719,7 @@ pub struct MatRef<'a, T: Repr> {
     pub(crate) ptr: NonNull<u8>,
     pub(crate) repr: T,
     /// Marker to tie the lifetime to the borrowed data.
-    pub(crate) _lifetime: PhantomData<&'a [u8]>,
+    pub(crate) _lifetime: PhantomData<&'a T>,
 }
 
 // SAFETY: [`Repr`] is required to propagate its `Send` bound.
@@ -861,7 +866,7 @@ pub struct MatMut<'a, T: ReprMut> {
     pub(crate) ptr: NonNull<u8>,
     pub(crate) repr: T,
     /// Marker to tie the lifetime to the mutably borrowed data.
-    pub(crate) _lifetime: PhantomData<&'a mut [u8]>,
+    pub(crate) _lifetime: PhantomData<&'a mut T>,
 }
 
 // SAFETY: [`ReprMut`] is required to propagate its `Send` bound.
@@ -1135,6 +1140,35 @@ mod tests {
 
     /// Helper to assert a type is Copy.
     fn assert_copy<T: Copy>(_: &T) {}
+
+    // ── Variance assertions ──────────────────────────────────────
+    //
+    // These functions are never called. The test is that they compile:
+    // covariant positions must accept subtype coercions.
+    //
+    // The negative (invariance) counterparts live in
+    // `tests/compile-fail/multi/{mat,matmut}_invariant.rs`.
+
+    /// `MatRef` is covariant in `'a`: a longer borrow can shorten.
+    fn _assert_matref_covariant_lifetime<'long: 'short, 'short, T: Repr>(
+        v: MatRef<'long, T>,
+    ) -> MatRef<'short, T> {
+        v
+    }
+
+    /// `MatRef` is covariant in `T`: `Standard<&'long u8>` → `Standard<&'short u8>`.
+    fn _assert_matref_covariant_repr<'long: 'short, 'short, 'a>(
+        v: MatRef<'a, Standard<&'long u8>>,
+    ) -> MatRef<'a, Standard<&'short u8>> {
+        v
+    }
+
+    /// `MatMut` is covariant in `'a`: a longer borrow can shorten.
+    fn _assert_matmut_covariant_lifetime<'long: 'short, 'short, T: ReprMut>(
+        v: MatMut<'long, T>,
+    ) -> MatMut<'short, T> {
+        v
+    }
 
     fn edge_cases(nrows: usize) -> Vec<usize> {
         let max = usize::MAX;

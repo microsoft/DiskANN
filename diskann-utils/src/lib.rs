@@ -3,6 +3,9 @@
  * Licensed under the MIT license.
  */
 
+#[cfg(not(target_endian = "little"))]
+compile_error!("diskann-utils assumes little-endian targets");
+
 pub mod reborrow;
 pub use reborrow::{Reborrow, ReborrowMut};
 
@@ -11,6 +14,7 @@ pub use lifetime::WithLifetime;
 
 pub mod future;
 
+pub mod io;
 pub mod sampling;
 
 // Views

@@ -13,10 +13,11 @@ use diskann_providers::{
     },
     storage::PQStorage,
     utils::{
-        load_bin, load_metadata_from_file, RayonThreadPool, SampleVectorReader, SamplingDensity,
+        load_metadata_from_file, RayonThreadPool, SampleVectorReader, SamplingDensity,
         READ_WRITE_BLOCK_SIZE,
     },
 };
+use diskann_utils::io::read_bin;
 use rand::{seq::SliceRandom, Rng};
 use tracing::info;
 
@@ -129,7 +130,7 @@ where
         let metadata = load_metadata_from_file(storage_provider, shard_base_file)?;
 
         let mut index_config = base_config.clone();
-        index_config.max_points = metadata.npoints;
+        index_config.max_points = metadata.npoints();
         index_config.config = low_degree_params;
 
         Ok(index_config)
@@ -145,13 +146,11 @@ where
         T: Default + bytemuck::Pod,
     {
         let storage_provider = self.storage_provider;
-        let (shard_ids, shard_size, _) = load_bin::<u32, StorageProvider::Reader>(
-            &mut storage_provider.open_reader(shard_ids_file)?,
-            0,
-        )?;
+        let shard_ids = read_bin::<u32>(&mut storage_provider.open_reader(shard_ids_file)?)?;
+        let shard_size = shard_ids.nrows();
         info!("Loaded {} shard ids from {}", shard_size, shard_ids_file);
-        let max_id = shard_ids.iter().max().copied().unwrap_or(0);
-        let sampling_rate = shard_ids.len() as f64 / (max_id + 1) as f64;
+        let max_id = shard_ids.as_slice().iter().max().copied().unwrap_or(0);
+        let sampling_rate = shard_ids.as_slice().len() as f64 / (max_id + 1) as f64;
 
         let mut dataset_reader: SampleVectorReader<T, _> = SampleVectorReader::new(
             dataset_file,
@@ -172,7 +171,7 @@ where
         shard_base_cached_writer.write(&dim.to_le_bytes())?;
 
         let mut num_written: u32 = 0;
-        dataset_reader.read_vectors(shard_ids.iter().copied(), |vector_t| {
+        dataset_reader.read_vectors(shard_ids.as_slice().iter().copied(), |vector_t| {
             // Casting Pod type to bytes always succeeds (u8 has alignment of 1)
             let vector_bytes: &[u8] = bytemuck::must_cast_slice(vector_t);
             shard_base_cached_writer.write(vector_bytes)?;
@@ -384,12 +383,9 @@ where
         Ok(())
     }
 
-    fn read_idmap(&self, idmaps_path: String) -> std::io::Result<Vec<u32>> {
-        let (data, _npts, _dim) = load_bin::<u32, StorageProvider::Reader>(
-            &mut self.storage_provider.open_reader(&idmaps_path)?,
-            0,
-        )?;
-        Ok(data)
+    fn read_idmap(&self, idmaps_path: String) -> Result<Vec<u32>, diskann_utils::io::ReadBinError> {
+        let data = read_bin::<u32>(&mut self.storage_provider.open_reader(&idmaps_path)?)?;
+        Ok(data.into_inner().into_vec())
     }
 
     fn merge_shards_and_cleanup(
@@ -644,7 +640,7 @@ pub(crate) mod disk_index_builder_tests {
         test_utils::graph_data_type_utils::{
             GraphDataF32VectorU32Data, GraphDataF32VectorUnitData,
         },
-        utils::{file_util, BridgeErr, Timer},
+        utils::Timer,
     };
     use diskann_utils::test_data_root;
     use diskann_vector::{
@@ -787,15 +783,17 @@ pub(crate) mod disk_index_builder_tests {
                     .unwrap();
 
             assert_eq!(
-                self.params.dim, metadata.ndims,
+                self.params.dim,
+                metadata.ndims(),
                 "Parameters dimension {} and data dimension {} are not equal",
-                self.params.dim, metadata.ndims
+                self.params.dim,
+                metadata.ndims(),
             );
 
             let config = IndexConfiguration::new(
                 self.params.metric,
                 self.params.dim,
-                metadata.npoints,
+                metadata.npoints(),
                 ONE,
                 self.params.num_threads,
                 config,
@@ -1067,13 +1065,9 @@ pub(crate) mod disk_index_builder_tests {
             None,
         )?;
 
-        let (data, npoints, dim) = file_util::load_bin::<G::VectorDataType, _>(
-            storage_provider.as_ref(),
-            &params.data_path,
-            0,
-        )?;
         let data =
-            diskann_utils::views::Matrix::try_from(data.into(), npoints, dim).bridge_err()?;
+            read_bin::<G::VectorDataType>(&mut storage_provider.open_reader(&params.data_path)?)?;
+        let dim = data.ncols();
         let distance = <G::VectorDataType>::distance(params.metric, Some(dim));
 
         // Here, we use elements of the dataset to search the dataset itself.

@@ -48,10 +48,11 @@ pub fn build_pq<Data: GraphDataType>(
     let metadata = load_metadata_from_file(storage_provider, parameters.data_path)?;
     info!(
         "Compressing dim-{} data into {} chunks(bytes) for PQ",
-        metadata.ndims, num_pq_chunks
+        metadata.ndims(),
+        num_pq_chunks
     );
 
-    let p_val = MAX_PQ_TRAINING_SET_SIZE / (metadata.npoints as f64);
+    let p_val = MAX_PQ_TRAINING_SET_SIZE / (metadata.npoints() as f64);
 
     let timer = Timer::new();
     let storage_provider = FileStorageProvider;
