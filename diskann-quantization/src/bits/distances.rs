@@ -1405,15 +1405,17 @@ dispatch_pure!(
 impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 4>>
     for InnerProduct
 {
-    /// Computes the inner product of 8-bit unsigned × 4-bit unsigned vectors using avx2 intrinsics.
+    /// Computes the inner product of 8-bit unsigned × 4-bit unsigned vectors using V3 intrinsics.
     ///
-    /// # Strategy:
-    /// Use [`std::arch::x86_64::_mm256_maddubs_epi16_`] intrinsic on
-    /// blocks of size 32 after unpacking the 4-bit values into bytes.
+    /// # Strategy
     ///
-    /// Each iteration processes 32 logical elements:
-    /// - **x**: 32 bytes loaded directly as `u8x32`.
-    /// - **y**: 16 packed bytes → unpacked to 32 nibble values in a `u8x32`, using `_mm_unpacklo/hi_epi8`.
+    /// Unpack each 16-byte chunk of `y` into 32 nibble values via [`unpack_half_bytes`],
+    /// then multiply with the corresponding 32 bytes of `x` using `_mm256_maddubs_epi16`
+    /// (u8 × u8 → i16, pairwise horizontal add).
+    ///
+    /// The main loop is 4× unrolled: four i16 products are summed in i16 before a single
+    /// `_mm256_madd_epi16(…, 1)` widens to i32. This is safe because
+    /// 4 × (255 × 15 × 2) = 30_600 < i16::MAX.
     #[inline(always)]
     fn run(
         self,
@@ -1440,10 +1442,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         // Each block processes 32 elements: 32 bytes from x, 16 packed bytes from y.
         let blocks = len / 32;
         if blocks > 0 {
-            let mut s0 = i32s::default(arch);
-            let mut s1 = i32s::default(arch);
-            let mut s2 = i32s::default(arch);
-            let mut s3 = i32s::default(arch);
+            let mut acc = i32s::default(arch);
 
             let products = |x: u8s_32, y: u8s_32| -> i16s {
                 // SAFETY: `arch` is V3 (AVX2), which provides `_mm256_maddubs_epi16`.
@@ -1455,6 +1454,10 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
             let ones = i16s::splat(arch, 1);
 
             // Main loop: 4× unrolled, processing 128 elements per iteration.
+            //
+            // `products` returns i16 lanes, each at most 255 × 15 × 2 = 7_650.
+            // We sum 4 such values in i16 before widening to i32:
+            //   4 × 7_650 = 30_600 < i16::MAX (32_767)
             while i + 4 <= blocks {
                 // Block 0
                 // SAFETY: `i + 4 <= blocks` guarantees at least 4 full blocks remain.
@@ -1462,29 +1465,30 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
                 // SAFETY: `i + 4 <= blocks` guarantees 16 bytes readable at `py.add(16 * i)`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * i)) };
-                s0 = s0.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
+                let m0 = products(vx, unpack_half_bytes::<4>(arch, vy));
 
                 // Block 1
                 // SAFETY: `i + 1 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 1))) };
                 // SAFETY: same bound; 16 bytes readable at `py.add(16 * (i + 1))`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 1))) };
-                s1 = s1.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
+                let m1 = products(vx, unpack_half_bytes::<4>(arch, vy));
 
                 // Block 2
                 // SAFETY: `i + 2 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 2))) };
                 // SAFETY: same bound; 16 bytes readable at `py.add(16 * (i + 2))`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 2))) };
-                s2 = s2.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
+                let m2 = products(vx, unpack_half_bytes::<4>(arch, vy));
 
                 // Block 3
                 // SAFETY: `i + 3 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 3))) };
                 // SAFETY: same bound; 16 bytes readable at `py.add(16 * (i + 3))`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 3))) };
-                s3 = s3.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
+                let m3 = products(vx, unpack_half_bytes::<4>(arch, vy));
 
+                acc = acc.dot_simd(m0 + m1 + m2 + m3, ones);
                 i += 4;
             }
 
@@ -1495,11 +1499,11 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
                 // SAFETY: `i < blocks` guarantees 16 bytes readable at `py.add(16 * i)`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * i)) };
-                s0 = s0.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
+                acc = acc.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
                 i += 1;
             }
 
-            s = ((s0 + s1) + (s2 + s3)).sum_tree() as u32;
+            s = acc.sum_tree() as u32;
         }
 
         // Convert block count to element index.
@@ -1530,25 +1534,18 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 2>>
     for InnerProduct
 {
-    /// Computes the inner product of 8-bit unsigned × 2-bit unsigned vectors using avx2 intrinsics.
+    /// Computes the inner product of 8-bit unsigned × 2-bit unsigned vectors using AVX2.
     ///
-    /// # Strategy:
-    /// Use [`std::arch::x86_64::_mm256_maddubs_epi16_`] intrinsic on
-    /// blocks of size 64 after unpacking the 2-bit values into bytes.
+    /// # Strategy
     ///
-    /// Each iteration processes 64 logical elements:
-    /// - **x**: 64 bytes loaded as two separate `u8x32`s.
-    /// - **y**: 16 packed bytes unpacked to 64 crumb values in two `u8x32` lanes.
+    /// Unpack each 16-byte chunk of `y` into 64 crumb values via a two-level cascade:
+    /// first [`unpack_half_bytes`] splits bytes into nibbles, then a second pass splits
+    /// nibbles into crumbs (masked with `0x03`). Each unpacked half is paired with 32
+    /// bytes of `x` and multiplied via `_mm256_maddubs_epi16`.
     ///
-    /// The unpacking uses a two-level cascade:
-    ///
-    /// *Level 1 (nibble):* identical to the 4-bit unpacker. Each packed byte
-    /// is split into its low and high nibbles using [`unpack_half_bytes`] into
-    /// two `u8x16` registers.
-    ///
-    /// *Level 2 (crumb):* each 4-bit value contains two 2-bit crumbs. We
-    /// apply the same shift-interleave at a 2-bit granularity
-    /// then join halves into `u8x32` and mask with `0x03`.
+    /// The main loop is 4× unrolled: eight i16 products (4 blocks × 2 halves) are summed
+    /// in i16 before a single `_mm256_madd_epi16(…, 1)` widens to i32. This is safe
+    /// because 8 × (255 × 3 × 2) = 12_240 < i16::MAX.
     #[inline(always)]
     fn run(
         self,
@@ -1576,10 +1573,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         // Each block processes 64 elements: 64 bytes from x, 16 packed bytes from y.
         let blocks = len / 64;
         if blocks > 0 {
-            let mut s0 = i32s::default(arch);
-            let mut s1 = i32s::default(arch);
-            let mut s2 = i32s::default(arch);
-            let mut s3 = i32s::default(arch);
+            let mut acc = i32s::default(arch);
 
             let products = |x: u8s_32, y: u8s_32| -> i16s {
                 // SAFETY: `arch` is V3 (AVX2), which provides `_mm256_maddubs_epi16`.
@@ -1603,7 +1597,12 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 (lower, upper)
             };
 
-            // Processing 256 elements per iteration, i.e. 4x unrolled.
+            // Main loop: 4× unrolled, processing 256 elements per iteration.
+            //
+            // `products` returns i16 lanes, each at most 255 × 3 × 2 = 1_530.
+            // Each iteration produces 4 blocks × 2 products = 8 values.
+            // We sum all 8 in i16 before widening to i32:
+            //   8 × 1_530 = 12_240 < i16::MAX (32_767)
             while i + 4 <= blocks {
                 // Block 0
                 // SAFETY: `i + 4 <= blocks` guarantees at least 4 full blocks remain.
@@ -1615,8 +1614,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                         unpack_crumbs(u8s_16::load_simd(arch, py.add(16 * i))),
                     )
                 };
-                s0 = s0.dot_simd(products(vx0, vy0), ones);
-                s0 = s0.dot_simd(products(vx1, vy1), ones);
+                let m0a = products(vx0, vy0);
+                let m0b = products(vx1, vy1);
 
                 // Block 1
                 // SAFETY: `i + 1 < i + 4 <= blocks`.
@@ -1627,8 +1626,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                         unpack_crumbs(u8s_16::load_simd(arch, py.add(16 * (i + 1)))),
                     )
                 };
-                s1 = s1.dot_simd(products(vx0, vy0), ones);
-                s1 = s1.dot_simd(products(vx1, vy1), ones);
+                let m1a = products(vx0, vy0);
+                let m1b = products(vx1, vy1);
 
                 // Block 2
                 // SAFETY: `i + 2 < i + 4 <= blocks`.
@@ -1639,8 +1638,8 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                         unpack_crumbs(u8s_16::load_simd(arch, py.add(16 * (i + 2)))),
                     )
                 };
-                s2 = s2.dot_simd(products(vx0, vy0), ones);
-                s2 = s2.dot_simd(products(vx1, vy1), ones);
+                let m2a = products(vx0, vy0);
+                let m2b = products(vx1, vy1);
 
                 // Block 3
                 // SAFETY: `i + 3 < i + 4 <= blocks`.
@@ -1651,9 +1650,10 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                         unpack_crumbs(u8s_16::load_simd(arch, py.add(16 * (i + 3)))),
                     )
                 };
-                s3 = s3.dot_simd(products(vx0, vy0), ones);
-                s3 = s3.dot_simd(products(vx1, vy1), ones);
+                let m3a = products(vx0, vy0);
+                let m3b = products(vx1, vy1);
 
+                acc = acc.dot_simd((m0a + m0b + m1a + m1b) + (m2a + m2b + m3a + m3b), ones);
                 i += 4;
             }
 
@@ -1668,12 +1668,11 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                         unpack_crumbs(u8s_16::load_simd(arch, py.add(16 * i))),
                     )
                 };
-                s0 = s0.dot_simd(products(vx0, vy0), ones);
-                s0 = s0.dot_simd(products(vx1, vy1), ones);
+                acc = acc.dot_simd(products(vx0, vy0) + products(vx1, vy1), ones);
                 i += 1;
             }
 
-            s = ((s0 + s1) + (s2 + s3)).sum_tree() as u32;
+            s = acc.sum_tree() as u32;
         }
 
         // Convert block count to element index.
