@@ -17,7 +17,10 @@ use std::{
 use diskann::{
     graph::{
         SearchOutputBuffer,
-        config::{self, defaults::{FILTER_BETA, GRAPH_SLACK_FACTOR}},
+        config::{
+            self,
+            defaults::{FILTER_BETA, GRAPH_SLACK_FACTOR},
+        },
         search,
     },
     utils::VectorRepr,
