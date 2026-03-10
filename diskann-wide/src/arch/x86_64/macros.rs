@@ -318,8 +318,18 @@ macro_rules! x86_splitjoin {
 /// Implement [`ZipUnzip`] for a 256-bit vector type (`$type`) whose halved
 /// type (`$half`) is a 128-bit vector, using within-lane shuffles.
 ///
-/// This strategy is optimal for sub-32-bit element types on AVX2, where no
-/// cross-lane permute exists. For 32-bit elements, prefer [`x86_zipunzip_perm32`].
+/// The `zip` / `unzip` methods (producing `LoHi`) use 128-bit `pshufb` +
+/// `punpckl/hqdq` (5 µops).  The `zip_flat` / `unzip_flat` methods use 256-bit
+/// `vpshufb` + `vpermd` (2 µops) by rearranging within each lane and then
+/// fixing the cross-lane dword ordering.
+///
+/// # Parameters
+///
+/// * `$unpacklo`, `$unpackhi` — 128-bit unpack intrinsics for the `zip` path
+/// * `$deinterleave_mask` — 128-bit `pshufb` mask that groups even-indexed
+///   elements in the low qword and odd-indexed in the high qword
+/// * `$interleave_mask` — 128-bit `pshufb` mask that does the inverse:
+///   given `[evens..., odds...]`, produces `[e0, o0, e1, o1, ...]`
 ///
 /// # Safety
 ///
@@ -329,7 +339,8 @@ macro_rules! x86_zipunzip {
     (
         $type:path, $half:path,
         $unpacklo:ident, $unpackhi:ident,
-        $shuffle_mask:expr
+        $deinterleave_mask:expr,
+        $interleave_mask:expr
     ) => {
         impl $crate::ZipUnzip for $type {
             #[inline(always)]
@@ -356,7 +367,7 @@ macro_rules! x86_zipunzip {
                 // SAFETY: Caller asserts that these intrinsics are within the
                 // capabilities of the architecture stored in the type.
                 unsafe {
-                    let mask = $shuffle_mask;
+                    let mask = $deinterleave_mask;
                     let lo = _mm_shuffle_epi8(halves.lo.to_underlying(), mask);
                     let hi = _mm_shuffle_epi8(halves.hi.to_underlying(), mask);
                     let evens = _mm_unpacklo_epi64(lo, hi);
@@ -365,6 +376,34 @@ macro_rules! x86_zipunzip {
                         <$half>::from_underlying(halves.lo.arch(), evens),
                         <$half>::from_underlying(halves.lo.arch(), odds),
                     )
+                }
+            }
+
+            #[inline(always)]
+            fn zip_flat(self) -> Self {
+                // vpermd to swap middle dword-pairs, then vpshufb to interleave
+                // within each lane.
+                // SAFETY: Caller asserts AVX2 is available.
+                unsafe {
+                    let dword_fixup = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
+                    let fixed = _mm256_permutevar8x32_epi32(self.0, dword_fixup);
+                    let mask128 = $interleave_mask;
+                    let mask256 = _mm256_set_m128i(mask128, mask128);
+                    Self(_mm256_shuffle_epi8(fixed, mask256))
+                }
+            }
+
+            #[inline(always)]
+            fn unzip_flat(self) -> Self {
+                // vpshufb to deinterleave within each lane, then vpermd to fix
+                // cross-lane dword ordering.
+                // SAFETY: Caller asserts AVX2 is available.
+                unsafe {
+                    let mask128 = $deinterleave_mask;
+                    let mask256 = _mm256_set_m128i(mask128, mask128);
+                    let shuffled = _mm256_shuffle_epi8(self.0, mask256);
+                    let dword_fixup = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
+                    Self(_mm256_permutevar8x32_epi32(shuffled, dword_fixup))
                 }
             }
         }
