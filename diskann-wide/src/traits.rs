@@ -740,19 +740,9 @@ impl<T> SIMDSigned for T where T: SIMDUnsigned + SIMDAbs {}
 /// odd-indexed elements into the high half:
 ///   `unzip_flat([a0, b0, a1, b1, …]) = [a0, a1, …, b0, b1, …]`
 ///
-/// # Implementor guidance
-///
 /// `zip` and `unzip` are required. `zip_flat` and `unzip_flat` have default
 /// implementations that delegate through [`SplitJoin::split`] / [`SplitJoin::join`].
-/// Backends should override whichever pair is cheapest on their ISA:
-///
-/// * **AArch64 Neon** — `zip`/`unzip` are native (`vzip1q`/`vuzp1q`); the flat
-///   defaults are free because `Doubled` is already two registers.
-/// * **x86 AVX-512** — `zip_flat`/`unzip_flat` map to a single cross-lane permute
-///   (`vpermd`/`vpermw`/`vpermb`); callers that need `LoHi` pay one extra `split`.
-/// * **x86 AVX2 (8/16-bit)** — no cross-lane permute at sub-32-bit granularity,
-///   so `zip`/`unzip` use `pshufb` + `unpacklo/hi`; flat defaults are fine.
-/// * **x86 AVX2 (32-bit)** — `zip_flat`/`unzip_flat` map to a single `vpermd`.
+/// Backends should override whichever pair is cheapest on their ISA.
 pub trait ZipUnzip: crate::SplitJoin + Sized {
     /// Interleave elements from `halves.lo` and `halves.hi` into `Self`.
     fn zip(halves: crate::LoHi<Self::Halved>) -> Self;
