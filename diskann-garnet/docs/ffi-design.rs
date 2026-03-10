@@ -17,8 +17,9 @@
 /// metric_type is passed as a raw i32. Valid values are:
 /// - 0: Cosine
 /// - 1: InnerProduct
-/// - 2: L2 (Euclidean distance)
+/// - 2: L2-squared (squared Euclidean distance)
 /// - 3: CosineNormalized
+/// For metric_type = 2, note that the FFI returns squared Euclidean distances (L2-squared), not the unsquared L2 norm.
 /// Invalid values will cause the function to return null.
 ///
 /// Returning a single pointer conceal all the generics behind an opaque handle
