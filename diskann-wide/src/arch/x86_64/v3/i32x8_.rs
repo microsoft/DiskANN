@@ -36,6 +36,11 @@ macros::x86_splitjoin!(
     _mm256_set_m128i,
     "avx2"
 );
+macros::x86_zipunzip!(
+    i32x8, i32x4,
+    _mm_unpacklo_epi32, _mm_unpackhi_epi32,
+    _mm_setr_epi8(0,1,2,3, 8,9,10,11, 4,5,6,7, 12,13,14,15)
+);
 
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Add, add, _mm256_add_epi32, "avx2");
 helpers::unsafe_map_binary_op!(i32x8, std::ops::Sub, sub, _mm256_sub_epi32, "avx2");
@@ -299,6 +304,7 @@ mod test_x86_i32 {
 
     test_utils::ops::test_cmp!(i32x8, 0xdc88c2a44d17c78a, V3::new_checked_uncached());
     test_utils::ops::test_splitjoin!(i32x8 => i32x4, 0x475a19e80c2f3977, V3::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(i32x8 => i32x4, 0x92d5f4a83e1b07c6, V3::new_checked_uncached());
     test_utils::ops::test_select!(i32x8, 0xf72531c40af38507, V3::new_checked_uncached());
 
     // Bit ops

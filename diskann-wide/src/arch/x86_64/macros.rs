@@ -315,6 +315,61 @@ macro_rules! x86_splitjoin {
     };
 }
 
+/// Implement [`ZipUnzip`] for a 256-bit vector type (`$type`) whose halved
+/// type (`$half`) is a 128-bit vector.
+///
+/// # Safety
+///
+/// The caller must ensure that the supplied intrinsics are valid for the
+/// architecture token stored in `$type`.
+macro_rules! x86_zipunzip {
+    (
+        $type:path, $half:path,
+        $unpacklo:ident, $unpackhi:ident,
+        $shuffle_mask:expr
+    ) => {
+        impl $crate::ZipUnzip for $type {
+            type Halved = $half;
+
+            #[inline(always)]
+            fn zip(halves: $crate::LoHi<$half>) -> Self {
+                use $crate::SplitJoin;
+                // SAFETY: Caller asserts that these intrinsics are within the
+                // capabilities of the architecture stored in the type.
+                unsafe {
+                    let lo_raw = halves.lo.to_underlying();
+                    let hi_raw = halves.hi.to_underlying();
+                    let lo = $unpacklo(lo_raw, hi_raw);
+                    let hi = $unpackhi(lo_raw, hi_raw);
+                    <$type>::join($crate::LoHi::new(
+                        <$half>::from_underlying(halves.lo.arch(), lo),
+                        <$half>::from_underlying(halves.lo.arch(), hi),
+                    ))
+                }
+            }
+
+            #[inline(always)]
+            fn unzip(self) -> $crate::LoHi<$half> {
+                use $crate::SplitJoin;
+                let halves = self.split();
+                // SAFETY: Caller asserts that these intrinsics are within the
+                // capabilities of the architecture stored in the type.
+                unsafe {
+                    let mask = $shuffle_mask;
+                    let lo = _mm_shuffle_epi8(halves.lo.to_underlying(), mask);
+                    let hi = _mm_shuffle_epi8(halves.hi.to_underlying(), mask);
+                    let evens = _mm_unpacklo_epi64(lo, hi);
+                    let odds = _mm_unpackhi_epi64(lo, hi);
+                    $crate::LoHi::new(
+                        <$half>::from_underlying(halves.lo.arch(), evens),
+                        <$half>::from_underlying(halves.lo.arch(), odds),
+                    )
+                }
+            }
+        }
+    };
+}
+
 macro_rules! x86_avx512_int_comparisons {
     ($type:ty, $intrinsic:ident, $requires:literal) => {
         impl $crate::SIMDPartialEq for $type {
@@ -436,3 +491,4 @@ pub(crate) use x86_define_register;
 pub(crate) use x86_define_splat;
 pub(crate) use x86_retarget;
 pub(crate) use x86_splitjoin;
+pub(crate) use x86_zipunzip;

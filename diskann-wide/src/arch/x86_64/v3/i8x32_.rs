@@ -37,6 +37,11 @@ macros::x86_splitjoin!(
     _mm256_set_m128i,
     "avx2"
 );
+macros::x86_zipunzip!(
+    i8x32, i8x16,
+    _mm_unpacklo_epi8, _mm_unpackhi_epi8,
+    _mm_setr_epi8(0,2,4,6,8,10,12,14, 1,3,5,7,9,11,13,15)
+);
 
 impl std::ops::Mul for i8x32 {
     type Output = Self;
@@ -226,6 +231,7 @@ mod test_x86_i8 {
     test_utils::ops::test_abs!(i8x16, 0x40638a9d09522d1c, V3::new_checked_uncached());
 
     test_utils::ops::test_splitjoin!(i8x32 => i8x16, 0x475a19e80c2f3977, V3::new_checked_uncached());
+    test_utils::ops::test_zipunzip!(i8x32 => i8x16, 0xc7e3a92f1d8b5604, V3::new_checked_uncached());
 
     test_utils::ops::test_cmp!(i8x32, 0x941757bd5cc641a1, V3::new_checked_uncached());
 

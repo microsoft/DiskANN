@@ -722,17 +722,25 @@ impl<T> SIMDUnsigned for T where
 pub trait SIMDSigned: SIMDUnsigned + SIMDAbs {}
 impl<T> SIMDSigned for T where T: SIMDUnsigned + SIMDAbs {}
 
-/// Element-wise interleave of two SIMD vectors at the current lane width.
+/// Element-wise zip and unzip of two half-width SIMD vectors.
 ///
-/// Given vectors `a = [a0, a1, ..., a(N-1)]` and `b = [b0, b1, ..., b(N-1)]`,
-/// interleaving produces two half-results:
+/// `zip` interleaves elements from two halves into one full-width vector:
+///   `zip([a0, a1, …], [b0, b1, …]) = [a0, b0, a1, b1, …]`
 ///
-/// - **lo**: `[a0, b0, a1, b1, ..., a(N/2-1), b(N/2-1)]`
-/// - **hi**: `[a(N/2), b(N/2), ..., a(N-1), b(N-1)]`
+/// `unzip` is the inverse, separating even- and odd-indexed elements:
+///   `unzip([a0, b0, a1, b1, …]) = ([a0, a1, …], [b0, b1, …])`
 ///
-pub trait Interleave: SIMDVector {
-    /// Interleave elements of `self` and `other`, returning the low and high halves.
-    fn interleave(self, other: Self) -> crate::LoHi<Self>;
+/// This is analogous to [`SplitJoin`] but permutes elements rather than
+/// simply concatenating / splitting lanes.
+pub trait ZipUnzip: Sized {
+    /// The half-width vector type.
+    type Halved;
+
+    /// Interleave elements from `halves.lo` and `halves.hi` into `Self`.
+    fn zip(halves: crate::LoHi<Self::Halved>) -> Self;
+
+    /// Separate even-indexed elements into `lo` and odd-indexed into `hi`.
+    fn unzip(self) -> crate::LoHi<Self::Halved>;
 }
 
 // Since it is so difficult to work directly with generic integers, resort to using a macro

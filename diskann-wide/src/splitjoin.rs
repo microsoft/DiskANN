@@ -42,6 +42,14 @@ impl<T> LoHi<T> {
         U::join(self)
     }
 
+    /// Zip-interleave the `lo` and `hi` halves into a full-width vector.
+    pub fn zip<U>(self) -> U
+    where
+        U: crate::traits::ZipUnzip<Halved = T>,
+    {
+        U::zip(self)
+    }
+
     /// Return a new [`LoHi`] with the function `f` applied to the pairwise members
     /// of `self` and `x`.
     ///
