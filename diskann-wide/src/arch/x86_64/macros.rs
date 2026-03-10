@@ -474,6 +474,10 @@ macro_rules! x86_zipunzip_perm32 {
 ///
 /// The caller must ensure the permute intrinsic is within the capabilities of
 /// the architecture token stored in `$type`.
+///
+/// **Note**: Currently unused — V4 does not yet enable VBMI/BW. The macro is
+/// retained for the upcoming Ice Lake+ target-feature PR.
+#[allow(unused_macros)]
 macro_rules! x86_zipunzip_crosslane {
     ($type:path, $perm:ident, $zip_idx:expr, $unzip_idx:expr) => {
         impl $crate::ZipUnzip for $type {
@@ -630,5 +634,6 @@ pub(crate) use x86_define_splat;
 pub(crate) use x86_retarget;
 pub(crate) use x86_splitjoin;
 pub(crate) use x86_zipunzip;
+#[allow(unused_imports)]
 pub(crate) use x86_zipunzip_crosslane;
 pub(crate) use x86_zipunzip_perm32;

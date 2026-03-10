@@ -36,11 +36,13 @@ macros::x86_splitjoin!(
     _mm256_set_m128i,
     "avx2"
 );
-macros::x86_zipunzip_crosslane!(
+macros::x86_zipunzip!(
     i16x16,
-    _mm256_permutexvar_epi16,
-    _mm256_setr_epi16(0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15),
-    _mm256_setr_epi16(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15)
+    i16x8,
+    _mm_unpacklo_epi16,
+    _mm_unpackhi_epi16,
+    _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15),
+    _mm_setr_epi8(0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15)
 );
 
 helpers::unsafe_map_binary_op!(i16x16, std::ops::Add, add, _mm256_add_epi16, "avx2");
