@@ -1,8 +1,3 @@
-/*
- * Copyright (c) Microsoft Corporation.
- * Licensed under the MIT license.
- */
-
 use crate::garnet::{Callbacks, ReadDataCallback, RmwDataCallback, TERM_BITMASK};
 use core::slice;
 use dashmap::DashMap;
@@ -67,6 +62,7 @@ unsafe extern "C" fn test_read(
         pos += 4;
 
         let id = &ids[pos..pos + len as usize];
+        pos += len as usize;
 
         let store = Store;
         if let Some(v) = store.get(ctx, id) {
@@ -178,8 +174,8 @@ mod tests {
             results.insert(i, v.to_owned());
         });
         assert_eq!(results.get(&0), Some(b"0000".to_vec()).as_ref());
-        assert_eq!(results.get(&1), None);
-        assert_eq!(results.get(&2), Some(b"2222".to_vec()).as_ref());
+        assert_eq!(results.get(&1), Some(b"2222".to_vec()).as_ref());
+        assert_eq!(results.get(&2), None);
 
         // RMW should work.
         assert!(callbacks.rmw_iid(ctx.term(Term::Vector), 0, 4, |data| {
@@ -192,6 +188,7 @@ mod tests {
     #[test]
     fn garnet_provider_with_store_callbacks() {
         use crate::provider::GarnetProvider;
+        use diskann_vector::distance::Metric;
 
         let store: Store = Store;
         store.clear();
@@ -201,7 +198,7 @@ mod tests {
         // Create a u8 GarnetProvider with the test Store callbacks
         let dim = 8;
         let max_degree = 32;
-        let provider = GarnetProvider::<u8>::new(dim, max_degree, callbacks, ctx);
+        let provider = GarnetProvider::<u8>::new(dim, Metric::L2, max_degree, callbacks, ctx);
 
         // Provider should be created successfully
         assert!(provider.is_ok());
@@ -213,7 +210,7 @@ mod tests {
         // Create a u8 GarnetProvider with the test Store callbacks
         let dim = 8;
         let max_degree = 32;
-        let provider = GarnetProvider::<f32>::new(dim, max_degree, callbacks, ctx);
+        let provider = GarnetProvider::<f32>::new(dim, Metric::L2, max_degree, callbacks, ctx);
 
         // Provider should be created successfully
         assert!(provider.is_ok());

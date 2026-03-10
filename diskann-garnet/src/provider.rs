@@ -1,7 +1,8 @@
-/*
- * Copyright (c) Microsoft Corporation.
- * Licensed under the MIT license.
- */
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    future, mem,
+    ops::{Deref, DerefMut},
+};
 
 use dashmap::DashMap;
 use diskann::{
@@ -26,11 +27,6 @@ use diskann::{
 };
 use diskann_providers::model::graph::provider::async_::common::{FullPrecision, Internal};
 use diskann_vector::{PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric};
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    future, mem,
-    ops::{Deref, DerefMut},
-};
 use thiserror::Error;
 
 use crate::{
@@ -86,6 +82,7 @@ diskann::always_escalate!(GarnetProviderError);
 
 pub struct GarnetProvider<T: VectorRepr> {
     dim: usize,
+    metric_type: Metric,
     max_degree: usize,
     callbacks: Callbacks,
     id_buffer_pool: ObjectPool<AdjList>,
@@ -98,6 +95,7 @@ pub struct GarnetProvider<T: VectorRepr> {
 impl<T: VectorRepr> GarnetProvider<T> {
     pub fn new(
         dim: usize,
+        metric_type: Metric,
         max_degree: usize,
         callbacks: Callbacks,
         context: Context,
@@ -135,6 +133,7 @@ impl<T: VectorRepr> GarnetProvider<T> {
 
         Ok(Self {
             dim,
+            metric_type,
             max_degree,
             callbacks,
             id_buffer_pool,
@@ -561,7 +560,10 @@ impl<T: VectorRepr> BuildDistanceComputer for FullAccessor<'_, T> {
     fn build_distance_computer(
         &self,
     ) -> Result<Self::DistanceComputer, Self::DistanceComputerError> {
-        Ok(T::distance(Metric::Cosine, Some(self.provider.dim)))
+        Ok(T::distance(
+            self.provider.metric_type,
+            Some(self.provider.dim),
+        ))
     }
 }
 
@@ -573,7 +575,7 @@ impl<T: VectorRepr> BuildQueryComputer<[T]> for FullAccessor<'_, T> {
         &self,
         from: &[T],
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
-        Ok(T::query_distance(from, Metric::Cosine))
+        Ok(T::query_distance(from, self.provider.metric_type))
     }
 }
 

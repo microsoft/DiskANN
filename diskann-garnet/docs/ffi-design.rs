@@ -9,19 +9,28 @@
 ///
 /// quant_type needs option that map from NoQuant, Bin, and Q8 (as that's what provided in Redis) in addition to any custom index.  They don't need to be exact, just reasonable.
 ///
+/// metric_type is passed as a raw i32. Valid values are:
+/// - 0: Cosine
+/// - 1: InnerProduct
+/// - 2: L2 (Euclidean distance)
+/// - 3: CosineNormalized
+/// Invalid values will cause the function to return null.
+///
 /// Returning a single pointer conceal all the generics behind an opaque handle
 #[unsafe(no_mangle)]
 extern "C" fn create_index(
-    context: u64,
-    dimensions: u32,
-    reduce_dims: u32,
-    quant_type: SomeCStyleEnumeration,
-    build_exploration_factor: u32,
-    num_links: u32,
-    read_callback: unsafe extern "C" fn(u64, *const u8, usize, *mut u8, usize) -> i32,
-    write_callback: unsafe extern "C" fn(u64, *const u8, usize, *const u8, usize) -> bool,
-    delete_callback: unsafe extern "C" fn(u64, *const u8, usize) -> bool,
-) -> *mut c_void;
+    ctx: u64,
+    dim: u32,
+    _reduce_dim: u32,
+    quant_type: VectorQuantType,
+    metric_type: i32,
+    l_build: u32,
+    max_degree: u32,
+    read_callback: ReadCallback,
+    write_callback: WriteCallback,
+    delete_callback: DeleteCallback,
+    rmw_callback: ReadModifyWriteCallback,
+) -> *const c_void;
 
 /// Drop a previously created index
 ///
