@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 /// Create a new empty index
 /// Takes the params of VADD (see: https://redis.io/docs/latest/commands/vadd/), maps to a reasonable interpretation
 ///

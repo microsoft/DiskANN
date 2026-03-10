@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 use std::{
     collections::{HashMap, hash_map::Entry},
     future, mem,
