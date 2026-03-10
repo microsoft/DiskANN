@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package>
+  <metadata>
+    <id>diskann-garnet</id>
+    <version>1.0.25</version>
+    <readme>docs/README.md</readme>
+    <authors>Microsoft</authors>
+    <projectUrl>https://github.com/microsoft/DiskANN</projectUrl>
+    <description>DiskANN FFI and Data Provider for Garnet</description>
+    <copyright>© Microsoft Corporation. All rights reserved.</copyright>
+    <tags>microsoft diskann garnet</tags>
+    <title />
+  </metadata>
+  <files>
+    <file src="linux/libdiskann_garnet.so" target="runtimes/linux-x64/native/" />
+    <file src="windows/diskann_garnet.dll" target="runtimes/win-x64/native/" />
+    <file src="windows/diskann_garnet.pdb" target="runtimes/win-x64/native/" />
+    <file src="docs/README.md" target="docs/" />
+  </files>
+</package>
