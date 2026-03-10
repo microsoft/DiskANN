@@ -3048,12 +3048,6 @@ mod tests {
     // Heterogeneous: USlice<8> × USlice<M> //
     ///////////////////////////////////////////
 
-    // ── Generic helpers for heterogeneous 8×M inner-product tests ──────
-    //
-    // The business logic lives here as ordinary generic functions so that
-    // `rustfmt` can format them and compile errors are reported once.
-    // The macro below is thin plumbing that stamps out `#[test]` fns.
-
     /// Helper that builds vectors from a fill function and asserts the
     /// inner product matches.
     struct HetCase<const M: usize> {
