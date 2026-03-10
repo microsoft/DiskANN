@@ -6,7 +6,7 @@
 use half::f16;
 
 use super::{
-    SplitJoin, SupportedLaneCount,
+    SplitJoin, SupportedLaneCount, ZipUnzip,
     arch::{self, emulated::Scalar},
     bitmask::BitMask,
     constant::Const,
@@ -695,6 +695,74 @@ impl_splitjoin!(f32, 8 => 4);
 
 impl_splitjoin!(f16, 16 => 8);
 
+//////////////
+// ZipUnzip //
+//////////////
+
+macro_rules! array_zipunzip {
+    ($N:literal) => {
+        impl<T: Copy> crate::traits::ZipUnzip for [T; $N] {
+            type Halved = [T; { $N / 2 }];
+
+            #[inline(always)]
+            fn zip(halves: $crate::LoHi<Self::Halved>) -> Self {
+                core::array::from_fn(|i| {
+                    if i % 2 == 0 {
+                        halves.lo[i / 2]
+                    } else {
+                        halves.hi[i / 2]
+                    }
+                })
+            }
+
+            #[inline(always)]
+            fn unzip(self) -> $crate::LoHi<Self::Halved> {
+                $crate::LoHi {
+                    lo: core::array::from_fn(|i| self[2 * i]),
+                    hi: core::array::from_fn(|i| self[2 * i + 1]),
+                }
+            }
+        }
+    };
+}
+
+array_zipunzip!(2);
+array_zipunzip!(4);
+array_zipunzip!(8);
+array_zipunzip!(16);
+array_zipunzip!(32);
+array_zipunzip!(64);
+
+macro_rules! impl_zipunzip {
+    ($type:ty, $N:literal => $N2:literal) => {
+        impl<A> ZipUnzip for Emulated<$type, $N, A>
+        where
+            A: Copy,
+        {
+            type Halved = Emulated<$type, $N2, A>;
+
+            #[inline(always)]
+            fn zip(halves: $crate::LoHi<Self::Halved>) -> Self {
+                Self($crate::LoHi::new(halves.lo.0, halves.hi.0).zip(), halves.lo.1)
+            }
+
+            #[inline(always)]
+            fn unzip(self) -> $crate::LoHi<Self::Halved> {
+                let $crate::LoHi { lo, hi } = self.0.unzip();
+                let arch = self.1;
+                $crate::LoHi::new(Emulated(lo, arch), Emulated(hi, arch))
+            }
+        }
+    };
+}
+
+impl_zipunzip!(i8, 32 => 16);
+impl_zipunzip!(i16, 16 => 8);
+impl_zipunzip!(i32, 8 => 4);
+impl_zipunzip!(u8, 32 => 16);
+impl_zipunzip!(u32, 8 => 4);
+impl_zipunzip!(f16, 16 => 8);
+
 ///////////
 // Tests //
 ///////////
@@ -946,4 +1014,15 @@ mod test_emulated {
     test_utils::ops::test_cast!(Emulated<f32, 16> => Emulated<f16, 16>, 0x2b637e21afd9ef6c, SC);
 
     test_utils::ops::test_cast!(Emulated<i32, 8> => Emulated<f32, 8>, 0x2b08e8ec7e49323b, SC);
+
+    //////////////
+    // ZipUnzip //
+    //////////////
+
+    test_utils::ops::test_zipunzip!(Emulated<i8, 32> => Emulated<i8, 16>, 0xa7c3e1f920b45d68, SC);
+    test_utils::ops::test_zipunzip!(Emulated<i16, 16> => Emulated<i16, 8>, 0x6b8d2f0e41c7a593, SC);
+    test_utils::ops::test_zipunzip!(Emulated<i32, 8> => Emulated<i32, 4>, 0x5f1a8c63d702be94, SC);
+    test_utils::ops::test_zipunzip!(Emulated<u8, 32> => Emulated<u8, 16>, 0x92d5f4a83e1b07c6, SC);
+    test_utils::ops::test_zipunzip!(Emulated<u32, 8> => Emulated<u32, 4>, 0xb6f30d8a52e4c197, SC);
+    test_utils::ops::test_zipunzip!(Emulated<f16, 16> => Emulated<f16, 8>, 0x8b4e6d1fa07c9253, SC);
 }
