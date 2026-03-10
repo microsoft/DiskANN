@@ -80,6 +80,7 @@
 use std::{alloc::Layout, marker::PhantomData, ptr::NonNull};
 
 use diskann_utils::{
+    ReborrowMut,
     strided::StridedView,
     views::{MatrixView, MutMatrixView},
 };
@@ -599,6 +600,36 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> NewMut<T>
 }
 
 // ════════════════════════════════════════════════════════════════════
+// Delegation macro
+// ════════════════════════════════════════════════════════════════════
+
+/// Generates a forwarding method that delegates to `self.as_view().$name(...)`.
+///
+/// The generated doc-comment links back to the canonical implementation on
+/// [`BlockTransposedRef`], so documentation stays in sync automatically.
+macro_rules! delegate_to_ref {
+    // Safe function.
+    ($(#[$m:meta])* $vis:vis fn $name:ident(&self $(, $a:ident: $t:ty)*) $(-> $r:ty)?) => {
+        #[doc = concat!("See [`BlockTransposedRef::", stringify!($name), "`].")]
+        $(#[$m])*
+        #[inline]
+        $vis fn $name(&self $(, $a: $t)*) $(-> $r)? {
+            self.as_view().$name($($a),*)
+        }
+    };
+    // Unsafe function.
+    ($(#[$m:meta])* unsafe $vis:vis fn $name:ident(&self $(, $a:ident: $t:ty)*) $(-> $r:ty)?) => {
+        #[doc = concat!("See [`BlockTransposedRef::", stringify!($name), "`].")]
+        $(#[$m])*
+        #[inline]
+        $vis unsafe fn $name(&self $(, $a: $t)*) $(-> $r)? {
+            // SAFETY: Caller upholds the safety contract of the delegated method.
+            unsafe { self.as_view().$name($($a),*) }
+        }
+    };
+}
+
+// ════════════════════════════════════════════════════════════════════
 // Public wrapper types
 // ════════════════════════════════════════════════════════════════════
 
@@ -654,12 +685,6 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedRef<'a, 
     #[inline]
     pub fn padded_ncols(&self) -> usize {
         self.data.repr().padded_ncols()
-    }
-
-    /// Alias for [`ncols`](Self::ncols) — the number of logical columns.
-    #[inline]
-    pub fn block_size(&self) -> usize {
-        self.data.repr().ncols()
     }
 
     /// Group size (blocking factor `GROUP`).
@@ -817,25 +842,18 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
 
     // ── Delegated read methods ───────────────────────────────────
 
-    /// Returns the number of logical rows.
-    pub fn nrows(&self) -> usize {
-        self.as_view().nrows()
-    }
-
-    /// Returns the number of logical columns (dimensionality).
-    pub fn ncols(&self) -> usize {
-        self.as_view().ncols()
-    }
-
-    /// Returns the number of physical (padded) columns.
-    pub fn padded_ncols(&self) -> usize {
-        self.as_view().padded_ncols()
-    }
-
-    /// Alias for [`ncols`](Self::ncols).
-    pub fn block_size(&self) -> usize {
-        self.as_view().block_size()
-    }
+    delegate_to_ref!(pub fn nrows(&self) -> usize);
+    delegate_to_ref!(pub fn ncols(&self) -> usize);
+    delegate_to_ref!(pub fn padded_ncols(&self) -> usize);
+    delegate_to_ref!(pub fn full_blocks(&self) -> usize);
+    delegate_to_ref!(pub fn num_blocks(&self) -> usize);
+    delegate_to_ref!(pub fn remainder(&self) -> usize);
+    delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
+    delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
+    delegate_to_ref!(unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
+    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block(&self, block: usize) -> MatrixView<'_, T>);
+    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
+    delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
 
     /// Group size (blocking factor `GROUP`).
     pub const fn group_size(&self) -> usize {
@@ -852,65 +870,6 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
         PACK
     }
 
-    /// Number of completely full blocks.
-    #[inline]
-    pub fn full_blocks(&self) -> usize {
-        self.as_view().full_blocks()
-    }
-
-    /// Total number of blocks including any partially-filled tail.
-    #[inline]
-    pub fn num_blocks(&self) -> usize {
-        self.as_view().num_blocks()
-    }
-
-    /// Number of valid elements in the last partially-full block.
-    #[inline]
-    pub fn remainder(&self) -> usize {
-        self.as_view().remainder()
-    }
-
-    /// Raw typed pointer to the start of the backing data.
-    #[inline]
-    pub fn as_ptr(&self) -> *const T {
-        self.as_view().as_ptr()
-    }
-
-    /// The backing data as a shared slice.
-    #[inline]
-    pub fn as_slice(&self) -> &[T] {
-        self.as_view().as_slice()
-    }
-
-    /// Return a pointer to the start of the given block.
-    ///
-    /// # Safety
-    ///
-    /// `block` must be less than `self.num_blocks()`.
-    #[inline]
-    pub unsafe fn block_ptr_unchecked(&self, block: usize) -> *const T {
-        // SAFETY: Caller asserts block < num_blocks.
-        unsafe { self.as_view().block_ptr_unchecked(block) }
-    }
-
-    /// Return a view over a full block.
-    #[allow(clippy::expect_used)]
-    pub fn block(&self, block: usize) -> MatrixView<'_, T> {
-        self.as_view().block(block)
-    }
-
-    /// Return a view over the remainder block, or `None` if there is no remainder.
-    #[allow(clippy::expect_used)]
-    pub fn remainder_block(&self) -> Option<MatrixView<'_, T>> {
-        self.as_view().remainder_block()
-    }
-
-    /// Retrieve the value at the logical `(row, col)`.
-    #[inline]
-    pub fn get_element(&self, row: usize, col: usize) -> T {
-        self.as_view().get_element(row, col)
-    }
-
     /// Get an immutable row view, or `None` if `i` is out of bounds.
     #[inline]
     pub fn get_row(&self, i: usize) -> Option<Row<'_, T, GROUP, PACK>> {
@@ -918,14 +877,23 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     }
 
     // ── Mutable methods ──────────────────────────────────────────
+    //
+    // The `_inner` variants consume `self` by value so that the lifetime of
+    // the returned view is tied to `'a` (the underlying allocation), not to
+    // a temporary reborrow. Public `&mut self` methods reborrow into a
+    // short-lived `BlockTransposedMut` and then call the inner variant.
 
     /// Return the backing data as a mutable slice.
     ///
     /// The returned slice has `storage_len()` elements (including all padding).
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
+        self.reborrow_mut().as_mut_slice_inner()
+    }
+
+    fn as_mut_slice_inner(mut self) -> &'a mut [T] {
         let len = self.data.repr().storage_len();
-        // SAFETY: We have `&mut self` so exclusive access is guaranteed.
+        // SAFETY: We own exclusive access through `self`.
         unsafe { std::slice::from_raw_parts_mut(self.data.as_raw_mut_ptr().cast::<T>(), len) }
     }
 
@@ -936,6 +904,11 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     /// Panics if `block >= self.full_blocks()`.
     #[allow(clippy::expect_used)]
     pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
+        self.reborrow_mut().block_mut_inner(block)
+    }
+
+    #[allow(clippy::expect_used)]
+    fn block_mut_inner(mut self, block: usize) -> MutMatrixView<'a, T> {
         let repr = *self.data.repr();
         assert!(block < repr.full_blocks());
         let offset = repr.block_offset(block);
@@ -956,6 +929,11 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     /// remainder.
     #[allow(clippy::expect_used)]
     pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
+        self.reborrow_mut().remainder_block_mut_inner()
+    }
+
+    #[allow(clippy::expect_used)]
+    fn remainder_block_mut_inner(mut self) -> Option<MutMatrixView<'a, T>> {
         let repr = *self.data.repr();
         if repr.remainder() == 0 {
             None
@@ -982,6 +960,14 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     pub fn get_row_mut(&mut self, i: usize) -> Option<RowMut<'_, T, GROUP, PACK>> {
         self.data.get_row_mut(i)
     }
+
+    // ── Private helpers ──────────────────────────────────────────
+
+    fn reborrow_mut(&mut self) -> BlockTransposedMut<'_, T, GROUP, PACK> {
+        BlockTransposedMut {
+            data: self.data.reborrow_mut(),
+        }
+    }
 }
 
 // ── BlockTransposed (owned) ──────────────────────────────────────
@@ -1003,25 +989,18 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
 
     // ── Delegated read methods ───────────────────────────────────
 
-    /// Returns the number of logical rows.
-    pub fn nrows(&self) -> usize {
-        self.as_view().nrows()
-    }
-
-    /// Returns the number of logical columns (dimensionality).
-    pub fn ncols(&self) -> usize {
-        self.as_view().ncols()
-    }
-
-    /// Returns the number of physical (padded) columns.
-    pub fn padded_ncols(&self) -> usize {
-        self.as_view().padded_ncols()
-    }
-
-    /// Alias for [`ncols`](Self::ncols).
-    pub fn block_size(&self) -> usize {
-        self.as_view().block_size()
-    }
+    delegate_to_ref!(pub fn nrows(&self) -> usize);
+    delegate_to_ref!(pub fn ncols(&self) -> usize);
+    delegate_to_ref!(pub fn padded_ncols(&self) -> usize);
+    delegate_to_ref!(pub fn full_blocks(&self) -> usize);
+    delegate_to_ref!(pub fn num_blocks(&self) -> usize);
+    delegate_to_ref!(pub fn remainder(&self) -> usize);
+    delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
+    delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
+    delegate_to_ref!(unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
+    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block(&self, block: usize) -> MatrixView<'_, T>);
+    delegate_to_ref!(#[allow(clippy::expect_used)] pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
+    delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
 
     /// Group size (blocking factor `GROUP`).
     pub const fn group_size(&self) -> usize {
@@ -1038,148 +1017,30 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
         PACK
     }
 
-    /// Number of completely full blocks.
-    #[inline]
-    pub fn full_blocks(&self) -> usize {
-        self.as_view().full_blocks()
-    }
-
-    /// Total number of blocks including any partially-filled tail.
-    #[inline]
-    pub fn num_blocks(&self) -> usize {
-        self.as_view().num_blocks()
-    }
-
-    /// Number of valid elements in the last partially-full block, or 0 if all
-    /// blocks are full.
-    #[inline]
-    pub fn remainder(&self) -> usize {
-        self.as_view().remainder()
-    }
-
-    /// Raw typed pointer to the start of the backing data.
-    #[inline]
-    pub fn as_ptr(&self) -> *const T {
-        self.as_view().as_ptr()
-    }
-
-    /// The backing data as a shared slice.
-    ///
-    /// The returned slice has `storage_len()` elements — this includes all padding
-    /// for partial blocks and column-group alignment.
-    #[inline]
-    pub fn as_slice(&self) -> &[T] {
-        self.as_view().as_slice()
-    }
-
-    /// Return a pointer to the start of the given block.
-    ///
-    /// # Safety
-    ///
-    /// `block` must be less than `self.num_blocks()`.
-    #[inline]
-    pub unsafe fn block_ptr_unchecked(&self, block: usize) -> *const T {
-        // SAFETY: Caller asserts block < num_blocks.
-        unsafe { self.as_view().block_ptr_unchecked(block) }
-    }
-
-    /// Return a view over a full block as a [`MatrixView`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `block >= self.full_blocks()`.
-    #[allow(clippy::expect_used)]
-    pub fn block(&self, block: usize) -> MatrixView<'_, T> {
-        self.as_view().block(block)
-    }
-
-    /// Return a view over the remainder block, or `None` if there is no
-    /// remainder.
-    #[allow(clippy::expect_used)]
-    pub fn remainder_block(&self) -> Option<MatrixView<'_, T>> {
-        self.as_view().remainder_block()
-    }
-
-    /// Retrieve the value at the logical `(row, col)`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `row >= self.nrows()` or `col >= self.ncols()`.
-    #[inline]
-    pub fn get_element(&self, row: usize, col: usize) -> T {
-        self.as_view().get_element(row, col)
-    }
-
     /// Get an immutable row view, or `None` if `i` is out of bounds.
     #[inline]
     pub fn get_row(&self, i: usize) -> Option<Row<'_, T, GROUP, PACK>> {
         self.data.get_row(i)
     }
 
-    // ── Mutable methods ──────────────────────────────────────────
+    // ── Mutable methods (delegated to BlockTransposedMut) ────────
 
-    /// Return the backing data as a mutable slice.
-    ///
-    /// The returned slice has `storage_len()` elements (including all padding).
+    /// See [`BlockTransposedMut::as_mut_slice`].
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        let len = self.data.repr().storage_len();
-        // SAFETY: We have `&mut self` so exclusive access is guaranteed.
-        unsafe { std::slice::from_raw_parts_mut(self.data.as_raw_mut_ptr().cast::<T>(), len) }
+        self.as_view_mut().as_mut_slice_inner()
     }
 
-    /// Return a mutable view over a full block.
-    ///
-    /// The view has `padded_ncols / PACK` rows and `GROUP * PACK` columns.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `block >= self.full_blocks()`.
+    /// See [`BlockTransposedMut::block_mut`].
     #[allow(clippy::expect_used)]
     pub fn block_mut(&mut self, block: usize) -> MutMatrixView<'_, T> {
-        let repr = *self.data.repr();
-        assert!(block < repr.full_blocks());
-        let offset = repr.block_offset(block);
-        let stride = repr.block_stride();
-        let pncols = repr.padded_ncols();
-        // SAFETY: `block < full_blocks()` (asserted above), so `offset + stride`
-        // lies within the owned allocation. We have `&mut self` so no aliasing.
-        let data: &mut [T] = unsafe {
-            std::slice::from_raw_parts_mut(
-                self.data.as_raw_mut_ptr().cast::<T>().add(offset),
-                stride,
-            )
-        };
-        MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
-            .expect("base data should have been sized correctly")
+        self.as_view_mut().block_mut_inner(block)
     }
 
-    /// Return a mutable view over the remainder block, or `None` if there is no
-    /// remainder.
-    ///
-    /// The view has the same dimensions as [`block_mut()`](Self::block_mut).
+    /// See [`BlockTransposedMut::remainder_block_mut`].
     #[allow(clippy::expect_used)]
     pub fn remainder_block_mut(&mut self) -> Option<MutMatrixView<'_, T>> {
-        let repr = *self.data.repr();
-        if repr.remainder() == 0 {
-            None
-        } else {
-            let offset = repr.block_offset(repr.full_blocks());
-            let stride = repr.block_stride();
-            let pncols = repr.padded_ncols();
-            // SAFETY: Remainder block exists, so `offset + stride` is in bounds.
-            // `&mut self` guarantees exclusive access.
-            let data: &mut [T] = unsafe {
-                std::slice::from_raw_parts_mut(
-                    self.data.as_raw_mut_ptr().cast::<T>().add(offset),
-                    stride,
-                )
-            };
-            Some(
-                MutMatrixView::try_from(data, pncols / PACK, GROUP * PACK)
-                    .expect("base data should have been sized correctly"),
-            )
-        }
+        self.as_view_mut().remainder_block_mut_inner()
     }
 
     /// Get a mutable row view, or `None` if `i` is out of bounds.
@@ -1256,12 +1117,15 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
                                 // elements, and our loop visits each position once.
                                 unsafe { *dst = src_row[col] };
                             }
-                            // Advance even for padding — the default is already there.
-                            dst = dst.wrapping_add(1);
+                            // SAFETY: dst advances sequentially through the
+                            // backing allocation which has exactly `storage_len`
+                            // elements, and our loop visits each position once.
+                            dst = unsafe { dst.add(1) };
                         }
                     } else {
-                        // Entire row is padding — skip PACK positions.
-                        dst = dst.wrapping_add(PACK);
+                        // SAFETY: Entire row is padding — skip PACK positions.
+                        // dst remains within the allocation.
+                        dst = unsafe { dst.add(PACK) };
                     }
                 }
             }
@@ -1301,259 +1165,122 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<(usize, usi
 
 #[cfg(test)]
 mod tests {
+    //! Test organisation:
+    //!
+    //!  1. **Helper functions** — `*_from_index` element generators.
+    //!  2. [`test_full_api`] — single parameterized function that exhaustively
+    //!     exercises the full read + write API on all three wrapper types
+    //!     (`BlockTransposed`, `BlockTransposedRef`, `BlockTransposedMut`).
+    //!  3. **Test runners** — `#[test]` functions that call `test_full_api`
+    //!     with various `(T, GROUP, PACK, nrows, ncols)` combinations.
+    //!  4. [`test_block_layout_pack1`] — verifies that `PACK=1` blocks are
+    //!     the standard row-to-column transposition.
+    //!  5. **Focused tests** — edge cases that cannot be expressed as
+    //!     parameters to `test_full_api` (`Send`/`Sync`, panic paths,
+    //!     non-unit strides, concurrent mutation, etc.).
+
     use diskann_utils::{lazy_format, views::Matrix};
 
     use super::*;
     use crate::utils::div_round_up;
 
-    /// Exhaustive test for `PACK = 1` (the standard block-transpose layout).
-    fn test_block_transposed_impl<const GROUP: usize>(nrows: usize, ncols: usize) {
-        let context = lazy_format!("GROUP = {}, nrows = {}, ncols = {}", GROUP, nrows, ncols);
+    // ── Per-type index generators ────────────────────────────────────
+    //
+    // All generators return non-zero values so that `T::default()` (zero)
+    // can be used unambiguously to verify padding positions.
 
-        // Create initial data:
-        //       0         1         2 ...   ncols-1
-        //   ncols   ncols+1   ncols+2     2*ncols-1
-        // ...
-        let mut data = Matrix::new(0.0, nrows, ncols);
-        data.as_mut_slice()
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, d)| *d = i as f32);
-
-        let mut transpose = BlockTransposed::<f32, GROUP>::from_strided(data.as_view().into());
-
-        // Verify query methods.
-        assert_eq!(transpose.nrows(), nrows, "{}", context);
-        assert_eq!(transpose.ncols(), ncols, "{}", context);
-        assert_eq!(transpose.block_size(), ncols, "{}", context);
-        assert_eq!(transpose.group_size(), GROUP, "{}", context);
-        assert_eq!(transpose.full_blocks(), nrows / GROUP, "{}", context);
-        assert_eq!(
-            transpose.num_blocks(),
-            div_round_up(nrows, GROUP),
-            "{}",
-            context
-        );
-        assert_eq!(transpose.remainder(), nrows % GROUP, "{}", context);
-        assert_eq!(transpose.padded_ncols(), ncols, "{}", context); // PACK=1 → no padding
-
-        // Check regular row-column indexing.
-        for row in 0..nrows {
-            for col in 0..ncols {
-                assert_eq!(
-                    data[(row, col)],
-                    transpose[(row, col)],
-                    "failed for (row, col) = ({}, {})",
-                    row,
-                    col,
-                );
-            }
-        }
-
-        // Check get_element matches Index.
-        for row in 0..nrows {
-            for col in 0..ncols {
-                assert_eq!(
-                    data[(row, col)],
-                    transpose.get_element(row, col),
-                    "get_element failed for ({}, {})",
-                    row,
-                    col,
-                );
-            }
-        }
-
-        // Check row view.
-        let view = transpose.as_view();
-        for row in 0..nrows {
-            let row_view = view.get_row(row).unwrap();
-            assert_eq!(row_view.len(), ncols);
-            for col in 0..ncols {
-                assert_eq!(
-                    data[(row, col)],
-                    row_view[col],
-                    "row view failed for ({}, {})",
-                    row,
-                    col,
-                );
-            }
-            // Test iterator.
-            let collected: Vec<f32> = row_view.iter().collect();
-            assert_eq!(collected.len(), ncols);
-            for col in 0..ncols {
-                assert_eq!(data[(row, col)], collected[col]);
-            }
-        }
-
-        // Check block-level views (only valid for PACK=1, the default here).
-        for b in 0..transpose.full_blocks() {
-            let block = transpose.block(b);
-            assert_eq!(block.nrows(), ncols);
-            assert_eq!(block.ncols(), GROUP);
-
-            for i in 0..block.nrows() {
-                for j in 0..block.ncols() {
-                    assert_eq!(
-                        block[(i, j)],
-                        data[(GROUP * b + j, i)],
-                        "failed in block {}, row {}, col {} -- {}",
-                        b,
-                        i,
-                        j,
-                        context,
-                    );
-                }
-            }
-
-            // Check block_ptr_unchecked.
-            // SAFETY: b < full_blocks < num_blocks.
-            let ptr = unsafe { transpose.block_ptr_unchecked(b) };
-            assert_eq!(ptr, block.as_slice().as_ptr());
-
-            // Mutable access — zero out the block.
-            let mut block_mut = transpose.block_mut(b);
-            assert_eq!(ptr, block_mut.as_slice().as_ptr());
-            block_mut.as_mut_slice().fill(0.0);
-        }
-
-        let expected_remainder = nrows % GROUP;
-        if expected_remainder != 0 {
-            let b = transpose.full_blocks();
-            let block = transpose.remainder_block().unwrap();
-            assert_eq!(block.nrows(), ncols);
-            assert_eq!(block.ncols(), GROUP);
-
-            for i in 0..block.nrows() {
-                for j in 0..expected_remainder {
-                    assert_eq!(
-                        block[(i, j)],
-                        data[(GROUP * b + j, i)],
-                        "failed in block {}, row {}, col {} -- {}",
-                        b,
-                        i,
-                        j,
-                        context,
-                    );
-                }
-            }
-
-            // SAFETY: b < num_blocks.
-            let ptr = unsafe { transpose.block_ptr_unchecked(b) };
-            assert_eq!(ptr, block.as_slice().as_ptr());
-
-            let mut block_mut = transpose.remainder_block_mut().unwrap();
-            assert_eq!(ptr, block_mut.as_slice().as_ptr());
-            block_mut.as_mut_slice().fill(0.0);
-        } else {
-            assert!(transpose.remainder_block().is_none());
-            assert!(transpose.remainder_block_mut().is_none());
-        }
-
-        // The entire backing store should now be zeroed.
-        assert!(transpose.as_slice().iter().all(|i| *i == 0.0));
+    fn f32_from_index(i: usize) -> f32 {
+        (i + 1) as f32
+    }
+    fn i32_from_index(i: usize) -> i32 {
+        (i + 1) as i32
+    }
+    fn u8_from_index(i: usize) -> u8 {
+        ((i % 255) + 1) as u8
     }
 
-    #[test]
-    fn test_block_transposed_16() {
-        // Miri interprets at MIR level and is ~100-1000× slower than native execution,
-        // so we test only a single representative case under Miri to keep CI feasible.
-        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
-        let column_range = if cfg!(miri) { 4..5 } else { 0..5 };
+    // ── Unified parameterized test ──────────────────────────────────
 
-        for nrows in row_range {
-            for ncols in column_range.clone() {
-                test_block_transposed_impl::<16>(nrows, ncols);
-            }
-        }
-    }
-
-    #[test]
-    fn test_block_transposed_8() {
-        // Miri interprets at MIR level and is ~100-1000× slower than native execution,
-        // so we test only a single representative case under Miri to keep CI feasible.
-        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
-        let column_range = if cfg!(miri) { 4..5 } else { 0..5 };
-
-        for nrows in row_range {
-            for ncols in column_range.clone() {
-                test_block_transposed_impl::<8>(nrows, ncols);
-            }
-        }
-    }
-
-    #[test]
-    fn test_row_view_empty() {
-        // A 0-column matrix should yield empty row views.
-        let mat = BlockTransposed::<f32, 16>::new(4, 0);
-        let view = mat.as_view();
-        for i in 0..4 {
-            let row = view.get_row(i).unwrap();
-            assert!(row.is_empty());
-            assert_eq!(row.len(), 0);
-            assert_eq!(row.iter().count(), 0);
-        }
-    }
-
-    // ── PACK > 1 tests ──────────────────────────────────────────────
-
-    /// Test block-transposed with PACK > 1 for various dimensions.
-    fn test_packed_impl<const GROUP: usize, const PACK: usize>(nrows: usize, ncols: usize) {
+    /// Exhaustive test for the full `BlockTransposed` / `BlockTransposedRef` /
+    /// `BlockTransposedMut` API surface, parameterized over element type `T`,
+    /// group size `GROUP`, and packing factor `PACK`.
+    ///
+    /// Exercises: construction, query helpers, `Index` / `get_element`,
+    /// immutable row views (`Row`), mutable row views (`RowMut`),
+    /// `as_slice` / `as_mut_slice`, block views (immutable and mutable),
+    /// `remainder_block` / `remainder_block_mut`, `block_ptr_unchecked`,
+    /// `from_matrix_view`, OOB `get_row` returns, and both column and row
+    /// padding verification.
+    fn test_full_api<
+        T: Copy + Default + PartialEq + std::fmt::Debug + 'static,
+        const GROUP: usize,
+        const PACK: usize,
+    >(
+        nrows: usize,
+        ncols: usize,
+        from_index: fn(usize) -> T,
+    ) {
         let context = lazy_format!(
-            "GROUP = {}, PACK = {}, nrows = {}, ncols = {}",
+            "T={}, GROUP={}, PACK={}, nrows={}, ncols={}",
+            std::any::type_name::<T>(),
             GROUP,
             PACK,
             nrows,
             ncols,
         );
 
-        // Use nonzero values so we can distinguish from padding.
-        let mut data = Matrix::new(0.0, nrows, ncols);
+        // ── Construction ─────────────────────────────────────────
+
+        let mut data = Matrix::new(T::default(), nrows, ncols);
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
-            .for_each(|(i, d)| *d = (i + 1) as f32);
+            .for_each(|(i, d)| *d = from_index(i));
 
-        let transpose = BlockTransposed::<f32, GROUP, PACK>::from_strided(data.as_view().into());
+        let mut transpose = BlockTransposed::<T, GROUP, PACK>::from_strided(data.as_view().into());
 
-        // Check query methods.
+        let expected_padded = div_round_up(ncols, PACK) * PACK;
+        let expected_remainder = nrows % GROUP;
+        let storage_len = transpose.as_slice().len();
+
+        // ── Query methods on owned type ──────────────────────────
+
         assert_eq!(transpose.nrows(), nrows, "{}", context);
         assert_eq!(transpose.ncols(), ncols, "{}", context);
         assert_eq!(transpose.group_size(), GROUP, "{}", context);
+        assert_eq!(
+            BlockTransposed::<T, GROUP, PACK>::const_group_size(),
+            GROUP,
+            "{}",
+            context
+        );
         assert_eq!(transpose.pack_size(), PACK, "{}", context);
-
-        let expected_padded = div_round_up(ncols, PACK) * PACK;
-        assert_eq!(transpose.padded_ncols(), expected_padded, "{}", context);
-
         assert_eq!(transpose.full_blocks(), nrows / GROUP, "{}", context);
         assert_eq!(
             transpose.num_blocks(),
             div_round_up(nrows, GROUP),
             "{}",
-            context
+            context,
         );
-        assert_eq!(transpose.remainder(), nrows % GROUP, "{}", context);
+        assert_eq!(transpose.remainder(), expected_remainder, "{}", context);
+        assert_eq!(transpose.padded_ncols(), expected_padded, "{}", context);
 
-        // Check row-column indexing via Index.
+        // ── Element access (owned) ───────────────────────────────
+
         for row in 0..nrows {
             for col in 0..ncols {
                 assert_eq!(
                     data[(row, col)],
                     transpose[(row, col)],
-                    "Index failed for (row, col) = ({}, {}) -- {}",
+                    "Index at ({}, {}) -- {}",
                     row,
                     col,
                     context,
                 );
-            }
-        }
-
-        // Check get_element.
-        for row in 0..nrows {
-            for col in 0..ncols {
                 assert_eq!(
                     data[(row, col)],
                     transpose.get_element(row, col),
-                    "get_element failed for ({}, {}) -- {}",
+                    "get_element at ({}, {}) -- {}",
                     row,
                     col,
                     context,
@@ -1561,280 +1288,544 @@ mod tests {
             }
         }
 
-        // Check row view + iterator.
+        // ── Immutable row views (owned) ──────────────────────────
+
         let view = transpose.as_view();
         for row in 0..nrows {
             let row_view = view.get_row(row).unwrap();
             assert_eq!(row_view.len(), ncols, "{}", context);
+            assert_eq!(row_view.is_empty(), ncols == 0, "{}", context);
             for col in 0..ncols {
                 assert_eq!(
                     data[(row, col)],
                     row_view[col],
-                    "row view failed for ({}, {}) -- {}",
+                    "row view at ({}, {}) -- {}",
                     row,
                     col,
                     context,
                 );
             }
-            let collected: Vec<f32> = row_view.iter().collect();
+            // Row::get — in-bounds + OOB.
+            if ncols > 0 {
+                assert_eq!(row_view.get(0), Some(&data[(row, 0)]), "{}", context);
+            }
+            assert_eq!(row_view.get(ncols), None, "{}", context);
+
+            // Iterator + ExactSizeIterator.
+            let iter = row_view.iter();
+            assert_eq!(iter.len(), ncols, "{}", context);
+            let (lo, hi) = iter.size_hint();
+            assert_eq!(lo, ncols, "{}", context);
+            assert_eq!(hi, Some(ncols), "{}", context);
+
+            let collected: Vec<T> = row_view.iter().collect();
             assert_eq!(collected.len(), ncols, "{}", context);
             for col in 0..ncols {
                 assert_eq!(data[(row, col)], collected[col], "{}", context);
             }
         }
+        // OOB row returns None.
+        assert!(view.get_row(nrows).is_none(), "{}", context);
+        let _ = view;
 
-        // Verify padding positions are zero.
-        let raw: &[f32] = transpose.as_slice();
-        // Check that padded "columns" within each data row are zero.
-        for row in 0..nrows {
-            for col in ncols..expected_padded {
-                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
+        // ── BlockTransposedRef API ───────────────────────────────
+
+        {
+            let view = transpose.as_view();
+            assert_eq!(view.nrows(), nrows, "{}", context);
+            assert_eq!(view.ncols(), ncols, "{}", context);
+            assert_eq!(view.padded_ncols(), expected_padded, "{}", context);
+            assert_eq!(view.group_size(), GROUP, "{}", context);
+            assert_eq!(
+                BlockTransposedRef::<T, GROUP, PACK>::const_group_size(),
+                GROUP,
+            );
+            assert_eq!(view.pack_size(), PACK, "{}", context);
+            assert_eq!(view.full_blocks(), nrows / GROUP, "{}", context);
+            assert_eq!(view.num_blocks(), div_round_up(nrows, GROUP), "{}", context,);
+            assert_eq!(view.remainder(), expected_remainder, "{}", context);
+            assert_eq!(view.as_ptr(), transpose.as_ptr(), "{}", context);
+            assert_eq!(view.as_slice(), transpose.as_slice(), "{}", context);
+
+            for row in 0..nrows {
+                for col in 0..ncols {
+                    assert_eq!(
+                        data[(row, col)],
+                        view.get_element(row, col),
+                        "Ref get_element at ({}, {}) -- {}",
+                        row,
+                        col,
+                        context,
+                    );
+                }
+                let row_view = view.get_row(row).unwrap();
+                for col in 0..ncols {
+                    assert_eq!(data[(row, col)], row_view[col], "{}", context);
+                }
+            }
+            assert!(view.get_row(nrows).is_none(), "{}", context);
+        }
+
+        // ── BlockTransposedMut read API ──────────────────────────
+
+        let expected_ptr = transpose.as_ptr();
+        {
+            let mut_view = transpose.as_view_mut();
+            assert_eq!(mut_view.nrows(), nrows, "{}", context);
+            assert_eq!(mut_view.ncols(), ncols, "{}", context);
+            assert_eq!(mut_view.padded_ncols(), expected_padded, "{}", context);
+            assert_eq!(mut_view.group_size(), GROUP, "{}", context);
+            assert_eq!(
+                BlockTransposedMut::<T, GROUP, PACK>::const_group_size(),
+                GROUP,
+            );
+            assert_eq!(mut_view.pack_size(), PACK, "{}", context);
+            assert_eq!(mut_view.full_blocks(), nrows / GROUP, "{}", context);
+            assert_eq!(
+                mut_view.num_blocks(),
+                div_round_up(nrows, GROUP),
+                "{}",
+                context,
+            );
+            assert_eq!(mut_view.remainder(), expected_remainder, "{}", context);
+            assert_eq!(mut_view.as_ptr(), expected_ptr, "{}", context);
+            assert_eq!(mut_view.as_slice().len(), storage_len, "{}", context);
+
+            for row in 0..nrows {
+                for col in 0..ncols {
+                    assert_eq!(
+                        data[(row, col)],
+                        mut_view.get_element(row, col),
+                        "Mut get_element at ({}, {}) -- {}",
+                        row,
+                        col,
+                        context,
+                    );
+                }
+                let row_view = mut_view.get_row(row).unwrap();
+                for col in 0..ncols {
+                    assert_eq!(data[(row, col)], row_view[col], "{}", context);
+                }
+            }
+            assert!(mut_view.get_row(nrows).is_none(), "{}", context);
+        }
+
+        // ── BlockTransposedMut::as_view() ────────────────────────
+
+        {
+            let mut_view = transpose.as_view_mut();
+            let ref_from_mut = mut_view.as_view();
+            assert_eq!(ref_from_mut.nrows(), nrows, "{}", context);
+            for row in 0..nrows {
+                for col in 0..ncols {
+                    assert_eq!(
+                        data[(row, col)],
+                        ref_from_mut.get_element(row, col),
+                        "{}",
+                        context,
+                    );
+                }
+            }
+        }
+
+        // ── as_mut_slice ─────────────────────────────────────────
+
+        // Through BlockTransposedMut.
+        {
+            let mut mut_view = transpose.as_view_mut();
+            assert_eq!(mut_view.as_mut_slice().len(), storage_len, "{}", context);
+        }
+        // Through BlockTransposed (owned).
+        assert_eq!(transpose.as_mut_slice().len(), storage_len, "{}", context);
+
+        // ── Immutable block views on all three types ─────────────
+
+        let expected_block_nrows = expected_padded / PACK;
+        let expected_block_ncols = GROUP * PACK;
+
+        for b in 0..transpose.full_blocks() {
+            let block_data: Vec<T>;
+            let ptr: *const T;
+            {
+                let block = transpose.block(b);
+                assert_eq!(block.nrows(), expected_block_nrows, "{}", context);
+                assert_eq!(block.ncols(), expected_block_ncols, "{}", context);
+
+                // SAFETY: b < full_blocks <= num_blocks.
+                ptr = unsafe { transpose.block_ptr_unchecked(b) };
+                assert_eq!(ptr, block.as_slice().as_ptr(), "{}", context);
+
+                block_data = block.as_slice().to_vec();
+            }
+
+            // Same block via Ref.
+            {
+                let view = transpose.as_view();
+                assert_eq!(view.block(b).as_slice(), &block_data[..], "{}", context);
+                assert_eq!(unsafe { view.block_ptr_unchecked(b) }, ptr, "{}", context);
+            }
+
+            // Same block via Mut (read path).
+            {
+                let mut_view = transpose.as_view_mut();
+                assert_eq!(mut_view.block(b).as_slice(), &block_data[..], "{}", context);
                 assert_eq!(
-                    raw[idx], 0.0,
-                    "padding at ({}, {}) should be zero -- {}",
-                    row, col, context,
+                    unsafe { mut_view.block_ptr_unchecked(b) },
+                    ptr,
+                    "{}",
+                    context,
                 );
             }
         }
-    }
 
-    #[test]
-    fn test_block_transposed_pack2() {
-        // Miri interprets at MIR level and is ~100-1000× slower than native execution,
-        // so we test only a single representative case under Miri to keep CI feasible.
-        let row_range = if cfg!(miri) { 31..32 } else { 0..48 };
-        let column_range = if cfg!(miri) { 4..5 } else { 0..9 };
-
-        for nrows in row_range {
-            for ncols in column_range.clone() {
-                test_packed_impl::<4, 2>(nrows, ncols);
-                test_packed_impl::<8, 2>(nrows, ncols);
-                test_packed_impl::<16, 2>(nrows, ncols);
-            }
-        }
-    }
-
-    #[test]
-    fn test_block_transposed_pack4() {
-        // Miri interprets at MIR level and is ~100-1000× slower than native execution,
-        // so we test only a single representative case under Miri to keep CI feasible.
-        let row_range = if cfg!(miri) { 31..32 } else { 0..48 };
-        let column_range = if cfg!(miri) { 4..5 } else { 0..9 };
-
-        for nrows in row_range {
-            for ncols in column_range.clone() {
-                test_packed_impl::<4, 4>(nrows, ncols);
-                test_packed_impl::<8, 4>(nrows, ncols);
-                test_packed_impl::<16, 4>(nrows, ncols);
-            }
-        }
-    }
-
-    // ── Block views for PACK > 1 ────────────────────────────────────
-
-    /// Verify that `block()` / `remainder_block()` / `block_mut()` /
-    /// `remainder_block_mut()` produce correctly-sized views for PACK > 1 and
-    /// that mutating through `block_mut` is reflected in element access.
-    fn test_packed_block_views<const GROUP: usize, const PACK: usize>(nrows: usize, ncols: usize) {
-        let context = lazy_format!(
-            "block_views: GROUP={}, PACK={}, nrows={}, ncols={}",
-            GROUP,
-            PACK,
-            nrows,
-            ncols,
-        );
-
-        let mut data = Matrix::new(0.0_f32, nrows, ncols);
-        data.as_mut_slice()
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, d)| *d = (i + 1) as f32);
-
-        let mut transpose =
-            BlockTransposed::<f32, GROUP, PACK>::from_strided(data.as_view().into());
-
-        let expected_view_nrows = transpose.padded_ncols() / PACK;
-        let expected_view_ncols = GROUP * PACK;
-
-        // Full blocks.
-        for b in 0..transpose.full_blocks() {
-            let block = transpose.block(b);
-            assert_eq!(block.nrows(), expected_view_nrows, "{}", context);
-            assert_eq!(block.ncols(), expected_view_ncols, "{}", context);
-
-            // block_ptr_unchecked should point to the same memory.
-            // SAFETY: `b < full_blocks() <= num_blocks()`.
-            let ptr = unsafe { transpose.block_ptr_unchecked(b) };
-            assert_eq!(ptr, block.as_slice().as_ptr(), "{}", context);
-
-            // Mutable view should match dimensions.
-            let block_mut = transpose.block_mut(b);
-            assert_eq!(block_mut.nrows(), expected_view_nrows, "{}", context);
-            assert_eq!(block_mut.ncols(), expected_view_ncols, "{}", context);
-        }
-
-        // Remainder block.
-        let expected_remainder = nrows % GROUP;
+        // Remainder block (immutable, all three types).
         if expected_remainder != 0 {
-            let block = transpose.remainder_block().unwrap();
-            assert_eq!(block.nrows(), expected_view_nrows, "{}", context);
-            assert_eq!(block.ncols(), expected_view_ncols, "{}", context);
+            let remainder_data: Vec<T>;
+            let ptr: *const T;
+            let fb = transpose.full_blocks();
+            {
+                let block = transpose.remainder_block().unwrap();
+                assert_eq!(block.nrows(), expected_block_nrows, "{}", context);
+                assert_eq!(block.ncols(), expected_block_ncols, "{}", context);
 
-            let block_mut = transpose.remainder_block_mut().unwrap();
-            assert_eq!(block_mut.nrows(), expected_view_nrows, "{}", context);
-            assert_eq!(block_mut.ncols(), expected_view_ncols, "{}", context);
+                // SAFETY: fb < num_blocks (remainder exists).
+                ptr = unsafe { transpose.block_ptr_unchecked(fb) };
+                assert_eq!(ptr, block.as_slice().as_ptr(), "{}", context);
+
+                remainder_data = block.as_slice().to_vec();
+            }
+
+            // Via Ref.
+            {
+                let view = transpose.as_view();
+                let ref_block = view.remainder_block().unwrap();
+                assert_eq!(ref_block.as_slice(), &remainder_data[..], "{}", context);
+            }
+            // Via Mut (read path).
+            {
+                let mut_view = transpose.as_view_mut();
+                let mut_block = mut_view.remainder_block().unwrap();
+                assert_eq!(mut_block.as_slice(), &remainder_data[..], "{}", context);
+            }
         } else {
             assert!(transpose.remainder_block().is_none(), "{}", context);
+            {
+                let view = transpose.as_view();
+                assert!(view.remainder_block().is_none(), "{}", context);
+            }
+            {
+                let mut_view = transpose.as_view_mut();
+                assert!(mut_view.remainder_block().is_none(), "{}", context);
+            }
+        }
+
+        // ── Mutable block views via BlockTransposedMut ───────────
+
+        {
+            let mut mut_view = transpose.as_view_mut();
+            for b in 0..mut_view.full_blocks() {
+                let block_mut = mut_view.block_mut(b);
+                assert_eq!(block_mut.nrows(), expected_block_nrows, "{}", context);
+                assert_eq!(block_mut.ncols(), expected_block_ncols, "{}", context);
+            }
+            if expected_remainder != 0 {
+                let rem = mut_view.remainder_block_mut().unwrap();
+                assert_eq!(rem.nrows(), expected_block_nrows, "{}", context);
+                assert_eq!(rem.ncols(), expected_block_ncols, "{}", context);
+            } else {
+                assert!(mut_view.remainder_block_mut().is_none(), "{}", context);
+            }
+        }
+
+        // Mutable block views via owned BlockTransposed.
+        for b in 0..transpose.full_blocks() {
+            let block_mut = transpose.block_mut(b);
+            assert_eq!(block_mut.nrows(), expected_block_nrows, "{}", context);
+            assert_eq!(block_mut.ncols(), expected_block_ncols, "{}", context);
+        }
+        if expected_remainder != 0 {
+            let rem = transpose.remainder_block_mut().unwrap();
+            assert_eq!(rem.nrows(), expected_block_nrows, "{}", context);
+            assert_eq!(rem.ncols(), expected_block_ncols, "{}", context);
+        } else {
             assert!(transpose.remainder_block_mut().is_none(), "{}", context);
         }
 
-        // Zero out all blocks via block_mut / remainder_block_mut and verify.
+        // ── Mutable row views via BlockTransposedMut ─────────────
+
+        {
+            let mut mut_view = transpose.as_view_mut();
+            for row in 0..nrows {
+                let row_view = mut_view.get_row_mut(row).unwrap();
+                assert_eq!(row_view.len(), ncols, "{}", context);
+                assert_eq!(row_view.is_empty(), ncols == 0, "{}", context);
+                for col in 0..ncols {
+                    assert_eq!(data[(row, col)], row_view[col], "{}", context);
+                }
+            }
+            assert!(mut_view.get_row_mut(nrows).is_none(), "{}", context);
+        }
+
+        // ── Row::get, RowMut::get, RowMut::get_mut ──────────────
+
+        if nrows > 0 && ncols > 0 {
+            // Row::get OOB.
+            {
+                let view = transpose.as_view();
+                let row = view.get_row(0).unwrap();
+                assert_eq!(row.get(ncols), None, "{}", context);
+                assert_eq!(row.get(usize::MAX), None, "{}", context);
+            }
+
+            // RowMut::get OOB.
+            let row = transpose.get_row_mut(0).unwrap();
+            assert_eq!(row.get(ncols), None, "{}", context);
+
+            // RowMut::get_mut — mutate and verify.
+            let mut row = transpose.get_row_mut(0).unwrap();
+            let sentinel = from_index(usize::MAX / 2);
+            let original = row[0];
+            if let Some(v) = row.get_mut(0) {
+                *v = sentinel;
+            }
+            assert_eq!(row.get_mut(ncols), None, "{}", context);
+            drop(row);
+            assert_eq!(transpose.get_element(0, 0), sentinel, "{}", context);
+            // Restore original.
+            transpose.get_row_mut(0).unwrap().set(0, original);
+        }
+
+        // ── Zero out via block_mut / remainder_block_mut ─────────
+
         for b in 0..transpose.full_blocks() {
-            transpose.block_mut(b).as_mut_slice().fill(0.0);
+            transpose.block_mut(b).as_mut_slice().fill(T::default());
         }
         if transpose.remainder() != 0 {
             transpose
                 .remainder_block_mut()
                 .unwrap()
                 .as_mut_slice()
-                .fill(0.0);
+                .fill(T::default());
         }
-        let raw: &[f32] = transpose.as_slice();
         assert!(
-            raw.iter().all(|v| *v == 0.0),
+            transpose.as_slice().iter().all(|v| *v == T::default()),
             "not fully zeroed -- {}",
-            context
+            context,
         );
+
+        // ── Padding verification (fresh construction) ────────────
+
+        let transpose = BlockTransposed::<T, GROUP, PACK>::from_strided(data.as_view().into());
+        let raw = transpose.as_slice();
+
+        // Column padding.
+        for row in 0..nrows {
+            for col in ncols..expected_padded {
+                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
+                assert_eq!(
+                    raw[idx],
+                    T::default(),
+                    "col padding at ({}, {}) -- {}",
+                    row,
+                    col,
+                    context,
+                );
+            }
+        }
+
+        // Row padding (within partial blocks).
+        let padded_nrows = nrows.next_multiple_of(GROUP);
+        for row in nrows..padded_nrows {
+            for col in 0..expected_padded {
+                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
+                assert_eq!(
+                    raw[idx],
+                    T::default(),
+                    "row padding at ({}, {}) -- {}",
+                    row,
+                    col,
+                    context,
+                );
+            }
+        }
+
+        // ── from_matrix_view produces identical results ──────────
+
+        if nrows > 0 && ncols > 0 {
+            let via_matrix = BlockTransposed::<T, GROUP, PACK>::from_matrix_view(data.as_view());
+            assert_eq!(via_matrix.as_slice(), transpose.as_slice(), "{}", context);
+        }
     }
 
-    #[test]
-    fn test_packed_block_views_pack2() {
-        // Miri interprets at MIR level and is ~100-1000× slower than native execution,
-        // so we test only a single representative case under Miri to keep CI feasible.
-        let row_range = if cfg!(miri) { 31..32 } else { 0..48 };
-        let column_range = if cfg!(miri) { 4..5 } else { 0..9 };
+    // ════════════════════════════════════════════════════════════════
+    // Test runners — each combination gets the full API surface.
+    // ════════════════════════════════════════════════════════════════
 
+    #[test]
+    fn test_api_pack1_group16() {
+        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
+        let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
         for nrows in row_range {
-            for ncols in column_range.clone() {
-                test_packed_block_views::<4, 2>(nrows, ncols);
-                test_packed_block_views::<8, 2>(nrows, ncols);
-                test_packed_block_views::<16, 2>(nrows, ncols);
+            for ncols in col_range.clone() {
+                test_full_api::<f32, 16, 1>(nrows, ncols, f32_from_index);
             }
         }
     }
 
     #[test]
-    fn test_packed_block_views_pack4() {
-        // Miri interprets at MIR level and is ~100-1000× slower than native execution,
-        // so we test only a single representative case under Miri to keep CI feasible.
-        let row_range = if cfg!(miri) { 31..32 } else { 0..48 };
-        let column_range = if cfg!(miri) { 4..5 } else { 0..9 };
-
+    fn test_api_pack1_group8() {
+        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
+        let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
         for nrows in row_range {
-            for ncols in column_range.clone() {
-                test_packed_block_views::<4, 4>(nrows, ncols);
-                test_packed_block_views::<8, 4>(nrows, ncols);
-                test_packed_block_views::<16, 4>(nrows, ncols);
+            for ncols in col_range.clone() {
+                test_full_api::<f32, 8, 1>(nrows, ncols, f32_from_index);
             }
         }
     }
+
+    #[test]
+    fn test_api_pack2() {
+        let row_range = if cfg!(miri) { 31..32 } else { 0..48 };
+        let col_range = if cfg!(miri) { 4..5 } else { 0..9 };
+        for nrows in row_range {
+            for ncols in col_range.clone() {
+                test_full_api::<f32, 4, 2>(nrows, ncols, f32_from_index);
+                test_full_api::<f32, 8, 2>(nrows, ncols, f32_from_index);
+                test_full_api::<f32, 16, 2>(nrows, ncols, f32_from_index);
+            }
+        }
+    }
+
+    #[test]
+    fn test_api_pack4() {
+        let row_range = if cfg!(miri) { 31..32 } else { 0..48 };
+        let col_range = if cfg!(miri) { 4..5 } else { 0..9 };
+        for nrows in row_range {
+            for ncols in col_range.clone() {
+                test_full_api::<f32, 4, 4>(nrows, ncols, f32_from_index);
+                test_full_api::<f32, 8, 4>(nrows, ncols, f32_from_index);
+                test_full_api::<f32, 16, 4>(nrows, ncols, f32_from_index);
+            }
+        }
+    }
+
+    /// Exercise the unified test with non-`f32` element types.
+    #[test]
+    fn test_api_non_f32() {
+        // i32:  PACK=1 and PACK=2
+        test_full_api::<i32, 4, 1>(10, 7, i32_from_index);
+        test_full_api::<i32, 8, 2>(12, 5, i32_from_index);
+
+        // u8:   PACK=1 and PACK=2
+        test_full_api::<u8, 4, 2>(12, 5, u8_from_index);
+        test_full_api::<u8, 8, 1>(10, 7, u8_from_index);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // Block layout verification (PACK=1 only)
+    // ════════════════════════════════════════════════════════════════
+
+    /// Verify that for PACK=1, each block is the standard row-to-column
+    /// transposition of a GROUP-row slice of the source matrix.
+    fn test_block_layout_pack1<
+        T: Copy + Default + PartialEq + std::fmt::Debug + 'static,
+        const GROUP: usize,
+    >(
+        nrows: usize,
+        ncols: usize,
+        from_index: fn(usize) -> T,
+    ) {
+        let mut data = Matrix::new(T::default(), nrows, ncols);
+        data.as_mut_slice()
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, d)| *d = from_index(i));
+
+        let transpose = BlockTransposed::<T, GROUP, 1>::from_strided(data.as_view().into());
+
+        // Full blocks.
+        for b in 0..transpose.full_blocks() {
+            let block = transpose.block(b);
+            for i in 0..block.nrows() {
+                for j in 0..block.ncols() {
+                    assert_eq!(
+                        block[(i, j)],
+                        data[(GROUP * b + j, i)],
+                        "block {} at ({}, {}) -- GROUP={}, nrows={}, ncols={}",
+                        b,
+                        i,
+                        j,
+                        GROUP,
+                        nrows,
+                        ncols,
+                    );
+                }
+            }
+        }
+
+        // Remainder block.
+        if transpose.remainder() != 0 {
+            let fb = transpose.full_blocks();
+            let block = transpose.remainder_block().unwrap();
+            for i in 0..block.nrows() {
+                for j in 0..transpose.remainder() {
+                    assert_eq!(
+                        block[(i, j)],
+                        data[(GROUP * fb + j, i)],
+                        "remainder at ({}, {}) -- GROUP={}, nrows={}, ncols={}",
+                        i,
+                        j,
+                        GROUP,
+                        nrows,
+                        ncols,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_block_layout_pack1_group16() {
+        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
+        let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
+        for nrows in row_range {
+            for ncols in col_range.clone() {
+                test_block_layout_pack1::<f32, 16>(nrows, ncols, f32_from_index);
+            }
+        }
+    }
+
+    #[test]
+    fn test_block_layout_pack1_group8() {
+        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
+        let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
+        for nrows in row_range {
+            for ncols in col_range.clone() {
+                test_block_layout_pack1::<f32, 8>(nrows, ncols, f32_from_index);
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // Focused tests (not part of the unified parameterized test)
+    // ════════════════════════════════════════════════════════════════
 
     // ── Send / Sync static assertions ───────────────────────────────
 
-    /// Compile-time proof that row view types implement `Send` and `Sync`
-    /// when `T` satisfies the required bounds.
     #[test]
     fn test_row_view_send_sync() {
         fn assert_send<T: Send>() {}
         fn assert_sync<T: Sync>() {}
 
-        // Row: T: Sync → Send + Sync.
         assert_send::<Row<'_, f32, 16>>();
         assert_sync::<Row<'_, f32, 16>>();
         assert_send::<Row<'_, u8, 8, 2>>();
         assert_sync::<Row<'_, u8, 8, 2>>();
 
-        // RowMut: T: Send → Send; T: Sync → Sync.
         assert_send::<RowMut<'_, f32, 16>>();
         assert_sync::<RowMut<'_, f32, 16>>();
         assert_send::<RowMut<'_, i32, 4, 4>>();
         assert_sync::<RowMut<'_, i32, 4, 4>>();
-    }
-
-    // ── Generic element type (non-f32) ──────────────────────────────
-
-    /// Verify the full pipeline works with `i32` instead of `f32`.
-    #[test]
-    fn test_generic_element_type_i32() {
-        let nrows = 10;
-        let ncols = 7;
-
-        // Build via the wrapper constructor and manual fill.
-        let mut mat = BlockTransposed::<i32, 4>::new(nrows, ncols);
-
-        // Fill via mutable row view.
-        for row in 0..nrows {
-            let mut row_view = mat.get_row_mut(row).unwrap();
-            for col in 0..ncols {
-                row_view.set(col, (row * ncols + col) as i32);
-            }
-        }
-
-        // Verify via Index.
-        for row in 0..nrows {
-            for col in 0..ncols {
-                assert_eq!(mat[(row, col)], (row * ncols + col) as i32);
-            }
-        }
-
-        // Verify via get_element.
-        for row in 0..nrows {
-            for col in 0..ncols {
-                assert_eq!(mat.get_element(row, col), (row * ncols + col) as i32);
-            }
-        }
-
-        // Verify row view iteration.
-        let view = mat.as_view();
-        for row in 0..nrows {
-            let row_view = view.get_row(row).unwrap();
-            let collected: Vec<i32> = row_view.iter().collect();
-            for (col, &val) in collected.iter().enumerate() {
-                assert_eq!(val, (row * ncols + col) as i32);
-            }
-        }
-    }
-
-    /// Verify generic factory methods with `u8` and PACK > 1.
-    #[test]
-    fn test_generic_factory_u8_packed() {
-        let nrows = 12;
-        let ncols = 5;
-
-        let mut mat = BlockTransposed::<u8, 4, 2>::new(nrows, ncols);
-
-        for row in 0..nrows {
-            let mut row_view = mat.get_row_mut(row).unwrap();
-            for col in 0..ncols {
-                row_view.set(col, ((row * ncols + col) % 256) as u8);
-            }
-        }
-
-        for row in 0..nrows {
-            for col in 0..ncols {
-                assert_eq!(mat[(row, col)], ((row * ncols + col) % 256) as u8);
-            }
-        }
-
-        // Padding columns should be zero (u8::default()).
-        let expected_padded = div_round_up(ncols, 2) * 2; // 6
-        let raw: &[u8] = mat.as_slice();
-        for row in 0..nrows {
-            for col in ncols..expected_padded {
-                let idx = linear_index::<4, 2>(row, col, ncols);
-                assert_eq!(raw[idx], 0, "padding at ({}, {}) should be 0", row, col);
-            }
-        }
     }
 
     // ── NewRef / NewMut from raw slices ─────────────────────────────
@@ -1845,11 +1836,9 @@ mod tests {
         let ncols = 3;
         let repr = BlockTransposedRepr::<f32, 4>::new(nrows, ncols).unwrap();
 
-        // Build an owned mat and get its raw backing slice.
         let mat = BlockTransposed::<f32, 4>::new(nrows, ncols);
         let raw: &[f32] = mat.as_slice();
 
-        // Construct a BlockTransposedRef from the inner MatRef.
         let mat_ref = BlockTransposedRef {
             data: repr.new_ref(raw).unwrap(),
         };
@@ -1861,7 +1850,6 @@ mod tests {
             }
         }
 
-        // Construct a BlockTransposedMut from a mutable slice.
         let mut buf = raw.to_vec();
         let mat_mut = BlockTransposedMut {
             data: repr.new_mut(&mut buf).unwrap(),
@@ -1875,63 +1863,17 @@ mod tests {
         assert!(repr.new_mut(&mut short).is_err());
     }
 
-    // ── Row view get() / set() ─────────────────────────────────────
+    // ── Row view edge cases ─────────────────────────────────────────
 
     #[test]
-    fn test_row_view_get_and_set() {
-        let nrows = 6;
-        let ncols = 4;
-
-        let mut mat = BlockTransposed::<f32, 4>::new(nrows, ncols);
-
-        // Fill via set().
-        for row in 0..nrows {
-            let mut row_view = mat.get_row_mut(row).unwrap();
-            for col in 0..ncols {
-                row_view.set(col, (row * 100 + col) as f32);
-            }
-        }
-
-        // Read via get() — in-bounds.
+    fn test_row_view_empty() {
+        let mat = BlockTransposed::<f32, 16>::new(4, 0);
         let view = mat.as_view();
-        for row in 0..nrows {
-            let row_view = view.get_row(row).unwrap();
-            for col in 0..ncols {
-                assert_eq!(row_view.get(col), Some(&((row * 100 + col) as f32)));
-            }
-            // Out-of-bounds returns None.
-            assert_eq!(row_view.get(ncols), None);
-            assert_eq!(row_view.get(usize::MAX), None);
-        }
-
-        // Mutable row view get() also works.
-        for row in 0..nrows {
-            let row_view = mat.get_row_mut(row).unwrap();
-            for col in 0..ncols {
-                assert_eq!(row_view.get(col), Some(&((row * 100 + col) as f32)));
-            }
-            assert_eq!(row_view.get(ncols), None);
-        }
-    }
-
-    // ── from_matrix_view ────────────────────────────────────────────
-
-    #[test]
-    fn test_from_matrix_view() {
-        let nrows = 7;
-        let ncols = 3;
-        let mut data = Matrix::new(0.0_f32, nrows, ncols);
-        data.as_mut_slice()
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, d)| *d = i as f32);
-
-        let transpose = BlockTransposed::<f32, 4>::from_matrix_view(data.as_view());
-
-        for row in 0..nrows {
-            for col in 0..ncols {
-                assert_eq!(data[(row, col)], transpose[(row, col)]);
-            }
+        for i in 0..4 {
+            let row = view.get_row(i).unwrap();
+            assert!(row.is_empty());
+            assert_eq!(row.len(), 0);
+            assert_eq!(row.iter().count(), 0);
         }
     }
 
@@ -1943,7 +1885,7 @@ mod tests {
         let mat = BlockTransposed::<f32, 4>::new(4, 3);
         let view = mat.as_view();
         let row = view.get_row(0).unwrap();
-        let _ = row[3]; // ncols = 3, so index 3 is OOB
+        let _ = row[3];
     }
 
     #[test]
@@ -2001,7 +1943,6 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_block_oob() {
-        // 4 rows with GROUP=4 → 1 full block (index 0). Accessing block 1 should panic.
         let mat = BlockTransposed::<f32, 4>::new(4, 3);
         let _ = mat.block(1);
     }
@@ -2013,67 +1954,8 @@ mod tests {
         let _ = mat.block_mut(1);
     }
 
-    // ── Row-padding verification for PACK > 1 ───────────────────────
-
-    /// Verify that row-padding positions (rows in `nrows..padded_nrows`) are zero.
-    ///
-    /// The `from_strided` loop skips writing to row-padding positions, relying on
-    /// default-initialization. This test confirms those positions stay zero.
-    #[test]
-    fn test_packed_row_padding_is_zero() {
-        // GROUP=8, PACK=2, nrows=5, ncols=3 → 3 padding rows (rows 5, 6, 7).
-        const GROUP: usize = 8;
-        const PACK: usize = 2;
-        let nrows = 5;
-        let ncols = 3;
-
-        let mut data = Matrix::new(0.0_f32, nrows, ncols);
-        data.as_mut_slice()
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, d)| *d = (i + 1) as f32); // Use nonzero values
-
-        let transpose = BlockTransposed::<f32, GROUP, PACK>::from_strided(data.as_view().into());
-
-        let padded_nrows = nrows.next_multiple_of(GROUP); // 8
-        let padded_ncols = ncols.next_multiple_of(PACK); // 4
-        let raw: &[f32] = transpose.as_slice();
-
-        // Check that row-padding positions (rows 5..8) across all columns (0..4) are zero.
-        for row in nrows..padded_nrows {
-            for col in 0..padded_ncols {
-                let idx = linear_index::<GROUP, PACK>(row, col, ncols);
-                assert_eq!(
-                    raw[idx], 0.0,
-                    "row-padding at ({}, {}) should be zero, got {}",
-                    row, col, raw[idx],
-                );
-            }
-        }
-
-        // Also verify that data rows have correct values.
-        for row in 0..nrows {
-            for col in 0..ncols {
-                let expected = (row * ncols + col + 1) as f32;
-                assert_eq!(
-                    transpose[(row, col)],
-                    expected,
-                    "data at ({}, {}) should be {}, got {}",
-                    row,
-                    col,
-                    expected,
-                    transpose[(row, col)],
-                );
-            }
-        }
-    }
-
     // ── from_strided with non-unit stride ───────────────────────────
 
-    /// Test `from_strided` with a source that has `cstride > ncols` (non-contiguous rows).
-    ///
-    /// This validates that the new loop's `v.get_row_unchecked(row)` + `src_row[col]`
-    /// reads correctly from a strided source.
     #[test]
     fn test_from_strided_nonunit_stride() {
         use diskann_utils::strided::StridedView;
@@ -2082,17 +1964,10 @@ mod tests {
         const PACK: usize = 2;
         let nrows = 5;
         let ncols = 3;
-        let cstride = 8; // Each row occupies 8 elements in the source, but only 3 are data
+        let cstride = 8;
 
-        // Build a flat buffer with the strided layout:
-        // Row 0: data at [0..3], padding at [3..8]
-        // Row 1: data at [8..11], padding at [11..16]
-        // etc.
-        // linear_length = (nrows - 1) * cstride + ncols = 4 * 8 + 3 = 35
         let required_len = (nrows - 1) * cstride + ncols;
         let mut flat = vec![0.0_f32; required_len];
-
-        // Fill data positions with row * 100 + col + 1 (nonzero, distinguishable).
         for row in 0..nrows {
             for col in 0..ncols {
                 flat[row * cstride + col] = (row * 100 + col + 1) as f32;
@@ -2101,31 +1976,25 @@ mod tests {
 
         let strided = StridedView::try_shrink_from(&flat, nrows, ncols, cstride)
             .expect("should construct strided view");
-
         let transpose = BlockTransposed::<f32, GROUP, PACK>::from_strided(strided);
 
-        // Verify dimensions.
         assert_eq!(transpose.nrows(), nrows);
         assert_eq!(transpose.ncols(), ncols);
 
-        // Verify every (row, col) matches expected.
         for row in 0..nrows {
             for col in 0..ncols {
                 let expected = (row * 100 + col + 1) as f32;
                 assert_eq!(
                     transpose[(row, col)],
                     expected,
-                    "mismatch at ({}, {}): expected {}, got {}",
+                    "mismatch at ({}, {})",
                     row,
                     col,
-                    expected,
-                    transpose[(row, col)],
                 );
             }
         }
 
-        // Verify column padding is zero.
-        let padded_ncols = ncols.next_multiple_of(PACK); // 4
+        let padded_ncols = ncols.next_multiple_of(PACK);
         let raw: &[f32] = transpose.as_slice();
         for row in 0..nrows {
             for col in ncols..padded_ncols {
@@ -2133,107 +2002,42 @@ mod tests {
                 assert_eq!(
                     raw[idx], 0.0,
                     "column-padding at ({}, {}) should be zero",
-                    row, col
+                    row, col,
                 );
             }
         }
     }
 
-    // ── RowMut::get_mut() coverage ──────────────────────────────────
-
-    /// Test `RowMut::get_mut()` returns `Some(&mut T)` for in-bounds, `None` for OOB,
-    /// and that mutations through the reference are visible.
-    #[test]
-    fn test_row_view_get_mut() {
-        let nrows = 4;
-        let ncols = 3;
-        let mut mat = BlockTransposed::<f32, 4>::new(nrows, ncols);
-
-        // Fill with initial values.
-        for row in 0..nrows {
-            let mut row_view = mat.get_row_mut(row).unwrap();
-            for col in 0..ncols {
-                row_view.set(col, (row * 10 + col) as f32);
-            }
-        }
-
-        // Test get_mut() in-bounds — mutate through the reference.
-        {
-            let mut row_view = mat.get_row_mut(1).unwrap();
-            for col in 0..ncols {
-                let ptr = row_view.get_mut(col);
-                assert!(ptr.is_some(), "get_mut({}) should be Some", col);
-                *ptr.unwrap() += 1000.0;
-            }
-        }
-
-        // Verify mutations are visible via immutable Row::get().
-        let view = mat.as_view();
-        let row_view = view.get_row(1).unwrap();
-        for col in 0..ncols {
-            let expected = (10 + col) as f32 + 1000.0;
-            assert_eq!(row_view.get(col), Some(&expected));
-        }
-
-        // Test get_mut() OOB returns None.
-        {
-            let mut row_view = mat.get_row_mut(0).unwrap();
-            assert_eq!(row_view.get_mut(ncols), None);
-            assert_eq!(row_view.get_mut(usize::MAX), None);
-        }
-    }
-
     // ── Concurrent multi-row mutation ───────────────────────────────
 
-    /// Verify that `RowMut` views for distinct rows can be used concurrently
-    /// without data races. Uses `std::thread::scope` to spawn threads that each
-    /// write to non-overlapping rows via `RowMut`.
-    ///
-    /// Under Miri (`-Zmiri-strict-provenance`), this validates no aliasing UB.
     #[test]
     fn test_concurrent_row_mutation() {
-        use std::ptr::NonNull;
-
         const GROUP: usize = 8;
         const PACK: usize = 2;
 
-        // Reduce dimensions under Miri for faster execution.
         let (nrows, ncols, num_threads) = if cfg!(miri) { (8, 4, 2) } else { (64, 16, 4) };
 
         let mut mat = BlockTransposed::<f32, GROUP, PACK>::new(nrows, ncols);
-
-        // Get the repr and raw pointer for constructing RowMut in threads.
-        let repr = *mat.data.repr();
-        // Convert raw pointer to usize for Send across thread boundaries.
-        // SAFETY: We reconstruct the pointer inside each thread scope and use it
-        // only for non-overlapping row accesses.
-        let ptr_addr = mat.data.as_raw_mut_ptr() as usize;
-
-        // Each thread writes to a contiguous range of rows.
+        let rows: Vec<RowMut<'_, f32, GROUP, PACK>> = mat.data.rows_mut().collect();
         let rows_per_thread = nrows / num_threads;
+        let mut rows = rows.into_boxed_slice();
 
         std::thread::scope(|s| {
+            let mut remaining = &mut rows[..];
             for thread_id in 0..num_threads {
-                let start_row = thread_id * rows_per_thread;
-                let end_row = if thread_id == num_threads - 1 {
-                    nrows // Last thread takes any remainder
+                let chunk_len = if thread_id == num_threads - 1 {
+                    remaining.len()
                 } else {
-                    (thread_id + 1) * rows_per_thread
+                    rows_per_thread
                 };
+                let (chunk, rest) = remaining.split_at_mut(chunk_len);
+                remaining = rest;
+                let start_row = thread_id * rows_per_thread;
 
                 s.spawn(move || {
-                    for row in start_row..end_row {
-                        // Reconstruct the pointer from the usize address.
-                        let ptr = ptr_addr as *mut u8;
-                        // SAFETY: Each thread operates on distinct rows. Rows in
-                        // the block-transposed layout occupy non-overlapping memory
-                        // regions, so distinct-row `RowMut`s don't alias. The
-                        // pointer is valid for the lifetime of the scope because
-                        // `mat` outlives the `thread::scope` block.
-                        let mut row_view: RowMut<'_, f32, GROUP, PACK> =
-                            unsafe { repr.get_row_mut(NonNull::new_unchecked(ptr), row) };
+                    for (offset, row_view) in chunk.iter_mut().enumerate() {
+                        let row = start_row + offset;
                         for col in 0..ncols {
-                            // Write a pattern: thread_id * 10000 + row * 100 + col
                             let value = (thread_id * 10000 + row * 100 + col) as f32;
                             row_view.set(col, value);
                         }
@@ -2242,73 +2046,17 @@ mod tests {
             }
         });
 
-        // After all threads complete, verify every (row, col) has the expected value.
         for row in 0..nrows {
-            let thread_id = row / rows_per_thread;
-            // Adjust for last thread taking remainder
-            let thread_id = thread_id.min(num_threads - 1);
+            let thread_id = (row / rows_per_thread).min(num_threads - 1);
             for col in 0..ncols {
                 let expected = (thread_id * 10000 + row * 100 + col) as f32;
                 assert_eq!(
                     mat.get_element(row, col),
                     expected,
-                    "mismatch at ({}, {}): expected {}, got {}",
+                    "mismatch at ({}, {})",
                     row,
                     col,
-                    expected,
-                    mat.get_element(row, col),
                 );
-            }
-        }
-    }
-
-    // ── from_matrix_view with PACK > 1 ──────────────────────────────
-
-    /// Test `from_matrix_view` with packed layouts (PACK > 1).
-    #[test]
-    fn test_from_matrix_view_packed() {
-        let nrows = 10;
-        let ncols = 5;
-
-        let mut data = Matrix::new(0.0_f32, nrows, ncols);
-        data.as_mut_slice()
-            .iter_mut()
-            .enumerate()
-            .for_each(|(i, d)| *d = (i + 1) as f32);
-
-        // Test GROUP=8, PACK=2
-        {
-            let transpose = BlockTransposed::<f32, 8, 2>::from_matrix_view(data.as_view());
-            assert_eq!(transpose.nrows(), nrows);
-            assert_eq!(transpose.ncols(), ncols);
-            for row in 0..nrows {
-                for col in 0..ncols {
-                    assert_eq!(data[(row, col)], transpose[(row, col)]);
-                }
-            }
-        }
-
-        // Test GROUP=4, PACK=4
-        {
-            let transpose = BlockTransposed::<f32, 4, 4>::from_matrix_view(data.as_view());
-            assert_eq!(transpose.nrows(), nrows);
-            assert_eq!(transpose.ncols(), ncols);
-            for row in 0..nrows {
-                for col in 0..ncols {
-                    assert_eq!(data[(row, col)], transpose[(row, col)]);
-                }
-            }
-        }
-
-        // Test GROUP=16, PACK=2
-        {
-            let transpose = BlockTransposed::<f32, 16, 2>::from_matrix_view(data.as_view());
-            assert_eq!(transpose.nrows(), nrows);
-            assert_eq!(transpose.ncols(), ncols);
-            for row in 0..nrows {
-                for col in 0..ncols {
-                    assert_eq!(data[(row, col)], transpose[(row, col)]);
-                }
             }
         }
     }

@@ -394,7 +394,7 @@ pub(crate) fn lloyds_inner(
     let dim = data.ncols();
     assert_eq!(
         dim,
-        transpose.block_size(),
+        transpose.ncols(),
         "data and transpose should have the same dimensions"
     );
     assert_eq!(

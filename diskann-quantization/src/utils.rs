@@ -44,7 +44,7 @@ pub(crate) fn as_nonnull_mut<T>(slice: &mut [T]) -> NonNull<T> {
 /// pointer suitable for storing inside a [`Mat`](super::multi_vector::matrix::Mat).
 ///
 /// To reclaim the memory later, reconstruct the `Box` via
-/// `Box::from_raw(slice_from_raw_parts_mut(ptr, len))`.
+/// `Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len))`.
 pub(crate) fn box_into_nonnull<T>(b: Box<[T]>) -> NonNull<T> {
     // SAFETY: `Box::into_raw` guarantees the returned pointer is non-null.
     unsafe { NonNull::new_unchecked(Box::into_raw(b).cast::<T>()) }

@@ -389,7 +389,7 @@ where
 {
     assert_eq!(norms.len(), data.nrows());
     assert_eq!(transpose.nrows(), data.nrows());
-    assert_eq!(transpose.block_size(), data.ncols());
+    assert_eq!(transpose.ncols(), data.ncols());
     assert_eq!(points.ncols(), data.ncols());
 
     // Zero the argument
