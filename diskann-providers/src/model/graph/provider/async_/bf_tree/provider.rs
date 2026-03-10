@@ -2001,6 +2001,10 @@ where
         }
 
         // Save vectors and neighbors
+        // Note: snapshot calls perform synchronous I/O on the current thread.
+        // This is consistent with the on-disk snapshot() path which also blocks.
+        // spawn_blocking requires a 'static closure, but &self is a borrow,
+        // so it cannot be moved into spawn_blocking without an API change.
         if self.full_vectors.config().is_memory_backend() {
             self.full_vectors
                 .snapshot_to_disk(BfTreePaths::vectors_bftree(&saved_params.prefix));
@@ -2189,6 +2193,10 @@ where
         }
 
         // Save vectors, neighbors, and quant vectors
+        // Note: snapshot calls perform synchronous I/O on the current thread.
+        // This is consistent with the on-disk snapshot() path which also blocks.
+        // spawn_blocking requires a 'static closure, but &self is a borrow,
+        // so it cannot be moved into spawn_blocking without an API change.
         if self.full_vectors.config().is_memory_backend() {
             self.full_vectors
                 .snapshot_to_disk(BfTreePaths::vectors_bftree(&saved_params.prefix));
