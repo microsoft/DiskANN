@@ -481,6 +481,17 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> Repr
     unsafe fn get_row<'a>(self, ptr: NonNull<u8>, i: usize) -> Self::Row<'a> {
         debug_assert!(i < self.nrows);
 
+        // When ncols == 0 the backing allocation is zero-sized, so we must not
+        // compute any pointer offset.  Return a dangling base instead.
+        if self.ncols == 0 {
+            return Row {
+                // SAFETY: The row is empty (ncols == 0) so the pointer will never be
+                // dereferenced. A dangling `NonNull` satisfies the non-null invariant.
+                base: unsafe { SlicePtr::new_unchecked(NonNull::dangling()) },
+                ncols: 0,
+            };
+        }
+
         let base_ptr = ptr.as_ptr().cast::<T>();
         let offset = linear_index::<GROUP, PACK>(i, 0, self.ncols);
 
@@ -510,6 +521,17 @@ unsafe impl<T: Copy, const GROUP: usize, const PACK: usize> ReprMut
 
     unsafe fn get_row_mut<'a>(self, ptr: NonNull<u8>, i: usize) -> Self::RowMut<'a> {
         debug_assert!(i < self.nrows);
+
+        // When ncols == 0 the backing allocation is zero-sized, so we must not
+        // compute any pointer offset.  Return a dangling base instead.
+        if self.ncols == 0 {
+            return RowMut {
+                // SAFETY: The row is empty (ncols == 0) so the pointer will never be
+                // dereferenced. A dangling `NonNull` satisfies the non-null invariant.
+                base: unsafe { MutSlicePtr::new_unchecked(NonNull::dangling()) },
+                ncols: 0,
+            };
+        }
 
         let base_ptr = ptr.as_ptr().cast::<T>();
         let offset = linear_index::<GROUP, PACK>(i, 0, self.ncols);
@@ -850,7 +872,7 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     delegate_to_ref!(pub fn remainder(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
-    delegate_to_ref!(unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
+    delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
     delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block(&self, block: usize) -> MatrixView<'_, T>);
     delegate_to_ref!(#[allow(clippy::expect_used)] pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
     delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
@@ -888,10 +910,10 @@ impl<'a, T: Copy, const GROUP: usize, const PACK: usize> BlockTransposedMut<'a, 
     /// The returned slice has `storage_len()` elements (including all padding).
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        self.reborrow_mut().as_mut_slice_inner()
+        self.reborrow_mut().mut_slice_inner()
     }
 
-    fn as_mut_slice_inner(mut self) -> &'a mut [T] {
+    fn mut_slice_inner(mut self) -> &'a mut [T] {
         let len = self.data.repr().storage_len();
         // SAFETY: We own exclusive access through `self`.
         unsafe { std::slice::from_raw_parts_mut(self.data.as_raw_mut_ptr().cast::<T>(), len) }
@@ -997,7 +1019,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     delegate_to_ref!(pub fn remainder(&self) -> usize);
     delegate_to_ref!(pub fn as_ptr(&self) -> *const T);
     delegate_to_ref!(pub fn as_slice(&self) -> &[T]);
-    delegate_to_ref!(unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
+    delegate_to_ref!(#[allow(clippy::missing_safety_doc)] unsafe pub fn block_ptr_unchecked(&self, block: usize) -> *const T);
     delegate_to_ref!(#[allow(clippy::expect_used)] pub fn block(&self, block: usize) -> MatrixView<'_, T>);
     delegate_to_ref!(#[allow(clippy::expect_used)] pub fn remainder_block(&self) -> Option<MatrixView<'_, T>>);
     delegate_to_ref!(pub fn get_element(&self, row: usize, col: usize) -> T);
@@ -1028,7 +1050,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> BlockTransposed<T, GROUP, P
     /// See [`BlockTransposedMut::as_mut_slice`].
     #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
-        self.as_view_mut().as_mut_slice_inner()
+        self.as_view_mut().mut_slice_inner()
     }
 
     /// See [`BlockTransposedMut::block_mut`].
@@ -1167,7 +1189,7 @@ impl<T: Copy, const GROUP: usize, const PACK: usize> std::ops::Index<(usize, usi
 mod tests {
     //! Test organisation:
     //!
-    //!  1. **Helper functions** — `*_from_index` element generators.
+    //!  1. **Helper functions** — `gen_*` element generators.
     //!  2. [`test_full_api`] — single parameterized function that exhaustively
     //!     exercises the full read + write API on all three wrapper types
     //!     (`BlockTransposed`, `BlockTransposedRef`, `BlockTransposedMut`).
@@ -1184,18 +1206,18 @@ mod tests {
     use super::*;
     use crate::utils::div_round_up;
 
-    // ── Per-type index generators ────────────────────────────────────
+    // ── Per-type element generators ──────────────────────────────────
     //
-    // All generators return non-zero values so that `T::default()` (zero)
-    // can be used unambiguously to verify padding positions.
+    // Each generator maps a flat index to a non-zero `T` value so that
+    // `T::default()` (zero) can be used unambiguously to verify padding.
 
-    fn f32_from_index(i: usize) -> f32 {
+    fn gen_f32(i: usize) -> f32 {
         (i + 1) as f32
     }
-    fn i32_from_index(i: usize) -> i32 {
+    fn gen_i32(i: usize) -> i32 {
         (i + 1) as i32
     }
-    fn u8_from_index(i: usize) -> u8 {
+    fn gen_u8(i: usize) -> u8 {
         ((i % 255) + 1) as u8
     }
 
@@ -1218,7 +1240,7 @@ mod tests {
     >(
         nrows: usize,
         ncols: usize,
-        from_index: fn(usize) -> T,
+        gen_element: fn(usize) -> T,
     ) {
         let context = lazy_format!(
             "T={}, GROUP={}, PACK={}, nrows={}, ncols={}",
@@ -1235,7 +1257,7 @@ mod tests {
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
-            .for_each(|(i, d)| *d = from_index(i));
+            .for_each(|(i, d)| *d = gen_element(i));
 
         let mut transpose = BlockTransposed::<T, GROUP, PACK>::from_strided(data.as_view().into());
 
@@ -1462,6 +1484,7 @@ mod tests {
             {
                 let view = transpose.as_view();
                 assert_eq!(view.block(b).as_slice(), &block_data[..], "{}", context);
+                // SAFETY: `b` is in range `0..num_blocks` by the loop bound.
                 assert_eq!(unsafe { view.block_ptr_unchecked(b) }, ptr, "{}", context);
             }
 
@@ -1470,6 +1493,7 @@ mod tests {
                 let mut_view = transpose.as_view_mut();
                 assert_eq!(mut_view.block(b).as_slice(), &block_data[..], "{}", context);
                 assert_eq!(
+                    // SAFETY: `b` is in range `0..num_blocks` by the loop bound.
                     unsafe { mut_view.block_ptr_unchecked(b) },
                     ptr,
                     "{}",
@@ -1583,13 +1607,14 @@ mod tests {
 
             // RowMut::get_mut — mutate and verify.
             let mut row = transpose.get_row_mut(0).unwrap();
-            let sentinel = from_index(usize::MAX / 2);
+            let sentinel = gen_element(usize::MAX / 2);
             let original = row[0];
             if let Some(v) = row.get_mut(0) {
                 *v = sentinel;
             }
             assert_eq!(row.get_mut(ncols), None, "{}", context);
-            drop(row);
+            // Explicit scope end so the mutable borrow is released before the next access.
+            let _ = row;
             assert_eq!(transpose.get_element(0, 0), sentinel, "{}", context);
             // Restore original.
             transpose.get_row_mut(0).unwrap().set(0, original);
@@ -1667,7 +1692,7 @@ mod tests {
         let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
         for nrows in row_range {
             for ncols in col_range.clone() {
-                test_full_api::<f32, 16, 1>(nrows, ncols, f32_from_index);
+                test_full_api::<f32, 16, 1>(nrows, ncols, gen_f32);
             }
         }
     }
@@ -1678,7 +1703,7 @@ mod tests {
         let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
         for nrows in row_range {
             for ncols in col_range.clone() {
-                test_full_api::<f32, 8, 1>(nrows, ncols, f32_from_index);
+                test_full_api::<f32, 8, 1>(nrows, ncols, gen_f32);
             }
         }
     }
@@ -1689,9 +1714,9 @@ mod tests {
         let col_range = if cfg!(miri) { 4..5 } else { 0..9 };
         for nrows in row_range {
             for ncols in col_range.clone() {
-                test_full_api::<f32, 4, 2>(nrows, ncols, f32_from_index);
-                test_full_api::<f32, 8, 2>(nrows, ncols, f32_from_index);
-                test_full_api::<f32, 16, 2>(nrows, ncols, f32_from_index);
+                test_full_api::<f32, 4, 2>(nrows, ncols, gen_f32);
+                test_full_api::<f32, 8, 2>(nrows, ncols, gen_f32);
+                test_full_api::<f32, 16, 2>(nrows, ncols, gen_f32);
             }
         }
     }
@@ -1702,9 +1727,9 @@ mod tests {
         let col_range = if cfg!(miri) { 4..5 } else { 0..9 };
         for nrows in row_range {
             for ncols in col_range.clone() {
-                test_full_api::<f32, 4, 4>(nrows, ncols, f32_from_index);
-                test_full_api::<f32, 8, 4>(nrows, ncols, f32_from_index);
-                test_full_api::<f32, 16, 4>(nrows, ncols, f32_from_index);
+                test_full_api::<f32, 4, 4>(nrows, ncols, gen_f32);
+                test_full_api::<f32, 8, 4>(nrows, ncols, gen_f32);
+                test_full_api::<f32, 16, 4>(nrows, ncols, gen_f32);
             }
         }
     }
@@ -1713,12 +1738,12 @@ mod tests {
     #[test]
     fn test_api_non_f32() {
         // i32:  PACK=1 and PACK=2
-        test_full_api::<i32, 4, 1>(10, 7, i32_from_index);
-        test_full_api::<i32, 8, 2>(12, 5, i32_from_index);
+        test_full_api::<i32, 4, 1>(10, 7, gen_i32);
+        test_full_api::<i32, 8, 2>(12, 5, gen_i32);
 
         // u8:   PACK=1 and PACK=2
-        test_full_api::<u8, 4, 2>(12, 5, u8_from_index);
-        test_full_api::<u8, 8, 1>(10, 7, u8_from_index);
+        test_full_api::<u8, 4, 2>(12, 5, gen_u8);
+        test_full_api::<u8, 8, 1>(10, 7, gen_u8);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -1733,13 +1758,13 @@ mod tests {
     >(
         nrows: usize,
         ncols: usize,
-        from_index: fn(usize) -> T,
+        gen_element: fn(usize) -> T,
     ) {
         let mut data = Matrix::new(T::default(), nrows, ncols);
         data.as_mut_slice()
             .iter_mut()
             .enumerate()
-            .for_each(|(i, d)| *d = from_index(i));
+            .for_each(|(i, d)| *d = gen_element(i));
 
         let transpose = BlockTransposed::<T, GROUP, 1>::from_strided(data.as_view().into());
 
@@ -1790,7 +1815,7 @@ mod tests {
         let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
         for nrows in row_range {
             for ncols in col_range.clone() {
-                test_block_layout_pack1::<f32, 16>(nrows, ncols, f32_from_index);
+                test_block_layout_pack1::<f32, 16>(nrows, ncols, gen_f32);
             }
         }
     }
@@ -1801,7 +1826,7 @@ mod tests {
         let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
         for nrows in row_range {
             for ncols in col_range.clone() {
-                test_block_layout_pack1::<f32, 8>(nrows, ncols, f32_from_index);
+                test_block_layout_pack1::<f32, 8>(nrows, ncols, gen_f32);
             }
         }
     }
@@ -1867,14 +1892,31 @@ mod tests {
 
     #[test]
     fn test_row_view_empty() {
-        let mat = BlockTransposed::<f32, 16>::new(4, 0);
-        let view = mat.as_view();
-        for i in 0..4 {
-            let row = view.get_row(i).unwrap();
-            assert!(row.is_empty());
-            assert_eq!(row.len(), 0);
-            assert_eq!(row.iter().count(), 0);
+        /// Verify that immutable and mutable empty-row views are sound for a
+        /// given `GROUP`/`PACK` combination.
+        fn check_empty<const GROUP: usize, const PACK: usize>() {
+            let mut mat = BlockTransposed::<f32, GROUP, PACK>::new(4, 0);
+
+            // Immutable views.
+            let view = mat.as_view();
+            for i in 0..4 {
+                let row = view.get_row(i).unwrap();
+                assert!(row.is_empty());
+                assert_eq!(row.len(), 0);
+                assert_eq!(row.iter().count(), 0);
+            }
+
+            // Mutable views.
+            for i in 0..4 {
+                let row = mat.get_row_mut(i).unwrap();
+                assert!(row.is_empty());
+                assert_eq!(row.len(), 0);
+            }
         }
+
+        check_empty::<16, 1>(); // default PACK
+        check_empty::<4, 2>(); // PACK > 1
+        check_empty::<4, 4>(); // PACK == GROUP
     }
 
     // ── Bounds-checking panic tests ─────────────────────────────────
