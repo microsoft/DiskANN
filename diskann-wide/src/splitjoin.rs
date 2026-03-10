@@ -19,7 +19,7 @@ pub trait SplitJoin {
 }
 
 /// Representation of the low and high halves associated with an implementation of
-/// [`SplitJoin`].
+/// [`SplitJoin`] or [`crate::ZipUnzip`].
 #[derive(Debug, Clone, Copy)]
 pub struct LoHi<T> {
     /// The first half of a split entity.

@@ -729,9 +729,6 @@ impl<T> SIMDSigned for T where T: SIMDUnsigned + SIMDAbs {}
 ///
 /// `unzip` is the inverse, separating even- and odd-indexed elements:
 ///   `unzip([a0, b0, a1, b1, …]) = ([a0, a1, …], [b0, b1, …])`
-///
-/// This is analogous to [`SplitJoin`] but permutes elements rather than
-/// simply concatenating / splitting lanes.
 pub trait ZipUnzip: Sized {
     /// The half-width vector type.
     type Halved;

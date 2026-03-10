@@ -162,5 +162,3 @@ pub(crate) unsafe fn __load_first_u16_of_16_bytes(
         }
     }
 }
-
-
