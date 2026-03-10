@@ -1947,6 +1947,23 @@ async fn copy_snapshot_if_needed(
     Ok(())
 }
 
+/// Load a BfTree from a snapshot file, restoring it as in-memory or on-disk
+/// depending on `is_memory`. Builds the Config from `params` internally.
+fn load_bftree(
+    params: &BfTreeParams,
+    snapshot_path: std::path::PathBuf,
+    is_memory: bool,
+) -> Result<BfTree, ANNError> {
+    let config = params.to_config(&snapshot_path, is_memory);
+    if is_memory {
+        BfTree::new_from_snapshot_disk_to_memory(snapshot_path, config)
+            .map_err(|e| ANNError::from(super::ConfigError(e)))
+    } else {
+        BfTree::new_from_snapshot(config, None)
+            .map_err(|e| ANNError::from(super::ConfigError(e)))
+    }
+}
+
 // SaveWith/LoadWith for BfTreeProvider with TableDeleteProviderAsync
 
 impl<T> SaveWith<String> for BfTreeProvider<T, NoStore, TableDeleteProviderAsync>
@@ -2064,24 +2081,11 @@ where
         let metric = Metric::from_str(&saved_params.metric)
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
-        let vector_config = saved_params.params_vector.to_config(
-            &BfTreePaths::vectors_bftree(&saved_params.prefix),
+        let vector_index = load_bftree(
+            &saved_params.params_vector,
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
             saved_params.is_memory,
-        );
-        let neighbor_config = saved_params.params_neighbor.to_config(
-            &BfTreePaths::neighbors_bftree(&saved_params.prefix),
-            saved_params.is_memory,
-        );
-
-        let vector_index = if saved_params.is_memory {
-            BfTree::new_from_snapshot_disk_to_memory(
-                BfTreePaths::vectors_bftree(&saved_params.prefix),
-                vector_config,
-            )
-            .map_err(super::ConfigError)?
-        } else {
-            BfTree::new_from_snapshot(vector_config, None).map_err(super::ConfigError)?
-        };
+        )?;
         let full_vectors = VectorProvider::<T>::new_from_bftree(
             saved_params.max_points,
             saved_params.dim,
@@ -2089,15 +2093,11 @@ where
             vector_index,
         );
 
-        let adjacency_list_index = if saved_params.is_memory {
-            BfTree::new_from_snapshot_disk_to_memory(
-                BfTreePaths::neighbors_bftree(&saved_params.prefix),
-                neighbor_config,
-            )
-            .map_err(super::ConfigError)?
-        } else {
-            BfTree::new_from_snapshot(neighbor_config, None).map_err(super::ConfigError)?
-        };
+        let adjacency_list_index = load_bftree(
+            &saved_params.params_neighbor,
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        )?;
         let neighbor_provider =
             NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
 
@@ -2282,28 +2282,11 @@ where
         let metric = Metric::from_str(&saved_params.metric)
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
-        let vector_config = saved_params.params_vector.to_config(
-            &BfTreePaths::vectors_bftree(&saved_params.prefix),
+        let vector_index = load_bftree(
+            &saved_params.params_vector,
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
             saved_params.is_memory,
-        );
-        let neighbor_config = saved_params.params_neighbor.to_config(
-            &BfTreePaths::neighbors_bftree(&saved_params.prefix),
-            saved_params.is_memory,
-        );
-        let quant_config = quant_params.params_quant.to_config(
-            &BfTreePaths::quant_bftree(&saved_params.prefix),
-            saved_params.is_memory,
-        );
-
-        let vector_index = if saved_params.is_memory {
-            BfTree::new_from_snapshot_disk_to_memory(
-                BfTreePaths::vectors_bftree(&saved_params.prefix),
-                vector_config,
-            )
-            .map_err(super::ConfigError)?
-        } else {
-            BfTree::new_from_snapshot(vector_config, None).map_err(super::ConfigError)?
-        };
+        )?;
         let full_vectors = VectorProvider::<T>::new_from_bftree(
             saved_params.max_points,
             saved_params.dim,
@@ -2311,15 +2294,11 @@ where
             vector_index,
         );
 
-        let adjacency_list_index = if saved_params.is_memory {
-            BfTree::new_from_snapshot_disk_to_memory(
-                BfTreePaths::neighbors_bftree(&saved_params.prefix),
-                neighbor_config,
-            )
-            .map_err(super::ConfigError)?
-        } else {
-            BfTree::new_from_snapshot(neighbor_config, None).map_err(super::ConfigError)?
-        };
+        let adjacency_list_index = load_bftree(
+            &saved_params.params_neighbor,
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        )?;
         let neighbor_provider =
             NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
 
@@ -2329,15 +2308,11 @@ where
         let pq_table =
             pq_storage.load_pq_pivots_bin(&filename, quant_params.num_pq_bytes, storage)?;
 
-        let quant_vector_index = if saved_params.is_memory {
-            BfTree::new_from_snapshot_disk_to_memory(
-                BfTreePaths::quant_bftree(&saved_params.prefix),
-                quant_config,
-            )
-            .map_err(super::ConfigError)?
-        } else {
-            BfTree::new_from_snapshot(quant_config, None).map_err(super::ConfigError)?
-        };
+        let quant_vector_index = load_bftree(
+            &quant_params.params_quant,
+            BfTreePaths::quant_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        )?;
         let quant_vectors = QuantVectorProvider::new_from_bftree(
             metric,
             saved_params.max_points,
