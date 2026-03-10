@@ -465,6 +465,7 @@ where
 ///////////
 
 #[cfg(test)]
+#[cfg(not(miri))]
 mod minmax_vector_tests {
     use diskann_utils::Reborrow;
     use rand::{

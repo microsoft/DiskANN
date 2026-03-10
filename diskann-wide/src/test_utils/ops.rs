@@ -1010,6 +1010,7 @@ macro_rules! test_splitjoin {
 pub fn test_zipunzip_impl<V, H, T, const N: usize, const N2: usize>(arch: V::Arch, a: &[T])
 where
     T: Copy + Debug + ScalarTraits,
+    [T; N]: SplitJoin<Halved = [T; N2]>,
     Const<N>: SupportedLaneCount,
     Const<N2>: SupportedLaneCount,
     V: SIMDVector<Scalar = T, ConstLanes = Const<N>> + ZipUnzip<Halved = H>,
@@ -1020,17 +1021,20 @@ where
     assert!(2 * N2 == N, "zip/unzip should logically halve dimensions");
     let a: &[T; N] = a.try_into().unwrap();
 
-    // --- Test unzip: even/odd deinterleave ---
+    // Unzip
     let LoHi { lo, hi } = V::from_array(arch, *a).unzip();
     let evens: [T; N2] = core::array::from_fn(|i| a[2 * i]);
     let odds: [T; N2] = core::array::from_fn(|i| a[2 * i + 1]);
     test_unary_op(&lo.to_array(), &evens, &identity, "unzip evens");
     test_unary_op(&hi.to_array(), &odds, &identity, "unzip odds");
 
-    // --- Test zip: interleave ---
-    // Reinterpret the N-element input as two N/2 halves for the zip test.
-    let lo_half = H::from_array(arch, *<&[T; N2]>::try_from(&a[..N2]).unwrap());
-    let hi_half = H::from_array(arch, *<&[T; N2]>::try_from(&a[N2..]).unwrap());
+    // Zip
+    let LoHi {
+        lo: lo_arr,
+        hi: hi_arr,
+    } = a.split();
+    let lo_half = H::from_array(arch, lo_arr);
+    let hi_half = H::from_array(arch, hi_arr);
     let zipped = LoHi::new(lo_half, hi_half).zip::<V>();
     let expected: [T; N] =
         core::array::from_fn(|i| if i % 2 == 0 { a[i / 2] } else { a[N2 + i / 2] });
