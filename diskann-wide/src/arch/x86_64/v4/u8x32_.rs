@@ -36,8 +36,6 @@ macros::x86_splitjoin!(
 macros::x86_zipunzip!(
     u8x32,
     u8x16,
-    _mm_unpacklo_epi8,
-    _mm_unpackhi_epi8,
     _mm_setr_epi8(0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15),
     _mm_setr_epi8(0, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 14, 7, 15)
 );

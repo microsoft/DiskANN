@@ -316,16 +316,11 @@ macro_rules! x86_splitjoin {
 }
 
 /// Implement [`ZipUnzip`] for a 256-bit vector type (`$type`) whose halved
-/// type (`$half`) is a 128-bit vector, using within-lane shuffles.
-///
-/// The `zip` / `unzip` methods (producing `LoHi`) use 128-bit `pshufb` +
-/// `punpckl/hqdq` (5 µops).  The `zip_flat` / `unzip_flat` methods use 256-bit
-/// `vpshufb` + `vpermd` (2 µops) by rearranging within each lane and then
-/// fixing the cross-lane dword ordering.
+/// type is a 128-bit vector, using `vpshufb` + `vpermd` for the flat paths
+/// and delegating `zip`/`unzip` through `join`/`split`.
 ///
 /// # Parameters
 ///
-/// * `$unpacklo`, `$unpackhi` — 128-bit unpack intrinsics for the `zip` path
 /// * `$deinterleave_mask` — 128-bit `pshufb` mask that groups even-indexed
 ///   elements in the low qword and odd-indexed in the high qword
 /// * `$interleave_mask` — 128-bit `pshufb` mask that does the inverse:
@@ -333,50 +328,23 @@ macro_rules! x86_splitjoin {
 ///
 /// # Safety
 ///
-/// The caller must ensure that the supplied intrinsics are valid for the
-/// architecture token stored in `$type`.
+/// The caller must ensure AVX2 is available for the architecture token stored
+/// in `$type`.
 macro_rules! x86_zipunzip {
     (
         $type:path, $half:path,
-        $unpacklo:ident, $unpackhi:ident,
         $deinterleave_mask:expr,
         $interleave_mask:expr
     ) => {
         impl $crate::ZipUnzip for $type {
             #[inline(always)]
             fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {
-                use $crate::SplitJoin;
-                // SAFETY: Caller asserts that these intrinsics are within the
-                // capabilities of the architecture stored in the type.
-                unsafe {
-                    let lo_raw = halves.lo.to_underlying();
-                    let hi_raw = halves.hi.to_underlying();
-                    let lo = $unpacklo(lo_raw, hi_raw);
-                    let hi = $unpackhi(lo_raw, hi_raw);
-                    <$type>::join($crate::LoHi::new(
-                        <$half>::from_underlying(halves.lo.arch(), lo),
-                        <$half>::from_underlying(halves.lo.arch(), hi),
-                    ))
-                }
+                <Self as $crate::SplitJoin>::join(halves).zip_flat()
             }
 
             #[inline(always)]
             fn unzip(self) -> $crate::LoHi<<Self as $crate::SplitJoin>::Halved> {
-                use $crate::SplitJoin;
-                let halves = self.split();
-                // SAFETY: Caller asserts that these intrinsics are within the
-                // capabilities of the architecture stored in the type.
-                unsafe {
-                    let mask = $deinterleave_mask;
-                    let lo = _mm_shuffle_epi8(halves.lo.to_underlying(), mask);
-                    let hi = _mm_shuffle_epi8(halves.hi.to_underlying(), mask);
-                    let evens = _mm_unpacklo_epi64(lo, hi);
-                    let odds = _mm_unpackhi_epi64(lo, hi);
-                    $crate::LoHi::new(
-                        <$half>::from_underlying(halves.lo.arch(), evens),
-                        <$half>::from_underlying(halves.lo.arch(), odds),
-                    )
-                }
+                <Self as $crate::SplitJoin>::split(self.unzip_flat())
             }
 
             #[inline(always)]
