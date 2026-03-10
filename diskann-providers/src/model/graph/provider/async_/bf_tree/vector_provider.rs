@@ -101,16 +101,9 @@ impl<T: VectorRepr, I: VectorId> VectorProvider<T, I> {
         self.vector_index.config()
     }
 
-    /// Create a snapshot of the vector index
-    ///
-    #[inline(always)]
-    pub fn snapshot(&self) -> std::path::PathBuf {
-        self.vector_index.snapshot()
-    }
-
-    /// Snapshot an in-memory vector index to a file on disk.
-    pub fn snapshot_to_disk(&self, path: impl AsRef<std::path::Path>) -> std::path::PathBuf {
-        self.vector_index.snapshot_memory_to_disk(path)
+    /// Access the underlying BfTree
+    pub(crate) fn bftree(&self) -> &BfTree {
+        &self.vector_index
     }
 
     /// Set vector with Id, `i``, to `v`

@@ -1947,6 +1947,19 @@ async fn copy_snapshot_if_needed(
     Ok(())
 }
 
+/// Save a BfTree to disk, handling both in-memory and on-disk cases.
+/// For in-memory trees, uses `snapshot_memory_to_disk` to serialize all records.
+/// For on-disk trees, snapshots in place and copies if the target path differs.
+async fn save_bftree(tree: &BfTree, target_path: std::path::PathBuf) -> ANNResult<()> {
+    if tree.config().is_memory_backend() {
+        tree.snapshot_memory_to_disk(&target_path);
+    } else {
+        let snapshot_path = tree.snapshot();
+        copy_snapshot_if_needed(snapshot_path, target_path).await?;
+    }
+    Ok(())
+}
+
 /// Load a BfTree from a snapshot file, restoring it as in-memory or on-disk
 /// depending on `is_memory`. Builds the Config from `params` internally.
 fn load_bftree(
@@ -2017,31 +2030,16 @@ where
         }
 
         // Save vectors and neighbors
-        // Note: snapshot calls perform synchronous I/O on the current thread.
-        // This is consistent with the on-disk snapshot() path which also blocks.
-        // spawn_blocking requires a 'static closure, but &self is a borrow,
-        // so it cannot be moved into spawn_blocking without an API change.
-        if self.full_vectors.config().is_memory_backend() {
-            self.full_vectors
-                .snapshot_to_disk(BfTreePaths::vectors_bftree(&saved_params.prefix));
-            self.neighbor_provider
-                .snapshot_to_disk(BfTreePaths::neighbors_bftree(&saved_params.prefix));
-        } else {
-            let vectors_snapshot_path = self.full_vectors.snapshot();
-            let neighbors_snapshot_path = self.neighbor_provider.snapshot();
-
-            // Copy snapshot files to the target prefix location if they differ
-            copy_snapshot_if_needed(
-                vectors_snapshot_path,
-                BfTreePaths::vectors_bftree(&saved_params.prefix),
-            )
-            .await?;
-            copy_snapshot_if_needed(
-                neighbors_snapshot_path,
-                BfTreePaths::neighbors_bftree(&saved_params.prefix),
-            )
-            .await?;
-        }
+        save_bftree(
+            self.full_vectors.bftree(),
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+        )
+        .await?;
+        save_bftree(
+            self.neighbor_provider.bftree(),
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+        )
+        .await?;
 
         // Save delete bitmap
         {
@@ -2192,39 +2190,21 @@ where
         }
 
         // Save vectors, neighbors, and quant vectors
-        // Note: snapshot calls perform synchronous I/O on the current thread.
-        // This is consistent with the on-disk snapshot() path which also blocks.
-        // spawn_blocking requires a 'static closure, but &self is a borrow,
-        // so it cannot be moved into spawn_blocking without an API change.
-        if self.full_vectors.config().is_memory_backend() {
-            self.full_vectors
-                .snapshot_to_disk(BfTreePaths::vectors_bftree(&saved_params.prefix));
-            self.neighbor_provider
-                .snapshot_to_disk(BfTreePaths::neighbors_bftree(&saved_params.prefix));
-            self.quant_vectors
-                .snapshot_to_disk(BfTreePaths::quant_bftree(&saved_params.prefix));
-        } else {
-            let vectors_snapshot_path = self.full_vectors.snapshot();
-            let neighbors_snapshot_path = self.neighbor_provider.snapshot();
-            let quant_snapshot_path = self.quant_vectors.snapshot();
-
-            // Copy snapshot files to the target prefix location if they differ
-            copy_snapshot_if_needed(
-                vectors_snapshot_path,
-                BfTreePaths::vectors_bftree(&saved_params.prefix),
-            )
-            .await?;
-            copy_snapshot_if_needed(
-                neighbors_snapshot_path,
-                BfTreePaths::neighbors_bftree(&saved_params.prefix),
-            )
-            .await?;
-            copy_snapshot_if_needed(
-                quant_snapshot_path,
-                BfTreePaths::quant_bftree(&saved_params.prefix),
-            )
-            .await?;
-        }
+        save_bftree(
+            self.full_vectors.bftree(),
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+        )
+        .await?;
+        save_bftree(
+            self.neighbor_provider.bftree(),
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+        )
+        .await?;
+        save_bftree(
+            self.quant_vectors.bftree(),
+            BfTreePaths::quant_bftree(&saved_params.prefix),
+        )
+        .await?;
 
         // Save PQ table metadata and data using PQStorage format
         let filename = BfTreePaths::pq_pivots_bin(&saved_params.prefix);
