@@ -35,9 +35,11 @@ macros::x86_splitjoin!(
     "avx2"
 );
 macros::x86_zipunzip!(
-    f16x16, f16x8,
-    _mm_unpacklo_epi16, _mm_unpackhi_epi16,
-    _mm_setr_epi8(0,1, 4,5, 8,9, 12,13, 2,3, 6,7, 10,11, 14,15)
+    f16x16,
+    f16x8,
+    _mm_unpacklo_epi16,
+    _mm_unpackhi_epi16,
+    _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, 2, 3, 6, 7, 10, 11, 14, 15)
 );
 
 impl X86Splat for f16x16 {

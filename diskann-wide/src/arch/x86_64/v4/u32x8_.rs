@@ -36,9 +36,11 @@ macros::x86_splitjoin!(
     "avx2"
 );
 macros::x86_zipunzip!(
-    u32x8, u32x4,
-    _mm_unpacklo_epi32, _mm_unpackhi_epi32,
-    _mm_setr_epi8(0,1,2,3, 8,9,10,11, 4,5,6,7, 12,13,14,15)
+    u32x8,
+    u32x4,
+    _mm_unpacklo_epi32,
+    _mm_unpackhi_epi32,
+    _mm_setr_epi8(0, 1, 2, 3, 8, 9, 10, 11, 4, 5, 6, 7, 12, 13, 14, 15)
 );
 
 helpers::unsafe_map_binary_op!(u32x8, std::ops::Add, add, _mm256_add_epi32, "avx2");

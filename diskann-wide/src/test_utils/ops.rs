@@ -1032,9 +1032,8 @@ where
     let lo_half = H::from_array(arch, *<&[T; N2]>::try_from(&a[..N2]).unwrap());
     let hi_half = H::from_array(arch, *<&[T; N2]>::try_from(&a[N2..]).unwrap());
     let zipped = LoHi::new(lo_half, hi_half).zip::<V>();
-    let expected: [T; N] = core::array::from_fn(|i| {
-        if i % 2 == 0 { a[i / 2] } else { a[N2 + i / 2] }
-    });
+    let expected: [T; N] =
+        core::array::from_fn(|i| if i % 2 == 0 { a[i / 2] } else { a[N2 + i / 2] });
     test_unary_op(&zipped.to_array(), &expected, &identity, "zip");
 }
 

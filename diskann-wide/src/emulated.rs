@@ -743,7 +743,10 @@ macro_rules! impl_zipunzip {
 
             #[inline(always)]
             fn zip(halves: $crate::LoHi<Self::Halved>) -> Self {
-                Self($crate::LoHi::new(halves.lo.0, halves.hi.0).zip(), halves.lo.1)
+                Self(
+                    $crate::LoHi::new(halves.lo.0, halves.hi.0).zip(),
+                    halves.lo.1,
+                )
             }
 
             #[inline(always)]
