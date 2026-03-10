@@ -1423,7 +1423,6 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         x: USlice<'_, 8>,
         y: USlice<'_, 4>,
     ) -> MathematicalResult<u32> {
-        use diskann_wide::arch::x86_64::algorithms::unpack_half_bytes;
         use std::arch::x86_64::_mm256_maddubs_epi16;
 
         let len = check_lengths!(x, y)?;
@@ -1438,6 +1437,12 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 
         let mut i: usize = 0;
         let mut s: u32 = 0;
+
+        #[inline(always)]
+        fn unpack_half(input: u8s_16) -> u8s_32 {
+            let combined = diskann_wide::LoHi::new(input, input >> 4).zip::<u8s_32>();
+            combined & u8s_32::splat(input.arch(), (1u8 << 4) - 1)
+        }
 
         // Each block processes 32 elements: 32 bytes from x, 16 packed bytes from y.
         let blocks = len / 32;
@@ -1465,28 +1470,28 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
                 // SAFETY: `i + 4 <= blocks` guarantees 16 bytes readable at `py.add(16 * i)`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * i)) };
-                let m0 = products(vx, unpack_half_bytes::<4>(arch, vy));
+                let m0 = products(vx, unpack_half(vy));
 
                 // Block 1
                 // SAFETY: `i + 1 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 1))) };
                 // SAFETY: same bound; 16 bytes readable at `py.add(16 * (i + 1))`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 1))) };
-                let m1 = products(vx, unpack_half_bytes::<4>(arch, vy));
+                let m1 = products(vx, unpack_half(vy));
 
                 // Block 2
                 // SAFETY: `i + 2 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 2))) };
                 // SAFETY: same bound; 16 bytes readable at `py.add(16 * (i + 2))`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 2))) };
-                let m2 = products(vx, unpack_half_bytes::<4>(arch, vy));
+                let m2 = products(vx, unpack_half(vy));
 
                 // Block 3
                 // SAFETY: `i + 3 < i + 4 <= blocks`.
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * (i + 3))) };
                 // SAFETY: same bound; 16 bytes readable at `py.add(16 * (i + 3))`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * (i + 3))) };
-                let m3 = products(vx, unpack_half_bytes::<4>(arch, vy));
+                let m3 = products(vx, unpack_half(vy));
 
                 acc = acc.dot_simd(m0 + m1 + m2 + m3, ones);
                 i += 4;
@@ -1499,7 +1504,7 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 let vx = unsafe { u8s_32::load_simd(arch, px.add(32 * i)) };
                 // SAFETY: `i < blocks` guarantees 16 bytes readable at `py.add(16 * i)`.
                 let vy = unsafe { u8s_16::load_simd(arch, py.add(16 * i)) };
-                acc = acc.dot_simd(products(vx, unpack_half_bytes::<4>(arch, vy)), ones);
+                acc = acc.dot_simd(products(vx, unpack_half(vy)), ones);
                 i += 1;
             }
 
@@ -1554,7 +1559,6 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         y: USlice<'_, 2>,
     ) -> MathematicalResult<u32> {
         use diskann_wide::SplitJoin;
-        use diskann_wide::arch::x86_64::algorithms::unpack_half_bytes;
         use std::arch::x86_64::_mm256_maddubs_epi16;
 
         let len = check_lengths!(x, y)?;
@@ -1582,20 +1586,26 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
                 })
             };
 
-            let ones = i16s::splat(arch, 1);
+            #[inline(always)]
+            fn unpack_sub<const N: u8>(input: u8s_16) -> u8s_32 {
+                let combined = diskann_wide::LoHi::new(input, input >> N).zip::<u8s_32>();
+                combined & u8s_32::splat(input.arch(), (1u8 << N) - 1)
+            }
 
             let unpack_crumbs = |x: u8s_16| -> (u8s_32, u8s_32) {
                 // Level 1: nibble split → 32 × 4-bit values in a u8x32.
-                let nibbles = unpack_half_bytes::<4>(arch, x);
+                let nibbles = unpack_sub::<4>(x);
 
                 // Split the u8x32 into two u8x16 halves (lo = elements 0..15,
                 // hi = elements 16..31), then apply Level 2 crumb split to each.
                 let diskann_wide::LoHi { lo, hi } = nibbles.split();
-                let lower = unpack_half_bytes::<2>(arch, lo);
-                let upper = unpack_half_bytes::<2>(arch, hi);
+                let lower = unpack_sub::<2>(lo);
+                let upper = unpack_sub::<2>(hi);
 
                 (lower, upper)
             };
+
+            let ones = i16s::splat(arch, 1);
 
             // Main loop: 4× unrolled, processing 256 elements per iteration.
             //
@@ -3038,12 +3048,195 @@ mod tests {
     // Heterogeneous: USlice<8> × USlice<M> //
     ///////////////////////////////////////////
 
-    /// Generate a test helper and test suite for heterogeneous 8×M inner products.
-    ///
-    /// The `$M` parameter is the bit width of the RHS vector (2 or 4).
-    /// `$max_val` is `(1 << M) - 1` — the maximum value a single element can hold.
-    /// `$block_size` is the SIMD block size used by the V3 kernel (32 for 4-bit,
-    /// 64 for 2-bit).
+    // ── Generic helpers for heterogeneous 8×M inner-product tests ──────
+    //
+    // The business logic lives here as ordinary generic functions so that
+    // `rustfmt` can format them and compile errors are reported once.
+    // The macro below is thin plumbing that stamps out `#[test]` fns.
+
+    /// Helper that builds vectors from a fill function and asserts the
+    /// inner product matches.
+    struct HetCase<const M: usize> {
+        x_vals: Vec<i64>,
+        y_vals: Vec<i64>,
+    }
+
+    impl<const M: usize> HetCase<M>
+    where
+        Unsigned: Representation<M>,
+    {
+        fn new(dim: usize, fill: impl FnMut(usize) -> (i64, i64)) -> Self {
+            let (x_vals, y_vals) = (0..dim).map(fill).unzip();
+            Self { x_vals, y_vals }
+        }
+
+        fn check_with(&self, label: &str, evaluate: &dyn Fn(USlice<'_, 8>, USlice<'_, M>) -> MR) {
+            let dim = self.x_vals.len();
+            let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+            let mut y = BoxedBitSlice::<M, Unsigned>::new_boxed(dim);
+            // Pre-fill with 0xFF to catch trailing-element bugs.
+            x.as_mut_slice().fill(u8::MAX);
+            y.as_mut_slice().fill(u8::MAX);
+            for (i, (&xv, &yv)) in self.x_vals.iter().zip(&self.y_vals).enumerate() {
+                x.set(i, xv).unwrap();
+                y.set(i, yv).unwrap();
+            }
+            let expected: u32 = self
+                .x_vals
+                .iter()
+                .zip(&self.y_vals)
+                .map(|(&a, &b)| a as u32 * b as u32)
+                .sum();
+            let got = evaluate(x.reborrow(), y.reborrow()).unwrap().into_inner();
+            assert_eq!(expected, got, "{} failed for dim = {}", label, dim);
+        }
+    }
+
+    /// Fuzz test helper: random vectors across many dimensions.
+    fn fuzz_heterogeneous_ip<const M: usize>(
+        dim_max: usize,
+        trials_per_dim: usize,
+        max_val: i64,
+        evaluate_ip: &dyn Fn(USlice<'_, 8>, USlice<'_, M>) -> MR,
+        context: &str,
+        rng: &mut impl Rng,
+    ) where
+        Unsigned: Representation<M>,
+    {
+        let dist_8bit = Uniform::new_inclusive(0i64, 255i64).unwrap();
+        let dist_mbit = Uniform::new_inclusive(0i64, max_val).unwrap();
+
+        for dim in 0..dim_max {
+            for trial in 0..trials_per_dim {
+                HetCase::<M>::new(dim, |_| {
+                    (dist_8bit.sample(&mut *rng), dist_mbit.sample(&mut *rng))
+                })
+                .check_with(
+                    &format!("IP(8,{}) dim={}, trial={} -- {}", M, dim, trial, context),
+                    evaluate_ip,
+                );
+            }
+
+            // Length mismatch → error.
+            let x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
+            let y = BoxedBitSlice::<M, Unsigned>::new_boxed(dim + 1);
+            assert!(
+                evaluate_ip(x.reborrow(), y.reborrow()).is_err(),
+                "context: {}",
+                context,
+            );
+        }
+    }
+
+    /// All values at maximum: x[i] = 255, y[i] = max_val.
+    /// Confirms no i16 saturation in vpmaddubsw.
+    fn het_test_max_values<const M: usize>(
+        max_val: i64,
+        context: &str,
+        evaluate: &dyn Fn(USlice<'_, 8>, USlice<'_, M>) -> MR,
+    ) where
+        Unsigned: Representation<M>,
+    {
+        let dims = [127, 128, 129, 255, 256, 512, 768, 896, 3072];
+        for &dim in &dims {
+            let case = HetCase::<M>::new(dim, |_| (255, max_val));
+            case.check_with(&format!("max-value {} dim={}", context, dim), evaluate);
+        }
+    }
+
+    /// Known-answer tests to catch bit-ordering bugs.
+    fn het_test_known_answers<const M: usize>(
+        max_val: i64,
+        evaluate: &dyn Fn(USlice<'_, 8>, USlice<'_, M>) -> MR,
+    ) where
+        Unsigned: Representation<M>,
+    {
+        // _mm256_addubs_epi8 unsigned treatment: x[i] = 200 (> 127), y[i] = max_val.
+        // Correct: 200 × max_val per element.
+        HetCase::<M>::new(64, |_| (200, max_val)).check_with("vpmaddubsw operand-order", evaluate);
+
+        // Ascending x, constant y.
+        let y_val = (max_val / 2).max(1);
+        HetCase::<M>::new(128, |i| ((i % 256) as i64, y_val))
+            .check_with("ascending-x constant-y", evaluate);
+
+        // Single element (pure scalar fallback).
+        HetCase::<M>::new(1, |_| (200, max_val)).check_with("single element", evaluate);
+    }
+
+    /// Exhaustive edge-case coverage.
+    fn het_test_edge_cases<const M: usize>(
+        max_val: i64,
+        block_size: usize,
+        evaluate: &dyn Fn(USlice<'_, 8>, USlice<'_, M>) -> MR,
+    ) where
+        Unsigned: Representation<M>,
+    {
+        let y_half = (max_val / 2).max(1);
+
+        // One side zero.
+        HetCase::<M>::new(64, |_| (0, max_val)).check_with("x-zero y-nonzero", evaluate);
+        HetCase::<M>::new(64, |_| (255, 0)).check_with("y-zero x-nonzero", evaluate);
+
+        // Every dimension from 0..block_size+1 (scalar fallback boundary).
+        for dim in 0..=(block_size + 1) {
+            HetCase::<M>::new(dim, |_| (3, y_half)).check_with("uniform fill", evaluate);
+        }
+
+        // Exact block boundaries.
+        for &dim in &[block_size, 2 * block_size, 4 * block_size, 8 * block_size] {
+            HetCase::<M>::new(dim, |_| (100, max_val)).check_with("exact block boundary", evaluate);
+        }
+
+        // x varies, y constant.
+        HetCase::<M>::new(300, |i| ((i % 256) as i64, 1))
+            .check_with("x-varies y-constant", evaluate);
+
+        // x constant, y varies.
+        HetCase::<M>::new(300, |i| (1, (i as i64) % (max_val + 1)))
+            .check_with("x-constant y-varies", evaluate);
+
+        // Alternating pattern.
+        HetCase::<M>::new(128, |i| if i % 2 == 0 { (255, max_val) } else { (0, 0) })
+            .check_with("alternating pattern", evaluate);
+
+        // Opposite alternating pattern.
+        HetCase::<M>::new(128, |i| if i % 2 == 0 { (0, 0) } else { (255, max_val) })
+            .check_with("opposite alternating", evaluate);
+
+        // Large accumulation check for overflow.
+        HetCase::<M>::new(1024, |_| (255, max_val)).check_with("large accumulation", evaluate);
+
+        // x > 127 sweep (vpmaddubsw unsigned treatment).
+        for x_val in [128i64, 170, 200, 240, 255] {
+            HetCase::<M>::new(block_size, move |_| (x_val, y_half))
+                .check_with(&format!("x > 127 (x_val={})", x_val), evaluate);
+        }
+
+        // Dim = block_size - 1 (no full block, all scalar).
+        HetCase::<M>::new(block_size - 1, |i| {
+            (
+                ((i * 7 + 3) % 256) as i64,
+                ((i * 11 + 5) as i64) % (max_val + 1),
+            )
+        })
+        .check_with("dim=block_size-1 (all scalar)", evaluate);
+
+        // 4× unroll boundary exercises.
+        let unroll4 = 4 * block_size;
+        for &dim in &[
+            unroll4,
+            unroll4 + 1,
+            unroll4 + block_size,
+            unroll4 + block_size + 1,
+        ] {
+            HetCase::<M>::new(dim, |i| {
+                (((i + 1) % 256) as i64, ((i + 1) as i64) % (max_val + 1))
+            })
+            .check_with("unroll boundary", evaluate);
+        }
+    }
+
     macro_rules! heterogeneous_ip_tests_8xM {
         (
             mod_name: $mod:ident,
@@ -3051,129 +3244,47 @@ mod tests {
             max_val: $max_val:literal,
             block_size: $block_size:literal,
             seed_fuzz: $seed_fuzz:literal,
-            seed_large: $seed_large:literal,
-            seed_v3_scalar: $seed_v3_scalar:literal,
         ) => {
             mod $mod {
                 use super::*;
-
-                /// Helper that builds vectors from a
-                /// fill function and asserts the inner product matches.
-                struct Case {
-                    x_vals: Vec<i64>,
-                    y_vals: Vec<i64>,
-                }
-
-                impl Case {
-                    fn new(dim: usize, fill: impl FnMut(usize) -> (i64, i64)) -> Self {
-                        let (x_vals, y_vals) = (0..dim).map(fill).unzip();
-                        Self { x_vals, y_vals }
-                    }
-
-                    fn check(&self, label: &str) {
-                        self.check_with(label, |x, y| InnerProduct::evaluate(x, y));
-                    }
-
-                    fn check_with(
-                        &self,
-                        label: &str,
-                        evaluate: impl Fn(USlice<'_, 8>, USlice<'_, $M>) -> MR,
-                    ) {
-                        let dim = self.x_vals.len();
-                        let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let mut y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim);
-                        // Pre-fill with 0xFF to catch trailing-element bugs.
-                        x.as_mut_slice().fill(u8::MAX);
-                        y.as_mut_slice().fill(u8::MAX);
-                        for (i, (&xv, &yv)) in self.x_vals.iter().zip(&self.y_vals).enumerate() {
-                            x.set(i, xv).unwrap();
-                            y.set(i, yv).unwrap();
-                        }
-                        let expected: u32 = self
-                            .x_vals
-                            .iter()
-                            .zip(&self.y_vals)
-                            .map(|(&a, &b)| a as u32 * b as u32)
-                            .sum();
-                        let got = evaluate(x.reborrow(), y.reborrow()).unwrap().into_inner();
-                        assert_eq!(expected, got, "{} failed for dim = {}", label, dim,);
-                    }
-                }
-
-                /// Fuzz test helper: random vectors across many dimensions.
-                fn test_heterogeneous_ip(
-                    dim_max: usize,
-                    trials_per_dim: usize,
-                    evaluate_ip: &dyn Fn(USlice<'_, 8>, USlice<'_, $M>) -> MR,
-                    context: &str,
-                    rng: &mut impl Rng,
-                ) {
-                    let dist_8bit = Uniform::new_inclusive(0i64, 255i64).unwrap();
-                    let dist_mbit = Uniform::new_inclusive(0i64, $max_val as i64).unwrap();
-
-                    for dim in 0..dim_max {
-                        for trial in 0..trials_per_dim {
-                            Case::new(dim, |_| {
-                                (dist_8bit.sample(&mut *rng), dist_mbit.sample(&mut *rng))
-                            })
-                            .check_with(
-                                &format!(
-                                    "IP(8,{}) dim={}, trial={} -- {}",
-                                    $M, dim, trial, context,
-                                ),
-                                evaluate_ip,
-                            );
-                        }
-
-                        // Length mismatch → error.
-                        let x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
-                        let y = BoxedBitSlice::<$M, Unsigned>::new_boxed(dim + 1);
-                        assert!(
-                            evaluate_ip(x.reborrow(), y.reborrow()).is_err(),
-                            "context: {}",
-                            context,
-                        );
-                    }
-                }
 
                 #[test]
                 fn all_ip_dispatches() {
                     let mut rng = StdRng::seed_from_u64($seed_fuzz);
 
-                    // PureDistanceFunction dispatch.
-                    test_heterogeneous_ip(
+                    fuzz_heterogeneous_ip::<$M>(
                         MAX_DIM,
                         TRIALS_PER_DIM,
+                        $max_val,
                         &|x, y| InnerProduct::evaluate(x, y),
                         "pure distance function",
                         &mut rng,
                     );
-
-                    // Scalar architecture.
-                    test_heterogeneous_ip(
+                    fuzz_heterogeneous_ip::<$M>(
                         MAX_DIM,
                         TRIALS_PER_DIM,
+                        $max_val,
                         &|x, y| diskann_wide::arch::Scalar::new().run2(InnerProduct, x, y),
                         "scalar arch",
                         &mut rng,
                     );
-
                     #[cfg(target_arch = "x86_64")]
                     if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-                        test_heterogeneous_ip(
+                        fuzz_heterogeneous_ip::<$M>(
                             MAX_DIM,
                             TRIALS_PER_DIM,
+                            $max_val,
                             &|x, y| arch.run2(InnerProduct, x, y),
                             "x86-64-v3",
                             &mut rng,
                         );
                     }
-
                     #[cfg(target_arch = "x86_64")]
                     if let Some(arch) = diskann_wide::arch::x86_64::V4::new_checked_miri() {
-                        test_heterogeneous_ip(
+                        fuzz_heterogeneous_ip::<$M>(
                             MAX_DIM,
                             TRIALS_PER_DIM,
+                            $max_val,
                             &|x, y| arch.run2(InnerProduct, x, y),
                             "x86-64-v4",
                             &mut rng,
@@ -3181,159 +3292,29 @@ mod tests {
                     }
                 }
 
-                /// All values at maximum: x[i] = 255, y[i] = max_val.
-                /// Confirms no i16 saturation in vpmaddubsw.
                 #[test]
                 fn max_values() {
-                    let dims = [127, 128, 129, 255, 256, 512, 768, 896, 3072];
-
-                    for &dim in &dims {
-                        let case = Case::new(dim, |_| (255, $max_val as i64));
-                        case.check(&format!("max-value dispatch dim={}", dim));
-
-                        #[cfg(target_arch = "x86_64")]
-                        if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
-                            case.check_with(&format!("max-value V3 dim={}", dim), |x, y| {
-                                arch.run2(InnerProduct, x, y)
-                            });
-                        }
+                    het_test_max_values::<$M>($max_val, "dispatch", &|x, y| {
+                        InnerProduct::evaluate(x, y)
+                    });
+                    #[cfg(target_arch = "x86_64")]
+                    if let Some(arch) = diskann_wide::arch::x86_64::V3::new_checked() {
+                        het_test_max_values::<$M>($max_val, "V3", &|x, y| {
+                            arch.run2(InnerProduct, x, y)
+                        });
                     }
                 }
 
-                /// Known-answer tests to catch bit-ordering bugs.
                 #[test]
                 fn known_answers() {
-                    // _mm256_addubs_epi8 unsigned treatment: x[i] = 200 (> 127), y[i] = max_val.
-                    // Correct: 200 × max_val per element.
-                    Case::new(64, |_| (200, $max_val as i64)).check("vpmaddubsw operand-order");
-
-                    // Ascending x, constant y.
-                    let y_val = ($max_val / 2).max(1) as i64;
-                    Case::new(128, |i| ((i % 256) as i64, y_val)).check("ascending-x constant-y");
-
-                    // Single element (pure scalar fallback).
-                    Case::new(1, |_| (200, $max_val as i64)).check("single element");
+                    het_test_known_answers::<$M>($max_val, &|x, y| InnerProduct::evaluate(x, y));
                 }
 
-                /// Exhaustive edge-case coverage.
                 #[test]
                 fn edge_cases() {
-                    let y_half = ($max_val / 2).max(1) as i64;
-
-                    // One side zero.
-                    Case::new(64, |_| (0, $max_val as i64)).check("x-zero y-nonzero");
-                    Case::new(64, |_| (255, 0)).check("y-zero x-nonzero");
-
-                    // Every dimension from 0..block_size+1 (scalar fallback boundary).
-                    for dim in 0..=($block_size + 1) {
-                        Case::new(dim, |_| (3, y_half)).check("uniform fill");
-                    }
-
-                    // Exact block boundaries.
-                    for &dim in &[
-                        $block_size,
-                        2 * $block_size,
-                        4 * $block_size,
-                        8 * $block_size,
-                    ] {
-                        Case::new(dim, |_| (100, $max_val as i64)).check("exact block boundary");
-                    }
-
-                    // x varies, y constant.
-                    Case::new(300, |i| ((i % 256) as i64, 1)).check("x-varies y-constant");
-
-                    // x constant, y varies.
-                    Case::new(300, |i| (1, (i as i64) % ($max_val as i64 + 1)))
-                        .check("x-constant y-varies");
-
-                    // Alternating pattern
-                    Case::new(128, |i| {
-                        if i % 2 == 0 {
-                            (255, $max_val as i64)
-                        } else {
-                            (0, 0)
-                        }
-                    })
-                    .check("alternating pattern");
-
-                    // Opposite alternating pattern.
-                    Case::new(128, |i| {
-                        if i % 2 == 0 {
-                            (0, 0)
-                        } else {
-                            (255, $max_val as i64)
-                        }
-                    })
-                    .check("opposite alternating");
-
-                    // Large accumulation check for overflow
-                    Case::new(1024, |_| (255, $max_val as i64)).check("large accumulation");
-
-                    // x > 127 sweep (vpmaddubsw unsigned treatment).
-                    for x_val in [128i64, 170, 200, 240, 255] {
-                        Case::new($block_size, move |_| (x_val, y_half))
-                            .check(&format!("x > 127 (x_val={})", x_val));
-                    }
-
-                    // Dim = block_size - 1 (no full block, all scalar).
-                    Case::new($block_size - 1, |i| {
-                        (
-                            ((i * 7 + 3) % 256) as i64,
-                            ((i * 11 + 5) as i64) % ($max_val as i64 + 1),
-                        )
-                    })
-                    .check("dim=block_size-1 (all scalar)");
-
-                    // 4× unroll boundary exercises.
-                    let unroll4 = 4 * $block_size;
-                    for &dim in &[
-                        unroll4,
-                        unroll4 + 1,
-                        unroll4 + $block_size,
-                        unroll4 + $block_size + 1,
-                    ] {
-                        Case::new(dim, |i| {
-                            (
-                                ((i + 1) % 256) as i64,
-                                ((i + 1) as i64) % ($max_val as i64 + 1),
-                            )
-                        })
-                        .check("unroll boundary");
-                    }
-                }
-
-                /// V3 direct call vs Scalar for edge-case dimensions.
-                #[test]
-                fn v3_vs_scalar() {
-                    let dims = [
-                        0, 1, 2, 15, 16, 31, 32, 33, 63, 64, 65, 127, 128, 129, 160, 255, 256,
-                    ];
-
-                    let scalar = diskann_wide::arch::Scalar::new();
-
-                    #[cfg(target_arch = "x86_64")]
-                    let v3 = diskann_wide::arch::x86_64::V3::new_checked();
-
-                    let mut rng = StdRng::seed_from_u64($seed_v3_scalar);
-                    let dist_8bit = Uniform::new_inclusive(0i64, 255i64).unwrap();
-                    let dist_mbit = Uniform::new_inclusive(0i64, $max_val as i64).unwrap();
-
-                    for &dim in &dims {
-                        let case = Case::new(dim, |_| {
-                            (dist_8bit.sample(&mut rng), dist_mbit.sample(&mut rng))
-                        });
-
-                        case.check_with(&format!("scalar dim={}", dim), |x, y| {
-                            scalar.run2(InnerProduct, x, y)
-                        });
-
-                        #[cfg(target_arch = "x86_64")]
-                        if let Some(arch) = v3 {
-                            case.check_with(&format!("V3 dim={}", dim), |x, y| {
-                                arch.run2(InnerProduct, x, y)
-                            });
-                        }
-                    }
+                    het_test_edge_cases::<$M>($max_val, $block_size, &|x, y| {
+                        InnerProduct::evaluate(x, y)
+                    });
                 }
             }
         };
@@ -3345,8 +3326,6 @@ mod tests {
         max_val: 15,
         block_size: 32,
         seed_fuzz: 0xd3a7f1c09b2e4856,
-        seed_large: 0xa1b2c3d4e5f60718,
-        seed_v3_scalar: 0xfedcba9876543210,
     }
 
     heterogeneous_ip_tests_8xM! {
@@ -3355,7 +3334,5 @@ mod tests {
         max_val: 3,
         block_size: 64,
         seed_fuzz: 0x82c4a6e809f1d3b5,
-        seed_large: 0xb3d5f7190a2c4e60,
-        seed_v3_scalar: 0x1234abcd5678ef90,
     }
 }

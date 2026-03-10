@@ -7,8 +7,6 @@
 use std::arch::x86_64::*;
 
 use super::V3;
-use super::v3::{u8x16, u8x32};
-use crate::traits::SIMDVector;
 
 /// Efficiently load the first `8 < bytes < 16` bytes from `ptr` without accessing memory
 /// outside of `[ptr, ptr + bytes)`.
@@ -165,39 +163,4 @@ pub(crate) unsafe fn __load_first_u16_of_16_bytes(
     }
 }
 
-/// Unpack sub-byte fields from a `u8x16` register into a `u8x32` by
-/// shift-interleave-mask.
-///
-/// Each byte has the form `G | Hi | Lo`, where `Hi` and `Lo` are `N`-bit fields and
-/// G is `(8 - 2N)` bytes. For e.g. with `N = 2`,  
-/// ```text
-/// [0,     1,     2,     3,     4,     5,     6,     7]
-/// |----------------------|    |--------|    |--------|
-///             G                   Hi            Lo
-///```
-/// This operation will result in a u8x32 vector with 32 (Lo, Hi) byte-pairs.
-/// For `N = 4` this will unpack the half-bytes into a u8x32 byte vector.
-#[inline(always)]
-pub fn unpack_half_bytes<const N: u8>(arch: V3, input: u8x16) -> u8x32 {
-    const { assert!(N <= 4) };
-    // Step 1: Shift each byte right by N. This positions Hi in the low
-    // N bits of each byte.
-    //
-    // input:   [B0,       B1,       B2,       ..., B15      ]
-    // shifted: [B0 >> N,  B1 >> N,  B2 >> N,  ..., B15 >> N ]
-    let shifted = input >> N;
 
-    // Step 2: Zip-interleave input with shifted into one 256-bit register.
-    // This pairs each original byte with its shifted counterpart:
-    //
-    // [B0, B0>>N, B1, B1>>N, ..., B7, B7>>N, B8, B8>>N, ..., B15, B15>>N]
-    let combined = crate::LoHi::new(input, shifted).zip::<u8x32>();
-
-    // Step 3: Mask every byte to N bits. This isolates Lo from the even
-    // positions and Hi from the odd positions, giving 32 clean N-bit values.
-    //
-    // [Lo0, Hi0, Lo1, Hi1, ..., Lo15, Hi15]
-    // |---------|---------|     |---------|
-    //  each pair came from one input byte
-    combined & u8x32::splat(arch, (1u8 << N) - 1)
-}
