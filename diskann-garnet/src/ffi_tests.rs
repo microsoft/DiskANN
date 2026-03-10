@@ -4,7 +4,8 @@ mod tests {
     use diskann_vector::distance::Metric;
 
     use crate::{
-        VectorQuantType, VectorValueType, card, check_external_id_valid, create_index, drop_index, garnet::Context, insert, remove, search_vector, set_attribute, test_utils::Store
+        VectorQuantType, VectorValueType, card, check_external_id_valid, create_index, drop_index,
+        garnet::Context, insert, remove, search_vector, set_attribute, test_utils::Store,
     };
 
     /// Creates an index with default test values and returns (index_ptr, Context).
@@ -20,10 +21,7 @@ mod tests {
 
     /// Creates an index with specified metric type and returns (index_ptr, Context).
     /// The caller is responsible for calling drop_index when done.
-    fn create_test_index_with_metric(
-        store: &Store,
-        metric_type: i32,
-    ) -> (*const c_void, Context) {
+    fn create_test_index_with_metric(store: &Store, metric_type: i32) -> (*const c_void, Context) {
         store.clear();
 
         let callbacks = store.callbacks();
@@ -71,7 +69,7 @@ mod tests {
 
         // Test with invalid metric type values — passed as raw i32
         let invalid_metrics = [-1, -2, 99, i32::MAX, i32::MIN];
-        
+
         for invalid_metric in invalid_metrics {
             let (index_ptr, _ctx) = create_test_index_with_metric(&store, invalid_metric);
             assert!(
@@ -754,7 +752,10 @@ mod tests {
         assert_eq!(dists3[0], 0.0, "exact match should have distance 0");
         // The next 2 results should all be distance 1.0 (one axis off by 1)
         for d in &dists3[1..] {
-            assert_eq!(*d, 1.0, "neighbors of center should be at squared L2 distance 1.0");
+            assert_eq!(
+                *d, 1.0,
+                "neighbors of center should be at squared L2 distance 1.0"
+            );
         }
 
         // Query 4: off-grid point — nearest should be v_0_0_0 at squared distance 0.75
@@ -762,7 +763,10 @@ mod tests {
         assert_eq!(ids4.len(), 3, "expected 3 results");
         // All 8 corners {0,1}^3 are equidistant at squared L2 = 3*0.25 = 0.75,
         // but v_0_0_0 and v_1_1_1 etc. are among them — just check the distance.
-        assert_eq!(dists4[0], 0.75, "nearest to (0.5,0.5,0.5) should be at squared distance 0.75");
+        assert_eq!(
+            dists4[0], 0.75,
+            "nearest to (0.5,0.5,0.5) should be at squared distance 0.75"
+        );
 
         unsafe {
             drop_index(ctx.0, index_ptr);
