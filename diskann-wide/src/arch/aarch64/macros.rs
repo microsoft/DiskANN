@@ -569,3 +569,53 @@ pub(crate) use aarch64_define_loadstore;
 pub(crate) use aarch64_define_register;
 pub(crate) use aarch64_define_splat;
 pub(crate) use aarch64_splitjoin;
+
+/// Implement [`ZipUnzip`] for a [`Doubled`] type using Neon zip/unzip intrinsics.
+///
+/// ## Parameters
+///
+/// * `$half`   — the native 128-bit Neon type (e.g. `i8x16`)
+/// * `$zip1`   — `vzip1q_*` intrinsic (interleave lower halves)
+/// * `$zip2`   — `vzip2q_*` intrinsic (interleave upper halves)
+/// * `$uzp1`   — `vuzp1q_*` intrinsic (collect even-indexed elements)
+/// * `$uzp2`   — `vuzp2q_*` intrinsic (collect odd-indexed elements)
+///
+/// ## Safety
+///
+/// The caller must ensure the provided intrinsics match the element type of `$half`.
+macro_rules! aarch64_zipunzip {
+    ($half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
+        impl $crate::ZipUnzip for $crate::doubled::Doubled<$half> {
+            type Halved = $half;
+
+            #[inline(always)]
+            fn zip(halves: $crate::LoHi<$half>) -> Self {
+                use $crate::SIMDVector;
+                // SAFETY: Caller asserts that these intrinsics match the element type.
+                unsafe {
+                    let lo_raw = halves.lo.to_underlying();
+                    let hi_raw = halves.hi.to_underlying();
+                    $crate::doubled::Doubled(
+                        <$half>::from_underlying(halves.lo.arch(), $zip1(lo_raw, hi_raw)),
+                        <$half>::from_underlying(halves.lo.arch(), $zip2(lo_raw, hi_raw)),
+                    )
+                }
+            }
+
+            #[inline(always)]
+            fn unzip(self) -> $crate::LoHi<$half> {
+                use $crate::SIMDVector;
+                // SAFETY: Caller asserts that these intrinsics match the element type.
+                unsafe {
+                    let lo_raw = self.0.to_underlying();
+                    let hi_raw = self.1.to_underlying();
+                    $crate::LoHi::new(
+                        <$half>::from_underlying(self.0.arch(), $uzp1(lo_raw, hi_raw)),
+                        <$half>::from_underlying(self.0.arch(), $uzp2(lo_raw, hi_raw)),
+                    )
+                }
+            }
+        }
+    };
+}
+pub(crate) use aarch64_zipunzip;
