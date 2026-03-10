@@ -1959,8 +1959,7 @@ fn load_bftree(
         BfTree::new_from_snapshot_disk_to_memory(snapshot_path, config)
             .map_err(|e| ANNError::from(super::ConfigError(e)))
     } else {
-        BfTree::new_from_snapshot(config, None)
-            .map_err(|e| ANNError::from(super::ConfigError(e)))
+        BfTree::new_from_snapshot(config, None).map_err(|e| ANNError::from(super::ConfigError(e)))
     }
 }
 
