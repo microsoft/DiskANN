@@ -206,8 +206,62 @@ std::unique_ptr<AbstractIndex> IndexFactory::create_instance(const std::string &
 // template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<uint8_t>> IndexFactory::construct_datastore(
 //     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
 // template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<int8_t>> IndexFactory::construct_datastore(
-//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
-// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<float>> IndexFactory::construct_datastore(
+//     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);// template DISKANN_DLLEXPORT std::shared_ptr<AbstractDataStore<float>> IndexFactory::construct_datastore(
 //     DataStoreStrategy stratagy, size_t num_points, size_t dimension, Metric m);
 
 } // namespace diskann
+
+
+//refer to https://github.com/microsoft/DiskANN/blob/main/apps/search_memory_index.cpp
+extern "C" void *CreateIndex(const char *index_path, uint32_t embedding_dim, uint32_t num_threads,
+                                uint32_t search_L)
+{
+    const size_t num_frozen_pts = diskann::get_graph_num_frozen_points(index_path);
+
+    auto config = diskann::IndexConfigBuilder()
+                        .with_metric(diskann::Metric::L2)
+                        .with_dimension(embedding_dim)
+                        .with_max_points(0)
+                        .with_data_load_store_strategy(diskann::DataStoreStrategy::MEMORY)
+                        .with_graph_load_store_strategy(diskann::GraphStoreStrategy::MEMORY)
+                        .with_data_type(diskann_type_to_name<uint8_t>())
+                        .with_label_type(diskann_type_to_name<uint16_t>())
+                        .with_tag_type(diskann_type_to_name<uint32_t>())
+                        .is_dynamic_index(false)
+                        .is_enable_tags(false)
+                        .is_concurrent_consolidate(false)
+                        .is_pq_dist_build(false)
+                        .is_use_opq(false)
+                        .with_num_pq_chunks(0)
+                        .with_num_frozen_pts(num_frozen_pts)
+                        .build();
+
+    auto index_factory = diskann::IndexFactory(config);
+    auto index = index_factory.create_instance();
+    index->load(index_path, num_threads, search_L);
+    std::cout << index_path  << "index loaded" << std::endl;
+
+    // Transfer ownership to caller: release pointer from unique_ptr
+    return static_cast<void *>(index.release());
+}
+
+extern "C" void ReleaseIndex(const void *index_ptr)
+{
+    if (index_ptr)
+    {
+        diskann::AbstractIndex *index = static_cast<diskann::AbstractIndex *>(const_cast<void *>(index_ptr));
+        delete index;
+    }
+}
+
+extern "C" int SearchIndex(void *index_ptr, const uint8_t *query, uint32_t recall_at, uint32_t search_L,
+                uint32_t* result_ids, float* distances)
+{
+    if (!index_ptr)
+        return -1;
+    diskann::AbstractIndex *index = static_cast<diskann::AbstractIndex *>(index_ptr);
+
+    index->search(query, recall_at, search_L,
+                    result_ids, distances);
+    return 0;
+}

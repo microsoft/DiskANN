@@ -5,6 +5,7 @@
 #include "in_mem_graph_store.h"
 #include "pq_data_store.h"
 
+
 namespace diskann
 {
 class IndexFactory
@@ -49,3 +50,9 @@ class IndexFactory
 };
 
 } // namespace diskann
+
+extern "C" __declspec(dllexport) void *CreateIndex(const char *index_path, uint32_t embedding_dim, uint32_t num_threads,
+                                                   uint32_t search_L);
+extern "C" __declspec(dllexport) void ReleaseIndex(const void *index_ptr);
+extern "C" __declspec(dllexport) int SearchIndex(void *index_ptr, const uint8_t *query, uint32_t recall_at,
+                                                 uint32_t search_L, uint32_t *result_ids, float *distances);
