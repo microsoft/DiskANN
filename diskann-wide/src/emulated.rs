@@ -702,8 +702,6 @@ impl_splitjoin!(f16, 16 => 8);
 macro_rules! array_zipunzip {
     ($N:literal) => {
         impl<T: Copy> crate::traits::ZipUnzip for [T; $N] {
-            type Halved = [T; { $N / 2 }];
-
             #[inline(always)]
             fn zip(halves: $crate::LoHi<Self::Halved>) -> Self {
                 core::array::from_fn(|i| {
@@ -739,8 +737,6 @@ macro_rules! impl_zipunzip {
         where
             A: Copy,
         {
-            type Halved = Emulated<$type, $N2, A>;
-
             #[inline(always)]
             fn zip(halves: $crate::LoHi<Self::Halved>) -> Self {
                 Self(

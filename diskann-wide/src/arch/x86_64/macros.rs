@@ -316,7 +316,10 @@ macro_rules! x86_splitjoin {
 }
 
 /// Implement [`ZipUnzip`] for a 256-bit vector type (`$type`) whose halved
-/// type (`$half`) is a 128-bit vector.
+/// type (`$half`) is a 128-bit vector, using within-lane shuffles.
+///
+/// This strategy is optimal for sub-32-bit element types on AVX2, where no
+/// cross-lane permute exists. For 32-bit elements, prefer [`x86_zipunzip_perm32`].
 ///
 /// # Safety
 ///
@@ -329,10 +332,8 @@ macro_rules! x86_zipunzip {
         $shuffle_mask:expr
     ) => {
         impl $crate::ZipUnzip for $type {
-            type Halved = $half;
-
             #[inline(always)]
-            fn zip(halves: $crate::LoHi<$half>) -> Self {
+            fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {
                 use $crate::SplitJoin;
                 // SAFETY: Caller asserts that these intrinsics are within the
                 // capabilities of the architecture stored in the type.
@@ -349,7 +350,7 @@ macro_rules! x86_zipunzip {
             }
 
             #[inline(always)]
-            fn unzip(self) -> $crate::LoHi<$half> {
+            fn unzip(self) -> $crate::LoHi<<Self as $crate::SplitJoin>::Halved> {
                 use $crate::SplitJoin;
                 let halves = self.split();
                 // SAFETY: Caller asserts that these intrinsics are within the
@@ -364,6 +365,104 @@ macro_rules! x86_zipunzip {
                         <$half>::from_underlying(halves.lo.arch(), evens),
                         <$half>::from_underlying(halves.lo.arch(), odds),
                     )
+                }
+            }
+        }
+    };
+}
+
+/// Implement [`ZipUnzip`] for a 256-bit vector type (`$type`) with 32-bit
+/// elements, using a single cross-lane `vpermd` for the flat variants.
+///
+/// Both `zip_flat` and `unzip_flat` compile to one `_mm256_permutevar8x32_epi32`.
+/// The `zip` and `unzip` methods delegate through `join`/`split` respectively.
+///
+/// # Safety
+///
+/// The caller must ensure AVX2 (or better) is available.
+macro_rules! x86_zipunzip_perm32 {
+    ($type:path) => {
+        impl $crate::ZipUnzip for $type {
+            #[inline(always)]
+            fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {
+                <Self as $crate::SplitJoin>::join(halves).zip_flat()
+            }
+
+            #[inline(always)]
+            fn unzip(self) -> $crate::LoHi<<Self as $crate::SplitJoin>::Halved> {
+                <Self as $crate::SplitJoin>::split(self.unzip_flat())
+            }
+
+            #[inline(always)]
+            fn zip_flat(self) -> Self {
+                // Interleave: [a0,a1,a2,a3,b0,b1,b2,b3] → [a0,b0,a1,b1,a2,b2,a3,b3]
+                // SAFETY: Caller asserts AVX2 is available.
+                unsafe {
+                    let idx = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+                    Self(_mm256_permutevar8x32_epi32(self.0, idx))
+                }
+            }
+
+            #[inline(always)]
+            fn unzip_flat(self) -> Self {
+                // Deinterleave: [a0,b0,a1,b1,a2,b2,a3,b3] → [a0,a1,a2,a3,b0,b1,b2,b3]
+                // SAFETY: Caller asserts AVX2 is available.
+                unsafe {
+                    let idx = _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7);
+                    Self(_mm256_permutevar8x32_epi32(self.0, idx))
+                }
+            }
+        }
+    };
+}
+
+/// Implement [`ZipUnzip`] for a 256-bit vector type using a single cross-lane
+/// permute instruction.
+///
+/// The caller provides the permute intrinsic (`$perm`) and index constructor
+/// (`$setr`). The macro builds interleave and deinterleave index vectors and
+/// generates `zip_flat`/`unzip_flat` overrides; `zip`/`unzip` delegate through
+/// `join`/`split`.
+///
+/// # Parameters
+///
+/// * `$type`  — the 256-bit vector type (e.g. `u8x32`)
+/// * `$perm`  — the permute intrinsic, e.g. `_mm256_permutexvar_epi8`
+/// * `$zip_idx` — expression producing `__m256i` with the zip index vector
+/// * `$unzip_idx` — expression producing `__m256i` with the unzip index vector
+///
+/// # Safety
+///
+/// The caller must ensure the permute intrinsic is within the capabilities of
+/// the architecture token stored in `$type`.
+macro_rules! x86_zipunzip_crosslane {
+    ($type:path, $perm:ident, $zip_idx:expr, $unzip_idx:expr) => {
+        impl $crate::ZipUnzip for $type {
+            #[inline(always)]
+            fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {
+                <Self as $crate::SplitJoin>::join(halves).zip_flat()
+            }
+
+            #[inline(always)]
+            fn unzip(self) -> $crate::LoHi<<Self as $crate::SplitJoin>::Halved> {
+                <Self as $crate::SplitJoin>::split(self.unzip_flat())
+            }
+
+            #[inline(always)]
+            fn zip_flat(self) -> Self {
+                // SAFETY: Caller asserts the permute intrinsic is available.
+                unsafe {
+                    let idx = $zip_idx;
+                    Self($perm(idx, self.0))
+                }
+            }
+
+            #[inline(always)]
+            fn unzip_flat(self) -> Self {
+                // SAFETY: Caller asserts the permute intrinsic is available.
+                unsafe {
+                    let idx = $unzip_idx;
+                    Self($perm(idx, self.0))
                 }
             }
         }
@@ -492,3 +591,5 @@ pub(crate) use x86_define_splat;
 pub(crate) use x86_retarget;
 pub(crate) use x86_splitjoin;
 pub(crate) use x86_zipunzip;
+pub(crate) use x86_zipunzip_crosslane;
+pub(crate) use x86_zipunzip_perm32;
