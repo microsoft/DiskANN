@@ -86,11 +86,10 @@ pub fn distances_in_place(
         // SAFETY: Closure pre-conditions mean that this access is in-bounds.
         let block_ptr = unsafe { dataset.block_ptr_unchecked(block) };
         for dim in 0..dataset.ncols() {
-            // SAFETY: For all rows in this block, 16 reads are valid and by construction,
-            // `dim < dataset.block_size()`. This loads the first 8.
+            // SAFETY: Each block stores `N * ncols` contiguous f32s (N=16).
+            // `dim < dataset.ncols()`, so `N * dim + 7 < N * ncols`. Loads first 8.
             let d0 = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(N * dim)) };
-            // SAFETY: For all rows in this block, 16 reads are valid and by construction,
-            // `dim < dataset.block_size()`. This loads the last 8.
+            // SAFETY: Same reasoning; `N * dim + N2 + 7 < N * ncols`. Loads last 8.
             let d1 = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(N * dim + N2)) };
 
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.
@@ -127,11 +126,10 @@ pub fn distances_in_place(
         // SAFETY: Closure pre-conditions mean that this access is in-bounds.
         let block_ptr = unsafe { dataset.block_ptr_unchecked(block) };
         for dim in 0..dataset.ncols() {
-            // SAFETY: For all rows in this block, 16 reads are valid and by construction,
-            // `dim < dataset.block_size()`. This loads the first 8.
+            // SAFETY: Each block stores `N * ncols` contiguous f32s (N=16).
+            // `dim < dataset.ncols()`, so `N * dim + 7 < N * ncols`. Loads first 8.
             let d0 = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(N * dim)) };
-            // SAFETY: For all rows in this block, 16 reads are valid and by construction,
-            // `dim < dataset.block_size()`. This loads the last 8.
+            // SAFETY: Same reasoning; `N * dim + N2 + 7 < N * ncols`. Loads last 8.
             let d1 = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(N * dim + N2)) };
 
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.

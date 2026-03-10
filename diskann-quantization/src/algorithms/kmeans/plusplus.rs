@@ -51,8 +51,9 @@ pub(crate) trait MicroKernel {
     ///
     /// # SAFETY
     ///
-    /// `block` must be the base pointer of a data block in a `BlockTransposed` and the
-    /// block size of this block must have the same length as `this`.
+    /// `block` must be the base pointer of a data block in a `BlockTransposed<f32, N>`
+    /// whose column count equals `this.len()`. That is, `N * this.len()` elements must
+    /// be readable from `block`.
     unsafe fn accum_full(block: *const f32, this: &[f32]) -> Self::Intermediate;
 
     /// Accumulate intermediate distances and store the result in `mins`.
@@ -98,13 +99,13 @@ impl MicroKernel for BlockTransposed<f32, 16> {
         this.iter().enumerate().for_each(|(i, b)| {
             let b = f32s::splat(diskann_wide::ARCH, *b);
 
-            // SAFETY: From the requirement that `self.block_size() == this.len()`, then
-            // `this.len() * 16` elements are readible from `block_ptr` and `i < this.len()`.
+            // SAFETY: Each block stores `16 * ncols` contiguous f32s (GROUP=16).
+            // The caller guarantees `ncols == this.len()`, so `16 * this.len()`
+            // elements are readable from `block_ptr` and `i < this.len()`.
             let a = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(16 * i)) };
             s0 = a.mul_add_simd(b, s0);
 
-            // SAFETY: From the requirement that `self.block_size() == this.len()`, then
-            // `this.len() * 16` elements are readible from `block_ptr` and `i < this.len()`.
+            // SAFETY: Same as above; offset `16 * i + 8 < 16 * this.len()`.
             let a = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(16 * i + 8)) };
             s1 = a.mul_add_simd(b, s1);
         });
