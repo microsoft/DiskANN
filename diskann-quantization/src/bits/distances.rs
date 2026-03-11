@@ -2476,9 +2476,9 @@ dispatch_full_ip!(1, 2, 3, 4, 5, 6, 7, 8);
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::LazyLock};
+    use std::{collections::HashMap, fmt::Display, sync::LazyLock};
 
-    use diskann_utils::Reborrow;
+    use diskann_utils::{Reborrow, lazy_format};
     use rand::{
         Rng, SeedableRng,
         distr::{Distribution, Uniform},
@@ -3175,7 +3175,11 @@ mod tests {
             Self { x_vals, y_vals }
         }
 
-        fn check_with(&self, label: &str, evaluate: &dyn Fn(USlice<'_, 8>, USlice<'_, M>) -> MR) {
+        fn check_with(
+            &self,
+            label: impl Display,
+            evaluate: &dyn Fn(USlice<'_, 8>, USlice<'_, M>) -> MR,
+        ) {
             let dim = self.x_vals.len();
             let mut x = BoxedBitSlice::<8, Unsigned>::new_boxed(dim);
             let mut y = BoxedBitSlice::<M, Unsigned>::new_boxed(dim);
@@ -3217,7 +3221,7 @@ mod tests {
                     (dist_8bit.sample(&mut *rng), dist_mbit.sample(&mut *rng))
                 })
                 .check_with(
-                    &format!("IP(8,{}) dim={}, trial={} -- {}", M, dim, trial, context),
+                    &lazy_format!("IP(8,{}) dim={dim}, trial={trial} -- {context}", M),
                     evaluate_ip,
                 );
             }
@@ -3245,7 +3249,7 @@ mod tests {
         let dims = [127, 128, 129, 255, 256, 512, 768, 896, 3072];
         for &dim in &dims {
             let case = HetCase::<M>::new(dim, |_| (255, max_val));
-            case.check_with(&format!("max-value {} dim={}", context, dim), evaluate);
+            case.check_with(&lazy_format!("max-value {context} dim={dim}"), evaluate);
         }
     }
 
@@ -3315,7 +3319,7 @@ mod tests {
         // x > 127 sweep (vpmaddubsw unsigned treatment).
         for x_val in [128i64, 170, 200, 240, 255] {
             HetCase::<M>::new(block_size, move |_| (x_val, y_half))
-                .check_with(&format!("x > 127 (x_val={})", x_val), evaluate);
+                .check_with(&lazy_format!("x > 127 (x_val={x_val})"), evaluate);
         }
 
         // Dim = block_size - 1 (no full block, all scalar).
