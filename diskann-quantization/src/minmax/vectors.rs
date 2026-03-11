@@ -751,7 +751,7 @@ mod minmax_vector_tests {
             .unwrap()
             .into_inner();
         assert!(
-            (expected_ip - computed_ip).abs() / expected_ip.abs().max(1e-10) < 1e-3,
+            (expected_ip - computed_ip).abs() / expected_ip.abs().max(1e-10) < 1e-6,
             "Heterogeneous IP ({},{}) failed: expected {}, got {} on dim: {}",
             N,
             M,
@@ -779,4 +779,5 @@ mod minmax_vector_tests {
 
     test_minmax_heterogeneous!(minmax_heterogeneous_8x4, 8, 4, 0xb7c3d9e5f1a20864);
     test_minmax_heterogeneous!(minmax_heterogeneous_8x2, 8, 2, 0x4e8f2c6a1d3b5079);
+    test_minmax_heterogeneous!(minmax_heterogeneous_8x1, 8, 1, 0x1b0f2c614d2a7141);
 }

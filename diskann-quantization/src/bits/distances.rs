@@ -1358,7 +1358,8 @@ impl_fallback_ip!(
     (3, 3),
     (2, 2),
     (8, 4),
-    (8, 2)
+    (8, 2),
+    (8, 1)
 );
 
 #[cfg(target_arch = "x86_64")]
@@ -1381,7 +1382,8 @@ retarget!(
     (5, 5),
     (3, 3),
     (8, 4),
-    (8, 2)
+    (8, 2),
+    (8, 1)
 );
 
 dispatch_pure!(
@@ -1395,7 +1397,8 @@ dispatch_pure!(
     (7, 7),
     (8, 8),
     (8, 4),
-    (8, 2)
+    (8, 2),
+    (8, 1)
 );
 
 //////////////////////////////////////////
@@ -1707,6 +1710,147 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
         Ok(MV::new(s))
     }
 }
+
+#[cfg(target_arch = "x86_64")]
+impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_, 8>, USlice<'_, 1>>
+    for InnerProduct
+{
+    /// Computes the inner product of 8-bit unsigned × 1-bit unsigned vectors using V3 intrinsics.
+    ///
+    /// For each 32-element block we load 32 bytes from `x` and 4 bytes (32 bits) from `y`.
+    /// ANDing the data with the mask created from 4 bytes from `y` zeroes unselected lanes.
+    /// Finally, `_mm256_sad_epu8` horizontally sums the masked bytes in groups of 8.
+    ///
+    /// The main loop is 4× unrolled, processing 128 elements per iteration.
+    ///
+    /// ## Overflow
+    ///
+    /// Each `sad` output lane holds at most `8 × 255 = 2_040`. Accumulated across `d/32`
+    /// blocks, the per-lane max is `(d/32) × 2_040`. At dim = 3072: `96 × 2_040 = 195_840`,
+    /// well within i32 range.
+    #[inline(always)]
+    fn run(
+        self,
+        arch: diskann_wide::arch::x86_64::V3,
+        x: USlice<'_, 8>,
+        y: USlice<'_, 1>,
+    ) -> MathematicalResult<u32> {
+        use diskann_wide::{FromInt, SIMDMask};
+        use std::arch::x86_64::_mm256_sad_epu8;
+
+        let len = check_lengths!(x, y)?;
+
+        diskann_wide::alias!(i32s = <diskann_wide::arch::x86_64::V3>::i32x8);
+        diskann_wide::alias!(u8s_32 = <diskann_wide::arch::x86_64::V3>::u8x32);
+
+        type Mask32 = diskann_wide::BitMask<32, diskann_wide::arch::x86_64::V3>;
+        type Mask8x32 = diskann_wide::arch::x86_64::v3::masks::mask8x32;
+
+        let px: *const u8 = x.as_ptr();
+        let py: *const u8 = y.as_ptr();
+
+        let mut i: usize = 0;
+        let mut s: u32 = 0;
+
+        // Each block processes 32 elements: 32 bytes from x, 4 bytes (32 bits) from y.
+        let blocks = len / 32;
+        if blocks > 0 {
+            let mut acc = i32s::default(arch);
+            let zero = u8s_32::default(arch);
+
+            // Expand 32 bits of `y` to a byte mask, AND with `x`, and horizontally sum
+            // the masked bytes via `_mm256_sad_epu8`.
+            //
+            // Returns an `i32x8` where lanes 0, 2, 4, 6 hold group sums (each ≤ 2040)
+            // and lanes 1, 3, 5, 7 are zero.
+            let masked_sad = |vx: u8s_32, bits: u32| -> i32s {
+                // Expand 32-bit mask → 32 bytes of 0xFF/0x00.
+                let byte_mask: Mask8x32 = Mask32::from_int(arch, bits).into();
+
+                // AND data with mask: zeroes lanes where the bit is 0.
+                let masked = vx & u8s_32::from_underlying(arch, byte_mask.to_underlying());
+
+                // Horizontal byte sum in groups of 8 → 4 × u64 partial sums.
+                // SAFETY: `arch` is V3 (AVX2), `_mm256_sad_epu8` is available.
+                i32s::from_underlying(arch, unsafe {
+                    _mm256_sad_epu8(masked.to_underlying(), zero.to_underlying())
+                })
+            };
+
+            // Main loop: 4× unrolled, processing 128 elements per iteration.
+            while i + 4 <= blocks {
+                // SAFETY: `i + 4 <= blocks` guarantees at least 4 full blocks remain.
+                // Each block needs 32 bytes from `px` and 4 bytes from `py`.
+                let s0 = unsafe {
+                    let vx = u8s_32::load_simd(arch, px.add(32 * i));
+                    let bits = (py.add(4 * i) as *const u32).read_unaligned();
+                    masked_sad(vx, bits)
+                };
+
+                // SAFETY: `i + 1 < i + 4 <= blocks`.
+                let s1 = unsafe {
+                    let vx = u8s_32::load_simd(arch, px.add(32 * (i + 1)));
+                    let bits = (py.add(4 * (i + 1)) as *const u32).read_unaligned();
+                    masked_sad(vx, bits)
+                };
+
+                // SAFETY: `i + 2 < i + 4 <= blocks`.
+                let s2 = unsafe {
+                    let vx = u8s_32::load_simd(arch, px.add(32 * (i + 2)));
+                    let bits = (py.add(4 * (i + 2)) as *const u32).read_unaligned();
+                    masked_sad(vx, bits)
+                };
+
+                // SAFETY: `i + 3 < i + 4 <= blocks`.
+                let s3 = unsafe {
+                    let vx = u8s_32::load_simd(arch, px.add(32 * (i + 3)));
+                    let bits = (py.add(4 * (i + 3)) as *const u32).read_unaligned();
+                    masked_sad(vx, bits)
+                };
+
+                acc = acc + s0 + s1 + s2 + s3;
+                i += 4;
+            }
+
+            // Drain remaining full 32-element blocks (0..3 iterations).
+            while i < blocks {
+                // SAFETY: `i < blocks` guarantees 32 bytes from `px` and 4 bytes from `py`
+                // are readable at this offset.
+                let si = unsafe {
+                    let vx = u8s_32::load_simd(arch, px.add(32 * i));
+                    let bits = (py.add(4 * i) as *const u32).read_unaligned();
+                    masked_sad(vx, bits)
+                };
+                acc = acc + si;
+                i += 1;
+            }
+
+            s = acc.sum_tree() as u32;
+        }
+
+        // Convert block count to element index.
+        i *= 32;
+
+        // Scalar fallback for the remaining < 32 elements.
+        if i != len {
+            #[inline(never)]
+            fn fallback(x: USlice<'_, 8>, y: USlice<'_, 1>, from: usize) -> u32 {
+                let mut s: u32 = 0;
+                for i in from..x.len() {
+                    // SAFETY: `i` is in `from..x.len()`, which equals `y.len()`.
+                    let (ix, iy) =
+                        unsafe { (x.get_unchecked(i) as u32, y.get_unchecked(i) as u32) };
+                    s += ix * iy;
+                }
+                s
+            }
+            s += fallback(x, y, i);
+        }
+
+        Ok(MV::new(s))
+    }
+}
+
 #[cfg(target_arch = "aarch64")]
 retarget!(
     diskann_wide::arch::aarch64::Neon,
@@ -1718,7 +1862,8 @@ retarget!(
     (3, 3),
     (2, 2),
     (8, 4),
-    (8, 2)
+    (8, 2),
+    (8, 1)
 );
 
 //////////////////
@@ -3328,5 +3473,13 @@ mod tests {
         max_val: 3,
         block_size: 64,
         seed_fuzz: 0x82c4a6e809f1d3b5,
+    }
+
+    heterogeneous_ip_tests_8xM! {
+        mod_name: heterogeneous_ip_8x1,
+        M: 1,
+        max_val: 1,
+        block_size: 32,
+        seed_fuzz: 0x1b17_a5e7c2d0f839,
     }
 }
