@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::{Scalar, Target, Target1, Target2, Target3};
 
 // Internal helpers
-pub mod algorithms;
+mod algorithms;
 mod common;
 mod macros;
 

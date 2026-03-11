@@ -75,6 +75,7 @@
 //! |               |               |           |           |               |           |           |
 //! | `USlice<8>`   | `USlice<4>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
 //! | `USlice<8>`   | `USlice<2>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
+//! | `USlice<8>`   | `USlice<1>`   | `MV<u32>` | Fallback  | Yes           | Uses V3   | Fallback  |
 //! |               |               | `       ` |           |               |           |           |
 //! | `TSlice<4>`   | `USlice<1>`   | `MV<u32>` | Optimized | Optimized     | Optimized | Optimized |
 //! |               |               | `       ` |           |               |           |           |
@@ -143,9 +144,12 @@ macro_rules! retarget {
             }
         }
     };
+    ($arch:path, $op:ty, $N:literal) => {
+        retarget!($arch, $op, ($N, $N));
+    };
     ($arch:path, $op:ty, $($args:tt),+ $(,)?) => {
         $(retarget!($arch, $op, $args);)+
-    }
+    };
 }
 
 /// Impledment [`diskann_vector::PureDistanceFunction`] using the current compilation architecture
@@ -157,6 +161,9 @@ macro_rules! dispatch_pure {
                 (diskann_wide::ARCH).run2(Self, x, y)
             }
         }
+    };
+    ($op:ty, $N:literal) => {
+        dispatch_pure!($op, ($N, $N));
     };
     ($op:ty, $($args:tt),+ $(,)?) => {
         $(dispatch_pure!($op, $args);)+
@@ -787,48 +794,22 @@ macro_rules! impl_fallback_l2 {
 impl_fallback_l2!(7, 6, 5, 4, 3, 2);
 
 #[cfg(target_arch = "x86_64")]
-retarget!(
-    diskann_wide::arch::x86_64::V3,
-    SquaredL2,
-    (7, 7),
-    (6, 6),
-    (5, 5),
-    (3, 3)
-);
+retarget!(diskann_wide::arch::x86_64::V3, SquaredL2, 7, 6, 5, 3);
 
 #[cfg(target_arch = "x86_64")]
-retarget!(
-    diskann_wide::arch::x86_64::V4,
-    SquaredL2,
-    (7, 7),
-    (6, 6),
-    (5, 5),
-    (4, 4),
-    (3, 3),
-    (2, 2)
-);
+retarget!(diskann_wide::arch::x86_64::V4, SquaredL2, 7, 6, 5, 4, 3, 2);
 
-dispatch_pure!(
-    SquaredL2,
-    (1, 1),
-    (2, 2),
-    (3, 3),
-    (4, 4),
-    (5, 5),
-    (6, 6),
-    (7, 7),
-    (8, 8)
-);
+dispatch_pure!(SquaredL2, 1, 2, 3, 4, 5, 6, 7, 8);
 #[cfg(target_arch = "aarch64")]
 retarget!(
     diskann_wide::arch::aarch64::Neon,
     SquaredL2,
-    (7, 7),
-    (6, 6),
-    (5, 5),
-    (4, 4),
-    (3, 3),
-    (2, 2)
+    7,
+    6,
+    5,
+    4,
+    3,
+    2
 );
 
 ///////////////////
@@ -1345,42 +1326,28 @@ macro_rules! impl_fallback_ip {
             }
         }
     };
+    ($N:literal) => {
+        impl_fallback_ip!(($N, $N));
+    };
     ($($args:tt),+ $(,)?) => {
         $(impl_fallback_ip!($args);)+
     };
 }
 
-impl_fallback_ip!(
-    (7, 7),
-    (6, 6),
-    (5, 5),
-    (4, 4),
-    (3, 3),
-    (2, 2),
-    (8, 4),
-    (8, 2),
-    (8, 1)
-);
+impl_fallback_ip!(7, 6, 5, 4, 3, 2, (8, 4), (8, 2), (8, 1));
 
 #[cfg(target_arch = "x86_64")]
-retarget!(
-    diskann_wide::arch::x86_64::V3,
-    InnerProduct,
-    (7, 7),
-    (6, 6),
-    (5, 5),
-    (3, 3)
-);
+retarget!(diskann_wide::arch::x86_64::V3, InnerProduct, 7, 6, 5, 3);
 
 #[cfg(target_arch = "x86_64")]
 retarget!(
     diskann_wide::arch::x86_64::V4,
     InnerProduct,
-    (7, 7),
-    (6, 6),
-    (4, 4),
-    (5, 5),
-    (3, 3),
+    7,
+    6,
+    5,
+    4,
+    3,
     (8, 4),
     (8, 2),
     (8, 1)
@@ -1388,13 +1355,13 @@ retarget!(
 
 dispatch_pure!(
     InnerProduct,
-    (1, 1),
-    (2, 2),
-    (3, 3),
-    (4, 4),
-    (5, 5),
-    (6, 6),
-    (7, 7),
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
     (8, 8),
     (8, 4),
     (8, 2),
@@ -1855,13 +1822,12 @@ impl Target2<diskann_wide::arch::x86_64::V3, MathematicalResult<u32>, USlice<'_,
 retarget!(
     diskann_wide::arch::aarch64::Neon,
     InnerProduct,
-    (7, 7),
-    (6, 6),
-    (4, 4),
-    (5, 5),
-    (3, 3),
-    (2, 2),
-    (8, 4),
+    7,
+    6,
+    5,
+    4,
+    3,
+    2(8, 4),
     (8, 2),
     (8, 1)
 );
