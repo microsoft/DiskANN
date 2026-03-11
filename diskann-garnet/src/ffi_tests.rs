@@ -6,6 +6,8 @@
 mod tests {
     use std::{ffi::c_void, mem, ptr};
 
+    use diskann_vector::distance::Metric;
+
     use crate::{
         VectorQuantType, VectorValueType, card, check_external_id_valid, create_index, drop_index,
         garnet::Context, insert, remove, search_vector, set_attribute, test_utils::Store,
@@ -14,6 +16,17 @@ mod tests {
     /// Creates an index with default test values and returns (index_ptr, Context).
     /// The caller is responsible for calling drop_index when done.
     fn create_test_index(store: &Store) -> (*const c_void, Context) {
+        let (index_ptr, ctx) = create_test_index_with_metric(store, Metric::L2 as i32);
+        assert!(
+            !index_ptr.is_null(),
+            "create_test_index failed to create index"
+        );
+        (index_ptr, ctx)
+    }
+
+    /// Creates an index with specified metric type and returns (index_ptr, Context).
+    /// The caller is responsible for calling drop_index when done.
+    fn create_test_index_with_metric(store: &Store, metric_type: i32) -> (*const c_void, Context) {
         store.clear();
 
         let callbacks = store.callbacks();
@@ -31,6 +44,7 @@ mod tests {
                 dim,
                 reduce_dim,
                 quant_type,
+                metric_type,
                 l_build,
                 max_degree,
                 callbacks.read_callback(),
@@ -40,8 +54,6 @@ mod tests {
             )
         };
 
-        assert!(!index_ptr.is_null());
-
         (index_ptr, ctx)
     }
 
@@ -49,9 +61,52 @@ mod tests {
     fn basic_create_index() {
         let store = Store;
         let (index_ptr, ctx) = create_test_index(&store);
+        assert!(!index_ptr.is_null());
 
         unsafe {
             drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn create_index_with_invalid_metric_returns_null() {
+        let store = Store;
+
+        // Test with invalid metric type values — passed as raw i32
+        let invalid_metrics = [-1, -2, 99, i32::MAX, i32::MIN];
+
+        for invalid_metric in invalid_metrics {
+            let (index_ptr, _ctx) = create_test_index_with_metric(&store, invalid_metric);
+            assert!(
+                index_ptr.is_null(),
+                "Expected null for invalid metric_type={}",
+                invalid_metric
+            );
+        }
+    }
+
+    #[test]
+    fn create_index_with_valid_metrics() {
+        let store = Store;
+
+        // Test all valid metric types
+        let valid_metrics = [
+            Metric::Cosine as i32,
+            Metric::L2 as i32,
+            Metric::InnerProduct as i32,
+            Metric::CosineNormalized as i32,
+        ];
+
+        for valid_metric in valid_metrics {
+            let (index_ptr, ctx) = create_test_index_with_metric(&store, valid_metric);
+            assert!(
+                !index_ptr.is_null(),
+                "Expected non-null for valid metric_type_raw={}",
+                valid_metric
+            );
+            unsafe {
+                drop_index(ctx.0, index_ptr);
+            }
         }
     }
 
@@ -290,9 +345,9 @@ mod tests {
         let (index_ptr, ctx) = create_test_index(&store);
 
         let id1 = 1234u64;
-        let v1 = &[1u8, 1u8];
+        let v1 = &[1u8, 0u8];
         let id2 = 5678u64;
-        let v2 = &[2u8, 2u8];
+        let v2 = &[0u8, 1u8];
 
         let id1_bytes = bytemuck::bytes_of(&id1);
         let id2_bytes = bytemuck::bytes_of(&id2);
@@ -562,6 +617,163 @@ mod tests {
             assert_eq!(ids_null, ids_empty);
             assert_eq!(dists_null, dists_empty);
 
+            drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    /// Insert 27 vectors in a 3x3x3 grid with string external IDs like "v_0_0_0",
+    /// then run multiple VSIM queries each requesting the 3 nearest neighbors.
+    #[test]
+    fn search_grid_with_string_ids() {
+        let store = Store;
+        store.clear();
+
+        let callbacks = store.callbacks();
+        let ctx = Context(0);
+
+        let dim: u32 = 3;
+        let index_ptr = unsafe {
+            create_index(
+                ctx.0,
+                dim,
+                0,
+                VectorQuantType::NoQuant,
+                Metric::L2 as i32,
+                10,
+                20,
+                callbacks.read_callback(),
+                callbacks.write_callback(),
+                callbacks.delete_callback(),
+                callbacks.rmw_callback(),
+            )
+        };
+        assert!(!index_ptr.is_null());
+
+        // Insert 27 vectors in a 3x3x3 grid with string IDs "v_x_y_z"
+        let mut ids: Vec<String> = Vec::new();
+        let mut vectors: Vec<[f32; 3]> = Vec::new();
+        for x in 0..3u32 {
+            for y in 0..3u32 {
+                for z in 0..3u32 {
+                    let id = format!("v_{x}_{y}_{z}");
+                    let vec = [x as f32, y as f32, z as f32];
+
+                    let id_bytes = id.as_bytes();
+                    let vec_bytes: &[u8] = bytemuck::cast_slice(&vec);
+                    let inserted = unsafe {
+                        insert(
+                            ctx.0,
+                            index_ptr,
+                            id_bytes.as_ptr(),
+                            id_bytes.len(),
+                            VectorValueType::FP32,
+                            vec_bytes.as_ptr(),
+                            vec.len(),
+                            b"".as_ptr(),
+                            0,
+                        )
+                    };
+                    assert!(inserted, "failed to insert {id}");
+
+                    ids.push(id);
+                    vectors.push(vec);
+                }
+            }
+        }
+
+        assert_eq!(unsafe { card(ctx.0, index_ptr) }, 27);
+
+        // Helper to run a search and parse variable-length string IDs from the output buffer.
+        let do_grid_search = |query: &[f32; 3], k: usize| -> (Vec<String>, Vec<f32>) {
+            let query_bytes: &[u8] = bytemuck::cast_slice(query);
+            // Each result: 4 bytes id_len + up to 7 bytes for "v_X_Y_Z"
+            let max_id_size = mem::size_of::<u32>() + 7;
+            let mut output_id_buffer = vec![0u8; k * max_id_size];
+            let mut output_dists = vec![0f32; k];
+
+            let delta = 2.0f32;
+            let search_exploration_factor = 100u32;
+            let bitmap_data = ptr::null();
+            let bitmap_len = 0;
+            let max_filtering_effort = 30;
+
+            let count = unsafe {
+                search_vector(
+                    ctx.0,
+                    index_ptr,
+                    VectorValueType::FP32,
+                    query_bytes.as_ptr(),
+                    query.len(),
+                    delta,
+                    search_exploration_factor,
+                    bitmap_data,
+                    bitmap_len,
+                    max_filtering_effort,
+                    output_id_buffer.as_mut_ptr(),
+                    output_id_buffer.len(),
+                    output_dists.as_mut_ptr(),
+                    output_dists.len(),
+                    ptr::null_mut(),
+                )
+            };
+            assert!(count >= 0, "search failed with {count}");
+            let count = count as usize;
+
+            let mut result_ids = Vec::new();
+            let mut offset = 0;
+            for _ in 0..count {
+                let mut id_len = 0u32;
+                bytemuck::bytes_of_mut(&mut id_len)
+                    .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+                offset += mem::size_of::<u32>();
+
+                let id_str =
+                    std::str::from_utf8(&output_id_buffer[offset..offset + id_len as usize])
+                        .expect("id should be valid utf8");
+                result_ids.push(id_str.to_string());
+                offset += id_len as usize;
+            }
+
+            output_dists.truncate(count);
+            (result_ids, output_dists)
+        };
+
+        // Query 1: exact match at origin — nearest should be v_0_0_0
+        let (ids1, dists1) = do_grid_search(&[0.0, 0.0, 0.0], 3);
+        assert_eq!(ids1.len(), 3, "expected 3 results");
+        assert_eq!(ids1[0], "v_0_0_0", "closest to origin should be v_0_0_0");
+        assert_eq!(dists1[0], 0.0, "exact match should have distance 0");
+
+        // Query 2: exact match at corner — nearest should be v_2_2_2
+        let (ids2, dists2) = do_grid_search(&[2.0, 2.0, 2.0], 3);
+        assert_eq!(ids2.len(), 3, "expected 3 results");
+        assert_eq!(ids2[0], "v_2_2_2", "closest to (2,2,2) should be v_2_2_2");
+        assert_eq!(dists2[0], 0.0, "exact match should have distance 0");
+
+        // Query 3: center of grid — nearest should be v_1_1_1
+        let (ids3, dists3) = do_grid_search(&[1.0, 1.0, 1.0], 3);
+        assert_eq!(ids3.len(), 3, "expected 3 results");
+        assert_eq!(ids3[0], "v_1_1_1", "closest to center should be v_1_1_1");
+        assert_eq!(dists3[0], 0.0, "exact match should have distance 0");
+        // The next 2 results should all be distance 1.0 (one axis off by 1)
+        for d in &dists3[1..] {
+            assert_eq!(
+                *d, 1.0,
+                "neighbors of center should be at squared L2 distance 1.0"
+            );
+        }
+
+        // Query 4: off-grid point — nearest should be v_0_0_0 at squared distance 0.75
+        let (ids4, dists4) = do_grid_search(&[0.5, 0.5, 0.5], 3);
+        assert_eq!(ids4.len(), 3, "expected 3 results");
+        // All 8 corners {0,1}^3 are equidistant at squared L2 = 3*0.25 = 0.75,
+        // but v_0_0_0 and v_1_1_1 etc. are among them — just check the distance.
+        assert_eq!(
+            dists4[0], 0.75,
+            "nearest to (0.5,0.5,0.5) should be at squared distance 0.75"
+        );
+
+        unsafe {
             drop_index(ctx.0, index_ptr);
         }
     }
