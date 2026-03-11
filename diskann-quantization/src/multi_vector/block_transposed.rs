@@ -1688,10 +1688,20 @@ mod tests {
 
     #[test]
     fn test_api_pack1_group16() {
-        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
-        let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
-        for nrows in row_range {
-            for ncols in col_range.clone() {
+        // Miri: boundary rows around GROUP=16 block transitions;
+        // full run: exhaustive sweep.
+        let rows: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 15, 16, 17, 33]
+        } else {
+            (0..128).collect()
+        };
+        let cols: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 2]
+        } else {
+            (0..5).collect()
+        };
+        for &nrows in &rows {
+            for &ncols in &cols {
                 test_full_api::<f32, 16, 1>(nrows, ncols, gen_f32);
             }
         }
@@ -1699,10 +1709,20 @@ mod tests {
 
     #[test]
     fn test_api_pack1_group8() {
-        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
-        let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
-        for nrows in row_range {
-            for ncols in col_range.clone() {
+        // Miri: boundary rows around GROUP=8 block transitions;
+        // full run: exhaustive sweep.
+        let rows: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 7, 8, 9, 17]
+        } else {
+            (0..128).collect()
+        };
+        let cols: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 2]
+        } else {
+            (0..5).collect()
+        };
+        for &nrows in &rows {
+            for &ncols in &cols {
                 test_full_api::<f32, 8, 1>(nrows, ncols, gen_f32);
             }
         }
@@ -1710,10 +1730,20 @@ mod tests {
 
     #[test]
     fn test_api_pack2() {
-        let row_range = if cfg!(miri) { 31..32 } else { 0..48 };
-        let col_range = if cfg!(miri) { 4..5 } else { 0..9 };
-        for nrows in row_range {
-            for ncols in col_range.clone() {
+        // Miri: boundary rows around GROUP=4/8/16 transitions;
+        // cols hit PACK=2 boundary (even/odd). Full run: exhaustive.
+        let rows: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17]
+        } else {
+            (0..48).collect()
+        };
+        let cols: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 2, 3, 4, 5]
+        } else {
+            (0..9).collect()
+        };
+        for &nrows in &rows {
+            for &ncols in &cols {
                 test_full_api::<f32, 4, 2>(nrows, ncols, gen_f32);
                 test_full_api::<f32, 8, 2>(nrows, ncols, gen_f32);
                 test_full_api::<f32, 16, 2>(nrows, ncols, gen_f32);
@@ -1723,10 +1753,20 @@ mod tests {
 
     #[test]
     fn test_api_pack4() {
-        let row_range = if cfg!(miri) { 31..32 } else { 0..48 };
-        let col_range = if cfg!(miri) { 4..5 } else { 0..9 };
-        for nrows in row_range {
-            for ncols in col_range.clone() {
+        // Miri: boundary rows around GROUP=4/8/16 transitions;
+        // cols hit PACK=4 boundary (0,1,3,4,5,8). Full run: exhaustive.
+        let rows: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17]
+        } else {
+            (0..48).collect()
+        };
+        let cols: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 3, 4, 5, 8]
+        } else {
+            (0..9).collect()
+        };
+        for &nrows in &rows {
+            for &ncols in &cols {
                 test_full_api::<f32, 4, 4>(nrows, ncols, gen_f32);
                 test_full_api::<f32, 8, 4>(nrows, ncols, gen_f32);
                 test_full_api::<f32, 16, 4>(nrows, ncols, gen_f32);
@@ -1811,10 +1851,18 @@ mod tests {
 
     #[test]
     fn test_block_layout_pack1_group16() {
-        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
-        let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
-        for nrows in row_range {
-            for ncols in col_range.clone() {
+        let rows: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 15, 16, 17, 33]
+        } else {
+            (0..128).collect()
+        };
+        let cols: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 2]
+        } else {
+            (0..5).collect()
+        };
+        for &nrows in &rows {
+            for &ncols in &cols {
                 test_block_layout_pack1::<f32, 16>(nrows, ncols, gen_f32);
             }
         }
@@ -1822,10 +1870,18 @@ mod tests {
 
     #[test]
     fn test_block_layout_pack1_group8() {
-        let row_range = if cfg!(miri) { 127..128 } else { 0..128 };
-        let col_range = if cfg!(miri) { 4..5 } else { 0..5 };
-        for nrows in row_range {
-            for ncols in col_range.clone() {
+        let rows: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 7, 8, 9, 17]
+        } else {
+            (0..128).collect()
+        };
+        let cols: Vec<usize> = if cfg!(miri) {
+            vec![0, 1, 2]
+        } else {
+            (0..5).collect()
+        };
+        for &nrows in &rows {
+            for &ncols in &cols {
                 test_block_layout_pack1::<f32, 8>(nrows, ncols, gen_f32);
             }
         }
