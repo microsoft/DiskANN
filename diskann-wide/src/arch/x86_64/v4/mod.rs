@@ -34,7 +34,7 @@
 //! However, Miri is a great tool for assisting with writing kernels when it comes to
 //! validating bounds-checking. The [`V4`] supports running under Miri with a few caveats.
 //! First, when using `#[cfg(miri)]`, the type aliases such as [`f32x4`] will be mapped
-//! to emulated variants (i.e., [`Emulated<f32, 4, V4>`]). Use of the standard SIMD functions
+//! to emulated variants (i.e., [`crate::Emulated<f32, 4, V4>`]). Use of the standard SIMD functions
 //! like arithmetic, loading, storing, etc. will execute as expected, enabling Miri assisted
 //! bounds checking for loads and stores.
 //!
