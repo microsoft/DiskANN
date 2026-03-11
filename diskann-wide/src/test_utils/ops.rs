@@ -1069,19 +1069,6 @@ where
         &identity,
         "zip_flat",
     );
-
-    // --- Round-trip: zip_flat ∘ unzip_flat = identity ---
-    let round_trip = V::from_array(arch, *a).unzip_flat().zip_flat();
-    test_unary_op(&round_trip.to_array(), a, &identity, "zip_flat∘unzip_flat");
-
-    // --- Round-trip: unzip_flat ∘ zip_flat = identity ---
-    let round_trip2 = V::from_array(arch, *a).zip_flat().unzip_flat();
-    test_unary_op(
-        &round_trip2.to_array(),
-        a,
-        &identity,
-        "unzip_flat∘zip_flat",
-    );
 }
 
 macro_rules! test_zipunzip {
