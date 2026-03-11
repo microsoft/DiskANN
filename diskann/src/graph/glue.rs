@@ -85,7 +85,7 @@ use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 use crate::{
     ANNError, ANNResult,
     error::{ErrorExt, StandardError},
-    graph::{AdjacencyList, SearchOutputBuffer, workingset::Fill},
+    graph::{AdjacencyList, SearchOutputBuffer, workingset},
     neighbor::Neighbor,
     provider::{
         Accessor, AsNeighbor, AsNeighborMut, BuildDistanceComputer, BuildQueryComputer,
@@ -580,21 +580,26 @@ where
 
     /// The concrete type of the accessor that is used to access `Self` during pruning.
     ///
-    /// The accessor implements [`Fill`] for the strategy's [`State`](Self::State) type,
-    /// which controls how elements are fetched and cached for distance computations.
+    /// The accessor implements [`workingset::Fill`] for the strategy's
+    /// [`State`](Self::State) type, which controls how elements are fetched and cached for
+    /// distance computations.
     ///
     /// Implementations are encouraged to have [`Accessor::get_element`] return the
     /// highest-precision applicable value for a given element type.
     type PruneAccessor<'a>: Accessor<Id = Provider::InternalId>
         + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer>
         + AsNeighborMut
-        + Fill<Self::State>;
+        + workingset::Fill<Self::State>;
 
     /// An error that can occur when getting the prune accessor.
     type PruneAccessorError: StandardError;
 
-    /// Create a fresh working set state, optionally pre-sized for `size_hint` elements.
-    fn create_state(&self, size_hint: Option<usize>) -> Self::State;
+    /// Create a fresh working set state pre-sized for up to `capacity` elements.
+    ///
+    /// `capacity` is a contractual upper-bound: callers guarantee that no more than
+    /// `capacity` elements will be inserted into the state during a single fill cycle.
+    /// Implementations may use this to pre-allocate or panic if exceeded.
+    fn create_state(&self, capacity: usize) -> Self::State;
 
     /// Return the prune accessor.
     fn prune_accessor<'a>(
@@ -629,6 +634,7 @@ where
     B: Batch,
 {
     type State: Send + Sync + 'static;
+    type Seed: workingset::AsWorkingSet<Self::State> + Send + Sync + 'static;
     type InsertStrategy: for<'a> InsertStrategy<
             Provider,
             B::Element<'a>,
@@ -637,7 +643,7 @@ where
 
     fn insert_strategy(&self) -> Self::InsertStrategy;
 
-    fn finish<Itr>(&self, batch: &Arc<B>, ids: Itr) -> Self::State
+    fn finish<Itr>(&self, batch: &Arc<B>, ids: Itr) -> Self::Seed
     where
         Itr: ExactSizeIterator<Item = Provider::InternalId>;
 }

@@ -25,7 +25,7 @@ use diskann::{
     neighbor::Neighbor,
     provider::{
         Accessor, BuildQueryComputer, DataProvider, DefaultContext, DelegateNeighbor, HasId,
-        NeighborAccessor,
+        NeighborAccessor, NoopGuard,
     },
     utils::{
         object_pool::{ObjectPool, PoolOption, TryAsPooled},
@@ -99,6 +99,8 @@ where
     type InternalId = u32;
 
     type ExternalId = u32;
+
+    type Guard = NoopGuard<u32>;
 
     type Error = ANNError;
 
@@ -279,7 +281,7 @@ impl<'a> RerankAndFilter<'a> {
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
-        [Data::VectorDataType],
+        &[Data::VectorDataType],
         (
             <DiskProvider<Data> as DataProvider>::InternalId,
             Data::AssociatedDataType,
@@ -338,7 +340,7 @@ where
 impl<'this, Data, ProviderFactory>
     SearchStrategy<
         DiskProvider<Data>,
-        [Data::VectorDataType],
+        &[Data::VectorDataType],
         (
             <DiskProvider<Data> as DataProvider>::InternalId,
             Data::AssociatedDataType,
@@ -393,7 +395,7 @@ impl PreprocessedDistanceFunction<&[u8], f32> for DiskQueryComputer {
     }
 }
 
-impl<Data, VP> BuildQueryComputer<[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
+impl<Data, VP> BuildQueryComputer<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
@@ -430,7 +432,7 @@ where
     }
 }
 
-impl<Data, VP> ExpandBeam<[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
+impl<Data, VP> ExpandBeam<&[Data::VectorDataType]> for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,

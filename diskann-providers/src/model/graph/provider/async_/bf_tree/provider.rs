@@ -24,6 +24,7 @@ use diskann::{
             self, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchExt,
             SearchStrategy,
         },
+        workingset,
     },
     neighbor::Neighbor,
     provider::{
@@ -601,6 +602,9 @@ where
     //
     type Error = ANNError;
 
+    // No insert-ID recovery.
+    type Guard = NoopGuard<u32>;
+
     // Translate an external id to its corresponding internal id.
     //
     fn to_internal_id(
@@ -754,7 +758,6 @@ where
     D: AsyncFriendly,
 {
     type SetError = ANNError;
-    type Guard = NoopGuard<u32>;
 
     /// Store the provided element in both the full-precision and quant vector stores.
     ///
@@ -792,7 +795,6 @@ where
     D: AsyncFriendly,
 {
     type SetError = ANNError;
-    type Guard = NoopGuard<u32>;
 
     /// Store the provided element in just the full-precision vector stores
     ///
@@ -925,7 +927,7 @@ where
     /// The host provider.
     provider: &'a BfTreeProvider<T, Q, D>,
     /// A buffer to store retrieved elements.
-    element: Box<&[T]>,
+    element: Box<[T]>,
 }
 
 impl<T, Q, D> HasId for FullAccessor<'_, T, Q, D>
@@ -984,7 +986,7 @@ where
     D: AsyncFriendly,
 {
     /// The lifetime extended version requires an allocation.
-    type Extended = Box<&[T]>;
+    type Extended = Box<[T]>;
 
     /// This accessor returns a reference to a local copy of the vector.
     type Element<'a>
@@ -1380,84 +1382,58 @@ where
     }
 }
 
-// impl<T, D> FillSet for HybridAccessor<'_, T, D>
-// where
-//     T: VectorRepr,
-//     D: AsyncFriendly,
-// {
-//     /// Fill up to `max_fp_per_prune` as full precision. The rest are quantized.
-//     ///
-//     /// if a full-precision vector already exists regardless of whether a full-precision
-//     /// vector or quant vector is needed, it is left as-is
-//     ///
-//     async fn fill_set<Itr>(
-//         &mut self,
-//         set: &mut HashMap<Self::Id, Self::Extended>,
-//         itr: Itr,
-//     ) -> Result<(), Self::GetError>
-//     where
-//         Itr: Iterator<Item = Self::Id> + Send + Sync,
-//     {
-//         let threshold = self.provider.max_fp_vecs_per_fill;
-//         itr.enumerate().for_each(|(i, id)| {
-//             let e = set.entry(id);
-//
-//             // Below the threshold, we try to fetch full-precision vectors.
-//             //
-//             if i < threshold {
-//                 // If the item already exists but is not full precision, make it full
-//                 // precision.
-//                 e.and_modify(|v| {
-//                     if !v.is_full() {
-//                         // SAFETY: We've decided to live with UB (undefined behavior) that
-//                         // can result from potentially mixing unsynchronized reads and
-//                         // writes on the underlying memory.
-//                         //
-//                         #[allow(clippy::expect_used)]
-//                         let vec = self
-//                             .provider
-//                             .full_vectors
-//                             .get_vector_sync(id.into_usize())
-//                             .expect("Full vector provider failed to retrieve element");
-//                         *v = distances::pq::Hybrid::Full(vec);
-//                     }
-//                 })
-//                 .or_insert_with(|| {
-//                     // Only invoke this method if the entry is not occupied.
-//                     //
-//                     // SAFETY: We've decided to live with UB (undefined behavior) that
-//                     // can result from potentially mixing unsynchronized reads and
-//                     // writes on the underlying memory.
-//                     //
-//                     #[allow(clippy::expect_used)]
-//                     let vec = self
-//                         .provider
-//                         .full_vectors
-//                         .get_vector_sync(id.into_usize())
-//                         .expect("Full vector provider failed to retrieve element");
-//                     distances::pq::Hybrid::Full(vec)
-//                 });
-//             } else {
-//                 // Otherwise, only insert into the cache if the entry is not occupied.
-//                 //
-//                 e.or_insert_with(|| {
-//                     // SAFETY: We've decided to live with UB (undefined behavior) that
-//                     // can result from potentially mixing unsynchronized reads and
-//                     // writes on the underlying memory.
-//                     //
-//                     #[allow(clippy::expect_used)]
-//                     distances::pq::Hybrid::Quant(
-//                         self.provider
-//                             .quant_vectors
-//                             .get_vector_sync(id.into_usize())
-//                             .expect("Fail to retrieve a quant vector during fillset"),
-//                     )
-//                 });
-//             }
-//         });
-//         Ok(())
-//     }
-// }
+impl<T, D> workingset::Fill<distances::pq::HybridMap<Vec<T>, Vec<u8>>> for HybridAccessor<'_, T, D>
+where
+    T: VectorRepr,
+    D: AsyncFriendly,
+{
+    type Error = ANNError;
+    type Set<'a>
+        = workingset::ScopedMapView<'a, u32, distances::pq::Hybrid<Vec<T>, Vec<u8>>>
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        state: &'a mut distances::pq::HybridMap<Vec<T>, Vec<u8>>,
+        itr: Itr,
+    ) -> Result<Self::Set<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        let map = state.get_mut();
+        map.clear();
+        let threshold = self.provider.max_fp_vecs_per_fill;
+        itr.enumerate().try_for_each(|(i, id)| -> ANNResult<()> {
+            match map.entry(id) {
+                workingset::Entry::Seeded(_) | workingset::Entry::Occupied(_) => {}
+                workingset::Entry::Vacant(vacant) => {
+                    let element = if i < threshold {
+                        let vec = self
+                            .provider
+                            .full_vectors
+                            .get_vector_sync(id.into_usize())?;
+
+                        distances::pq::Hybrid::Full(vec)
+                    } else {
+                        let vec = self
+                            .provider
+                            .quant_vectors
+                            .get_vector_sync(id.into_usize())?;
+
+                        distances::pq::Hybrid::Quant(vec)
+                    };
+
+                    vacant.insert(element);
+                }
+            }
+            Ok(())
+        })?;
+
+        Ok(map.scoped())
+    }
+}
 
 ////////////////
 // Strategies //
@@ -1629,6 +1605,7 @@ where
     Q: AsyncFriendly,
     D: AsyncFriendly,
 {
+    type State = workingset::Map<u32, Box<[T]>>;
     type DistanceComputer = T::Distance;
     type PruneAccessor<'a> = FullAccessor<'a, T, Q, D>;
     type PruneAccessorError = diskann::error::Infallible;
@@ -1640,6 +1617,10 @@ where
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(FullAccessor::new(provider))
     }
+
+    fn create_state(&self, _capacity: usize) -> Self::State {
+        Default::default()
+    }
 }
 
 impl<T, D> PruneStrategy<BfTreeProvider<T, QuantVectorProvider, D>> for Hybrid
@@ -1647,6 +1628,7 @@ where
     T: VectorRepr,
     D: AsyncFriendly,
 {
+    type State = distances::pq::HybridMap<Vec<T>, Vec<u8>>;
     type DistanceComputer = distances::pq::HybridComputer<T>;
     type PruneAccessor<'a> = HybridAccessor<'a, T, D>;
     type PruneAccessorError = diskann::error::Infallible;
@@ -1657,6 +1639,10 @@ where
         _context: &'a DefaultContext,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(HybridAccessor::new(provider))
+    }
+
+    fn create_state(&self, _capacity: usize) -> Self::State {
+        Default::default()
     }
 }
 
@@ -1693,7 +1679,7 @@ where
 {
     type DeleteElementError = Panics;
     type DeleteElement<'a> = &'a [T];
-    type DeleteElementGuard = Box<&[T]>;
+    type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
     type SearchStrategy = Internal<Self>;
     fn search_strategy(&self) -> Self::SearchStrategy {
@@ -1727,7 +1713,7 @@ where
 {
     type DeleteElementError = Panics;
     type DeleteElement<'a> = &'a [T];
-    type DeleteElementGuard = Box<&[T]>;
+    type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
     type SearchStrategy = Internal<Self>;
     fn search_strategy(&self) -> Self::SearchStrategy {

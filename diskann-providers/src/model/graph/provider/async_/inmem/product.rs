@@ -393,68 +393,20 @@ where
     }
 }
 
-// impl<T, D, Ctx> FillSet for HybridAccessor<'_, T, D, Ctx>
-// where
-//     T: VectorRepr,
-//     D: AsyncFriendly,
-//     Ctx: ExecutionContext,
-// {
-//     /// Fill up to `max_fp_per_prune` as full precision. The rest are quantized.
-//     ///
-//     /// if a full-precision vector already exists regardless of whether a full-precision
-//     /// vector or quant vector is needed, it is left as-is.
-//     async fn fill_set<Itr>(
-//         &mut self,
-//         set: &mut HashMap<Self::Id, Self::Extended>,
-//         itr: Itr,
-//     ) -> Result<(), Self::GetError>
-//     where
-//         Itr: Iterator<Item = Self::Id> + Send + Sync,
-//     {
-//         let threshold = self.max_fp_vecs_per_prune;
-//         itr.enumerate().for_each(|(i, id)| {
-//             let e = set.entry(id);
-//             // Below the threshold, we try to fetch full-precision vectors.
-//             if i < threshold {
-//                 // If the item already exists but is not full precision, make it full
-//                 // precision.
-//                 e.and_modify(|v| {
-//                     if !v.is_full() {
-//                         // SAFETY: We've decided to live with UB (undefined behavior) that
-//                         // can result from potentially mixing unsynchronized reads and
-//                         // writes on the underlying memory.
-//                         *v = distances::pq::Hybrid::Full(unsafe {
-//                             self.provider.base_vectors.get_vector_sync(id.into_usize())
-//                         });
-//                     }
-//                 })
-//                 .or_insert_with(|| {
-//                     // Only invoke this method if the entry is not occupied.
-//                     //
-//                     // SAFETY: We've decided to live with UB (undefined behavior) that
-//                     // can result from potentially mixing unsynchronized reads and
-//                     // writes on the underlying memory.
-//                     distances::pq::Hybrid::Full(unsafe {
-//                         self.provider.base_vectors.get_vector_sync(id.into_usize())
-//                     })
-//                 });
-//             } else {
-//                 // Otherwise, only insert into the cache if the entry is not occupied.
-//                 e.or_insert_with(|| {
-//                     // SAFETY: We've decided to live with UB (undefined behavior) that
-//                     // can result from potentially mixing unsynchronized reads and
-//                     // writes on the underlying memory.
-//                     distances::pq::Hybrid::Quant(unsafe {
-//                         self.provider.aux_vectors.get_vector_sync(id.into_usize())
-//                     })
-//                 });
-//             }
-//         });
-//         Ok(())
-//     }
-// }
+/// Tracks which IDs should use full-precision vectors during hybrid pruning.
+///
+/// IDs in the set get full-precision distance computations; all others fall back to
+/// quantized vectors.
+pub struct FullPrecisionTracker(pub hashbrown::HashSet<u32>);
 
-impl<T, D, Ctx> workingset::Fill<PassThrough> for HybridAccessor<'_, T, D, Ctx>
+impl workingset::AsWorkingSet<FullPrecisionTracker> for workingset::Unseeded {
+    fn as_working_set(&self, capacity: usize) -> FullPrecisionTracker {
+        FullPrecisionTracker(hashbrown::HashSet::with_capacity(capacity))
+    }
+}
+
+impl<'accessor, T, D, Ctx> workingset::Fill<FullPrecisionTracker>
+    for HybridAccessor<'accessor, T, D, Ctx>
 where
     T: VectorRepr,
     D: AsyncFriendly,
@@ -462,24 +414,37 @@ where
 {
     type Error = std::convert::Infallible;
     type Set<'a>
-        = &'a Self
+        = MaybeFullPrecision<'a, 'accessor, T, D, Ctx>
     where
         Self: 'a;
 
     async fn fill<'a, Itr>(
         &'a mut self,
-        _state: &'a mut PassThrough,
-        _itr: Itr,
+        state: &'a mut FullPrecisionTracker,
+        itr: Itr,
     ) -> Result<Self::Set<'a>, Self::Error>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a,
     {
-        Ok(self)
+        state.0.clear();
+        state.0.extend(itr.take(self.max_fp_vecs_per_prune));
+        Ok(MaybeFullPrecision {
+            accessor: self,
+            full: state,
+        })
     }
 }
 
-impl<T, D, Ctx> workingset::ScopedMap<u32> for &HybridAccessor<'_, T, D, Ctx>
+pub struct MaybeFullPrecision<'a, 'b, T, D, Ctx>
+where
+    T: VectorRepr,
+{
+    accessor: &'a HybridAccessor<'b, T, D, Ctx>,
+    full: &'a FullPrecisionTracker,
+}
+
+impl<T, D, Ctx> workingset::ScopedMap<u32> for MaybeFullPrecision<'_, '_, T, D, Ctx>
 where
     T: VectorRepr,
     D: AsyncFriendly,
@@ -492,9 +457,19 @@ where
         Self: 'a;
 
     fn get(&self, id: u32) -> Option<Self::Element<'_>> {
-        Some(unsafe {
-            distances::pq::Hybrid::Full(self.provider.base_vectors.get_vector_sync(id.into_usize()))
-        })
+        let provider = &self.accessor.provider;
+        let element = if self.full.0.contains(&id) {
+            // YOLO
+            unsafe {
+                distances::pq::Hybrid::Full(provider.base_vectors.get_vector_sync(id.into_usize()))
+            }
+        } else {
+            // YOLO
+            unsafe {
+                distances::pq::Hybrid::Quant(provider.aux_vectors.get_vector_sync(id.into_usize()))
+            }
+        };
+        Some(element)
     }
 }
 
@@ -614,10 +589,10 @@ where
     type DistanceComputer = distances::pq::HybridComputer<T>;
     type PruneAccessor<'a> = HybridAccessor<'a, T, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = PassThrough;
+    type State = FullPrecisionTracker;
 
-    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
-        PassThrough
+    fn create_state(&self, capacity: usize) -> Self::State {
+        FullPrecisionTracker(hashbrown::HashSet::with_capacity(capacity))
     }
 
     fn prune_accessor<'a>(
@@ -657,18 +632,19 @@ where
             PruneStrategy = Self,
         >,
 {
-    type State = PassThrough;
+    type Seed = workingset::Unseeded;
+    type State = FullPrecisionTracker;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
         *self
     }
 
-    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::State
+    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::Seed
     where
         Itr: ExactSizeIterator<Item = u32>,
     {
-        PassThrough
+        workingset::Unseeded
     }
 }
 
@@ -743,7 +719,7 @@ where
     type PruneAccessorError = diskann::error::Infallible;
     type State = PassThrough;
 
-    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+    fn create_state(&self, _capacity: usize) -> Self::State {
         PassThrough
     }
 
@@ -780,6 +756,7 @@ where
             PruneStrategy = Self,
         >,
 {
+    type Seed = PassThrough;
     type State = PassThrough;
     type InsertStrategy = Self;
 
@@ -787,7 +764,7 @@ where
         *self
     }
 
-    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::State
+    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::Seed
     where
         Itr: ExactSizeIterator<Item = u32>,
     {

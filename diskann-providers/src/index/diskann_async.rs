@@ -723,149 +723,143 @@ pub(crate) mod tests {
     const IBC_NONE: IntraBatchCandidates = IntraBatchCandidates::None;
     const IBC_ALL: IntraBatchCandidates = IntraBatchCandidates::All;
 
-    // #[rstest]
-    // #[tokio::test]
-    // async fn grid_search_with_build<T>(
-    //     #[values(PhantomData::<f32>, PhantomData::<i8>, PhantomData::<u8>)] _v: PhantomData<T>,
-    //     #[values((1, 100), (3, 7), (4, 5))] dim_and_size: (usize, usize),
-    //     #[values(IBC_NONE, IBC_ALL)] intra_batch_candidates: IntraBatchCandidates,
-    // ) where
-    //     T: VectorRepr + GenerateGrid + Into<f32>,
-    // {
-    //     let dim = dim_and_size.0;
-    //     let grid_size = dim_and_size.1;
+    #[rstest]
+    #[tokio::test]
+    async fn grid_search_with_build<T>(
+        #[values(PhantomData::<f32>, PhantomData::<i8>, PhantomData::<u8>)] _v: PhantomData<T>,
+        #[values((1, 100), (3, 7), (4, 5))] dim_and_size: (usize, usize),
+        #[values(IBC_NONE, IBC_ALL)] intra_batch_candidates: IntraBatchCandidates,
+    ) where
+        T: VectorRepr + GenerateGrid + Into<f32>,
+    {
+        let dim = dim_and_size.0;
+        let grid_size = dim_and_size.1;
 
-    //     let l = 10;
+        let l = 10;
 
-    //     // NOTE: Be careful changing `max_degree`. It needs to be high enough that the
-    //     // graph is navigable, but low enough that the batch parallel handling inside
-    //     // `multi_insert` is needed for the multi-insert graph to be navigable.
-    //     //
-    //     // With the current configured values, removing the other elements in the batch
-    //     // from the visited set during `multi_insert` results in a graph failure.
-    //     let max_degree = 2 * dim;
-    //     let minibatch_par = 10;
+        // NOTE: Be careful changing `max_degree`. It needs to be high enough that the
+        // graph is navigable, but low enough that the batch parallel handling inside
+        // `multi_insert` is needed for the multi-insert graph to be navigable.
+        //
+        // With the current configured values, removing the other elements in the batch
+        // from the visited set during `multi_insert` results in a graph failure.
+        let max_degree = 2 * dim;
+        let minibatch_par = 10;
 
-    //     let max_fp_vecs_per_prune = Some(2);
-    //     let hybrid = Hybrid::new(max_fp_vecs_per_prune);
+        let max_fp_vecs_per_prune = Some(2);
+        let hybrid = Hybrid::new(max_fp_vecs_per_prune);
 
-    //     let num_points = (grid_size).pow(dim as u32);
+        let num_points = (grid_size).pow(dim as u32);
 
-    //     let (config, parameters) =
-    //         simplified_builder(l, max_degree, Metric::L2, dim, num_points, |p| {
-    //             p.max_minibatch_par(minibatch_par)
-    //                 .intra_batch_candidates(intra_batch_candidates);
-    //         })
-    //         .unwrap();
+        let (config, parameters) =
+            simplified_builder(l, max_degree, Metric::L2, dim, num_points, |p| {
+                p.max_minibatch_par(minibatch_par)
+                    .intra_batch_candidates(intra_batch_candidates);
+            })
+            .unwrap();
 
-    //     let mut vectors = T::generate_grid(dim, grid_size);
-    //     assert_eq!(vectors.len(), num_points);
+        let mut vectors: Vec<Vec<T>> = T::generate_grid(dim, grid_size);
+        assert_eq!(vectors.len(), num_points);
 
-    //     // This is a little subtle, but we need `vectors` to contain the start point as
-    //     // its last element, but we **don't** want to include it in the index build.
-    //     //
-    //     // This basically means that we need to be careful with out index initialization.
-    //     vectors.push(vec![
-    //         <T as num_traits::FromPrimitive>::from_usize(grid_size)
-    //             .unwrap();
-    //         dim
-    //     ]);
+        // This is a little subtle, but we need `vectors` to contain the start point as
+        // its last element, but we **don't** want to include it in the index build.
+        //
+        // This basically means that we need to be careful with out index initialization.
+        vectors.push(vec![
+            <T as num_traits::FromPrimitive>::from_usize(grid_size)
+                .unwrap();
+            dim
+        ]);
 
-    //     let table = train_pq(
-    //         squish(vectors.iter(), dim).as_view(),
-    //         2.min(dim), // Number of PQ chunks is bounded by the dimension.
-    //         &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
-    //         1usize,
-    //     )
-    //     .unwrap();
+        // A matrix view of all vectors (including the start point at the end).
+        let matrix: Matrix<T> = squish::<T, T, _>(vectors.iter(), dim);
 
-    //     // Initialize an index for a new round of building.
-    //     let init_index = || {
-    //         let index = new_quant_index::<T, _, _>(
-    //             config.clone(),
-    //             parameters.clone(),
-    //             table.clone(),
-    //             NoDeletes,
-    //         )
-    //         .unwrap();
-    //         index
-    //             .provider()
-    //             .set_start_points(std::iter::once(vectors.last().unwrap().as_slice()))
-    //             .unwrap();
-    //         index
-    //     };
+        let table = train_pq(
+            matrix.map(|i| (*i).into()).as_view(),
+            2.min(dim), // Number of PQ chunks is bounded by the dimension.
+            &mut create_rnd_from_seed_in_tests(0x04a8832604476965),
+            1usize,
+        )
+        .unwrap();
 
-    //     // Build with full-precision single insert
-    //     {
-    //         let index = init_index();
-    //         let ctx = DefaultContext;
-    //         for (i, v) in vectors.iter().take(num_points).enumerate() {
-    //             index
-    //                 .insert(FullPrecision, &ctx, &(i as u32), v.as_slice())
-    //                 .await
-    //                 .unwrap();
-    //         }
+        // Initialize an index for a new round of building.
+        let init_index = || {
+            let index = new_quant_index::<T, _, _>(
+                config.clone(),
+                parameters.clone(),
+                table.clone(),
+                NoDeletes,
+            )
+            .unwrap();
+            index
+                .provider()
+                .set_start_points(std::iter::once(matrix.row(num_points)))
+                .unwrap();
+            index
+        };
 
-    //         check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
-    //     }
+        // Build with full-precision single insert
+        {
+            let index = init_index();
+            let ctx = DefaultContext;
+            for (i, v) in matrix.row_iter().take(num_points).enumerate() {
+                index
+                    .insert(FullPrecision, &ctx, &(i as u32), v)
+                    .await
+                    .unwrap();
+            }
 
-    //     // Build with quantized single insert
-    //     {
-    //         let index = init_index();
-    //         let ctx = DefaultContext;
-    //         for (i, v) in vectors.iter().take(num_points).enumerate() {
-    //             index
-    //                 .insert(hybrid, &ctx, &(i as u32), v.as_slice())
-    //                 .await
-    //                 .unwrap();
-    //         }
+            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+        }
 
-    //         check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
-    //     }
+        // Build with quantized single insert
+        {
+            let index = init_index();
+            let ctx = DefaultContext;
+            for (i, v) in matrix.row_iter().take(num_points).enumerate() {
+                index.insert(hybrid, &ctx, &(i as u32), v).await.unwrap();
+            }
 
-    //     // Build with full-precision multi-insert
-    //     {
-    //         let index = init_index();
-    //         let ctx = DefaultContext;
+            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+        }
 
-    //         let mut itr = vectors
-    //             .iter()
-    //             .take(num_points)
-    //             .enumerate()
-    //             .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()));
+        // Build with full-precision multi-insert
+        {
+            let index = init_index();
+            let ctx = DefaultContext;
+            let ids: Arc<[u32]> = (0..num_points as u32).collect();
 
-    //         // Partition by `max_minibatch_par`.
-    //         loop {
-    //             let v: Vec<_> = itr.by_ref().take(2 * minibatch_par).collect();
-    //             if v.is_empty() {
-    //                 break;
-    //             }
+            // Partition by `max_minibatch_par`.
+            let chunk_size = 2 * minibatch_par;
+            for chunk_start in (0..num_points).step_by(chunk_size) {
+                let chunk_end = (chunk_start + chunk_size).min(num_points);
+                let batch = Arc::new(matrix.subview(chunk_start..chunk_end).unwrap().to_owned());
+                let batch_ids: Arc<[u32]> = ids[chunk_start..chunk_end].into();
 
-    //             index
-    //                 .multi_insert(FullPrecision, &ctx, v.into())
-    //                 .await
-    //                 .unwrap();
-    //         }
+                index
+                    .multi_insert::<_, Matrix<T>>(FullPrecision, &ctx, batch, batch_ids)
+                    .await
+                    .unwrap();
+            }
 
-    //         check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
-    //     }
+            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+        }
 
-    //     // Build with quantized multi-insert
-    //     {
-    //         let index = init_index();
-    //         let ctx = DefaultContext;
-    //         let batch: Box<[_]> = vectors
-    //             .iter()
-    //             .take(num_points)
-    //             .enumerate()
-    //             .map(|(id, v)| VectorIdBoxSlice::new(id as u32, v.as_slice().into()))
-    //             .collect();
+        // Build with quantized multi-insert
+        {
+            let index = init_index();
+            let ctx = DefaultContext;
+            let batch = Arc::new(matrix.subview(0..num_points).unwrap().to_owned());
+            let batch_ids: Arc<[u32]> = (0..num_points as u32).collect();
 
-    //         index.multi_insert(hybrid, &ctx, batch).await.unwrap();
+            index
+                .multi_insert::<_, Matrix<T>>(hybrid, &ctx, batch, batch_ids)
+                .await
+                .unwrap();
 
-    //         check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
-    //     }
-    // }
+            check_grid_search(&index, &vectors, &[], FullPrecision, hybrid).await;
+        }
+    }
 
     ///////////////////
     // Sphere Search //
@@ -2144,8 +2138,9 @@ pub(crate) mod tests {
         #[values(FullPrecision, Hybrid::new(None))] build_strategy: S,
         #[values(1, 10)] batchsize: usize,
     ) where
-        S: for<'a> InsertStrategy<TestProvider, &'a [f32]> +
-            MultiInsertStrategy<TestProvider, Matrix<f32>> + Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -2237,8 +2232,9 @@ pub(crate) mod tests {
         #[values(1, 10)] batchsize: usize,
         #[values((-2.0,-1.0), (-1.0, 0.0), (40000.0,50000.0), (50000.0,75000.0))] radii: (f32, f32),
     ) where
-        S: for<'a> InsertStrategy<TestProvider, &'a [f32]> +
-            MultiInsertStrategy<TestProvider, Matrix<f32>> + Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let parameters = InitParams {
@@ -2959,8 +2955,9 @@ pub(crate) mod tests {
         DefaultProvider<U, V, D>: DataProvider<ExternalId = u32, Context = DefaultContext>
             + for<'a> SetElement<&'a [f32]>
             + SetStartPoints<f32>,
-        S: for<'a> InsertStrategy<DefaultProvider<U, V, D>, &'a [f32]> +
-            MultiInsertStrategy<DefaultProvider<U, V, D>, Matrix<f32>> + Clone,
+        S: for<'a> InsertStrategy<DefaultProvider<U, V, D>, &'a [f32]>
+            + MultiInsertStrategy<DefaultProvider<U, V, D>, Matrix<f32>>
+            + Clone,
     {
         let ctx = &DefaultContext;
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
@@ -3014,8 +3011,9 @@ pub(crate) mod tests {
         startpoint: StartPointStrategy,
     ) -> (Arc<TestIndex>, diskann_utils::views::Matrix<f32>)
     where
-        S: for<'a> InsertStrategy<TestProvider, &'a [f32]> +
-            MultiInsertStrategy<TestProvider, Matrix<f32>> + Clone,
+        S: for<'a> InsertStrategy<TestProvider, &'a [f32]>
+            + MultiInsertStrategy<TestProvider, Matrix<f32>>
+            + Clone,
     {
         let storage = VirtualStorageProvider::new_overlay(test_data_root());
         let mut reader = storage.open_reader(file).unwrap();

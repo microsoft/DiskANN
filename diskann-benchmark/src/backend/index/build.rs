@@ -40,7 +40,7 @@ pub(super) fn set_start_points<DP, T>(
     start_strategy: StartPointStrategy,
 ) -> ANNResult<()>
 where
-    DP: SetStartPoints<[T]>,
+    DP: SetStartPoints<T>,
     T: diskann::graph::SampleableForStart
         + diskann_utils::sampling::WithApproximateNorm
         + AsyncFriendly,
@@ -258,7 +258,8 @@ pub(super) async fn save_index<DP, T>(
     save_path: &str,
 ) -> anyhow::Result<()>
 where
-    DP: DataProvider<Context = DefaultContext, ExternalId = u32> + provider::SetElement<[T]>,
+    DP: DataProvider<Context = DefaultContext, ExternalId = u32>
+        + for<'a> provider::SetElement<&'a [T]>,
     DiskANNIndex<DP>: SaveWith<AsyncIndexMetadata, Error = ANNError>,
 {
     index

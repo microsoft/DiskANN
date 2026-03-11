@@ -62,11 +62,41 @@ pub mod pq {
 
     use std::sync::Arc;
 
-    use diskann::utils::VectorRepr;
+    use diskann::{graph::workingset, utils::VectorRepr};
     use diskann_utils::Reborrow;
     use diskann_vector::DistanceFunction;
 
     use crate::model::pq::{self, FixedChunkPQTable};
+
+    /// A newtype wrapper around [`workingset::Map`] to avoid the default blanket
+    /// implementation of [`workingset::Fill`].
+    pub struct HybridMap<F, Q>(workingset::Map<u32, Hybrid<F, Q>>);
+
+    impl<F, Q> HybridMap<F, Q> {
+        pub fn with_capacity(capacity: usize) -> Self {
+            Self(workingset::Map::with_capacity(capacity))
+        }
+
+        pub fn get(&self) -> &workingset::Map<u32, Hybrid<F, Q>> {
+            &self.0
+        }
+
+        pub fn get_mut(&mut self) -> &mut workingset::Map<u32, Hybrid<F, Q>> {
+            &mut self.0
+        }
+    }
+
+    impl<F, Q> Default for HybridMap<F, Q> {
+        fn default() -> Self {
+            Self(Default::default())
+        }
+    }
+
+    impl<F, Q> workingset::AsWorkingSet<HybridMap<F, Q>> for workingset::Unseeded {
+        fn as_working_set(&self, capacity: usize) -> HybridMap<F, Q> {
+            HybridMap::with_capacity(capacity)
+        }
+    }
 
     /// An element for two-level datasets that is either full-precision or quantized.
     /// This allows a pruning strategy that combines full-precision and quantized distances.

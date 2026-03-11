@@ -619,7 +619,7 @@ where
     type PruneAccessorError = diskann::error::Infallible;
     type State = PassThrough;
 
-    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+    fn create_state(&self, _capacity: usize) -> Self::State {
         PassThrough
     }
 
@@ -701,6 +701,7 @@ where
             PruneStrategy = Self,
         >,
 {
+    type Seed = PassThrough;
     type State = PassThrough;
     type InsertStrategy = Self;
 
@@ -708,7 +709,7 @@ where
         *self
     }
 
-    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::State
+    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::Seed
     where
         Itr: ExactSizeIterator<Item = u32>,
     {

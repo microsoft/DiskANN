@@ -12,6 +12,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
+use diskann_utils::views::Matrix;
 use diskann_vector::distance::Metric;
 use thiserror::Error;
 
@@ -974,7 +975,7 @@ impl glue::PruneStrategy<Provider> for Strategy {
     type PruneAccessor<'a> = Accessor<'a>;
     type PruneAccessorError = Infallible;
 
-    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+    fn create_state(&self, _capacity: usize) -> Self::State {
         workingset::Map::new()
     }
 
@@ -1000,6 +1001,23 @@ impl glue::InsertStrategy<Provider, &[f32]> for Strategy {
         _context: &'a Context,
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(Accessor::new(provider))
+    }
+}
+
+impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
+    type State = workingset::Map<u32, Box<[f32]>>;
+    type Seed = workingset::MapSeed<u32, Box<[f32]>>;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(&self, batch: &Arc<Matrix<f32>>, ids: Itr) -> Self::Seed
+    where
+        Itr: ExactSizeIterator<Item = u32>,
+    {
+        workingset::MapSeed::from_batch(batch, ids, |v| v.into())
     }
 }
 

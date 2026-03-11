@@ -59,6 +59,7 @@
 use std::{
     collections::{HashMap, hash_map::Entry},
     fmt::Debug,
+    sync::Arc,
 };
 
 use diskann::{
@@ -67,9 +68,10 @@ use diskann::{
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, Pipeline, PruneStrategy,
-            SearchExt, SearchPostProcessStep, SearchStrategy,
+            self, Batch, ExpandBeam, InplaceDeleteStrategy, InsertStrategy, MultiInsertStrategy,
+            Pipeline, PruneStrategy, SearchExt, SearchPostProcessStep, SearchStrategy,
         },
+        workingset,
     },
     neighbor::Neighbor,
     provider::{
@@ -325,56 +327,32 @@ where
     ) -> Result<CachingAccessor<A, Self::Accessor>, Self::Error>;
 }
 
-// /// The caching equivalent of [`diskann::glue::Fill`], implemented by the
-// /// **inner** [`Accessor`] for a cache accessor `C`. This allows the [`Accessor`] to
-// ///
-// /// customize the interaction with the cache.
-// ///
-// /// # Provided
-// ///
-// /// The provided implementation iterates through `itr` and only attempts to mutate ids that
-// /// are not already present in `set`. The cache will first be checked and if an item is
-// /// not present, it will be retrieved via [`Self::get_element`] and inserted into the cache.
-// ///
-// /// **ALL** errors are propagated eagerly by this method.
-// pub trait CachedFillSet<C>: CacheableAccessor
-// where
-//     C: ElementCache<Self::Id, Self::Map>,
-// {
-//     fn cached_fill_set<Itr>(
-//         &mut self,
-//         cache: &mut C,
-//         set: &mut HashMap<Self::Id, Self::Extended>,
-//         itr: Itr,
-//     ) -> impl SendFuture<Result<(), CachingError<Self::GetError, C::Error>>>
-//     where
-//         Itr: Iterator<Item = Self::Id> + Send + Sync,
-//     {
-//         async move {
-//             for i in itr {
-//                 if let Entry::Vacant(e) = set.entry(i) {
-//                     match cache.try_get(i).map_err(CachingError::Cache)? {
-//                         // Conversion chain:
-//                         //
-//                         // * `C::Element -> A::Element<'_>` via `CacheableAccessor`.
-//                         // * `A::Element<'_> -> A::Extended` via `Into`.
-//                         MaybeCached::Present(element) => {
-//                             e.insert(Self::from_cached(element).into());
-//                         }
-//                         MaybeCached::Missing(missing) => {
-//                             let element = self.get_element(i).await.map_err(CachingError::Inner)?;
-//                             missing
-//                                 .set(Self::as_cached(&element))
-//                                 .map_err(CachingError::Cache)?;
-//                             e.insert(element.into());
-//                         }
-//                     }
-//                 }
-//             }
-//             Ok(())
-//         }
-//     }
-// }
+/// The caching equivalent of [`diskann::glue::Fill`], implemented by the
+/// **inner** [`Accessor`] for a cache accessor `C`. This allows the [`Accessor`] to
+///
+/// customize the interaction with the cache.
+///
+/// # Provided
+///
+/// The provided implementation iterates through `itr` and only attempts to mutate ids that
+/// are not already present in `set`. The cache will first be checked and if an item is
+/// not present, it will be retrieved via [`Self::get_element`] and inserted into the cache.
+///
+/// **ALL** errors are propagated eagerly by this method.
+pub trait CachedFill<C, State>: CacheableAccessor
+where
+    C: ElementCache<Self::Id, Self::Map>,
+    Self: workingset::Fill<State>,
+{
+    fn cached_fill<'a, Itr>(
+        &'a mut self,
+        cache: &'a mut C,
+        state: &'a mut State,
+        itr: Itr,
+    ) -> impl SendFuture<Result<Self::Set<'a>, CachingError<Self::Error, C::Error>>>
+    where
+        Itr: Iterator<Item = Self::Id> + Send + Sync;
+}
 
 ///////////////
 // New Types //
@@ -459,6 +437,15 @@ impl<S> Cached<S> {
     /// Construct a new [`Cached`] around the inner `strategy`.
     pub fn new(strategy: S) -> Self {
         Self { strategy }
+    }
+}
+
+impl<T, U> workingset::AsWorkingSet<Cached<T>> for Cached<U>
+where
+    U: workingset::AsWorkingSet<T>,
+{
+    fn as_working_set(&self, capacity: usize) -> Cached<T> {
+        Cached::new(self.strategy.as_working_set(capacity))
     }
 }
 
@@ -599,6 +586,7 @@ where
     type Error = T::Error;
     type ExternalId = T::ExternalId;
     type InternalId = T::InternalId;
+    type Guard = T::Guard;
 
     fn to_external_id(
         &self,
@@ -662,17 +650,16 @@ where
 impl<DP, C, T> SetElement<T> for CachingProvider<DP, C>
 where
     DP: SetElement<T>,
-    T: Send + Sync + ?Sized,
+    T: Send + Sync,
     C: AsyncFriendly + Evict<DP::InternalId>,
 {
     type SetError = DP::SetError;
-    type Guard = DP::Guard;
 
     async fn set_element(
         &self,
         context: &Self::Context,
         id: &Self::ExternalId,
-        element: &T,
+        element: T,
     ) -> Result<Self::Guard, Self::SetError> {
         use diskann::provider::Guard;
 
@@ -792,7 +779,6 @@ where
 
 impl<T, A, C> BuildQueryComputer<T> for CachingAccessor<A, C>
 where
-    T: ?Sized,
     A: BuildQueryComputer<T> + CacheableAccessor,
     C: ElementCache<A::Id, A::Map>,
 {
@@ -801,32 +787,42 @@ where
 
     fn build_query_computer(
         &self,
-        from: &T,
+        from: T,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         self.inner.build_query_computer(from)
     }
 }
 
-// impl<A, C> FillSet for CachingAccessor<A, C>
-// where
-//     A: CacheableAccessor + CachedFillSet<C>,
-//     C: ElementCache<A::Id, A::Map>,
-// {
-//     fn fill_set<Itr>(
-//         &mut self,
-//         set: &mut HashMap<Self::Id, Self::Extended>,
-//         itr: Itr,
-//     ) -> impl Future<Output = Result<(), Self::GetError>> + Send
-//     where
-//         Itr: Iterator<Item = Self::Id> + Send + Sync,
-//     {
-//         self.inner.cached_fill_set(&mut self.cache, set, itr)
-//     }
-// }
+impl<A, C, State> workingset::Fill<Cached<State>> for CachingAccessor<A, C>
+where
+    A: workingset::Fill<State>,
+    A: CacheableAccessor + CachedFill<C, State>,
+    C: ElementCache<A::Id, A::Map>,
+{
+    type Error = CachingError<A::Error, C::Error>;
+
+    type Set<'a>
+        = <A as workingset::Fill<State>>::Set<'a>
+    where
+        Self: 'a,
+        State: 'a;
+
+    fn fill<'a, Itr>(
+        &'a mut self,
+        state: &'a mut Cached<State>,
+        itr: Itr,
+    ) -> impl SendFuture<Result<Self::Set<'a>, Self::Error>>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        self.inner
+            .cached_fill(&mut self.cache, &mut state.strategy, itr)
+    }
+}
 
 impl<A, C, T> ExpandBeam<T> for CachingAccessor<A, C>
 where
-    T: ?Sized,
     A: BuildQueryComputer<T> + CacheableAccessor + AsNeighbor,
     C: ElementCache<A::Id, A::Map> + NeighborCache<A::Id>,
 {
@@ -838,7 +834,6 @@ pub struct Unwrap;
 
 impl<A, C, T> SearchPostProcessStep<CachingAccessor<A, C>, T> for Unwrap
 where
-    T: ?Sized,
     A: BuildQueryComputer<T> + CacheableAccessor,
     C: ElementCache<A::Id, A::Map>,
 {
@@ -853,7 +848,7 @@ where
         &self,
         next: &Next,
         accessor: &mut CachingAccessor<A, C>,
-        query: &T,
+        query: T,
         computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
@@ -905,7 +900,6 @@ type PruneAccessor<'a, S, DP> = <S as PruneStrategy<DP>>::PruneAccessor<'a>;
 /// that the relevant accessor can also access the underlying graph.
 impl<DP, C, T, S, E> SearchStrategy<CachingProvider<DP, C>, T> for Cached<S>
 where
-    T: ?Sized,
     DP: DataProvider,
     S: for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>,
     C: for<'a> AsCacheAccessorFor<
@@ -965,10 +959,13 @@ where
             Accessor: NeighborCache<DP::InternalId>,
             Error = E,
         > + AsyncFriendly,
-    for<'a> S::PruneAccessor<'a>:
-        CachedFill<<C as AsCacheAccessorFor<'a, PruneAccessor<'a, S, DP>>>::Accessor>,
+    for<'a> S::PruneAccessor<'a>: CachedFill<
+            <C as AsCacheAccessorFor<'a, PruneAccessor<'a, S, DP>>>::Accessor,
+            <S as PruneStrategy<DP>>::State,
+        >,
     E: StandardError,
 {
+    type State = Cached<<S as PruneStrategy<DP>>::State>;
     type DistanceComputer = S::DistanceComputer;
     type PruneAccessor<'a> = CachingAccessor<
         PruneAccessor<'a, S, DP>,
@@ -991,6 +988,10 @@ where
             .as_cache_accessor_for(inner)
             .map_err(CachingError::Cache)
     }
+
+    fn create_state(&self, capacity: usize) -> Self::State {
+        Cached::new(self.strategy.create_state(capacity))
+    }
 }
 
 /// Surprisingly - the `where` clause for this, while not pretty, is not too bad.
@@ -998,7 +999,6 @@ impl<DP, C, T, S> InsertStrategy<CachingProvider<DP, C>, T> for Cached<S>
 where
     DP: DataProvider,
     S: InsertStrategy<DP, T>,
-    T: ?Sized,
     Cached<S>: SearchStrategy<CachingProvider<DP, C>, T>,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
     C: AsyncFriendly,
@@ -1048,6 +1048,36 @@ where
     {
         self.strategy
             .get_delete_element(&provider.provider, context, id)
+    }
+}
+
+impl<DP, C, S, B> MultiInsertStrategy<CachingProvider<DP, C>, B> for Cached<S>
+where
+    DP: DataProvider,
+    B: Batch,
+    S: MultiInsertStrategy<DP, B>,
+    Cached<S::InsertStrategy>: for<'a> InsertStrategy<
+            CachingProvider<DP, C>,
+            B::Element<'a>,
+            PruneStrategy: PruneStrategy<CachingProvider<DP, C>, State = Cached<S::State>>,
+        >,
+    C: AsyncFriendly,
+{
+    type Seed = Cached<S::Seed>;
+    type State = Cached<S::State>;
+    type InsertStrategy = Cached<S::InsertStrategy>;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        Cached {
+            strategy: self.strategy.insert_strategy(),
+        }
+    }
+
+    fn finish<Itr>(&self, batch: &Arc<B>, ids: Itr) -> Self::Seed
+    where
+        Itr: ExactSizeIterator<Item = DP::InternalId>,
+    {
+        Cached::new(self.strategy.finish(batch, ids))
     }
 }
 

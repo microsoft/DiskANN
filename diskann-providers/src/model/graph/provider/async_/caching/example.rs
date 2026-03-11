@@ -4,7 +4,7 @@
  */
 
 use diskann::{
-    graph::AdjacencyList,
+    graph::{AdjacencyList, workingset},
     provider::{self as core_provider, DefaultContext},
 };
 use diskann_utils::future::AsyncFriendly;
@@ -201,10 +201,62 @@ impl<'a> cache_provider::AsCacheAccessorFor<'a, debug_provider::FullAccessor<'a>
     }
 }
 
-// impl<'a> cache_provider::CachedFillSet<CacheAccessor<'a, bf_cache::VecCacher<f32>>>
-//     for debug_provider::FullAccessor<'a>
-// {
-// }
+type FullAccessorState = workingset::Map<u32, Box<[f32]>>;
+type FullAccessorCache<'a> = CacheAccessor<'a, bf_cache::VecCacher<f32>>;
+
+impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, FullAccessorState>
+    for debug_provider::FullAccessor<'a>
+{
+    fn cached_fill<'b, Itr>(
+        &'b mut self,
+        cache: &'b mut FullAccessorCache<'a>,
+        state: &'b mut FullAccessorState,
+        itr: Itr,
+    ) -> impl diskann_utils::future::SendFuture<
+        Result<
+            <Self as workingset::Fill<FullAccessorState>>::Set<'b>,
+            cache_provider::CachingError<
+                <Self as workingset::Fill<FullAccessorState>>::Error,
+                <FullAccessorCache<'a> as cache_provider::ElementCache<
+                    u32,
+                    diskann_utils::lifetime::Slice<f32>,
+                >>::Error,
+            >,
+        >,
+    >
+    where
+        Itr: Iterator<Item = u32> + Send + Sync,
+    {
+        use cache_provider::{CachingError, ElementCache};
+        use diskann::provider::{Accessor, CacheableAccessor};
+
+        async move {
+            for i in itr {
+                match state.entry(i) {
+                    workingset::Entry::Seeded(_) | workingset::Entry::Occupied(_) => {}
+                    workingset::Entry::Vacant(vacant) => {
+                        match cache.get_cached(i).map_err(CachingError::Cache)? {
+                            Some(element) => {
+                                vacant.insert(
+                                    <Self as CacheableAccessor>::from_cached(element).into(),
+                                );
+                            }
+                            None => {
+                                let element =
+                                    self.get_element(i).await.map_err(CachingError::Inner)?;
+                                cache
+                                    .set_cached(i, <Self as CacheableAccessor>::as_cached(&element))
+                                    .map_err(CachingError::Cache)?;
+                                vacant.insert(element.into());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(state.scoped())
+        }
+    }
+}
 
 ///////////
 // Tests //
@@ -655,7 +707,7 @@ mod tests {
             // Note: Without the fully qualified syntax - this fails to compile.
             let mut accessor = <cache_provider::Cached<FullPrecision> as SearchStrategy<
                 cache_provider::CachingProvider<debug_provider::DebugProvider, ExampleCache>,
-                [f32],
+                &[f32],
             >>::search_accessor(&strategy, index.provider(), CTX)
             .unwrap();
             async_tests::populate_graph(&mut accessor, &adjacency_lists).await;
@@ -800,14 +852,13 @@ mod tests {
         // Build with full-precision multi-insert
         {
             let index = init_index();
-            let batch: Box<[_]> = vectors
-                .iter()
-                .take(num_points)
-                .enumerate()
-                .map(|(id, v)| async_tools::VectorIdBoxSlice::new(id as u32, v.as_slice().into()))
-                .collect();
+            let batch = Arc::new(async_tests::squish(vectors.iter().take(num_points), dim));
+            let ids: Arc<[u32]> = (0..num_points as u32).collect();
 
-            index.multi_insert(strategy, CTX, batch).await.unwrap();
+            index
+                .multi_insert::<_, Matrix<f32>>(strategy, CTX, batch, ids)
+                .await
+                .unwrap();
 
             async_tests::check_grid_search(&index, &vectors, &[], strategy, strategy).await;
             check_stats(index.provider());
@@ -880,7 +931,7 @@ mod tests {
         // Note: Without the fully qualified syntax - this fails to compile.
         let mut accessor = <cache_provider::Cached<FullPrecision> as SearchStrategy<
             cache_provider::CachingProvider<debug_provider::DebugProvider, ExampleCache>,
-            [f32],
+            &[f32],
         >>::search_accessor(&strategy, index.provider(), CTX)
         .unwrap();
 

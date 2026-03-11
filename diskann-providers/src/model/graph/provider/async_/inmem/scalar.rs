@@ -674,7 +674,7 @@ where
     type PruneAccessorError = diskann::error::Infallible;
     type State = PassThrough;
 
-    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+    fn create_state(&self, _capacity: usize) -> Self::State {
         PassThrough
     }
 
@@ -777,6 +777,7 @@ where
         >,
 {
     type State = PassThrough;
+    type Seed = PassThrough;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {

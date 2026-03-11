@@ -28,12 +28,14 @@ pub struct InlineBetaStrategy<Strategy> {
     inner: Strategy,
 }
 
-impl<DP, Strategy, Q>
-    SearchStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, FilteredQuery<Q>>
-    for InlineBetaStrategy<Strategy>
+impl<'q, DP, Strategy, Q>
+    SearchStrategy<
+        DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
+        &'q FilteredQuery<Q>,
+    > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: SearchStrategy<DP, Q>,
+    Strategy: SearchStrategy<DP, &'q Q>,
     Q: AsyncFriendly + Clone,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
@@ -125,20 +127,20 @@ pub struct FilterResults<IPP> {
     inner_post_processor: IPP,
 }
 
-impl<Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, FilteredQuery<Q>>
+impl<'q, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, &'q FilteredQuery<Q>>
     for FilterResults<IPP>
 where
-    IA: BuildQueryComputer<Q>,
+    IA: BuildQueryComputer<&'q Q>,
     Q: Clone + AsyncFriendly,
-    IPP: SearchPostProcess<IA, Q> + Send + Sync,
+    IPP: SearchPostProcess<IA, &'q Q> + Send + Sync,
 {
     type Error = ANNError;
 
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &FilteredQuery<Q>,
-        computer: &InlineBetaComputer<<IA as BuildQueryComputer<Q>>::QueryComputer>,
+        query: &'q FilteredQuery<Q>,
+        computer: &InlineBetaComputer<<IA as BuildQueryComputer<&'q Q>>::QueryComputer>,
         candidates: I,
         output: &mut B,
     ) -> Result<usize, Self::Error>

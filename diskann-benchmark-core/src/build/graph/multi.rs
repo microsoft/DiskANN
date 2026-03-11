@@ -64,12 +64,9 @@ where
 
 impl<DP, T, S> Build for MultiInsert<DP, T, S>
 where
-    DP: provider::DataProvider<Context: Default> + provider::SetElement<[T]>,
-    S: glue::InsertStrategy<DP, [T], PruneStrategy: Clone> + Clone + AsyncFriendly,
+    DP: provider::DataProvider<Context: Default> + for<'a> provider::SetElement<&'a [T]>,
+    S: glue::MultiInsertStrategy<DP, Matrix<T>> + Clone + 'static,
     T: AsyncFriendly + Clone,
-    // TODO (Mark): This is a very very unfortunate bound and should be cleaned up with
-    // an overhaul to the working set.
-    for<'a> glue::aliases::InsertPruneAccessor<'a, S, DP, [T]>: glue::AsElement<&'a [T]>,
 {
     type Output = ();
 
@@ -78,43 +75,42 @@ where
     }
 
     async fn build(&self, range: Range<usize>) -> ANNResult<Self::Output> {
-        let vectors: ANNResult<Box<[_]>> = range
-            .into_iter()
-            .map(|i| {
-                let id = self.to_id.to_id(i)?;
-                let vector = self.data.get_row(i).ok_or_else(|| {
-                    #[derive(Debug)]
-                    struct OutOfBounds {
-                        max: usize,
-                        accessed: usize,
+        let vectors = self
+            .data
+            .subview(range.clone())
+            .ok_or_else(|| {
+                #[derive(Debug)]
+                struct OutOfBounds {
+                    max: usize,
+                    start: usize,
+                    end: usize,
+                }
+
+                impl std::fmt::Display for OutOfBounds {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(
+                            f,
+                            "tried to access data with {} rows at range [{}, {})",
+                            self.max, self.start, self.end
+                        )
                     }
+                }
 
-                    impl std::fmt::Display for OutOfBounds {
-                        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                            write!(
-                                f,
-                                "tried to access data with {} rows at index {}",
-                                self.max, self.accessed
-                            )
-                        }
-                    }
+                ANNError::message(
+                    ANNErrorKind::Opaque,
+                    OutOfBounds {
+                        max: self.data.nrows(),
+                        start: range.start,
+                        end: range.end,
+                    },
+                )
+            })?
+            .to_owned();
 
-                    ANNError::message(
-                        ANNErrorKind::Opaque,
-                        OutOfBounds {
-                            max: self.data.nrows(),
-                            accessed: i,
-                        },
-                    )
-                })?;
-
-                Ok(VectorIdBoxSlice::new(id, vector.into()))
-            })
-            .collect();
-
+        let ids: ANNResult<Arc<[_]>> = range.into_iter().map(|i| self.to_id.to_id(i)).collect();
         let context = DP::Context::default();
         self.index
-            .multi_insert(self.strategy.clone(), &context, vectors?)
+            .multi_insert::<S, _>(self.strategy.clone(), &context, Arc::new(vectors), ids?)
             .await?;
 
         Ok(())

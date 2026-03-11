@@ -35,7 +35,7 @@ use super::{
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
     search_output_buffer,
-    workingset::{Fill, ScopedMap},
+    workingset::{AsWorkingSet, Fill, ScopedMap},
 };
 
 use crate::{
@@ -329,7 +329,7 @@ where
             let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
 
             // N.B.: Working set needs to be outlived by `accessor`.
-            let mut working_set = prune_strategy.create_state(None);
+            let mut working_set = prune_strategy.create_state(self.max_occlusion_size());
             let mut prune_scratch = prune::Scratch::new();
             let mut new_neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
 
@@ -701,7 +701,7 @@ where
                 .into_ann_result()?;
 
             let mut prune_scratch = prune::Scratch::new();
-            let mut working_set = strategy.create_state(None);
+            let mut working_set = strategy.create_state(self.max_occlusion_size());
 
             // During bootstrap, we want the graph to be as dense as possible to aid
             // in early navigation.
@@ -925,6 +925,7 @@ where
 
             // Launch `max_minibatch_par - 1` tasks to do work, running the last task on
             // the local thread.
+            let seed = strategy.finish(&vectors, guards.iter().map(|g| g.id()));
             let handles: Vec<_> = (0..num_tasks.get() - 1)
                 .map(|_| {
                     let self_clone = self.clone();
@@ -932,7 +933,7 @@ where
                     let context_clone = context.clone();
                     let vectors_clone = vectors.clone();
                     let work_clone = work.clone();
-                    let mut state = strategy.finish(&vectors, guards.iter().map(|g| g.id()));
+                    let mut state = seed.as_working_set(self.max_occlusion_size());
 
                     let future = async move {
                         self_clone
@@ -950,14 +951,13 @@ where
                 .collect();
 
             // Defer dealing with the `result` until after we have joined the other tasks.
-            let mut state = strategy.finish(&vectors, guards.iter().map(|g| g.id()));
             let mut edges = match self
                 .search_and_prune_batch(
                     &strategy.insert_strategy(),
                     context,
                     &vectors,
                     &work,
-                    &mut state,
+                    &mut seed.as_working_set(self.max_occlusion_size()),
                 )
                 .await
             {
@@ -1034,7 +1034,7 @@ where
                     let context_clone = context.clone();
                     let strategy_clone = strategy.insert_strategy().prune_strategy();
                     let backedges_clone = backedges.clone();
-                    let mut state = strategy.finish(&vectors, guards.iter().map(|g| g.id()));
+                    let mut state = seed.as_working_set(self.max_occlusion_size());
 
                     tokio::spawn(context.wrap_spawn(async move {
                         // Get the range of items to process in this task.
@@ -1520,7 +1520,8 @@ where
                             };
 
                             let mut prune_scratch = prune::Scratch::new();
-                            let mut working_set = strategy_clone.create_state(None);
+                            let mut working_set =
+                                strategy_clone.create_state(self_clone.max_occlusion_size());
 
                             match result {
                                 Some(source) => {
@@ -1612,7 +1613,7 @@ where
             delete_set.insert(vector_id);
             let prune_strategy = strategy.prune_strategy();
 
-            let mut working_set = prune_strategy.create_state(None);
+            let mut working_set = prune_strategy.create_state(self.max_occlusion_size());
             let mut prune_scratch = prune::Scratch::new();
 
             for (neighbor, edges) in edges_to_add.iter() {
@@ -1689,7 +1690,7 @@ where
             };
 
             let prune_strategy = strategy.prune_strategy();
-            let mut working_set_state = prune_strategy.create_state(None);
+            let mut working_set_state = prune_strategy.create_state(self.max_occlusion_size());
             let mut accessor = prune_strategy
                 .prune_accessor(&self.data_provider, context)
                 .into_ann_result()?;
@@ -1930,7 +1931,7 @@ where
                     neighbors
                 } else {
                     let mut prune_scratch = prune::Scratch::new();
-                    let mut working_set = strategy.create_state(None);
+                    let mut working_set = strategy.create_state(self.max_occlusion_size());
 
                     // Force saturation is mainly used for the retry insert logic.
                     //
@@ -2679,22 +2680,12 @@ where
 
             let computer = accessor.build_distance_computer().into_ann_result()?;
 
-            let vector: A::Extended = match accessor.get_element(location).await {
-                Ok(vector) => vector.into(),
-                Err(err) => match err.to_ranked() {
-                    RankedError::Transient(transient) => {
-                        transient.acknowledge(
-                            "propagating transient error for failed vector-id retrieval",
-                        );
-                        return Err(prune::ListError::failed_retrieval(location));
-                    }
-                    RankedError::Error(err) => return Err(prune::ListError::from(err.into())),
-                },
-            };
-
-            // Fetch into the working set.
+            // Fetch into the working set, including the source location.
             let scoped_map = accessor
-                .fill(state, list.iter().copied())
+                .fill(
+                    state,
+                    internal::chain(std::iter::once(location), list.iter().copied()),
+                )
                 .send()
                 .await
                 .into_ann_result()?;
@@ -2702,12 +2693,20 @@ where
             scratch.pool.clear();
             scratch.pool.reserve(list.len());
 
-            for id in list.iter().filter(|&&i| i != location) {
-                if let Some(other) = scoped_map.get(*id) {
-                    scratch.pool.push(Neighbor::new(
-                        *id,
-                        computer.evaluate_similarity(vector.reborrow(), other.reborrow()),
-                    ));
+            // Look up the source vector from the working set and compute distances.
+            {
+                let vector = match scoped_map.get(location) {
+                    Some(v) => v,
+                    None => return Err(prune::ListError::failed_retrieval(location)),
+                };
+
+                for id in list.iter().filter(|&&i| i != location) {
+                    if let Some(other) = scoped_map.get(*id) {
+                        scratch.pool.push(Neighbor::new(
+                            *id,
+                            computer.evaluate_similarity(vector.reborrow(), other.reborrow()),
+                        ));
+                    }
                 }
             }
 
@@ -2744,7 +2743,11 @@ where
             let working_set = accessor
                 .fill(
                     state,
-                    internal::chain(extras.clone(), record.ids()).take(self.max_occlusion_size()),
+                    internal::chain(
+                        std::iter::once(internal_id),
+                        internal::chain(extras.clone(), record.ids()),
+                    )
+                    .take(self.max_occlusion_size()),
                 )
                 .await
                 .into_ann_result()?;
@@ -3023,7 +3026,7 @@ where
                 .prune_accessor(&self.data_provider, context)
                 .into_ann_result()?;
 
-            let mut working_set = strategy.create_state(None);
+            let mut working_set = strategy.create_state(self.max_occlusion_size());
 
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
             let mut prune_scratch = prune::Scratch::<DP::InternalId>::new();

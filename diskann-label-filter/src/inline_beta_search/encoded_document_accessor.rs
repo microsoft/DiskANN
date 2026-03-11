@@ -204,17 +204,17 @@ where
     }
 }
 
-impl<IA, Q> BuildQueryComputer<FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
+impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
 where
-    IA: BuildQueryComputer<Q>,
-    Q: AsyncFriendly + Clone,
+    IA: BuildQueryComputer<&'q Q>,
+    Q: Clone,
 {
     type QueryComputerError = ANNError;
-    type QueryComputer = InlineBetaComputer<IA::QueryComputer>;
+    type QueryComputer = InlineBetaComputer<<IA as BuildQueryComputer<&'q Q>>::QueryComputer>;
 
     fn build_query_computer(
         &self,
-        from: &FilteredQuery<Q>,
+        from: &'q FilteredQuery<Q>,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         let inner_computer = self
             .inner_accessor
@@ -234,7 +234,7 @@ impl<IA, Q> ExpandBeam<Q> for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
     EncodedDocumentAccessor<IA>: BuildQueryComputer<Q> + AsNeighbor,
-    Q: Clone + AsyncFriendly,
+    Q: Clone,
 {
 }
 

@@ -94,13 +94,13 @@ where
     let build_parameters = DiskIndexBuildParameters::new(
         MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
         params.quantization_type,
-        NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims)?,
+        NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
     );
 
     let index_configuration = IndexConfiguration::new(
         metric,
-        metadata.ndims,
-        metadata.npoints,
+        metadata.ndims(),
+        metadata.npoints(),
         ONE,
         params.num_threads,
         config,

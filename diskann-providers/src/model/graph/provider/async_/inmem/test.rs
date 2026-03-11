@@ -282,7 +282,7 @@ impl PruneStrategy<TestProvider> for Flaky {
         Ok(FlakyAccessor::new(provider, STATIC_PRUNE_THRESHOLD, start))
     }
 
-    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+    fn create_state(&self, _capacity: usize) -> Self::State {
         Self::State::default()
     }
 }
@@ -298,6 +298,7 @@ impl InsertStrategy<TestProvider, &[f32]> for Flaky {
 impl diskann::graph::glue::MultiInsertStrategy<TestProvider, diskann_utils::views::Matrix<f32>>
     for Flaky
 {
+    type Seed = workingset::MapSeed<u32, Box<[f32]>>;
     type State = workingset::Map<u32, Box<[f32]>>;
     type InsertStrategy = Self;
 
@@ -309,15 +310,11 @@ impl diskann::graph::glue::MultiInsertStrategy<TestProvider, diskann_utils::view
         &self,
         batch: &std::sync::Arc<diskann_utils::views::Matrix<f32>>,
         ids: Itr,
-    ) -> Self::State
+    ) -> Self::Seed
     where
         Itr: ExactSizeIterator<Item = u32>,
     {
-        let overlay: hashbrown::HashMap<u32, Box<[f32]>> = ids
-            .enumerate()
-            .map(|(i, id)| (id, Box::from(batch.row(i))))
-            .collect();
-        workingset::Map::with_batch(std::sync::Arc::new(overlay))
+        workingset::MapSeed::from_batch(batch, ids, |v| Box::from(v))
     }
 }
 
@@ -338,7 +335,7 @@ impl PruneStrategy<TestProvider> for SuperFlaky {
         Ok(FlakyAccessor::new(provider, 1, 1))
     }
 
-    fn create_state(&self, _size_hint: Option<usize>) -> Self::State {
+    fn create_state(&self, _capacity: usize) -> Self::State {
         Self::State::default()
     }
 }

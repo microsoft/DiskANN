@@ -19,9 +19,9 @@ use crate::{
     provider::Accessor,
 };
 
-// =========
-// = Traits
-// =========
+////////////
+// Traits //
+////////////
 
 /// Populate a working set `State` with element data from an accessor.
 ///
@@ -45,6 +45,10 @@ pub trait Fill<State>: Accessor {
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a;
+}
+
+pub trait AsWorkingSet<WorkingSet> {
+    fn as_working_set(&self, capacity: usize) -> WorkingSet;
 }
 
 /// Blanket implementation of [`Fill`] for [`Map`]-backed working sets.
@@ -85,28 +89,73 @@ pub trait ScopedMap<I> {
     fn get(&self, id: I) -> Option<Self::Element<'_>>;
 }
 
-/// Immutable batch overlay for pre-seeded elements (e.g. from multi-insert).
-///
-/// Object-safe by design so it can be stored as `Arc<dyn Batch<K, V>>`.
-pub trait Batch<K, V>: Send + Sync {
-    fn get(&self, key: &K) -> Option<&V>;
+#[derive(Debug, Clone, Copy)]
+pub struct Unseeded;
 
-    fn contains_key(&self, key: &K) -> bool {
-        self.get(key).is_some()
+impl<K, V> AsWorkingSet<Map<K, V>> for Unseeded {
+    fn as_working_set(&self, capacity: usize) -> Map<K, V> {
+        Map::with_capacity(capacity)
     }
 }
 
-impl<K, V> Batch<K, V> for hashbrown::HashMap<K, V>
+// ============
+// = MapSeed
+// ============
+
+/// Seed for [`Map`]-backed working sets.
+///
+/// Wraps an `Arc<HashMap<K, V>>` containing pre-projected batch elements.
+/// Cheap to clone (just an `Arc` bump). Convert to a [`Map`] via
+/// [`AsWorkingSet::as_working_set`].
+#[derive(Clone)]
+pub struct MapSeed<K, V> {
+    overlay: Arc<hashbrown::HashMap<K, V>>,
+}
+
+impl<K, V> MapSeed<K, V>
 where
-    K: Hash + Eq + Send + Sync,
-    V: Send + Sync,
+    K: Hash + Eq,
 {
-    fn get(&self, key: &K) -> Option<&V> {
-        hashbrown::HashMap::get(self, key)
+    /// Create a seed from a [`glue::Batch`](super::glue::Batch) and an iterator
+    /// of IDs assigned to each batch element.
+    ///
+    /// Each `(index, id)` pair from the iterator is mapped through `project` to produce
+    /// the stored value.
+    pub fn from_batch<B, F>(
+        batch: &Arc<B>,
+        ids: impl ExactSizeIterator<Item = K>,
+        project: F,
+    ) -> Self
+    where
+        B: super::glue::Batch,
+        F: Fn(B::Element<'_>) -> V,
+    {
+        let overlay: hashbrown::HashMap<K, V> = ids
+            .enumerate()
+            .map(|(i, id)| (id, project(batch.get(i))))
+            .collect();
+        Self {
+            overlay: Arc::new(overlay),
+        }
     }
 
-    fn contains_key(&self, key: &K) -> bool {
-        hashbrown::HashMap::contains_key(self, key)
+    /// Create an empty seed (no batch overlay).
+    pub fn empty() -> Self {
+        Self {
+            overlay: Arc::new(hashbrown::HashMap::new()),
+        }
+    }
+}
+
+impl<K, V> AsWorkingSet<Map<K, V>> for MapSeed<K, V>
+where
+    K: Hash + Eq,
+{
+    fn as_working_set(&self, capacity: usize) -> Map<K, V> {
+        Map {
+            map: hashbrown::HashMap::with_capacity(capacity),
+            seed: Some(Arc::clone(&self.overlay)),
+        }
     }
 }
 
@@ -114,31 +163,31 @@ where
 // = Map (default working set)
 // =============================
 
-/// Default working set state backed by a `HashMap` with an optional immutable batch overlay.
+/// Default working set state backed by a `HashMap` with an optional immutable seed overlay.
 ///
-/// For single insert, `batch` is `None`. For multi-insert, the batch is pre-seeded by
-/// `MultiInsertStrategy` with elements from the insertion batch, avoiding redundant fetches
-/// during [`Fill`].
+/// For single insert, `seed` is `None`. For multi-insert, the seed is pre-populated by
+/// [`MapSeed::from_batch`] with elements from the insertion batch, avoiding redundant
+/// fetches during [`Fill`].
 ///
-/// Batch keys and map keys are kept disjoint: insertions for keys already present in
-/// the batch are silently skipped.
+/// Seed keys and map keys are kept disjoint: insertions for keys already present in
+/// the seed are silently skipped.
 pub struct Map<K, V> {
     map: hashbrown::HashMap<K, V>,
-    batch: Option<Arc<dyn Batch<K, V>>>,
+    seed: Option<Arc<hashbrown::HashMap<K, V>>>,
 }
 
 impl<K, V> Map<K, V> {
     pub fn new() -> Self {
         Self {
             map: hashbrown::HashMap::new(),
-            batch: None,
+            seed: None,
         }
     }
 
-    pub fn with_batch(batch: Arc<dyn Batch<K, V>>) -> Self {
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            map: hashbrown::HashMap::new(),
-            batch: Some(batch),
+            map: hashbrown::HashMap::with_capacity(capacity),
+            seed: None,
         }
     }
 }
@@ -153,41 +202,48 @@ impl<K, V> Map<K, V>
 where
     K: Hash + Eq,
 {
-    /// Look up an element, checking the batch overlay first, then the map.
+    /// Look up an element, checking the seed overlay first, then the map.
     pub fn get(&self, key: &K) -> Option<&V> {
-        self.batch
+        self.seed
             .as_ref()
-            .and_then(|b| b.get(key))
+            .and_then(|s| s.get(key))
             .or_else(|| self.map.get(key))
     }
 
-    /// Mutable access to the map's own entries. Returns `None` for batch-only keys.
+    /// Mutable access to the map's own entries. Returns `None` for seed-only keys.
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         self.map.get_mut(key)
     }
 
-    /// Insert into the mutable map layer. If the key exists in the batch, this is
-    /// a no-op (batch keys and map keys are disjoint).
+    pub fn clear(&mut self) {
+        self.map.clear()
+    }
+
+    /// Insert into the mutable map layer. If the key exists in the seed, this is
+    /// a no-op (seed keys and map keys are disjoint).
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        if self.batch.as_ref().map_or(false, |b| b.contains_key(&key)) {
+        if self.seed.as_ref().map_or(false, |s| s.contains_key(&key)) {
             return None;
         }
         self.map.insert(key, value)
     }
 
-    /// Returns `true` if the key is in the batch overlay or the map.
+    /// Returns `true` if the key is in the seed overlay or the map.
     pub fn contains_key(&self, key: &K) -> bool {
-        self.batch.as_ref().map_or(false, |b| b.contains_key(key)) || self.map.contains_key(key)
+        self.seed.as_ref().map_or(false, |s| s.contains_key(key)) || self.map.contains_key(key)
     }
 
-    /// Batch-aware entry API. Returns [`Entry::Occupied`] if the key is in the
-    /// batch or the map, [`Entry::Vacant`] only if absent from both.
+    /// Seed-aware entry API.
+    ///
+    /// Returns [`Entry::Seeded`] if the key is in the seed overlay,
+    /// [`Entry::Occupied`] if it is in the mutable map layer, or
+    /// [`Entry::Vacant`] if absent from both.
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
-        if self.batch.as_ref().map_or(false, |b| b.contains_key(&key)) {
-            return Entry::Occupied;
+        if let Some(value) = self.seed.as_ref().and_then(|s| s.get(&key)) {
+            return Entry::Seeded(value);
         }
         match self.map.entry(key) {
-            hash_map::Entry::Occupied(_) => Entry::Occupied,
+            hash_map::Entry::Occupied(o) => Entry::Occupied(OccupiedEntry { entry: o }),
             hash_map::Entry::Vacant(v) => Entry::Vacant(VacantEntry { entry: v }),
         }
     }
@@ -198,11 +254,39 @@ where
     }
 }
 
-/// Result of [`Map::entry`]. `Occupied` carries no data — the primary consumer
-/// (fill) only needs to know whether to skip.
+/// Result of [`Map::entry`].
+///
+/// This is a three-state entry:
+/// - [`Seeded`](Entry::Seeded): present in the immutable seed overlay. The value can be
+///   inspected but not mutated.
+/// - [`Occupied`](Entry::Occupied): present in the mutable map layer. The value can be
+///   read and written.
+/// - [`Vacant`](Entry::Vacant): absent from both layers.
 pub enum Entry<'a, K, V> {
-    Occupied,
+    /// The key exists in the immutable seed overlay.
+    Seeded(&'a V),
+    /// The key exists in the mutable map layer.
+    Occupied(OccupiedEntry<'a, K, V>),
+    /// The key is absent from both layers.
     Vacant(VacantEntry<'a, K, V>),
+}
+
+pub struct OccupiedEntry<'a, K, V> {
+    entry: hash_map::OccupiedEntry<'a, K, V>,
+}
+
+impl<'a, K, V> OccupiedEntry<'a, K, V> {
+    pub fn get(&self) -> &V {
+        self.entry.get()
+    }
+
+    pub fn get_mut(&mut self) -> &mut V {
+        self.entry.get_mut()
+    }
+
+    pub fn into_mut(self) -> &'a mut V {
+        self.entry.into_mut()
+    }
 }
 
 pub struct VacantEntry<'a, K, V> {
@@ -226,7 +310,7 @@ impl<K, V> VacantEntry<'_, K, V> {
 // = ScopedMapView (Map → ScopedMap)
 // ================================
 
-/// A [`ScopedMap`] view over a [`Map`], checking batch then map on each lookup.
+/// A [`ScopedMap`] view over a [`Map`], checking seed then map on each lookup.
 pub struct ScopedMapView<'a, K, V> {
     map: &'a Map<K, V>,
 }
@@ -298,7 +382,7 @@ pub fn fill_map_projected<'a, A, V, Itr, F>(
 ) -> impl SendFuture<Result<ScopedMapView<'a, A::Id, V>, <A::GetError as ToRanked>::Error>>
 where
     A: Accessor,
-    V: Send,
+    V: Send + Sync,
     A::Id: Hash + Eq,
     Itr: ExactSizeIterator<Item = A::Id> + Send + Sync,
     F: Fn(A::Extended) -> V + Send,
@@ -306,7 +390,7 @@ where
     async move {
         for i in itr {
             match map.entry(i) {
-                Entry::Occupied => { /* in batch or already fetched */ }
+                Entry::Seeded(_) | Entry::Occupied(_) => { /* in batch or already fetched */ }
                 Entry::Vacant(vacant) => match accessor.get_element(i).await {
                     Ok(element) => {
                         vacant.insert(projection(element.into()));

@@ -5,6 +5,8 @@
 
 //! Native (DiskANN built-in) data providers and strategies for async index build and search.
 
+use diskann::graph::workingset;
+
 mod provider;
 pub use provider::{DefaultProvider, DefaultProviderParameters, SetStartPoints};
 
@@ -13,6 +15,12 @@ pub use provider::{DefaultProvider, DefaultProviderParameters, SetStartPoints};
 /// do anything!
 #[derive(Debug, Clone, Copy)]
 pub struct PassThrough;
+
+impl workingset::AsWorkingSet<Self> for PassThrough {
+    fn as_working_set(&self, capacity: usize) -> Self {
+        *self
+    }
+}
 
 // Extensions
 mod scalar;
