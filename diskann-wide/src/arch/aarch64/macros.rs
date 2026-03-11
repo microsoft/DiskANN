@@ -586,10 +586,8 @@ pub(crate) use aarch64_splitjoin;
 macro_rules! aarch64_zipunzip {
     ($half:path, $zip1:ident, $zip2:ident, $uzp1:ident, $uzp2:ident) => {
         impl $crate::ZipUnzip for $crate::doubled::Doubled<$half> {
-            type Halved = $half;
-
             #[inline(always)]
-            fn zip(halves: $crate::LoHi<$half>) -> Self {
+            fn zip(halves: $crate::LoHi<<Self as $crate::SplitJoin>::Halved>) -> Self {
                 use $crate::SIMDVector;
                 // SAFETY: Caller asserts that these intrinsics match the element type.
                 unsafe {
@@ -603,7 +601,7 @@ macro_rules! aarch64_zipunzip {
             }
 
             #[inline(always)]
-            fn unzip(self) -> $crate::LoHi<$half> {
+            fn unzip(self) -> $crate::LoHi<<Self as $crate::SplitJoin>::Halved> {
                 use $crate::SIMDVector;
                 // SAFETY: Caller asserts that these intrinsics match the element type.
                 unsafe {

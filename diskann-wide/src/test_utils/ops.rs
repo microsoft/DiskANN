@@ -1039,6 +1039,49 @@ where
     let expected: [T; N] =
         core::array::from_fn(|i| if i % 2 == 0 { a[i / 2] } else { a[N2 + i / 2] });
     test_unary_op(&zipped.to_array(), &expected, &identity, "zip");
+
+    // --- Test unzip_flat: deinterleave staying in full width ---
+    let unzipped_flat = V::from_array(arch, *a).unzip_flat();
+    let expected_flat: [T; N] = {
+        let mut out = *a;
+        for i in 0..N2 {
+            out[i] = a[2 * i];
+            out[N2 + i] = a[2 * i + 1];
+        }
+        out
+    };
+    test_unary_op(
+        &unzipped_flat.to_array(),
+        &expected_flat,
+        &identity,
+        "unzip_flat",
+    );
+
+    // --- Test zip_flat: interleave staying in full width ---
+    // Input: [a0..a_{N/2-1}, b0..b_{N/2-1}]  (concatenated halves)
+    // Expected: [a0,b0, a1,b1, ...]
+    let zip_flat_result = V::from_array(arch, *a).zip_flat();
+    let expected_zip_flat: [T; N] =
+        core::array::from_fn(|i| if i % 2 == 0 { a[i / 2] } else { a[N2 + i / 2] });
+    test_unary_op(
+        &zip_flat_result.to_array(),
+        &expected_zip_flat,
+        &identity,
+        "zip_flat",
+    );
+
+    // --- Round-trip: zip_flat ∘ unzip_flat = identity ---
+    let round_trip = V::from_array(arch, *a).unzip_flat().zip_flat();
+    test_unary_op(&round_trip.to_array(), a, &identity, "zip_flat∘unzip_flat");
+
+    // --- Round-trip: unzip_flat ∘ zip_flat = identity ---
+    let round_trip2 = V::from_array(arch, *a).zip_flat().unzip_flat();
+    test_unary_op(
+        &round_trip2.to_array(),
+        a,
+        &identity,
+        "unzip_flat∘zip_flat",
+    );
 }
 
 macro_rules! test_zipunzip {
