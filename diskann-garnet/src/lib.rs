@@ -206,12 +206,9 @@ pub unsafe extern "C" fn create_index(
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
 ) -> *const c_void {
-    let metric_type = match metric_type {
-        x if x == Metric::Cosine as i32 => Metric::Cosine,
-        x if x == Metric::InnerProduct as i32 => Metric::InnerProduct,
-        x if x == Metric::L2 as i32 => Metric::L2,
-        x if x == Metric::CosineNormalized as i32 => Metric::CosineNormalized,
-        _ => return ptr::null(),
+    let metric_type = match Metric::try_from(metric_type) {
+        Ok(m) => m,
+        Err(_) => return ptr::null(),
     };
 
     let target_degree = (max_degree as f32 / GRAPH_SLACK_FACTOR) as usize;
