@@ -64,36 +64,48 @@ use crate::{
 
 /// Register the document index benchmarks.
 pub(crate) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register::<DocumentIndexJob<'static>>(
-        "document-index-build",
-        |job, checkpoint, out| {
-            let stats = job.run(checkpoint, out)?;
+    benchmarks.register::<DocumentIndexJob<'static, f32>>(
+        "document-index-build-f32",
+        |job, _checkpoint, out| {
+            let stats = job.run(out)?;
             Ok(serde_json::to_value(stats)?)
         },
     );
 }
 
 /// Document index benchmark job.
-pub(super) struct DocumentIndexJob<'a> {
+pub(super) struct DocumentIndexJob<'a, T> {
     input: &'a DocumentIndexBuild,
+    _type: std::marker::PhantomData<T>,
 }
 
-impl<'a> DocumentIndexJob<'a> {
+impl<'a, T> DocumentIndexJob<'a, T> {
     fn new(input: &'a DocumentIndexBuild) -> Self {
-        Self { input }
+        Self {
+            input,
+            _type: std::marker::PhantomData,
+        }
     }
 }
 
-impl diskann_benchmark_runner::dispatcher::Map for DocumentIndexJob<'static> {
-    type Type<'a> = DocumentIndexJob<'a>;
+impl<T: 'static> diskann_benchmark_runner::dispatcher::Map for DocumentIndexJob<'static, T> {
+    type Type<'a> = DocumentIndexJob<'a, T>;
 }
 
 // Dispatch from the concrete input type
-impl<'a> DispatchRule<&'a DocumentIndexBuild> for DocumentIndexJob<'a> {
+impl<'a, T> DispatchRule<&'a DocumentIndexBuild> for DocumentIndexJob<'a, T>
+where
+    datatype::Type<T>: DispatchRule<datatype::DataType>,
+{
     type Error = std::convert::Infallible;
 
     fn try_match(_from: &&'a DocumentIndexBuild) -> Result<MatchScore, FailureScore> {
-        Ok(MatchScore(1))
+        match _from.build.data_type {
+            datatype::DataType::Float32 => Ok(MatchScore(0)),
+            datatype::DataType::UInt8 => Ok(MatchScore(0)),
+            datatype::DataType::Int8 => Ok(MatchScore(0)),
+            _ => Err(datatype::MATCH_FAIL),
+        }
     }
 
     fn convert(from: &'a DocumentIndexBuild) -> Result<Self, Self::Error> {
@@ -109,7 +121,10 @@ impl<'a> DispatchRule<&'a DocumentIndexBuild> for DocumentIndexJob<'a> {
 }
 
 // Central dispatch mapping from Any
-impl<'a> DispatchRule<&'a Any> for DocumentIndexJob<'a> {
+impl<'a, T> DispatchRule<&'a Any> for DocumentIndexJob<'a, T>
+where
+    datatype::Type<T>: DispatchRule<datatype::DataType>,
+{
     type Error = anyhow::Error;
 
     fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
