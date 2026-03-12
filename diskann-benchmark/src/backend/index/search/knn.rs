@@ -91,16 +91,18 @@ pub(crate) fn run_determinant_diversity<I>(
                         results_k.unwrap_or(run.search_n),
                         eta,
                         power,
-                    );
-                    let search_params =
-                        diskann_benchmark_core::search::graph::determinant_diversity::Parameters {
-                            inner: base,
-                            processor,
-                        };
-
-                    core_search::Run::new(search_params, setup.clone())
+                    ).map_err(|e| anyhow::anyhow!("Invalid determinant-diversity parameters: {}", e));
+                    
+                    processor.map(|proc| {
+                        let search_params =
+                            diskann_benchmark_core::search::graph::determinant_diversity::Parameters {
+                                inner: base,
+                                processor: proc,
+                            };
+                        core_search::Run::new(search_params, setup.clone())
+                    })
                 })
-                .collect();
+                .collect::<anyhow::Result<Vec<_>>>()?;
 
             all.extend(runner.search_all(parameters, groundtruth, run.recall_k, run.search_n)?);
         }

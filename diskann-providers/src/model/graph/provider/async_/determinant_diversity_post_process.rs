@@ -11,7 +11,39 @@
 
 use diskann_vector::{MathematicalValue, PureDistanceFunction, distance::InnerProduct};
 
+/// Error type for determinant-diversity parameter validation.
+#[derive(Debug)]
+pub enum DeterminantDiversityError {
+    InvalidTopK { top_k: usize },
+    InvalidEta { eta: f64 },
+    InvalidPower { power: f64 },
+}
+
+impl std::fmt::Display for DeterminantDiversityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidTopK { top_k } => {
+                write!(f, "top_k must be > 0, got {}", top_k)
+            }
+            Self::InvalidEta { eta } => {
+                write!(f, "eta must be >= 0.0, got {}", eta)
+            }
+            Self::InvalidPower { power } => {
+                write!(f, "power must be > 0.0, got {}", power)
+            }
+        }
+    }
+}
+
+impl std::error::Error for DeterminantDiversityError {}
+
 /// Parameters for determinant-diversity reranking.
+///
+/// # Invariants
+///
+/// - `top_k > 0`: Must request at least one result
+/// - `determinant_diversity_eta >= 0.0`: Ridge regularization parameter (0 = no ridge)
+/// - `determinant_diversity_power > 0.0`: Exponent for diversity scaling (typically 1.0-2.0)
 #[derive(Debug, Clone, Copy)]
 pub struct DeterminantDiversitySearchParams {
     pub top_k: usize,
@@ -20,16 +52,43 @@ pub struct DeterminantDiversitySearchParams {
 }
 
 impl DeterminantDiversitySearchParams {
+    /// Construct parameters with validation.
+    ///
+    /// # Arguments
+    ///
+    /// * `top_k` - Number of results to return (must be > 0)
+    /// * `determinant_diversity_eta` - Ridge regularization parameter (must be >= 0.0)
+    /// * `determinant_diversity_power` - Diversity exponent (must be > 0.0)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeterminantDiversityError`] if any parameter is invalid.
     pub fn new(
         top_k: usize,
         determinant_diversity_eta: f64,
         determinant_diversity_power: f64,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, DeterminantDiversityError> {
+        if top_k == 0 {
+            return Err(DeterminantDiversityError::InvalidTopK { top_k });
+        }
+
+        if determinant_diversity_eta < 0.0 || !determinant_diversity_eta.is_finite() {
+            return Err(DeterminantDiversityError::InvalidEta {
+                eta: determinant_diversity_eta,
+            });
+        }
+
+        if determinant_diversity_power <= 0.0 || !determinant_diversity_power.is_finite() {
+            return Err(DeterminantDiversityError::InvalidPower {
+                power: determinant_diversity_power,
+            });
+        }
+
+        Ok(Self {
             top_k,
             determinant_diversity_eta,
             determinant_diversity_power,
-        }
+        })
     }
 }
 
@@ -44,16 +103,24 @@ pub fn determinant_diversity_post_process<Id: Copy>(
     determinant_diversity_eta: f64,
     determinant_diversity_power: f64,
 ) -> Vec<(Id, f32)> {
-    if candidates.is_empty() {
+    if candidates.is_empty() || query.is_empty() {
         return Vec::new();
     }
 
     let k = k.min(candidates.len());
+    if k == 0 {
+        return Vec::new();
+    }
 
+    // Convert vectors to owned format only once
     let candidates_f32: Vec<(Id, f32, Vec<f32>)> = candidates
         .into_iter()
         .map(|(id, dist, v)| (id, dist, v.to_vec()))
         .collect();
+
+    if candidates_f32[0].2.is_empty() {
+        return Vec::new();
+    }
 
     let results = if determinant_diversity_eta > 0.0 {
         post_process_with_eta_f32(
@@ -114,6 +181,7 @@ fn post_process_with_eta_f32<Id: Copy>(
     let mut residuals: Vec<Vec<f32>> = Vec::with_capacity(n);
     let mut norms_sq: Vec<f32> = Vec::with_capacity(n);
 
+    // Initialize residuals and norms (only one allocation per candidate)
     for (_, _, v) in &candidates {
         let similarity = dot_product(v, query);
         let scale = similarity.max(0.0).powf(power as f32) * inv_sqrt_eta;
@@ -150,16 +218,27 @@ fn post_process_with_eta_f32<Id: Copy>(
         }
 
         let norm_factor = 1.0 / (1.0 + norms_sq[j]).sqrt();
-        let q: Vec<f32> = residuals[j].iter().map(|&x| x * norm_factor).collect();
 
+        // Compute all projections first to avoid needing to clone residuals[j]
+        let mut projections: Vec<f32> = Vec::with_capacity(n);
+        for i in 0..n {
+            if !available[i] {
+                projections.push(0.0);
+            } else {
+                let alpha = dot_product(&residuals[j], &residuals[i]) * norm_factor * norm_factor;
+                projections.push(alpha);
+            }
+        }
+
+        // Now apply all updates using the precomputed projections
+        let q_scaled: Vec<f32> = residuals[j].iter().map(|&x| x * norm_factor).collect();
         for i in 0..n {
             if !available[i] {
                 continue;
             }
 
-            let alpha = dot_product(&q, &residuals[i]);
-
-            for (r_val, &q_val) in residuals[i].iter_mut().zip(q.iter()) {
+            let alpha = projections[i];
+            for (r_val, &q_val) in residuals[i].iter_mut().zip(q_scaled.iter()) {
                 *r_val -= alpha * q_val;
             }
 
@@ -198,6 +277,7 @@ fn post_process_greedy_orthogonalization_f32<Id: Copy>(
     let mut residuals: Vec<Vec<f32>> = Vec::with_capacity(n);
     let mut norms_sq: Vec<f32> = Vec::with_capacity(n);
 
+    // Initialize residuals and norms (only one allocation per candidate)
     for (_, _, v) in &candidates {
         let similarity = dot_product(v, query);
         let scale = similarity.max(0.0).powf(power as f32);
@@ -226,7 +306,6 @@ fn post_process_greedy_orthogonalization_f32<Id: Copy>(
         };
 
         let best_norm_sq = norms_sq[i_star];
-
         selected.push(i_star);
         available[i_star] = false;
 
@@ -238,17 +317,28 @@ fn post_process_greedy_orthogonalization_f32<Id: Copy>(
             continue;
         }
 
-        let r_star = residuals[i_star].clone();
         let inv_norm_sq_star = 1.0 / best_norm_sq;
 
+        // Compute all projections and make a copy of r_star to avoid borrow conflicts
+        let r_star_copy = residuals[i_star].clone();
+        let mut projections: Vec<f32> = Vec::with_capacity(n);
+        for j in 0..n {
+            if !available[j] {
+                projections.push(0.0);
+            } else {
+                let proj = dot_product(&residuals[j], &r_star_copy) * inv_norm_sq_star;
+                projections.push(proj);
+            }
+        }
+
+        // Now apply all updates using the precomputed projections
         for j in 0..n {
             if !available[j] {
                 continue;
             }
 
-            let proj_coeff = dot_product(&residuals[j], &r_star) * inv_norm_sq_star;
-
-            for (r_val, &rs_val) in residuals[j].iter_mut().zip(r_star.iter()) {
+            let proj_coeff = projections[j];
+            for (r_val, &rs_val) in residuals[j].iter_mut().zip(r_star_copy.iter()) {
                 *r_val -= proj_coeff * rs_val;
             }
 
@@ -274,6 +364,70 @@ fn dot_product(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===== Validation Tests =====
+
+    #[test]
+    fn test_validation_valid_params() {
+        let result = DeterminantDiversitySearchParams::new(10, 0.01, 2.0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validation_zero_top_k() {
+        let result = DeterminantDiversitySearchParams::new(0, 0.01, 2.0);
+        assert!(matches!(
+            result,
+            Err(DeterminantDiversityError::InvalidTopK { top_k: 0 })
+        ));
+    }
+
+    #[test]
+    fn test_validation_negative_eta() {
+        let result = DeterminantDiversitySearchParams::new(10, -0.01, 2.0);
+        assert!(matches!(
+            result,
+            Err(DeterminantDiversityError::InvalidEta { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validation_zero_power() {
+        let result = DeterminantDiversitySearchParams::new(10, 0.01, 0.0);
+        assert!(matches!(
+            result,
+            Err(DeterminantDiversityError::InvalidPower { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validation_negative_power() {
+        let result = DeterminantDiversitySearchParams::new(10, 0.01, -1.0);
+        assert!(matches!(
+            result,
+            Err(DeterminantDiversityError::InvalidPower { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validation_nan_eta() {
+        let result = DeterminantDiversitySearchParams::new(10, f64::NAN, 2.0);
+        assert!(matches!(
+            result,
+            Err(DeterminantDiversityError::InvalidEta { .. })
+        ));
+    }
+
+    #[test]
+    fn test_validation_infinity_power() {
+        let result = DeterminantDiversitySearchParams::new(10, 0.01, f64::INFINITY);
+        assert!(matches!(
+            result,
+            Err(DeterminantDiversityError::InvalidPower { .. })
+        ));
+    }
+
+    // ===== Algorithm Tests =====
 
     #[test]
     fn test_determinant_diversity_post_process_with_eta() {
@@ -314,5 +468,17 @@ mod tests {
 
         let result = determinant_diversity_post_process(candidates, &query, 3, 0.01, 2.0);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_determinant_diversity_post_process_k_larger_than_candidates() {
+        let v1 = vec![1.0f32, 0.0, 0.0];
+        let v2 = vec![0.0f32, 1.0, 0.0];
+        let candidates = vec![(1u32, 0.5f32, v1.as_slice()), (2u32, 0.3f32, v2.as_slice())];
+        let query = vec![1.0, 1.0, 1.0];
+
+        let result = determinant_diversity_post_process(candidates, &query, 10, 0.01, 2.0);
+        // Should return min(k, len(candidates)) = 2
+        assert_eq!(result.len(), 2);
     }
 }

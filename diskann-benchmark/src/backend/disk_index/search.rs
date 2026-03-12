@@ -274,22 +274,26 @@ where
                 search_params.determinant_diversity_eta,
                 search_params.determinant_diversity_power,
             ) {
-                let processor = DeterminantDiversitySearchParams::new(
+                match DeterminantDiversitySearchParams::new(
                     search_params
                         .determinant_diversity_results_k
                         .unwrap_or(search_params.recall_at as usize),
                     eta,
                     power,
-                );
-                searcher.search_determinant_diversity(
-                    q,
-                    search_params.recall_at,
-                    l,
-                    Some(search_params.beam_width),
-                    vector_filter,
-                    search_params.is_flat_search,
-                    processor,
-                )
+                ) {
+                    Ok(processor) => searcher.search_determinant_diversity(
+                        q,
+                        search_params.recall_at,
+                        l,
+                        Some(search_params.beam_width),
+                        vector_filter,
+                        search_params.is_flat_search,
+                        processor,
+                    ),
+                    Err(e) => {
+                        Err(format!("Invalid determinant-diversity parameters: {}", e).into())
+                    }
+                }
             } else {
                 searcher.search(
                     q,

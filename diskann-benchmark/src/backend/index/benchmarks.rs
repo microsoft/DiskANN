@@ -12,7 +12,6 @@ use diskann::{
     provider::{self, DataProvider, DefaultContext},
     utils::VectorRepr,
 };
-use diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams;
 use diskann_benchmark_core::{
     self as benchmark_core,
     streaming::{executors::bigann, Executor},
@@ -23,6 +22,7 @@ use diskann_benchmark_runner::{
     utils::datatype,
     Any, Checkpoint,
 };
+use diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams;
 use diskann_providers::{
     index::diskann_async,
     model::{configuration::IndexConfiguration, graph::provider::async_::common},
