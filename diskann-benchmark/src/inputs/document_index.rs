@@ -39,12 +39,7 @@ pub(crate) struct DocumentBuildParams {
     pub(crate) max_degree: usize,
     pub(crate) l_build: usize,
     pub(crate) alpha: f32,
-    #[serde(default = "default_num_threads")]
     pub(crate) num_threads: usize,
-}
-
-fn default_num_threads() -> usize {
-    1
 }
 
 impl CheckDeserialization for DocumentBuildParams {
