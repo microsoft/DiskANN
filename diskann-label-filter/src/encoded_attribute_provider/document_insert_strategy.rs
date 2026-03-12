@@ -9,13 +9,7 @@
 use std::marker::PhantomData;
 
 use diskann::{
-    graph::{
-        glue::{
-            ExpandBeam, InsertStrategy, PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
-        },
-        SearchOutputBuffer,
-    },
-    neighbor::Neighbor,
+    graph::glue::{self, ExpandBeam, InsertStrategy, PruneStrategy, SearchExt, SearchStrategy},
     provider::{Accessor, BuildQueryComputer, DataProvider, DelegateNeighbor, HasId},
     ANNResult,
 };
@@ -160,33 +154,6 @@ where
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct CopyIdsForDocument;
-
-impl<'doc, A, VT> SearchPostProcess<A, Document<'doc, VT>> for CopyIdsForDocument
-where
-    A: BuildQueryComputer<Document<'doc, VT>>,
-    VT: ?Sized,
-{
-    type Error = std::convert::Infallible;
-
-    fn post_process<I, B>(
-        &self,
-        _accessor: &mut A,
-        _query: &Document<'doc, VT>,
-        _computer: &<A as BuildQueryComputer<Document<'doc, VT>>>::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
-    where
-        I: Iterator<Item = Neighbor<A::Id>> + Send,
-        B: SearchOutputBuffer<A::Id> + Send + ?Sized,
-    {
-        let count = output.extend(candidates.map(|n| (n.id, n.distance)));
-        std::future::ready(Ok(count))
-    }
-}
-
 impl<'doc, Inner, DP, VT>
     SearchStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, Document<'doc, VT>>
     for DocumentInsertStrategy<Inner, VT>
@@ -196,7 +163,7 @@ where
     VT: Sync + Send + ?Sized + 'static,
 {
     type QueryComputer = Inner::QueryComputer;
-    type PostProcessor = CopyIdsForDocument;
+    type PostProcessor = glue::CopyIds;
     type SearchAccessorError = Inner::SearchAccessorError;
     type SearchAccessor<'a> = DocumentSearchAccessor<Inner::SearchAccessor<'a>, VT>;
 
@@ -212,7 +179,7 @@ where
     }
 
     fn post_processor(&self) -> Self::PostProcessor {
-        CopyIdsForDocument
+        glue::CopyIds
     }
 }
 
