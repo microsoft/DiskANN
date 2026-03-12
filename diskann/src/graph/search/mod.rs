@@ -83,7 +83,7 @@ where
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
-        processor: &PP,
+        processor: PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
@@ -94,7 +94,7 @@ where
 pub use determinant_diversity_post_process::{
     DeterminantDiversitySearchParams, determinant_diversity_post_process,
 };
-pub use knn_search::{Knn, KnnSearchError, KnnWith, RecordedKnn};
+pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
 pub use range_search::{Range, RangeSearchError, RangeSearchOutput};
 

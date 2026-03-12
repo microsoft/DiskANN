@@ -408,7 +408,7 @@ where
     #[allow(clippy::manual_async_fn)]
     fn post_process_with<'a, I, B>(
         &self,
-        processor: &DeterminantDiversitySearchParams,
+        processor: DeterminantDiversitySearchParams,
         accessor: &mut Self::SearchAccessor<'a>,
         query: &[Data::VectorDataType],
         _computer: &Self::QueryComputer,
@@ -1110,7 +1110,7 @@ where
             self.runtime.block_on(self.index.search_with(
                 knn_search,
                 &strategy,
-                &processor,
+                processor,
                 &DefaultContext,
                 strategy.query,
                 &mut result_output_buffer,

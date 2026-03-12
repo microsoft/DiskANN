@@ -19,6 +19,12 @@ use crate::{
     utils,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub struct Parameters {
+    pub inner: graph::search::Knn,
+    pub processor: graph::search::DeterminantDiversitySearchParams,
+}
+
 /// A built-in helper for benchmarking determinant-diversity K-nearest neighbors.
 #[derive(Debug)]
 pub struct KNN<DP, T, S>
@@ -60,7 +66,7 @@ where
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
-    type Parameters = graph::search::KnnWith<graph::search::DeterminantDiversitySearchParams>;
+    type Parameters = Parameters;
     type Output = super::knn::Metrics;
 
     fn num_queries(&self) -> usize {
@@ -83,9 +89,10 @@ where
         let context = DP::Context::default();
         let stats = self
             .index
-            .search(
-                parameters.clone(),
+            .search_with(
+                parameters.inner,
                 self.strategy.get(index)?,
+                parameters.processor,
                 &context,
                 self.queries.row(index),
                 buffer,
@@ -104,7 +111,7 @@ where
 #[non_exhaustive]
 pub struct Summary {
     pub setup: search::Setup,
-    pub parameters: graph::search::KnnWith<graph::search::DeterminantDiversitySearchParams>,
+    pub parameters: Parameters,
     pub end_to_end_latencies: Vec<MicroSeconds>,
     pub mean_latencies: Vec<f64>,
     pub p90_latencies: Vec<MicroSeconds>,
@@ -134,12 +141,7 @@ impl<'a, I> Aggregator<'a, I> {
     }
 }
 
-impl<I>
-    search::Aggregate<
-        graph::search::KnnWith<graph::search::DeterminantDiversitySearchParams>,
-        I,
-        super::knn::Metrics,
-    > for Aggregator<'_, I>
+impl<I> search::Aggregate<Parameters, I, super::knn::Metrics> for Aggregator<'_, I>
 where
     I: crate::recall::RecallCompatible,
 {
@@ -147,7 +149,7 @@ where
 
     fn aggregate(
         &mut self,
-        run: search::Run<graph::search::KnnWith<graph::search::DeterminantDiversitySearchParams>>,
+        run: search::Run<Parameters>,
         mut results: Vec<search::SearchResults<I, super::knn::Metrics>>,
     ) -> anyhow::Result<Summary> {
         let recall = match results.first() {
@@ -185,7 +187,7 @@ where
 
         Ok(Summary {
             setup: run.setup().clone(),
-            parameters: run.parameters().clone(),
+            parameters: *run.parameters(),
             end_to_end_latencies: results.iter().map(|r| r.end_to_end_latency()).collect(),
             recall,
             mean_latencies,

@@ -181,7 +181,7 @@ where
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
-        processor: &PP,
+        processor: PP,
         context: &DP::Context,
         query: &T,
         _output: &mut (),

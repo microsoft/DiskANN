@@ -92,7 +92,11 @@ pub(crate) fn run_determinant_diversity<I>(
                         eta,
                         power,
                     );
-                    let search_params = diskann::graph::search::KnnWith::new(base, processor);
+                    let search_params =
+                        diskann_benchmark_core::search::graph::determinant_diversity::Parameters {
+                            inner: base,
+                            processor,
+                        };
 
                     core_search::Run::new(search_params, setup.clone())
                 })
@@ -116,9 +120,8 @@ pub(crate) trait Knn<I> {
     ) -> anyhow::Result<Vec<SearchResults>>;
 }
 
-type DeterminantRun = core_search::Run<
-    diskann::graph::search::KnnWith<diskann::graph::search::DeterminantDiversitySearchParams>,
->;
+type DeterminantRun =
+    core_search::Run<diskann_benchmark_core::search::graph::determinant_diversity::Parameters>;
 
 pub(crate) trait DeterminantDiversityKnn<I> {
     fn search_all(
@@ -192,9 +195,7 @@ where
     DP: diskann::provider::DataProvider,
     core_search::graph::determinant_diversity::KNN<DP, T, S>: core_search::Search<
         Id = DP::InternalId,
-        Parameters = diskann::graph::search::KnnWith<
-            diskann::graph::search::DeterminantDiversitySearchParams,
-        >,
+        Parameters = diskann_benchmark_core::search::graph::determinant_diversity::Parameters,
         Output = core_search::graph::knn::Metrics,
     >,
 {
@@ -202,9 +203,7 @@ where
         &self,
         parameters: Vec<
             core_search::Run<
-                diskann::graph::search::KnnWith<
-                    diskann::graph::search::DeterminantDiversitySearchParams,
-                >,
+                diskann_benchmark_core::search::graph::determinant_diversity::Parameters,
             >,
         >,
         groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,

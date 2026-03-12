@@ -335,8 +335,8 @@ where
 
 /// Strategy-level bridge connecting a [`SearchStrategy`] to a specific processor type `P`.
 ///
-/// This trait is the surface that the search infrastructure ([`super::search::Knn`],
-/// [`super::search::KnnWith`], etc.) bounds on.
+/// This trait is the surface that the search infrastructure (for example,
+/// [`super::search::Knn`]) bounds on.
 ///
 /// The blanket impl covers `P = DefaultPostProcess` for any strategy implementing
 /// [`HasDefaultProcessor`]. Custom processor types (e.g. `DeterminantDiversitySearchParams`) can have
@@ -353,7 +353,7 @@ where
     /// results into `output`.
     fn post_process_with<'a, I, B>(
         &self,
-        processor: &P,
+        processor: P,
         accessor: &mut Self::SearchAccessor<'a>,
         query: &T,
         computer: &Self::QueryComputer,
@@ -421,7 +421,7 @@ where
 {
     fn post_process_with<'a, I, B>(
         &self,
-        _processor: &DefaultPostProcess,
+        _processor: DefaultPostProcess,
         accessor: &mut Self::SearchAccessor<'a>,
         query: &T,
         computer: &Self::QueryComputer,

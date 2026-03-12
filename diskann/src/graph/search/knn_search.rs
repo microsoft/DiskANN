@@ -15,7 +15,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{DefaultPostProcess, PostProcess, SearchExt},
+        glue::{PostProcess, SearchExt},
         index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
@@ -152,7 +152,7 @@ impl Knn {
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-        post_processor: &PP,
+        post_processor: PP,
     ) -> ANNResult<SearchStats>
     where
         DP: DataProvider,
@@ -213,7 +213,7 @@ where
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
-        processor: &PP,
+        processor: PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
@@ -263,7 +263,7 @@ where
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
-        processor: &PP,
+        processor: PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
@@ -304,68 +304,6 @@ where
                 .await?;
 
             Ok(stats.finish(result_count as u32))
-        }
-    }
-}
-
-/////////////////////////
-// KnnWith             //
-/////////////////////////
-
-/// K-NN search with an explicit caller-supplied post-processor.
-///
-/// This allows using a custom post-processor `PP` instead of the strategy's default.
-/// Use [`KnnWith::new`] to wrap a base [`Knn`] with a post-processor.
-#[derive(Debug, Clone)]
-pub struct KnnWith<PP> {
-    /// Base k-NN search parameters.
-    pub inner: Knn,
-    /// The caller-supplied post-processor.
-    pub post_processor: PP,
-}
-
-impl<PP> KnnWith<PP> {
-    /// Create new k-NN search parameters with an explicit post-processor.
-    pub fn new(inner: Knn, post_processor: PP) -> Self {
-        Self {
-            inner,
-            post_processor,
-        }
-    }
-}
-
-impl<DP, S, T, O, OB, PP> Search<DP, S, T, O, OB, DefaultPostProcess> for KnnWith<PP>
-where
-    DP: DataProvider,
-    T: Sync + ?Sized,
-    S: PostProcess<DP, T, PP, O>,
-    O: Send,
-    OB: SearchOutputBuffer<O> + Send + ?Sized,
-    PP: Send + Sync,
-{
-    type Output = SearchStats;
-
-    /// Execute the k-NN search with the caller-supplied post-processor.
-    fn search(
-        self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
-        _processor: &DefaultPostProcess,
-        context: &DP::Context,
-        query: &T,
-        output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
-        async move {
-            self.inner
-                .search_core(
-                    index,
-                    strategy,
-                    context,
-                    query,
-                    output,
-                    &self.post_processor,
-                )
-                .await
         }
     }
 }

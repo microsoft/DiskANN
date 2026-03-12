@@ -478,65 +478,6 @@ where
     delegate_default_post_process!(RemoveDeletedIdsAndCopy);
 }
 
-impl<T, Q, D, Ctx>
-    PostProcess<FullPrecisionProvider<T, Q, D, Ctx>, [T], DeterminantDiversitySearchParams>
-    for Internal<FullPrecision>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    #[allow(clippy::manual_async_fn)]
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: &DeterminantDiversitySearchParams,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &[T],
-        _computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
-    {
-        async move {
-            let query_f32 = T::as_f32(query).into_ann_result()?.to_vec();
-            let mut candidates_with_vectors = Vec::new();
-
-            for candidate in candidates {
-                if accessor.provider.deleted.deletion_check(candidate.id) {
-                    continue;
-                }
-
-                let vector = accessor.get_element(candidate.id).await.into_ann_result()?;
-                let vector_f32 = T::as_f32(vector).into_ann_result()?;
-                candidates_with_vectors.push((
-                    candidate.id,
-                    candidate.distance,
-                    vector_f32.to_vec(),
-                ));
-            }
-
-            let borrowed: Vec<(u32, f32, &[f32])> = candidates_with_vectors
-                .iter()
-                .map(|(id, distance, vector)| (*id, *distance, vector.as_slice()))
-                .collect();
-
-            let reranked = determinant_diversity_post_process(
-                borrowed,
-                &query_f32,
-                processor.top_k,
-                processor.determinant_diversity_eta,
-                processor.determinant_diversity_power,
-            );
-
-            Ok(output.extend(reranked))
-        }
-    }
-}
-
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
@@ -582,7 +523,7 @@ where
     #[allow(clippy::manual_async_fn)]
     fn post_process_with<'a, I, B>(
         &self,
-        processor: &DeterminantDiversitySearchParams,
+        processor: DeterminantDiversitySearchParams,
         accessor: &mut Self::SearchAccessor<'a>,
         query: &[T],
         _computer: &Self::QueryComputer,

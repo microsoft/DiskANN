@@ -1299,7 +1299,7 @@ where
             let post_processor = strategy.search_post_processor();
             let num_results = search_strategy
                 .post_process_with(
-                    &post_processor,
+                    post_processor,
                     &mut search_accessor,
                     &*proxy,
                     &computer,
@@ -2159,7 +2159,7 @@ where
         self.search_with(
             search_params,
             strategy,
-            &glue::DefaultPostProcess,
+            glue::DefaultPostProcess,
             context,
             query,
             output,
@@ -2171,7 +2171,7 @@ where
         &self,
         search_params: P,
         strategy: &S,
-        processor: &PP,
+        processor: PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
