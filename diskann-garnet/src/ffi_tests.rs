@@ -649,7 +649,7 @@ mod tests {
 
     /// Generates `grid_size ^ dimensions` vectors on an integer grid.
     /// Returns `(ids, vectors)` where each id is a descriptive string
-    /// like `"grid_vector_00000001_dim3_at_0_0_0"`.
+    /// like `"grid_vector_00000001_dim3"`.
     fn generate_grid_vectors(dimensions: usize, grid_size: usize) -> (Vec<String>, Vec<Vec<f32>>) {
         let total = grid_size.pow(dimensions as u32);
         let mut ids = Vec::with_capacity(total);
@@ -658,25 +658,11 @@ mod tests {
         for i in 0..total {
             let mut vec = vec![0.0f32; dimensions];
             let mut pos = i;
-            let mut coords = Vec::with_capacity(dimensions);
             for d in (0..dimensions).rev() {
-                let coord = pos % grid_size;
-                vec[d] = coord as f32;
-                coords.push(coord);
+                vec[d] = (pos % grid_size) as f32;
                 pos /= grid_size;
             }
-            coords.reverse();
-            let coord_str: String = coords
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join("_");
-            ids.push(format!(
-                "grid_vector_{:08}_dim{}_at_{}",
-                i + 1,
-                dimensions,
-                coord_str
-            ));
+            ids.push(format!("grid_vector_{:08}_dim{}", i + 1, dimensions));
             vectors.push(vec);
         }
 
