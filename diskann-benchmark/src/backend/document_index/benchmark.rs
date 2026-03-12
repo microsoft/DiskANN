@@ -486,7 +486,7 @@ where
         O: diskann::graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let ctx = DefaultContext;
-        let query_vec = self.queries.row(index);
+        let query_vec = self.queries.row(index).to_vec();
         let (_, ref ast_expr) = self.predicates[index];
         let strategy = InlineBetaStrategy::new(self.beta, common::FullPrecision);
         let filtered_query = FilteredQuery::new(query_vec, ast_expr.clone());
@@ -707,19 +707,60 @@ pub struct BuildParamsStats {
     pub alpha: f32,
 }
 
+/// Helper module for serializing arrays as compact single-line JSON strings
+mod compact_array {
+    use serde::Serializer;
+
+    pub fn serialize_u32_vec<S>(vec: &Vec<u32>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Serialize as a string containing the compact JSON array
+        let compact = serde_json::to_string(vec).unwrap_or_default();
+        serializer.serialize_str(&compact)
+    }
+
+    pub fn serialize_f32_vec<S>(vec: &Vec<f32>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        // Serialize as a string containing the compact JSON array
+        let compact = serde_json::to_string(vec).unwrap_or_default();
+        serializer.serialize_str(&compact)
+    }
+}
+
+/// Per-query detailed results for debugging/analysis
+#[derive(Debug, Serialize)]
+pub struct PerQueryDetails {
+    pub query_id: usize,
+    pub filter: String,
+    pub recall: f64,
+    #[serde(serialize_with = "compact_array::serialize_u32_vec")]
+    pub result_ids: Vec<u32>,
+    #[serde(serialize_with = "compact_array::serialize_f32_vec")]
+    pub result_distances: Vec<f32>,
+    #[serde(serialize_with = "compact_array::serialize_u32_vec")]
+    pub groundtruth_ids: Vec<u32>,
+}
+
 /// Results from a single search configuration (one search_l value).
 #[derive(Debug, Serialize)]
 pub struct SearchRunStats {
     pub num_threads: usize,
+    pub num_queries: usize,
     pub search_n: usize,
     pub search_l: usize,
     pub recall: SerializableRecallMetrics,
     pub qps: Vec<f64>,
+    pub wall_clock_time: Vec<MicroSeconds>,
     pub mean_latency: f64,
     pub p90_latency: MicroSeconds,
     pub p99_latency: MicroSeconds,
     pub mean_cmps: f32,
     pub mean_hops: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_query_details: Option<Vec<PerQueryDetails>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -796,7 +837,7 @@ impl std::fmt::Display for DocumentIndexStats {
                 };
                 writeln!(
                     f,
-                    "  {:>8} {:>8} {:>10.1} {:>10.1} {:>7.1}({:>5.1}) {:>12.1} {:>12} {:>10.4} {:>8}",
+                    "  {:>8} {:>8} {:>10.1} {:>10.1} {:>7.1}({:>5.1}) {:>12.1} {:>12} {:>10.4} {:>8} {:>10} {:>12.3}",
                     s.search_l,
                     s.search_n,
                     s.mean_cmps,
@@ -806,7 +847,9 @@ impl std::fmt::Display for DocumentIndexStats {
                     s.mean_latency,
                     s.p99_latency,
                     s.recall.average,
-                    s.num_threads
+                    s.num_threads,
+                    s.num_queries,
+                    mean_wall_clock
                 )?;
             }
         }

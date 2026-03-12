@@ -79,7 +79,6 @@ pub struct InlineBetaComputer<Inner> {
     inner_computer: Inner,
     beta_value: f32,
     filter_expr: EncodedFilterExpr,
-    is_valid_filter: bool, //optimization to avoid evaluating empty predicates.
 }
 
 impl<Inner> InlineBetaComputer<Inner> {
@@ -87,22 +86,16 @@ impl<Inner> InlineBetaComputer<Inner> {
         inner_computer: Inner,
         beta_value: f32,
         filter_expr: EncodedFilterExpr,
-        is_valid_filter: bool,
     ) -> Self {
         Self {
             inner_computer,
             beta_value,
             filter_expr,
-            is_valid_filter,
         }
     }
 
     pub(crate) fn filter_expr(&self) -> &EncodedFilterExpr {
         &self.filter_expr
-    }
-
-    pub(crate) fn is_valid_filter(&self) -> bool {
-        self.is_valid_filter
     }
 }
 
