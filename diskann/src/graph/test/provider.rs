@@ -970,7 +970,7 @@ impl glue::SearchStrategy<Provider, &[f32]> for Strategy {
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {
-    type State = workingset::Map<u32, Box<[f32]>>;
+    type State = workingset::Map<u32, Box<[f32]>, workingset::Ref<[f32]>>;
     type DistanceComputer = <f32 as VectorRepr>::Distance;
     type PruneAccessor<'a> = Accessor<'a>;
     type PruneAccessorError = Infallible;
@@ -1005,8 +1005,8 @@ impl glue::InsertStrategy<Provider, &[f32]> for Strategy {
 }
 
 impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
-    type State = workingset::Map<u32, Box<[f32]>>;
-    type Seed = workingset::MapSeed<u32, Box<[f32]>>;
+    type State = workingset::Map<u32, Box<[f32]>, workingset::Ref<[f32]>>;
+    type Seed = workingset::MapSeed<u32, workingset::Ref<[f32]>>;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -1017,7 +1017,7 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
     where
         Itr: ExactSizeIterator<Item = u32>,
     {
-        workingset::MapSeed::from_batch(batch, ids, |v| v.into())
+        workingset::MapSeed::from_batch(batch, ids)
     }
 }
 
