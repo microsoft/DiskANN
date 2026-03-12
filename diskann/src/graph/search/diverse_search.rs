@@ -113,7 +113,7 @@ where
     where
         S: PostProcess<DP, T, PP, O>,
         PP: Send + Sync,
-        OB: SearchOutputBuffer<O> + Send,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
             let mut accessor = strategy
