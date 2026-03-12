@@ -4,14 +4,17 @@
  */
 
 use dashmap::DashMap;
+use diskann::delegate_default_post_process;
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
+    error::IntoANNResult,
     graph::{
         AdjacencyList, SearchOutputBuffer,
         config::defaults::MAX_OCCLUSION_SIZE,
         glue::{
-            self, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
-            SearchExt, SearchPostProcess, SearchStrategy,
+            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy,
+            InsertStrategy, PostProcess, PruneStrategy, SearchExt, SearchPostProcess,
+            SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -24,7 +27,7 @@ use diskann::{
         object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
     },
 };
-use diskann_providers::model::graph::provider::async_::common::{FullPrecision, Internal};
+use diskann_providers::model::graph::provider::async_::common::FullPrecision;
 use diskann_vector::{PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric};
 use std::{
     collections::{HashMap, hash_map::Entry},
@@ -718,25 +721,6 @@ impl<T: VectorRepr> NeighborAccessorMut for DelegateNeighborAccessor<'_, '_, T> 
     }
 }
 
-impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T]> for Internal<FullPrecision> {
-    type SearchAccessor<'a> = FullAccessor<'a, T>;
-    type SearchAccessorError = GarnetProviderError;
-    type QueryComputer = T::QueryDistance;
-    type PostProcessor = glue::CopyIds;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a GarnetProvider<T>,
-        context: &'a <GarnetProvider<T> as DataProvider>::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider, context, true))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
-}
-
 /// A [`SearchPostProcess`] base object that copies each `Neighbor` to a `(ExternalId, f32)` pair
 /// and writes as many as possible to the output buffer.
 #[derive(Debug, Default, Clone, Copy)]
@@ -777,7 +761,6 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], GarnetId> for FullPre
     type SearchAccessor<'a> = FullAccessor<'a, T>;
     type SearchAccessorError = GarnetProviderError;
     type QueryComputer = T::QueryDistance;
-    type PostProcessor = glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -786,16 +769,18 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], GarnetId> for FullPre
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider, context, true))
     }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
 }
+
+impl<T: VectorRepr> DelegateDefaultPostProcessor<GarnetProvider<T>, [T], GarnetId>
+    for FullPrecision
+{
+    delegate_default_post_process!(glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>);
+}
+
 impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecision {
     type SearchAccessor<'a> = FullAccessor<'a, T>;
     type SearchAccessorError = GarnetProviderError;
     type QueryComputer = T::QueryDistance;
-    type PostProcessor = glue::CopyIds;
 
     fn search_accessor<'a>(
         &'a self,
@@ -805,8 +790,61 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecisio
         Ok(FullAccessor::new(provider, context, true))
     }
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
+}
+
+impl<T: VectorRepr> DelegateDefaultPostProcessor<GarnetProvider<T>, [T], u32> for FullPrecision {
+    delegate_default_post_process!(glue::CopyIds);
+}
+
+impl<T: VectorRepr> PostProcess<GarnetProvider<T>, [T], glue::CopyIds, u32> for FullPrecision {
+    #[allow(clippy::manual_async_fn)]
+    fn post_process_with<'a, I, B>(
+        &self,
+        processor: glue::CopyIds,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &[T],
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<u32> + Send + ?Sized,
+    {
+        async move {
+            diskann::graph::glue::SearchPostProcess::post_process(
+                &processor, accessor, query, computer, candidates, output,
+            )
+            .await
+            .into_ann_result()
+        }
+    }
+}
+
+impl<T: VectorRepr> PostProcess<GarnetProvider<T>, [T], CopyExternalIds, GarnetId>
+    for FullPrecision
+{
+    #[allow(clippy::manual_async_fn)]
+    fn post_process_with<'a, I, B>(
+        &self,
+        processor: CopyExternalIds,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &[T],
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<GarnetId> + Send + ?Sized,
+    {
+        async move {
+            diskann::graph::glue::SearchPostProcess::post_process(
+                &processor, accessor, query, computer, candidates, output,
+            )
+            .await
+            .into_ann_result()
+        }
     }
 }
 
@@ -858,14 +896,19 @@ impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for FullPrecision {
     type DeleteElementError = GarnetProviderError;
 
     type PruneStrategy = Self;
-    type SearchStrategy = Internal<Self>;
+    type SearchPostProcessor = glue::CopyIds;
+    type SearchStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Self
     }
 
     fn search_strategy(&self) -> Self::SearchStrategy {
-        Internal(Self)
+        Self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        glue::CopyIds
     }
 
     fn get_delete_element<'a>(

@@ -290,9 +290,10 @@ where
                         search_params.is_flat_search,
                         processor,
                     ),
-                    Err(e) => {
-                        Err(format!("Invalid determinant-diversity parameters: {}", e).into())
-                    }
+                    Err(e) => Err(diskann::ANNError::log_index_error(format!(
+                        "Invalid determinant-diversity parameters: {}",
+                        e
+                    ))),
                 }
             } else {
                 searcher.search(
