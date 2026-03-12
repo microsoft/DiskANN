@@ -27,6 +27,7 @@ use diskann::{
 };
 use diskann_providers::index::wrapped_async::DiskANNIndex;
 use diskann_quantization::alloc::Poly;
+use diskann_vector::distance::Metric;
 
 use crate::{
     alloc::AlignToEight,
@@ -42,6 +43,8 @@ use crate::{
 
 mod alloc;
 mod dyn_index;
+#[cfg(test)]
+mod ffi_recall_tests;
 #[cfg(test)]
 mod ffi_tests;
 mod fsm;
@@ -167,11 +170,12 @@ fn create_index_impl<T: VectorRepr>(
     quant_type: VectorQuantType,
     config: config::Config,
     dim: usize,
+    metric_type: Metric,
     max_degree: usize,
     callbacks: Callbacks,
     context: Context,
 ) -> Result<Arc<Index>, GarnetProviderError> {
-    let provider = GarnetProvider::<T>::new(dim, max_degree, callbacks, context)?;
+    let provider = GarnetProvider::<T>::new(dim, metric_type, max_degree, callbacks, context)?;
     let state = if provider.start_points_exist() {
         AtomicUsize::new(IndexState::Ready as usize)
     } else {
@@ -195,6 +199,7 @@ pub unsafe extern "C" fn create_index(
     dim: u32,
     _reduce_dim: u32,
     quant_type: VectorQuantType,
+    metric_type: i32,
     l_build: u32,
     max_degree: u32,
     read_callback: ReadCallback,
@@ -202,6 +207,11 @@ pub unsafe extern "C" fn create_index(
     delete_callback: DeleteCallback,
     rmw_callback: ReadModifyWriteCallback,
 ) -> *const c_void {
+    let metric_type = match Metric::try_from(metric_type) {
+        Ok(m) => m,
+        Err(_) => return ptr::null(),
+    };
+
     let target_degree = (max_degree as f32 / GRAPH_SLACK_FACTOR) as usize;
     let config = if let Ok(config) = config::Builder::new(
         target_degree,
@@ -225,6 +235,7 @@ pub unsafe extern "C" fn create_index(
                 quant_type,
                 config,
                 dim as usize,
+                metric_type,
                 max_degree as usize,
                 callbacks,
                 context,
@@ -239,6 +250,7 @@ pub unsafe extern "C" fn create_index(
                 quant_type,
                 config,
                 dim as usize,
+                metric_type,
                 max_degree as usize,
                 callbacks,
                 context,

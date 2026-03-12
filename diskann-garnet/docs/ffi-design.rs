@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Microsoft Corporation.
+ * Licensed under the MIT license.
+ */
+
 /// Create a new empty index
 /// Takes the params of VADD (see: https://redis.io/docs/latest/commands/vadd/), maps to a reasonable interpretation
 ///
@@ -9,6 +14,13 @@
 ///
 /// quant_type needs option that map from NoQuant, Bin, and Q8 (as that's what provided in Redis) in addition to any custom index.  They don't need to be exact, just reasonable.
 ///
+/// metric_type is passed as a raw i32. Valid values are:
+/// - 0: Cosine
+/// - 1: InnerProduct
+/// - 2: L2 (Euclidean distance)
+/// - 3: CosineNormalized
+/// Invalid values will cause the function to return null.
+///
 /// Returning a single pointer conceal all the generics behind an opaque handle
 #[unsafe(no_mangle)]
 extern "C" fn create_index(
@@ -16,6 +28,7 @@ extern "C" fn create_index(
     dimensions: u32,
     reduce_dims: u32,
     quant_type: SomeCStyleEnumeration,
+    metric_type: i32,
     build_exploration_factor: u32,
     num_links: u32,
     read_callback: unsafe extern "C" fn(u64, *const u8, usize, *mut u8, usize) -> i32,
