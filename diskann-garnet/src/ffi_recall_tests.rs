@@ -86,20 +86,21 @@ mod tests {
         result
     }
 
-    /// Bucket a set of result IDs by distance, using epsilon tolerance.
-    /// Returns a histogram where the key is `(dist / EPSILON).round()`.
+    /// Bucket a set of result IDs by distance, quantizing to integer keys.
+    /// Distances are multiplied by `BUCKET_SCALE` (1000) and rounded, so
+    /// results within 0.001 of each other land in the same bucket.
     fn bucket_counts(
         result_ids: &[String],
         id_to_vector: &HashMap<&str, &[f32]>,
         query: &[f32],
         distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> HashMap<i64, usize> {
-        const EPSILON: f32 = 0.001;
+        const BUCKET_SCALE: f32 = 1000.0;
 
         let mut counts: HashMap<i64, usize> = HashMap::new();
         for id in result_ids {
             let dist = distance_fn(id_to_vector[id.as_str()], query);
-            let key = (dist / EPSILON).round() as i64;
+            let key = (dist * BUCKET_SCALE).round() as i64;
             *counts.entry(key).or_insert(0) += 1;
         }
         counts
