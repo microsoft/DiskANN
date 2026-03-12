@@ -1137,7 +1137,9 @@ impl<T: Copy + Default, const GROUP: usize, const PACK: usize> BlockTransposed<T
                                 // SAFETY: dst advances sequentially through the
                                 // backing allocation which has exactly `storage_len`
                                 // elements, and our loop visits each position once.
-                                unsafe { *dst = src_row[col] };
+                                // `col < ncols` is checked above, and `src_row` has
+                                // exactly `ncols` elements.
+                                unsafe { *dst = *src_row.get_unchecked(col) };
                             }
                             // SAFETY: dst advances sequentially through the
                             // backing allocation which has exactly `storage_len`
