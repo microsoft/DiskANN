@@ -24,6 +24,15 @@ where
     inv_index: Arc<RwLock<RoaringTreemapSetProvider<u64>>>,
 }
 
+impl<IT> Default for RoaringAttributeStore<IT>
+where
+    IT: VectorId,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<IT> RoaringAttributeStore<IT>
 where
     IT: VectorId,

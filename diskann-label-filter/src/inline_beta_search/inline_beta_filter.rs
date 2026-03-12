@@ -115,35 +115,20 @@ where
         let (vec, attrs) = changing.destructure();
         let sim = self.inner_computer.evaluate_similarity(vec);
         let pred_eval = PredicateEvaluator::new(attrs);
-        if self.is_valid_filter {
-            match self
-                .filter_expr
-                .encoded_filter_expr()
-                .as_ref()
-                .unwrap()
-                .accept(&pred_eval)
-            {
-                Ok(matched) => {
-                    if matched {
-                        return sim * self.beta_value;
-                    } else {
-                        return sim;
-                    }
-                }
-                Err(_) => {
-                    //If predicate evaluation fails for any reason, we simply revert
-                    //to unfiltered search.
-                    tracing::warn!("Predicate evaluation failed");
-                    return sim;
+        match self.filter_expr.encoded_filter_expr().accept(&pred_eval) {
+            Ok(matched) => {
+                if matched {
+                    sim * self.beta_value
+                } else {
+                    sim
                 }
             }
-        } else {
-            //If predicate evaluation fails, we will return the score returned by the
-            //inner computer, as though no predicate was specified.
-            tracing::warn!(
-                "Predicate evaluation failed in OnlineBetaComputer::evaluate_similarity()"
-            );
-            sim
+            Err(_) => {
+                //If predicate evaluation fails for any reason, we simply revert
+                //to unfiltered search.
+                tracing::warn!("Predicate evaluation failed");
+                sim
+            }
         }
     }
 }
@@ -182,16 +167,8 @@ where
             let doc = accessor.get_element(candidate.id).await?;
             let pe = PredicateEvaluator::new(doc.attributes());
 
-            if computer.is_valid_filter() {
-                if computer
-                    .filter_expr()
-                    .encoded_filter_expr()
-                    .as_ref()
-                    .unwrap()
-                    .accept(&pe)?
-                {
-                    filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
-                }
+            if computer.filter_expr().encoded_filter_expr().accept(&pe)? {
+                filtered_candidates.push(Neighbor::new(candidate.id, candidate.distance));
             }
         }
 

@@ -2,15 +2,13 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
-
-pub(crate) use benchmark_core::recall::knn;
 use diskann_benchmark_core as benchmark_core;
 
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
-pub(crate) struct RecallMetrics {
+pub(crate) struct SerializableRecallMetrics(benchmark_core::recall::RecallMetrics) {
     /// The `k` value for `k-recall-at-n`.
     pub(crate) recall_k: usize,
     /// The `n` value for `k-recall-at-n`.
@@ -25,7 +23,7 @@ pub(crate) struct RecallMetrics {
     pub(crate) maximum: usize,
 }
 
-impl From<&benchmark_core::recall::RecallMetrics> for RecallMetrics {
+impl From<&benchmark_core::recall::RecallMetrics> for SerializableRecallMetrics {
     fn from(m: &benchmark_core::recall::RecallMetrics) -> Self {
         Self {
             recall_k: m.recall_k,

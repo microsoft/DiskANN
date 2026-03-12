@@ -10,24 +10,28 @@
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
 use diskann::{
     graph::{
         config::Builder as ConfigBuilder, config::MaxDegree, config::PruneKind,
-        search_output_buffer, DiskANNIndex, SearchParams, StartPointStrategy,
+        search_output_buffer, DiskANNIndex, SearchOutputBuffer, SearchParams, StartPointStrategy,
     },
     provider::DefaultContext,
-    utils::{async_tools, IntoUsize},
+};
+use diskann_benchmark_core::{
+    build::{self, AsProgress, Build, Parallelism, Progress},
+    recall,
+    search as search_api,
+    tokio,
 };
 use diskann_benchmark_runner::{
     dispatcher::{DispatchRule, FailureScore, MatchScore},
     output::Output,
     registry::Benchmarks,
-    utils::{datatype::DataType, percentiles, MicroSeconds},
-    Any, Checkpoint,
+    utils::{datatype, percentiles, MicroSeconds},
+    Any,
 };
 use diskann_label_filter::{
     attribute::{Attribute, AttributeValue},
@@ -44,51 +48,66 @@ use diskann_providers::model::graph::provider::async_::{
     common::{self, NoStore, TableBasedDeletes},
     inmem::{CreateFullPrecision, DefaultProvider, DefaultProviderParameters, SetStartPoints},
 };
+use diskann_utils::{future::AsyncFriendly, sampling::medoid::ComputeMedoid};
+use diskann_utils::views::MatrixView;
 use diskann_utils::views::Matrix;
+use diskann_vector::PureDistanceFunction;
+use diskann_vector::distance::SquaredL2;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
 use crate::{
     inputs::document_index::DocumentIndexBuild,
     utils::{
-        self,
         datafiles::{self, BinFile},
-        recall,
+        recall::SerializableRecallMetrics,
     },
 };
 
 /// Register the document index benchmarks.
 pub(crate) fn register_benchmarks(benchmarks: &mut Benchmarks) {
-    benchmarks.register::<DocumentIndexJob<'static>>(
-        "document-index-build",
-        |job, checkpoint, out| {
-            let stats = job.run(checkpoint, out)?;
+    benchmarks.register::<DocumentIndexJob<'static, f32>>(
+        "document-index-build-f32",
+        |job, _checkpoint, out| {
+            let stats = job.run(out)?;
             Ok(serde_json::to_value(stats)?)
         },
     );
 }
 
 /// Document index benchmark job.
-pub(super) struct DocumentIndexJob<'a> {
+pub(super) struct DocumentIndexJob<'a, T> {
     input: &'a DocumentIndexBuild,
+    _type: std::marker::PhantomData<T>,
 }
 
-impl<'a> DocumentIndexJob<'a> {
+impl<'a, T> DocumentIndexJob<'a, T> {
     fn new(input: &'a DocumentIndexBuild) -> Self {
-        Self { input }
+        Self {
+            input,
+            _type: std::marker::PhantomData,
+        }
     }
 }
 
-impl diskann_benchmark_runner::dispatcher::Map for DocumentIndexJob<'static> {
-    type Type<'a> = DocumentIndexJob<'a>;
+impl<T: 'static> diskann_benchmark_runner::dispatcher::Map for DocumentIndexJob<'static, T> {
+    type Type<'a> = DocumentIndexJob<'a, T>;
 }
 
 // Dispatch from the concrete input type
-impl<'a> DispatchRule<&'a DocumentIndexBuild> for DocumentIndexJob<'a> {
+impl<'a, T> DispatchRule<&'a DocumentIndexBuild> for DocumentIndexJob<'a, T>
+where
+    datatype::Type<T>: DispatchRule<datatype::DataType>,
+{
     type Error = std::convert::Infallible;
 
     fn try_match(_from: &&'a DocumentIndexBuild) -> Result<MatchScore, FailureScore> {
-        Ok(MatchScore(1))
+        match _from.build.data_type {
+            datatype::DataType::Float32 => Ok(MatchScore(0)),
+            datatype::DataType::UInt8 => Ok(MatchScore(0)),
+            datatype::DataType::Int8 => Ok(MatchScore(0)),
+            _ => Err(datatype::MATCH_FAIL),
+        }
     }
 
     fn convert(from: &'a DocumentIndexBuild) -> Result<Self, Self::Error> {
@@ -104,7 +123,10 @@ impl<'a> DispatchRule<&'a DocumentIndexBuild> for DocumentIndexJob<'a> {
 }
 
 // Central dispatch mapping from Any
-impl<'a> DispatchRule<&'a Any> for DocumentIndexJob<'a> {
+impl<'a, T> DispatchRule<&'a Any> for DocumentIndexJob<'a, T>
+where
+    datatype::Type<T>: DispatchRule<datatype::DataType>,
+{
     type Error = anyhow::Error;
 
     fn try_match(from: &&'a Any) -> Result<MatchScore, FailureScore> {
@@ -126,105 +148,54 @@ fn hashmap_to_attributes(map: std::collections::HashMap<String, AttributeValue>)
         .collect()
 }
 
-/// Compute the index of the row closest to the medoid (centroid) of the data.
-fn compute_medoid_index<T>(data: &Matrix<T>) -> usize
+fn find_medoid_index<T>(x: MatrixView<'_, T>, y: &[T]) -> Option<usize> 
 where
-    T: bytemuck::Pod + Copy + 'static,
+    for<'a> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'a [T], &'a [T], f32>,
 {
-    use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
-
-    let dim = data.ncols();
-    if dim == 0 || data.nrows() == 0 {
-        return 0;
-    }
-
-    // Compute the centroid (mean of all rows) as f64 for precision
-    let mut sum = vec![0.0f64; dim];
-    for i in 0..data.nrows() {
-        let row = data.row(i);
-        for (j, &v) in row.iter().enumerate() {
-            // Convert T to f64 for summation using bytemuck
-            let f64_val: f64 = if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>() {
-                let f32_val: f32 = bytemuck::cast(v);
-                f32_val as f64
-            } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-                let u8_val: u8 = bytemuck::cast(v);
-                u8_val as f64
-            } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<i8>() {
-                let i8_val: i8 = bytemuck::cast(v);
-                i8_val as f64
-            } else {
-                0.0
-            };
-            sum[j] += f64_val;
+    let mut min_dist = f32::INFINITY;
+    let mut min_ind = x.nrows();
+    for (i, row) in x.row_iter().enumerate() {
+        let dist = SquaredL2::evaluate(row, y);
+        if dist < min_dist {
+            min_dist = dist;
+            min_ind = i;
         }
     }
 
-    // Convert centroid to f32 and compute distances
-    let centroid_f32: Vec<f32> = sum
-        .iter()
-        .map(|s| (s / data.nrows() as f64) as f32)
-        .collect();
-
-    // Find the row closest to the centroid
-    let mut min_dist = f32::MAX;
-    let mut medoid_idx = 0;
-    for i in 0..data.nrows() {
-        let row = data.row(i);
-        let row_f32: Vec<f32> = row
-            .iter()
-            .map(|&v| {
-                if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>() {
-                    bytemuck::cast(v)
-                } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-                    let u8_val: u8 = bytemuck::cast(v);
-                    u8_val as f32
-                } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<i8>() {
-                    let i8_val: i8 = bytemuck::cast(v);
-                    i8_val as f32
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-        let d = SquaredL2::evaluate(centroid_f32.as_slice(), row_f32.as_slice());
-        if d < min_dist {
-            min_dist = d;
-            medoid_idx = i;
-        }
+    // No closest neighbor found.
+    if min_ind == x.nrows() {
+        None
+    } else {
+        Some(min_ind)
     }
-
-    medoid_idx
 }
 
-impl<'a> DocumentIndexJob<'a> {
-    fn run(
-        self,
-        _checkpoint: Checkpoint<'_>,
-        mut output: &mut dyn Output,
-    ) -> Result<DocumentIndexStats, anyhow::Error> {
-        // Print the input description
-        writeln!(output, "{}", self.input)?;
-
-        let build = &self.input.build;
-
-        // Dispatch based on data type - retain original type without conversion
-        match build.data_type {
-            DataType::Float32 => self.run_typed::<f32>(output),
-            DataType::UInt8 => self.run_typed::<u8>(output),
-            DataType::Int8 => self.run_typed::<i8>(output),
-            _ => Err(anyhow::anyhow!(
-                "Unsupported data type: {:?}. Supported types: float32, uint8, int8.",
-                build.data_type
-            )),
-        }
+/// Compute the index of the row closest to the medoid (centroid) of the data.
+fn compute_medoid_index<T>(data: &Matrix<T>) -> anyhow::Result<usize>
+where
+    T: bytemuck::Pod + Copy + 'static + ComputeMedoid,
+    for<'a> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'a [T], &'a [T], f32>,
+{
+    let dim = data.ncols();
+    if dim == 0 || data.nrows() == 0 {
+        return Ok(0);
     }
 
-    fn run_typed<T>(self, mut output: &mut dyn Output) -> Result<DocumentIndexStats, anyhow::Error>
+    // returns row closes to centroid.
+    let medoid = T::compute_medoid(data.as_view());
+
+    find_medoid_index(data.as_view(), medoid.as_slice())
+        .ok_or_else(|| anyhow::anyhow!("Failed to find medoid index: no closest row found"))
+}
+
+impl<'a, T> DocumentIndexJob<'a, T> {
+    fn run(self, mut output: &mut dyn Output) -> Result<DocumentIndexStats, anyhow::Error>
     where
-        T: bytemuck::Pod + Copy + Send + Sync + 'static + std::fmt::Debug,
-        T: diskann::graph::SampleableForStart + diskann_utils::future::AsyncFriendly,
-        T: diskann::utils::VectorRepr + diskann_utils::sampling::WithApproximateNorm,
+        T: diskann::utils::VectorRepr
+            + diskann::graph::SampleableForStart
+            + diskann_utils::sampling::WithApproximateNorm
+            + 'static,
+        for<'b> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'b [T], &'b [T]>
     {
         let build = &self.input.build;
 
@@ -306,7 +277,7 @@ impl<'a> DocumentIndexJob<'a> {
 
         // Store attributes for the start point (medoid)
         // Start points are stored at indices num_vectors..num_vectors+frozen_points
-        let medoid_idx = compute_medoid_index(&data);
+        let medoid_idx = compute_medoid_index(&data)?;
         let start_point_id = num_vectors as u32; // Start points begin at max_points
         let medoid_attrs = attributes.get(medoid_idx).cloned().unwrap_or_default();
         use diskann_label_filter::traits::attribute_store::AttributeStore;
@@ -325,58 +296,33 @@ impl<'a> DocumentIndexJob<'a> {
         )?;
         let timer = std::time::Instant::now();
 
-        let insert_strategy: DocumentInsertStrategy<_, [T]> =
-            DocumentInsertStrategy::new(common::FullPrecision);
-        let rt = utils::tokio::runtime(build.num_threads)?;
-
-        // Create control block for parallel work distribution
+        let rt = tokio::runtime(build.num_threads)?;
         let data_arc = Arc::new(data);
         let attributes_arc = Arc::new(attributes);
-        let control_block = DocumentControlBlock::new(
+
+        let builder = DocumentIndexBuilder::new(
+            doc_index.clone(),
             data_arc.clone(),
             attributes_arc.clone(),
-            output.draw_target(),
-        )?;
-
-        let num_tasks = build.num_threads;
-        let insert_latencies = rt.block_on(async {
-            let tasks: Vec<_> = (0..num_tasks)
-                .map(|_| {
-                    let block = control_block.clone();
-                    let index = doc_index.clone();
-                    let strategy = insert_strategy;
-                    tokio::spawn(async move {
-                        let mut latencies = Vec::<MicroSeconds>::new();
-                        let ctx = DefaultContext;
-                        loop {
-                            match block.next() {
-                                Some((id, vector, attrs)) => {
-                                    let doc = Document::new(vector, attrs);
-                                    let start = std::time::Instant::now();
-                                    let result =
-                                        index.insert(strategy, &ctx, &(id as u32), &doc).await;
-                                    latencies.push(MicroSeconds::from(start.elapsed()));
-
-                                    if let Err(e) = result {
-                                        block.cancel();
-                                        return Err(e);
-                                    }
-                                }
-                                None => return Ok(latencies),
-                            }
-                        }
-                    })
-                })
-                .collect();
-
-            // Collect results from all tasks
-            let mut all_latencies = Vec::with_capacity(num_vectors);
-            for task in tasks {
-                let task_latencies = task.await??;
-                all_latencies.extend(task_latencies);
-            }
-            Ok::<_, anyhow::Error>(all_latencies)
-        })?;
+            DocumentInsertStrategy::new(common::FullPrecision),
+        );
+        let num_tasks = NonZeroUsize::new(build.num_threads).unwrap_or(diskann::utils::ONE);
+        let parallelism = Parallelism::dynamic(diskann::utils::ONE, num_tasks);
+        let progress = IndicatifAsProgress({
+            let bar = ProgressBar::with_draw_target(Some(num_vectors as u64), output.draw_target());
+            bar.set_style(
+                ProgressStyle::with_template("Building [{elapsed_precise}] {wide_bar} {percent}")
+                    .expect("valid template"),
+            );
+            bar
+        });
+        let build_results =
+            build::build_tracked(builder, parallelism, &rt, Some(&progress))?;
+        let insert_latencies: Vec<MicroSeconds> = build_results
+            .take_output()
+            .into_iter()
+            .map(|r| r.latency)
+            .collect();
 
         let build_time: MicroSeconds = timer.elapsed().into();
         writeln!(output, "  Index built in {} s", build_time.as_seconds())?;
@@ -485,49 +431,219 @@ impl<'a> DocumentIndexJob<'a> {
         Ok(stats)
     }
 }
-/// Local results from a partition of queries.
-struct SearchLocalResults {
-    ids: Matrix<u32>,
-    distances: Vec<Vec<f32>>,
-    latencies: Vec<MicroSeconds>,
-    comparisons: Vec<u32>,
-    hops: Vec<u32>,
+/// Per-query output from [`FilteredSearcher::search`].
+struct FilteredSearchOutput {
+    distances: Vec<f32>,
+    comparisons: u32,
+    hops: u32,
 }
 
-impl SearchLocalResults {
-    fn merge(all: &[SearchLocalResults]) -> anyhow::Result<Self> {
-        let first = all
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("empty results"))?;
-        let num_ids = first.ids.ncols();
-        let total_rows: usize = all.iter().map(|r| r.ids.nrows()).sum();
+/// Implements [`search_api::Search`] for parallelized inline-beta filtered search.
+///
+/// Each query is paired with a predicate at the same index in `predicates`. The
+/// [`InlineBetaStrategy`] is used with a [`FilteredQuery`] containing the raw vector
+/// and the predicate's [`ASTExpr`].
+struct FilteredSearcher<DP, T>
+where
+    DP: diskann::provider::DataProvider,
+{
+    index: Arc<DiskANNIndex<DP>>,
+    queries: Arc<Matrix<T>>,
+    predicates: Arc<Vec<(usize, ASTExpr)>>,
+    beta: f32,
+}
 
-        let mut ids = Matrix::new(0, total_rows, num_ids);
-        let mut output_row = 0;
-        for r in all {
-            for input_row in r.ids.row_iter() {
-                ids.row_mut(output_row).copy_from_slice(input_row);
-                output_row += 1;
+impl<DP, T> search_api::Search for FilteredSearcher<DP, T>
+where
+    DP: diskann::provider::DataProvider<Context = DefaultContext, ExternalId = u32, InternalId = u32>
+        + Send
+        + Sync
+        + 'static,
+    InlineBetaStrategy<common::FullPrecision>: diskann::graph::glue::SearchStrategy<DP, FilteredQuery<Vec<T>>, u32>,
+    T: bytemuck::Pod + Copy + Send + Sync + 'static,
+{
+    type Id = DP::ExternalId;
+    type Parameters = SearchParams;
+    type Output = FilteredSearchOutput;
+
+    fn num_queries(&self) -> usize {
+        self.queries.nrows()
+    }
+
+    fn id_count(&self, parameters: &SearchParams) -> search_api::IdCount {
+        search_api::IdCount::Fixed(
+            NonZeroUsize::new(parameters.k_value).unwrap_or(diskann::utils::ONE),
+        )
+    }
+
+    async fn search<O>(
+        &self,
+        parameters: &SearchParams,
+        buffer: &mut O,
+        index: usize,
+    ) -> diskann::ANNResult<FilteredSearchOutput>
+    where
+        O: diskann::graph::SearchOutputBuffer<DP::ExternalId> + Send,
+    {
+        let ctx = DefaultContext;
+        let query_vec = self.queries.row(index);
+        let (_, ref ast_expr) = self.predicates[index];
+        let strategy = InlineBetaStrategy::new(self.beta, common::FullPrecision);
+        let filtered_query = FilteredQuery::new(query_vec, ast_expr.clone());
+
+        // Use a concrete IdDistance scratch buffer so that both the IDs and distances
+        // are captured. Afterwards, the valid IDs are forwarded into the framework buffer.
+        let k = parameters.k_value;
+        let mut ids = vec![0u32; k];
+        let mut distances = vec![0.0f32; k];
+        let mut scratch = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+
+        let stats = self
+            .index
+            .search(&strategy, &ctx, &filtered_query, parameters, &mut scratch)
+            .await?;
+
+        let count = scratch.current_len();
+        for (&id, &dist) in std::iter::zip(&ids[..count], &distances[..count]) {
+            if buffer.push(id, dist).is_full() {
+                break;
             }
         }
 
-        let mut distances = Vec::new();
-        let mut latencies = Vec::new();
-        let mut comparisons = Vec::new();
-        let mut hops = Vec::new();
-        for r in all {
-            distances.extend_from_slice(&r.distances);
-            latencies.extend_from_slice(&r.latencies);
-            comparisons.extend_from_slice(&r.comparisons);
-            hops.extend_from_slice(&r.hops);
+        Ok(FilteredSearchOutput {
+            distances: distances[..count].to_vec(),
+            comparisons: stats.cmps,
+            hops: stats.hops,
+        })
+    }
+}
+
+/// Aggregates per-rep [`search_api::SearchResults`] into a [`SearchRunStats`].
+struct FilteredSearchAggregator<'a> {
+    groundtruth: &'a Vec<Vec<u32>>,
+    predicates: &'a [(usize, ASTExpr)],
+    recall_k: usize,
+}
+
+impl search_api::Aggregate<SearchParams, u32, FilteredSearchOutput>
+    for FilteredSearchAggregator<'_>
+{
+    type Output = SearchRunStats;
+
+    fn aggregate(
+        &mut self,
+        run: search_api::Run<SearchParams>,
+        results: Vec<search_api::SearchResults<u32, FilteredSearchOutput>>,
+    ) -> anyhow::Result<SearchRunStats> {
+        let parameters = run.parameters();
+        let search_n = parameters.k_value;
+        let num_queries = results.first().map(|r| r.len()).unwrap_or(0);
+
+        // Recall from first rep only.
+        let recall_metrics: SerializableRecallMetrics = match results.first() {
+            Some(first) => (&recall::knn(
+                self.groundtruth,
+                None,
+                first.ids().as_rows(),
+                self.recall_k,
+                search_n,
+                true,
+            )?)
+                .into(),
+            None => anyhow::bail!("no search results"),
+        };
+
+        // Per-query details from first rep (only queries with recall < 1).
+        let first = results.first().unwrap();
+        let per_query_details: Vec<PerQueryDetails> = (0..num_queries)
+            .filter_map(|query_idx| {
+                let result_ids: Vec<u32> = first.ids().as_rows().row(query_idx).to_vec();
+                let result_distances: Vec<f32> = first
+                    .output()
+                    .get(query_idx)
+                    .map(|o| o.distances.clone())
+                    .unwrap_or_default();
+                let gt_ids: Vec<u32> = self
+                    .groundtruth
+                    .get(query_idx)
+                    .map(|gt| gt.iter().take(20).copied().collect())
+                    .unwrap_or_default();
+
+                let result_set: std::collections::HashSet<u32> =
+                    result_ids.iter().copied().collect();
+                let gt_set: std::collections::HashSet<u32> =
+                    gt_ids.iter().take(self.recall_k).copied().collect();
+                let intersection = result_set.intersection(&gt_set).count();
+                let per_query_recall = if gt_set.is_empty() {
+                    1.0
+                } else {
+                    intersection as f64 / gt_set.len() as f64
+                };
+
+                if per_query_recall >= 1.0 {
+                    return None;
+                }
+
+                let (_, ref ast_expr) = self.predicates[query_idx];
+                Some(PerQueryDetails {
+                    query_id: query_idx,
+                    filter: format!("{:?}", ast_expr),
+                    recall: per_query_recall,
+                    result_ids,
+                    result_distances,
+                    groundtruth_ids: gt_ids,
+                })
+            })
+            .collect();
+
+        // Wall-clock latency and QPS per rep.
+        let rep_latencies: Vec<MicroSeconds> =
+            results.iter().map(|r| r.end_to_end_latency()).collect();
+        let qps: Vec<f64> = rep_latencies
+            .iter()
+            .map(|l| num_queries as f64 / l.as_seconds())
+            .collect();
+
+        // Per-query latencies, comparisons, and hops aggregated across all reps.
+        let mut all_latencies: Vec<MicroSeconds> = Vec::new();
+        let mut all_cmps: Vec<u32> = Vec::new();
+        let mut all_hops: Vec<u32> = Vec::new();
+        for r in &results {
+            all_latencies.extend_from_slice(r.latencies());
+            for o in r.output() {
+                all_cmps.push(o.comparisons);
+                all_hops.push(o.hops);
+            }
         }
 
-        Ok(Self {
-            ids,
-            distances,
-            latencies,
-            comparisons,
-            hops,
+        let percentiles::Percentiles { mean, p90, p99, .. } =
+            percentiles::compute_percentiles(&mut all_latencies)?;
+
+        let mean_cmps = if all_cmps.is_empty() {
+            0.0
+        } else {
+            all_cmps.iter().map(|&x| x as f32).sum::<f32>() / all_cmps.len() as f32
+        };
+        let mean_hops = if all_hops.is_empty() {
+            0.0
+        } else {
+            all_hops.iter().map(|&x| x as f32).sum::<f32>() / all_hops.len() as f32
+        };
+
+        Ok(SearchRunStats {
+            num_threads: run.setup().threads.get(),
+            num_queries,
+            search_n,
+            search_l: parameters.l_value,
+            recall: recall_metrics,
+            qps,
+            wall_clock_time: rep_latencies,
+            mean_latency: mean,
+            p90_latency: p90,
+            p99_latency: p99,
+            mean_cmps,
+            mean_hops,
+            per_query_details: Some(per_query_details),
         })
     }
 }
@@ -558,216 +674,31 @@ where
     InlineBetaStrategy<common::FullPrecision>:
         diskann::graph::glue::SearchStrategy<DP, FilteredQuery<Vec<T>>>,
 {
-    let rt = utils::tokio::runtime(num_threads.get())?;
-    let num_queries = queries.nrows();
+    let searcher = Arc::new(FilteredSearcher {
+        index: index.clone(),
+        queries: Arc::new(queries.clone()),
+        predicates: Arc::new(predicates.to_vec()),
+        beta,
+    });
 
-    let mut all_rep_results = Vec::with_capacity(reps.get());
-    let mut rep_latencies = Vec::with_capacity(reps.get());
+    let parameters = SearchParams::new_default(search_n, search_l)?;
+    let setup = search_api::Setup {
+        threads: num_threads,
+        tasks: num_threads,
+        reps,
+    };
 
-    for _ in 0..reps.get() {
-        let start = std::time::Instant::now();
-        let results = rt.block_on(run_search_parallel(
-            index.clone(),
-            queries,
+    let mut results = search_api::search_all(
+        searcher,
+        [search_api::Run::new(parameters, setup)],
+        FilteredSearchAggregator {
+            groundtruth,
             predicates,
-            beta,
-            num_threads,
-            search_n,
-            search_l,
-        ))?;
-        rep_latencies.push(MicroSeconds::from(start.elapsed()));
-        all_rep_results.push(results);
-    }
+            recall_k,
+        },
+    )?;
 
-    // Merge results from first rep for recall calculation
-    let merged = SearchLocalResults::merge(&all_rep_results[0])?;
-
-    // Compute recall
-    let recall_metrics: recall::RecallMetrics =
-        (&recall::knn(groundtruth, None, &merged.ids, recall_k, search_n, false)?).into();
-
-    // Compute QPS from rep latencies
-    let qps: Vec<f64> = rep_latencies
-        .iter()
-        .map(|l| num_queries as f64 / l.as_seconds())
-        .collect();
-
-    // Aggregate per-query latencies across all reps
-    let (all_latencies, all_cmps, all_hops): (Vec<_>, Vec<_>, Vec<_>) = all_rep_results
-        .iter()
-        .map(|results| {
-            let mut lat = Vec::new();
-            let mut cmp = Vec::new();
-            let mut hop = Vec::new();
-            for r in results {
-                lat.extend_from_slice(&r.latencies);
-                cmp.extend_from_slice(&r.comparisons);
-                hop.extend_from_slice(&r.hops);
-            }
-            (lat, cmp, hop)
-        })
-        .fold(
-            (Vec::new(), Vec::new(), Vec::new()),
-            |(mut a, mut b, mut c): (Vec<MicroSeconds>, Vec<u32>, Vec<u32>), (x, y, z)| {
-                a.extend(x);
-                b.extend(y);
-                c.extend(z);
-                (a, b, c)
-            },
-        );
-
-    let mut query_latencies = all_latencies;
-    let percentiles::Percentiles { mean, p90, p99, .. } =
-        percentiles::compute_percentiles(&mut query_latencies)?;
-
-    let mean_cmps = if all_cmps.is_empty() {
-        0.0
-    } else {
-        all_cmps.iter().map(|&x| x as f32).sum::<f32>() / all_cmps.len() as f32
-    };
-    let mean_hops = if all_hops.is_empty() {
-        0.0
-    } else {
-        all_hops.iter().map(|&x| x as f32).sum::<f32>() / all_hops.len() as f32
-    };
-
-    Ok(SearchRunStats {
-        num_threads: num_threads.get(),
-        search_n,
-        search_l,
-        recall: recall_metrics,
-        qps,
-        mean_latency: mean,
-        p90_latency: p90,
-        p99_latency: p99,
-        mean_cmps,
-        mean_hops,
-    })
-}
-async fn run_search_parallel<DP, T>(
-    index: Arc<DiskANNIndex<DP>>,
-    queries: &Matrix<T>,
-    predicates: &[(usize, ASTExpr)],
-    beta: f32,
-    num_tasks: NonZeroUsize,
-    search_n: usize,
-    search_l: usize,
-) -> anyhow::Result<Vec<SearchLocalResults>>
-where
-    T: bytemuck::Pod + Copy + Send + Sync + 'static,
-    DP: diskann::provider::DataProvider<
-            Context = DefaultContext,
-            ExternalId = u32,
-            InternalId = u32,
-        > + Send
-        + Sync
-        + 'static,
-    InlineBetaStrategy<common::FullPrecision>:
-        diskann::graph::glue::SearchStrategy<DP, FilteredQuery<Vec<T>>>,
-{
-    let num_queries = queries.nrows();
-
-    // Plan query partitions
-    let partitions: Result<Vec<_>, _> = (0..num_tasks.get())
-        .map(|task_id| async_tools::partition(num_queries, num_tasks, task_id))
-        .collect();
-    let partitions = partitions?;
-
-    // We need to clone data for each task
-    let queries_arc = Arc::new(queries.clone());
-    let predicates_arc = Arc::new(predicates.to_vec());
-
-    let handles: Vec<_> = partitions
-        .into_iter()
-        .map(|range| {
-            let index = index.clone();
-            let queries = queries_arc.clone();
-            let predicates = predicates_arc.clone();
-            tokio::spawn(async move {
-                run_search_local(index, queries, predicates, beta, range, search_n, search_l).await
-            })
-        })
-        .collect();
-
-    let mut results = Vec::new();
-    for h in handles {
-        results.push(h.await??);
-    }
-
-    Ok(results)
-}
-
-async fn run_search_local<DP, T>(
-    index: Arc<DiskANNIndex<DP>>,
-    queries: Arc<Matrix<T>>,
-    predicates: Arc<Vec<(usize, ASTExpr)>>,
-    beta: f32,
-    range: std::ops::Range<usize>,
-    search_n: usize,
-    search_l: usize,
-) -> anyhow::Result<SearchLocalResults>
-where
-    T: bytemuck::Pod + Copy + Send + Sync + 'static,
-    DP: diskann::provider::DataProvider<
-            Context = DefaultContext,
-            ExternalId = u32,
-            InternalId = u32,
-        > + Send
-        + Sync,
-    InlineBetaStrategy<common::FullPrecision>:
-        diskann::graph::glue::SearchStrategy<DP, FilteredQuery<Vec<T>>>,
-{
-    let mut ids = Matrix::new(0, range.len(), search_n);
-    let mut all_distances: Vec<Vec<f32>> = Vec::with_capacity(range.len());
-    let mut latencies = Vec::with_capacity(range.len());
-    let mut comparisons = Vec::with_capacity(range.len());
-    let mut hops = Vec::with_capacity(range.len());
-
-    let ctx = DefaultContext;
-    let search_params = SearchParams::new_default(search_n, search_l)?;
-
-    for (output_idx, query_idx) in range.enumerate() {
-        let query_vec = queries.row(query_idx);
-        let (_, ref ast_expr) = predicates[query_idx];
-
-        let strategy = InlineBetaStrategy::new(beta, common::FullPrecision);
-        let query_vec_owned = query_vec.to_vec();
-        let filtered_query: FilteredQuery<Vec<T>> =
-            FilteredQuery::new(query_vec_owned, ast_expr.clone());
-
-        let start = std::time::Instant::now();
-
-        let mut distances = vec![0.0f32; search_n];
-        let result_ids = ids.row_mut(output_idx);
-        let mut result_buffer = search_output_buffer::IdDistance::new(result_ids, &mut distances);
-
-        let stats = index
-            .search(
-                &strategy,
-                &ctx,
-                &filtered_query,
-                &search_params,
-                &mut result_buffer,
-            )
-            .await?;
-
-        let result_count = stats.result_count.into_usize();
-        result_ids[result_count..].fill(u32::MAX);
-        distances[result_count..].fill(f32::MAX);
-
-        latencies.push(MicroSeconds::from(start.elapsed()));
-        comparisons.push(stats.cmps);
-        hops.push(stats.hops);
-        all_distances.push(distances);
-    }
-
-    Ok(SearchLocalResults {
-        ids,
-        distances: all_distances,
-        latencies,
-        comparisons,
-        hops,
-    })
+    results.pop().ok_or_else(|| anyhow::anyhow!("no search results"))
 }
 #[derive(Debug, Serialize)]
 pub struct BuildParamsStats {
@@ -782,7 +713,7 @@ pub struct SearchRunStats {
     pub num_threads: usize,
     pub search_n: usize,
     pub search_l: usize,
-    pub recall: recall::RecallMetrics,
+    pub recall: SerializableRecallMetrics,
     pub qps: Vec<f64>,
     pub mean_latency: f64,
     pub p90_latency: MicroSeconds,
@@ -834,7 +765,7 @@ impl std::fmt::Display for DocumentIndexStats {
             writeln!(f, "\nFiltered Search Results:")?;
             writeln!(
                 f,
-                "  {:>8} {:>8} {:>10} {:>10} {:>15} {:>12} {:>12} {:>10} {:>8}",
+                "  {:>8} {:>8} {:>10} {:>10} {:>15} {:>12} {:>12} {:>10} {:>8} {:>10} {:>12}",
                 "L",
                 "KNN",
                 "Avg Cmps",
@@ -843,7 +774,9 @@ impl std::fmt::Display for DocumentIndexStats {
                 "Avg Latency",
                 "p99 Latency",
                 "Recall",
-                "Threads"
+                "Threads",
+                "Queries",
+                "WallClock(s)"
             )?;
             for s in &self.search {
                 let mean_qps = if s.qps.is_empty() {
@@ -852,6 +785,15 @@ impl std::fmt::Display for DocumentIndexStats {
                     s.qps.iter().sum::<f64>() / s.qps.len() as f64
                 };
                 let max_qps = s.qps.iter().cloned().fold(0.0_f64, f64::max);
+                let mean_wall_clock = if s.wall_clock_time.is_empty() {
+                    0.0
+                } else {
+                    s.wall_clock_time
+                        .iter()
+                        .map(|t| t.as_seconds())
+                        .sum::<f64>()
+                        / s.wall_clock_time.len() as f64
+                };
                 writeln!(
                     f,
                     "  {:>8} {:>8} {:>10.1} {:>10.1} {:>7.1}({:>5.1}) {:>12.1} {:>12} {:>10.4} {:>8}",
@@ -876,69 +818,79 @@ impl std::fmt::Display for DocumentIndexStats {
 // Parallel Build Support
 // ================================
 
-fn make_progress_bar(
-    nrows: usize,
-    draw_target: indicatif::ProgressDrawTarget,
-) -> anyhow::Result<ProgressBar> {
-    let progress = ProgressBar::with_draw_target(Some(nrows as u64), draw_target);
-    progress.set_style(ProgressStyle::with_template(
-        "Building [{elapsed_precise}] {wide_bar} {percent}",
-    )?);
-    Ok(progress)
-}
-
-/// Control block for parallel document insertion.
-/// Manages work distribution and progress tracking across multiple tasks.
-struct DocumentControlBlock<T> {
+/// Implements [`Build`] for parallel document insertion into a [`DiskANNIndex`]
+/// backed by a [`DocumentProvider`]. Each call to [`Build::build`] inserts a
+/// contiguous range of vectors and their associated attributes.
+struct DocumentIndexBuilder<DP: diskann::provider::DataProvider, T> {
+    index: Arc<DiskANNIndex<DP>>,
     data: Arc<Matrix<T>>,
     attributes: Arc<Vec<Vec<Attribute>>>,
-    position: AtomicUsize,
-    cancel: AtomicBool,
-    progress: ProgressBar,
+    strategy: DocumentInsertStrategy<common::FullPrecision, [T]>,
 }
 
-impl<T> DocumentControlBlock<T> {
+impl<DP: diskann::provider::DataProvider, T> DocumentIndexBuilder<DP, T> {
     fn new(
+        index: Arc<DiskANNIndex<DP>>,
         data: Arc<Matrix<T>>,
         attributes: Arc<Vec<Vec<Attribute>>>,
-        draw_target: indicatif::ProgressDrawTarget,
-    ) -> anyhow::Result<Arc<Self>> {
-        let nrows = data.nrows();
-        Ok(Arc::new(Self {
+        strategy: DocumentInsertStrategy<common::FullPrecision, [T]>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            index,
             data,
             attributes,
-            position: AtomicUsize::new(0),
-            cancel: AtomicBool::new(false),
-            progress: make_progress_bar(nrows, draw_target)?,
-        }))
-    }
-
-    /// Return the next document data to insert: (id, vector_slice, attributes).
-    fn next(&self) -> Option<(usize, &[T], Vec<Attribute>)> {
-        let cancel = self.cancel.load(Ordering::Relaxed);
-        if cancel {
-            None
-        } else {
-            let i = self.position.fetch_add(1, Ordering::Relaxed);
-            match self.data.get_row(i) {
-                Some(row) => {
-                    let attrs = self.attributes.get(i).cloned().unwrap_or_default();
-                    self.progress.inc(1);
-                    Some((i, row, attrs))
-                }
-                None => None,
-            }
-        }
-    }
-
-    /// Tell all users of the control block to cancel and return early.
-    fn cancel(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
+            strategy,
+        })
     }
 }
 
-impl<T> Drop for DocumentControlBlock<T> {
-    fn drop(&mut self) {
-        self.progress.finish();
+impl<DP, T> Build for DocumentIndexBuilder<DP, T>
+where
+    DP: diskann::provider::DataProvider<Context = DefaultContext, ExternalId = u32>
+        + for<'doc> diskann::provider::SetElement<Document<'doc, [T]>>
+        + AsyncFriendly,
+    for<'doc> DocumentInsertStrategy<common::FullPrecision, [T]>:
+        diskann::graph::glue::InsertStrategy<DP, Document<'doc, [T]>>,
+    DocumentInsertStrategy<common::FullPrecision, [T]>: AsyncFriendly,
+    T: AsyncFriendly,
+{
+    type Output = ();
+
+    fn num_data(&self) -> usize {
+        self.data.nrows()
+    }
+
+    async fn build(&self, range: std::ops::Range<usize>) -> diskann::ANNResult<Self::Output> {
+        let ctx = DefaultContext;
+        for i in range {
+            let attrs = self.attributes.get(i).cloned().unwrap_or_default();
+            let doc = Document::new(self.data.row(i), attrs);
+            self.index
+                .insert(self.strategy, &ctx, &(i as u32), &doc)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+/// Adapts an already-constructed [`ProgressBar`] into the [`AsProgress`] / [`Progress`]
+/// traits expected by [`build_tracked`].
+struct IndicatifAsProgress(ProgressBar);
+
+struct IndicatifProgress(ProgressBar);
+
+impl Progress for IndicatifProgress {
+    fn progress(&self, handled: usize) {
+        self.0.inc(handled as u64);
+    }
+
+    fn finish(&self) {
+        self.0.finish();
+    }
+}
+
+impl AsProgress for IndicatifAsProgress {
+    fn as_progress(&self, _max: usize) -> Arc<dyn Progress> {
+        Arc::new(IndicatifProgress(self.0.clone()))
     }
 }

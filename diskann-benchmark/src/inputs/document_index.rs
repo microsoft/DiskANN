@@ -39,27 +39,24 @@ pub(crate) struct DocumentBuildParams {
     pub(crate) max_degree: usize,
     pub(crate) l_build: usize,
     pub(crate) alpha: f32,
-    #[serde(default = "default_num_threads")]
     pub(crate) num_threads: usize,
-}
-
-fn default_num_threads() -> usize {
-    1
 }
 
 impl CheckDeserialization for DocumentBuildParams {
     fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.data.check_deserialization(checker)?;
         self.data_labels.check_deserialization(checker)?;
-        if self.max_degree == 0 {
-            return Err(anyhow::anyhow!("max_degree must be > 0"));
-        }
-        if self.l_build == 0 {
-            return Err(anyhow::anyhow!("l_build must be > 0"));
-        }
-        if self.alpha <= 0.0 {
-            return Err(anyhow::anyhow!("alpha must be > 0"));
-        }
+
+        // checking if the max_degree, l_build and alpha values are valid.
+        use diskann::graph::config::{Builder, MaxDegree, PruneKind};
+        let mut builder = Builder::new(
+            self.max_degree,
+            MaxDegree::Value(self.max_degree),
+            self.l_build,
+            PruneKind::Occluding,
+        );
+        builder.alpha(self.alpha);
+        builder.build()?;
         Ok(())
     }
 }
