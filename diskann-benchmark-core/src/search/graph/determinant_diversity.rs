@@ -11,6 +11,7 @@ use diskann::{
     provider,
 };
 use diskann_benchmark_runner::utils::{MicroSeconds, percentiles};
+use diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams;
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
 
 use crate::{
@@ -22,7 +23,7 @@ use crate::{
 #[derive(Debug, Clone, Copy)]
 pub struct Parameters {
     pub inner: graph::search::Knn,
-    pub processor: graph::search::DeterminantDiversitySearchParams,
+    pub processor: DeterminantDiversitySearchParams,
 }
 
 /// A built-in helper for benchmarking determinant-diversity K-nearest neighbors.
@@ -59,7 +60,7 @@ impl<DP, T, S> Search for KNN<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
     S: glue::DefaultSearchStrategy<DP, [T], DP::ExternalId>
-        + glue::PostProcess<DP, [T], graph::search::DeterminantDiversitySearchParams, DP::ExternalId>
+        + glue::PostProcess<DP, [T], DeterminantDiversitySearchParams, DP::ExternalId>
         + Clone
         + AsyncFriendly,
     T: AsyncFriendly + Clone,

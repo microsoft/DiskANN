@@ -9,7 +9,6 @@ use std::{collections::HashSet, fmt, sync::atomic::AtomicBool, time::Instant};
 use opentelemetry::{global, trace::Span, trace::Tracer};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 
-use diskann::graph::search::DeterminantDiversitySearchParams;
 use diskann::utils::VectorRepr;
 use diskann_benchmark_runner::{files::InputFile, utils::MicroSeconds};
 use diskann_disk::{
@@ -20,6 +19,7 @@ use diskann_disk::{
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
 };
+use diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     storage::{

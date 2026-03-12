@@ -469,6 +469,7 @@ dependencies = [
  "anyhow",
  "diskann",
  "diskann-benchmark-runner",
+ "diskann-providers",
  "diskann-utils",
  "diskann-vector",
  "futures-util",

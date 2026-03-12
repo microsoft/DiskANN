@@ -12,6 +12,7 @@ use diskann::{
     provider::{self, DataProvider, DefaultContext},
     utils::VectorRepr,
 };
+use diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams;
 use diskann_benchmark_core::{
     self as benchmark_core,
     streaming::{executors::bigann, Executor},
@@ -506,7 +507,7 @@ where
     T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
     S: glue::SearchStrategy<DP, [T]>
         + glue::HasDefaultProcessor<DP, [T]>
-        + glue::PostProcess<DP, [T], diskann::graph::search::DeterminantDiversitySearchParams>
+        + glue::PostProcess<DP, [T], DeterminantDiversitySearchParams>
         + Clone
         + AsyncFriendly,
 {

@@ -28,7 +28,6 @@ use diskann_utils::future::SendFuture;
 
 use crate::{ANNResult, graph::index::DiskANNIndex, provider::DataProvider};
 
-mod determinant_diversity_post_process;
 mod knn_search;
 mod multihop_search;
 mod range_search;
@@ -94,10 +93,6 @@ where
         OB: crate::graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
-// Re-export search parameter types.
-pub use determinant_diversity_post_process::{
-    DeterminantDiversitySearchParams, determinant_diversity_post_process,
-};
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
 pub use range_search::{Range, RangeSearchError, RangeSearchOutput};

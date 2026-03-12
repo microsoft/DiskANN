@@ -23,7 +23,7 @@ use diskann::{
             self, ExpandBeam, HasDefaultProcessor, IdIterator, PostProcess, SearchExt,
             SearchPostProcess, SearchStrategy,
         },
-        search::{determinant_diversity_post_process, DeterminantDiversitySearchParams, Knn},
+        search::Knn,
         search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
     },
     neighbor::Neighbor,
@@ -44,6 +44,7 @@ use diskann_providers::{
         pq::quantizer_preprocess, PQData, PQScratch,
     },
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
+    model::graph::provider::async_::{determinant_diversity_post_process, DeterminantDiversitySearchParams},
 };
 use diskann_vector::{distance::Metric, DistanceFunction, PreprocessedDistanceFunction};
 use futures_util::future;

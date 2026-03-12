@@ -87,7 +87,7 @@ pub(crate) fn run_determinant_diversity<I>(
                 .map(|search_l| {
                     let base =
                         diskann::graph::search::Knn::new(run.search_n, *search_l, None).unwrap();
-                    let processor = diskann::graph::search::DeterminantDiversitySearchParams::new(
+                    let processor = diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams::new(
                         results_k.unwrap_or(run.search_n),
                         eta,
                         power,

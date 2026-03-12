@@ -16,7 +16,6 @@ use diskann::{
             InplaceDeleteStrategy, InsertStrategy, PostProcess, PruneStrategy, SearchExt,
             SearchStrategy,
         },
-        search::{DeterminantDiversitySearchParams, determinant_diversity_post_process},
     },
     neighbor::Neighbor,
     provider::{
@@ -24,6 +23,10 @@ use diskann::{
         ExecutionContext, HasId,
     },
     utils::{IntoUsize, VectorRepr},
+};
+
+use super::super::determinant_diversity_post_process::{
+    DeterminantDiversitySearchParams, determinant_diversity_post_process,
 };
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{DistanceFunction, distance::Metric};
