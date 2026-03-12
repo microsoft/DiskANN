@@ -45,9 +45,7 @@ use crate::model::{
             neighbor_provider::NeighborProvider, quant_vector_provider::QuantVectorProvider,
             vector_provider::VectorProvider,
         },
-        common::{
-            CreateDeleteProvider, FullPrecision, Hybrid, NoDeletes, NoStore, Panics,
-        },
+        common::{CreateDeleteProvider, FullPrecision, Hybrid, NoDeletes, NoStore, Panics},
         distances,
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
@@ -1592,9 +1590,7 @@ where
                 .collect();
 
             reranked.sort_unstable_by(|a, b| {
-                (a.1)
-                    .partial_cmp(&b.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
             });
             Ok(output.extend(reranked))
         }

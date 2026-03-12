@@ -6,10 +6,10 @@
 //! Shared search post-processing.
 
 use diskann::{
+    ANNError,
     graph::{SearchOutputBuffer, glue},
     neighbor::Neighbor,
     provider::BuildQueryComputer,
-    ANNError,
 };
 
 /// A bridge allowing `Accessors` to opt-in to [`RemoveDeletedIdsAndCopy`] by delegating to

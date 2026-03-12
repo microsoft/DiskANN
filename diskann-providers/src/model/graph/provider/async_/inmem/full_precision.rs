@@ -12,9 +12,8 @@ use diskann::{
     graph::{
         SearchOutputBuffer,
         glue::{
-            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet,
-            InplaceDeleteStrategy, InsertStrategy, PostProcess, PruneStrategy, SearchExt,
-            SearchStrategy,
+            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy,
+            InsertStrategy, PostProcess, PruneStrategy, SearchExt, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -399,10 +398,7 @@ impl Default for Rerank {
 impl<A, T> glue::SearchPostProcess<A, [T]> for Rerank
 where
     T: VectorRepr,
-    A: BuildQueryComputer<[T], Id = u32>
-        + GetFullPrecision<Repr = T>
-        + AsDeletionCheck
-        + SearchExt,
+    A: BuildQueryComputer<[T], Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck + SearchExt,
     <A as AsDeletionCheck>::Checker: Sync,
 {
     type Error = ANNError;
@@ -452,9 +448,7 @@ where
                 .collect();
 
             reranked.sort_unstable_by(|a, b| {
-                (a.1)
-                    .partial_cmp(&b.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
             });
 
             Ok(output.extend(reranked))

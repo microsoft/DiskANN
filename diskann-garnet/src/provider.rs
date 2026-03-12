@@ -789,7 +789,6 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecisio
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider, context, true))
     }
-
 }
 
 impl<T: VectorRepr> DelegateDefaultPostProcessor<GarnetProvider<T>, [T], u32> for FullPrecision {

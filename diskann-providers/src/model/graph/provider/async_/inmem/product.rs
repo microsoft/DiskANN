@@ -496,8 +496,7 @@ where
     delegate_default_post_process!(Rerank);
 }
 
-impl<T, D, Ctx> PostProcess<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T], Rerank>
-    for Hybrid
+impl<T, D, Ctx> PostProcess<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T], Rerank> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
