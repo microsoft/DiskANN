@@ -58,8 +58,7 @@ where
 impl<DP, T, S> Search for KNN<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: glue::SearchStrategy<DP, [T], DP::ExternalId>
-        + glue::HasDefaultProcessor<DP, [T], DP::ExternalId>
+    S: glue::DefaultSearchStrategy<DP, [T], DP::ExternalId>
         + glue::PostProcess<DP, [T], graph::search::DeterminantDiversitySearchParams, DP::ExternalId>
         + Clone
         + AsyncFriendly,

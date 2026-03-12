@@ -52,18 +52,15 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
     }
 }
 
-impl<'q, DP, S, T, O, OB, PP> Search<DP, S, T, O, OB, PP> for MultihopSearch<'q, DP::InternalId>
+impl<'q, DP, S, T, O> Search<DP, S, T, O> for MultihopSearch<'q, DP::InternalId>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: PostProcess<DP, T, PP, O>,
     O: Send,
-    OB: SearchOutputBuffer<O> + Send,
-    PP: Send + Sync,
 {
     type Output = SearchStats;
 
-    fn search(
+    fn search<PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
@@ -71,7 +68,12 @@ where
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        S: PostProcess<DP, T, PP, O>,
+        PP: Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)

@@ -49,10 +49,10 @@ pub(crate) mod scratch;
 /// - [`Diverse`] - Diversity-aware search (feature-gated)
 /// - [`MultihopSearch`] - Label-filtered search with multi-hop expansion
 /// - [`RecordedKnn`] - K-NN search with path recording for debugging
-pub trait Search<DP, S, T: ?Sized, O, OB: ?Sized, PP = crate::graph::glue::DefaultPostProcess>
+pub trait Search<DP, S, T: ?Sized, O>
 where
     DP: DataProvider,
-    PP: Send + Sync,
+    O: Send,
 {
     /// The result type returned by this search.
     type Output;
@@ -79,7 +79,7 @@ where
     /// # Errors
     ///
     /// Returns an error if there is a failure accessing elements or computing distances.
-    fn search(
+    fn search<PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
@@ -87,7 +87,11 @@ where
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>>;
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        S: crate::graph::glue::PostProcess<DP, T, PP, O>,
+        PP: Send + Sync,
+        OB: crate::graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
 // Re-export search parameter types.

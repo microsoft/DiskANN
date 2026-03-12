@@ -197,19 +197,16 @@ impl Knn {
     }
 }
 
-impl<DP, S, T, O, OB, PP> Search<DP, S, T, O, OB, PP> for Knn
+impl<DP, S, T, O> Search<DP, S, T, O> for Knn
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: PostProcess<DP, T, PP, O>,
     O: Send,
-    OB: SearchOutputBuffer<O> + Send + ?Sized,
-    PP: Send + Sync,
 {
     type Output = SearchStats;
 
     /// Execute the k-NN search on the given index using the default post-processor.
-    fn search(
+    fn search<PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
@@ -217,7 +214,12 @@ where
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        S: PostProcess<DP, T, PP, O>,
+        PP: Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
         async move {
             self.search_core(index, strategy, context, query, output, processor)
                 .await
@@ -247,19 +249,16 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
     }
 }
 
-impl<'r, DP, S, T, O, OB, SR, PP> Search<DP, S, T, O, OB, PP> for RecordedKnn<'r, SR>
+impl<'r, DP, S, T, O, SR> Search<DP, S, T, O> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: PostProcess<DP, T, PP, O>,
     O: Send,
-    OB: SearchOutputBuffer<O> + Send + ?Sized,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
-    PP: Send + Sync,
 {
     type Output = SearchStats;
 
-    fn search(
+    fn search<PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
@@ -267,7 +266,12 @@ where
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        S: PostProcess<DP, T, PP, O>,
+        PP: Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)

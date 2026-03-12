@@ -384,6 +384,25 @@ where
     fn create_processor(&self) -> Self::Processor;
 }
 
+/// Aggregate trait for strategies that support both search access and a default post-processor.
+pub trait DefaultSearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<Provider, T, O> + HasDefaultProcessor<Provider, T, O>
+where
+    Provider: DataProvider,
+    T: ?Sized,
+    O: Send,
+{
+}
+
+impl<S, Provider, T, O> DefaultSearchStrategy<Provider, T, O> for S
+where
+    S: SearchStrategy<Provider, T, O> + HasDefaultProcessor<Provider, T, O>,
+    Provider: DataProvider,
+    T: ?Sized,
+    O: Send,
+{
+}
+
 /// Convenience macro for implementing [`HasDefaultProcessor`] when the processor
 /// is a [`Default`]-constructible type.
 ///

@@ -32,8 +32,8 @@ use crate::model::graph::{
     provider::async_::{
         FastMemoryVectorProviderAsync, SimpleNeighborProviderAsync,
         common::{
-            CreateVectorStore, FullPrecision, Internal, NoDeletes, NoStore, Panics,
-            PrefetchCacheLineLevel, SetElementHelper,
+            CreateVectorStore, FullPrecision, NoDeletes, NoStore, Panics, PrefetchCacheLineLevel,
+            SetElementHelper,
         },
         inmem::DefaultProvider,
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
@@ -434,50 +434,6 @@ where
 // Strategies //
 ////////////////
 
-// A layered approach is used for search strategies. The `Internal` version does the heavy
-// lifting in terms of establishing accessors and post processing.
-//
-// However, during post-processing, the `Internal` versions of strategies will not filter
-// out the start points. The publicly exposed types *will* filter out the start points.
-//
-// This layered approach allows algorithms like `InplaceDeleteStrategy` that need to adjust
-// the adjacency list for the start point to reuse the `Internal` strategies.
-
-/// Perform a search entirely in the full-precision space.
-///
-/// Starting points are not filtered out of the final results.
-impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]>
-    for Internal<FullPrecision>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
-    type SearchAccessorError = Panics;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a FullPrecisionProvider<T, Q, D, Ctx>,
-        _context: &'a Ctx,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider))
-    }
-}
-
-impl<T, Q, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, Q, D, Ctx>, [T]>
-    for Internal<FullPrecision>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
-}
-
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
@@ -509,6 +465,38 @@ where
     Ctx: ExecutionContext,
 {
     delegate_default_post_process!(glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
+}
+
+impl<T, Q, D, Ctx> PostProcess<FullPrecisionProvider<T, Q, D, Ctx>, [T], RemoveDeletedIdsAndCopy>
+    for FullPrecision
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    #[allow(clippy::manual_async_fn)]
+    fn post_process_with<'a, I, B>(
+        &self,
+        processor: RemoveDeletedIdsAndCopy,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &[T],
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<u32> + Send + ?Sized,
+    {
+        async move {
+            glue::SearchPostProcess::post_process(
+                &processor, accessor, query, computer, candidates, output,
+            )
+            .await
+            .into_ann_result()
+        }
+    }
 }
 
 impl<T, Q, D, Ctx>
@@ -634,10 +622,10 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
-    type SearchPostProcessor = diskann::graph::glue::DefaultPostProcess;
-    type SearchStrategy = Internal<Self>;
+    type SearchPostProcessor = RemoveDeletedIdsAndCopy;
+    type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
-        Internal(Self)
+        *self
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -645,7 +633,7 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        Default::default()
+        RemoveDeletedIdsAndCopy
     }
 
     async fn get_delete_element<'a>(

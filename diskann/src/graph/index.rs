@@ -2152,9 +2152,12 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: super::search::Search<DP, S, T, O, OB, glue::DefaultPostProcess>,
+        P: super::search::Search<DP, S, T, O>,
+        S: glue::PostProcess<DP, T, glue::DefaultPostProcess, O>,
+        glue::DefaultPostProcess: Send + Sync,
+        O: Send,
+        OB: super::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
-        OB: ?Sized,
     {
         self.search_with(
             search_params,
@@ -2177,10 +2180,12 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: super::search::Search<DP, S, T, O, OB, PP>,
+        P: super::search::Search<DP, S, T, O>,
+        S: glue::PostProcess<DP, T, PP, O>,
         PP: Send + Sync,
+        O: Send,
+        OB: super::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
-        OB: ?Sized,
     {
         search_params.search(self, strategy, processor, context, query, output)
     }

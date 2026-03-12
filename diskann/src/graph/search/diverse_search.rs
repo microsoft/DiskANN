@@ -92,19 +92,16 @@ where
     }
 }
 
-impl<DP, S, T, O, OB, P, PP> Search<DP, S, T, O, OB, PP> for Diverse<P>
+impl<DP, S, T, O, P> Search<DP, S, T, O> for Diverse<P>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: PostProcess<DP, T, PP, O>,
     O: Send,
-    OB: SearchOutputBuffer<O> + Send,
     P: AttributeValueProvider<Id = DP::InternalId>,
-    PP: Send + Sync,
 {
     type Output = SearchStats;
 
-    fn search(
+    fn search<PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
@@ -112,7 +109,12 @@ where
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        S: PostProcess<DP, T, PP, O>,
+        PP: Send + Sync,
+        OB: SearchOutputBuffer<O> + Send,
+    {
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)

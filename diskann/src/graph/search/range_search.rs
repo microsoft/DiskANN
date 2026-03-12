@@ -16,7 +16,7 @@ use crate::{
         glue::{self, ExpandBeam, PostProcess, SearchExt},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
-        search_output_buffer,
+        search_output_buffer::{self, SearchOutputBuffer},
     },
     neighbor::Neighbor,
     provider::{BuildQueryComputer, DataProvider},
@@ -167,25 +167,28 @@ impl Range {
     }
 }
 
-impl<DP, S, T, O, PP> Search<DP, S, T, O, (), PP> for Range
+impl<DP, S, T, O> Search<DP, S, T, O> for Range
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: PostProcess<DP, T, PP, O>,
     O: Send + Default + Clone,
-    PP: Send + Sync,
 {
     type Output = RangeSearchOutput<O>;
 
-    fn search(
+    fn search<PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
         processor: PP,
         context: &DP::Context,
         query: &T,
-        _output: &mut (),
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        S: PostProcess<DP, T, PP, O>,
+        PP: Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -285,6 +288,8 @@ where
             result_dists.drain(0..inner_cutoff);
 
             let result_count = result_ids.len();
+
+            let _ = output.extend(result_ids.iter().cloned().zip(result_dists.iter().copied()));
 
             Ok(RangeSearchOutput {
                 stats: SearchStats {
