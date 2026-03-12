@@ -12,7 +12,7 @@ use diskann::{
     graph::{
         SearchOutputBuffer,
         glue::{
-            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints,
+            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet,
             InplaceDeleteStrategy, InsertStrategy, PostProcess, PruneStrategy, SearchExt,
             SearchStrategy,
         },
@@ -383,16 +383,31 @@ pub trait GetFullPrecision {
 /// 1. Filters out deleted ids from being returned.
 /// 2. Reranks a candidate stream using full-precision distances.
 /// 3. Copies back the results to the output buffer.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Rerank;
+#[derive(Debug, Clone, Copy)]
+pub struct Rerank {
+    pub filter_start_points: bool,
+}
+
+impl Default for Rerank {
+    fn default() -> Self {
+        Self {
+            filter_start_points: true,
+        }
+    }
+}
 
 impl<A, T> glue::SearchPostProcess<A, [T]> for Rerank
 where
     T: VectorRepr,
-    A: BuildQueryComputer<[T], Id = u32> + GetFullPrecision<Repr = T> + AsDeletionCheck,
+    A: BuildQueryComputer<[T], Id = u32>
+        + GetFullPrecision<Repr = T>
+        + AsDeletionCheck
+        + SearchExt,
+    <A as AsDeletionCheck>::Checker: Sync,
 {
-    type Error = Panics;
+    type Error = ANNError;
 
+    #[allow(clippy::manual_async_fn)]
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
@@ -402,34 +417,48 @@ where
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
     where
-        I: Iterator<Item = Neighbor<u32>>,
-        B: SearchOutputBuffer<u32> + ?Sized,
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        let full = accessor.as_full_precision();
-        let checker = accessor.as_deletion_check();
-        let f = full.distance();
+        async move {
+            let full = accessor.as_full_precision();
+            let f = full.distance();
+            let is_not_start_point = if self.filter_start_points {
+                Some(accessor.is_not_start_point().await?)
+            } else {
+                None
+            };
+            let checker = accessor.as_deletion_check();
 
-        // Filter before computing the full precision distances.
-        let mut reranked: Vec<(u32, f32)> = candidates
-            .filter_map(|n| {
-                if checker.deletion_check(n.id) {
-                    None
-                } else {
+            let mut reranked: Vec<(u32, f32)> = candidates
+                .filter_map(|n| {
+                    if checker.deletion_check(n.id) {
+                        return None;
+                    }
+
+                    if let Some(filter) = is_not_start_point.as_ref()
+                        && !filter(n.id)
+                    {
+                        return None;
+                    }
+
                     Some((
                         n.id,
                         f.evaluate_similarity(query, unsafe {
                             full.get_vector_sync(n.id.into_usize())
                         }),
                     ))
-                }
-            })
-            .collect();
+                })
+                .collect();
 
-        // Sort the full precision distances.
-        reranked
-            .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        // Store the reranked results.
-        std::future::ready(Ok(output.extend(reranked)))
+            reranked.sort_unstable_by(|a, b| {
+                (a.1)
+                    .partial_cmp(&b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            Ok(output.extend(reranked))
+        }
     }
 }
 
@@ -468,7 +497,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    delegate_default_post_process!(glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
+    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
 }
 
 impl<T, Q, D, Ctx> PostProcess<FullPrecisionProvider<T, Q, D, Ctx>, [T], RemoveDeletedIdsAndCopy>
@@ -637,7 +666,9 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        RemoveDeletedIdsAndCopy
+        RemoveDeletedIdsAndCopy {
+            filter_start_points: false,
+        }
     }
 
     async fn get_delete_element<'a>(

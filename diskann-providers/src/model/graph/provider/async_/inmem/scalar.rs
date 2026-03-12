@@ -10,7 +10,7 @@ use diskann::delegate_default_post_process;
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
-        self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy,
+        DelegateDefaultPostProcessor, ExpandBeam, FillSet, InsertStrategy,
         PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
@@ -633,7 +633,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
 {
-    delegate_default_post_process!(glue::Pipeline<FilterStartPoints, Rerank>);
+    delegate_default_post_process!(Rerank);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
@@ -671,7 +671,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
 {
-    delegate_default_post_process!(glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
+    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
 }
 
 impl<const NBITS: usize, V, D, Ctx> PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>>

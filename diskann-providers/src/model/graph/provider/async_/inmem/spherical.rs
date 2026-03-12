@@ -12,7 +12,7 @@ use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::glue::{
-        self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy,
+        DelegateDefaultPostProcessor, ExpandBeam, FillSet, InsertStrategy,
         PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
@@ -579,7 +579,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    delegate_default_post_process!(glue::Pipeline<FilterStartPoints, Rerank>);
+    delegate_default_post_process!(Rerank);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
@@ -612,7 +612,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    delegate_default_post_process!(glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
+    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
 }
 
 impl<V, D, Ctx> PruneStrategy<DefaultProvider<V, SphericalStore, D, Ctx>> for Quantized

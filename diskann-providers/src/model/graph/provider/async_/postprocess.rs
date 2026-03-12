@@ -9,6 +9,7 @@ use diskann::{
     graph::{SearchOutputBuffer, glue},
     neighbor::Neighbor,
     provider::BuildQueryComputer,
+    ANNError,
 };
 
 /// A bridge allowing `Accessors` to opt-in to [`RemoveDeletedIdsAndCopy`] by delegating to
@@ -34,16 +35,28 @@ pub(crate) trait DeletionCheck {
 
 /// A [`SearchPostProcess`] routine that fuses the removal of deleted elements with the
 /// copying of IDs into an output buffer.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RemoveDeletedIdsAndCopy;
+#[derive(Debug, Clone, Copy)]
+pub struct RemoveDeletedIdsAndCopy {
+    pub filter_start_points: bool,
+}
+
+impl Default for RemoveDeletedIdsAndCopy {
+    fn default() -> Self {
+        Self {
+            filter_start_points: true,
+        }
+    }
+}
 
 impl<A, T> glue::SearchPostProcess<A, T> for RemoveDeletedIdsAndCopy
 where
-    A: BuildQueryComputer<T, Id = u32> + AsDeletionCheck,
+    A: BuildQueryComputer<T, Id = u32> + AsDeletionCheck + glue::SearchExt,
+    <A as AsDeletionCheck>::Checker: Sync,
     T: ?Sized,
 {
-    type Error = std::convert::Infallible;
+    type Error = ANNError;
 
+    #[allow(clippy::manual_async_fn)]
     fn post_process<I, B>(
         &self,
         accessor: &mut A,
@@ -56,14 +69,29 @@ where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        let checker = accessor.as_deletion_check();
-        let count = output.extend(candidates.filter_map(|n| {
-            if checker.deletion_check(n.id) {
-                None
+        async move {
+            let is_not_start_point = if self.filter_start_points {
+                Some(accessor.is_not_start_point().await?)
             } else {
-                Some((n.id, n.distance))
-            }
-        }));
-        std::future::ready(Ok(count))
+                None
+            };
+
+            let checker = accessor.as_deletion_check();
+            let filtered = candidates.filter_map(|n| {
+                if checker.deletion_check(n.id) {
+                    None
+                } else {
+                    Some((n.id, n.distance))
+                }
+            });
+
+            let count = if let Some(filter) = is_not_start_point {
+                output.extend(filtered.filter(|(id, _)| filter(*id)))
+            } else {
+                output.extend(filtered)
+            };
+
+            Ok(count)
+        }
     }
 }

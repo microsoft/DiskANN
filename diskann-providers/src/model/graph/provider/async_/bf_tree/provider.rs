@@ -19,11 +19,12 @@ use bf_tree::{BfTree, Config};
 use diskann::delegate_default_post_process;
 use diskann::{
     ANNError, ANNResult,
+    error::IntoANNResult,
     graph::{
         AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
             self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy,
-            InsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
+            InsertStrategy, PostProcess, PruneStrategy, SearchExt, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -45,7 +46,7 @@ use crate::model::{
             vector_provider::VectorProvider,
         },
         common::{
-            CreateDeleteProvider, FullPrecision, Hybrid, Internal, NoDeletes, NoStore, Panics,
+            CreateDeleteProvider, FullPrecision, Hybrid, NoDeletes, NoStore, Panics,
         },
         distances,
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
@@ -1467,37 +1468,6 @@ where
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T, Q, D> SearchStrategy<BfTreeProvider<T, Q, D>, [T]> for Internal<FullPrecision>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-{
-    type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = FullAccessor<'a, T, Q, D>;
-    type SearchAccessorError = Panics;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a BfTreeProvider<T, Q, D>,
-        _context: &'a DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider))
-    }
-}
-
-impl<T, Q, D> DelegateDefaultPostProcessor<BfTreeProvider<T, Q, D>, [T]> for Internal<FullPrecision>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-{
-    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
-}
-
-/// Perform a search entirely in the full-precision space.
-///
-/// Starting points are not filtered out of the final results.
 impl<T, Q, D> SearchStrategy<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
 where
     T: VectorRepr,
@@ -1523,20 +1493,61 @@ where
     Q: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
 {
-    delegate_default_post_process!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
+    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
+}
+
+impl<T, Q, D> PostProcess<BfTreeProvider<T, Q, D>, [T], RemoveDeletedIdsAndCopy> for FullPrecision
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+{
+    #[allow(clippy::manual_async_fn)]
+    fn post_process_with<'a, I, B>(
+        &self,
+        processor: RemoveDeletedIdsAndCopy,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &[T],
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<u32> + Send + ?Sized,
+    {
+        async move {
+            glue::SearchPostProcess::post_process(
+                &processor, accessor, query, computer, candidates, output,
+            )
+            .await
+            .into_ann_result()
+        }
+    }
 }
 
 /// An [`glue::SearchPostProcess`] implementation that reranks PQ vectors.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Rerank;
+#[derive(Debug, Clone, Copy)]
+pub struct Rerank {
+    pub filter_start_points: bool,
+}
+
+impl Default for Rerank {
+    fn default() -> Self {
+        Self {
+            filter_start_points: true,
+        }
+    }
+}
 
 impl<'a, T, D> glue::SearchPostProcess<QuantAccessor<'a, T, D>, [T]> for Rerank
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
 {
-    type Error = Panics;
+    type Error = ANNError;
 
+    #[allow(clippy::manual_async_fn)]
     fn post_process<I, B>(
         &self,
         accessor: &mut QuantAccessor<'a, T, D>,
@@ -1546,66 +1557,48 @@ where
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
     where
-        I: Iterator<Item = Neighbor<u32>>,
-        B: SearchOutputBuffer<u32> + ?Sized,
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        let provider = &accessor.provider;
-        let checker = accessor.as_deletion_check();
-        let f = T::distance(provider.metric, Some(provider.full_vectors.dim()));
+        async move {
+            let provider = &accessor.provider;
+            let f = T::distance(provider.metric, Some(provider.full_vectors.dim()));
+            let is_not_start_point = if self.filter_start_points {
+                Some(accessor.is_not_start_point().await?)
+            } else {
+                None
+            };
+            let checker = accessor.as_deletion_check();
 
-        // Filter before computing the full precision distances.
-        let mut reranked: Vec<(u32, f32)> = candidates
-            .filter_map(|n| {
-                if checker.deletion_check(n.id) {
-                    None
-                } else {
+            let mut reranked: Vec<(u32, f32)> = candidates
+                .filter_map(|n| {
+                    if checker.deletion_check(n.id) {
+                        return None;
+                    }
+
+                    if let Some(filter) = is_not_start_point.as_ref()
+                        && !filter(n.id)
+                    {
+                        return None;
+                    }
+
                     #[allow(clippy::expect_used)]
                     let vec = provider
                         .full_vectors
                         .get_vector_sync(n.id.into_usize())
                         .expect("Full vector provider failed to retrieve element");
                     Some((n.id, f.evaluate_similarity(query, &vec)))
-                }
-            })
-            .collect();
+                })
+                .collect();
 
-        // Sort the full precision distances.
-        reranked
-            .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        // Store the reranked results.
-        std::future::ready(Ok(output.extend(reranked)))
+            reranked.sort_unstable_by(|a, b| {
+                (a.1)
+                    .partial_cmp(&b.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            Ok(output.extend(reranked))
+        }
     }
-}
-
-/// Perform a search entirely in the quantized space.
-///
-/// Starting points are not filtered out of the final results but results are reranked using
-/// the full-precision data.
-impl<T, D> SearchStrategy<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Internal<Hybrid>
-where
-    T: VectorRepr,
-    D: AsyncFriendly + DeletionCheck,
-{
-    type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
-    type SearchAccessor<'a> = QuantAccessor<'a, T, D>;
-    type SearchAccessorError = Panics;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a BfTreeProvider<T, QuantVectorProvider, D>,
-        _context: &'a DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(QuantAccessor::new(provider))
-    }
-}
-
-impl<T, D> DelegateDefaultPostProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]>
-    for Internal<Hybrid>
-where
-    T: VectorRepr,
-    D: AsyncFriendly + DeletionCheck,
-{
-    delegate_default_post_process!(Rerank);
 }
 
 /// Perform a search entirely in the quantized space.
@@ -1635,7 +1628,36 @@ where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
 {
-    delegate_default_post_process!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
+    delegate_default_post_process!(Rerank);
+}
+
+impl<T, D> PostProcess<BfTreeProvider<T, QuantVectorProvider, D>, [T], Rerank> for Hybrid
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+{
+    #[allow(clippy::manual_async_fn)]
+    fn post_process_with<'a, I, B>(
+        &self,
+        processor: Rerank,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &[T],
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<u32> + Send + ?Sized,
+    {
+        async move {
+            glue::SearchPostProcess::post_process(
+                &processor, accessor, query, computer, candidates, output,
+            )
+            .await
+            .into_ann_result()
+        }
+    }
 }
 
 // Pruning
@@ -1746,10 +1768,10 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
-    type SearchPostProcessor = diskann::graph::glue::DefaultPostProcess;
-    type SearchStrategy = Internal<Self>;
+    type SearchPostProcessor = RemoveDeletedIdsAndCopy;
+    type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
-        Internal(Self)
+        Self
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -1757,7 +1779,9 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        Default::default()
+        RemoveDeletedIdsAndCopy {
+            filter_start_points: false,
+        }
     }
 
     async fn get_delete_element<'a>(
@@ -1785,10 +1809,10 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
-    type SearchPostProcessor = diskann::graph::glue::DefaultPostProcess;
-    type SearchStrategy = Internal<Self>;
+    type SearchPostProcessor = Rerank;
+    type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
-        Internal(*self)
+        *self
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -1796,7 +1820,9 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        Default::default()
+        Rerank {
+            filter_start_points: false,
+        }
     }
 
     async fn get_delete_element<'a>(
