@@ -695,7 +695,12 @@ mod tests {
     }
 
     fn squared_l2(a: &[f32], b: &[f32]) -> f32 {
-        a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum()
+        let mut sum = 0.0f32;
+        for i in 0..a.len() {
+            let diff = a[i] - b[i];
+            sum += diff * diff;
+        }
+        sum
     }
 
     /// Count intersection by grouping results by distance (handles ties).
@@ -889,13 +894,22 @@ mod tests {
         query: &[f32],
         k: usize,
     ) -> Vec<String> {
-        let q_norm: f32 = query.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let mut q_norm_sq = 0.0f32;
+        for x in query.iter() {
+            q_norm_sq += x * x;
+        }
+        let q_norm = q_norm_sq.sqrt();
         let mut scored: Vec<(&String, f32)> = ids
             .iter()
             .zip(vectors.iter())
             .map(|(id, vec)| {
-                let dot: f32 = vec.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
-                let v_norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+                let mut dot = 0.0f32;
+                let mut v_norm_sq = 0.0f32;
+                for i in 0..vec.len() {
+                    dot += vec[i] * query[i];
+                    v_norm_sq += vec[i] * vec[i];
+                }
+                let v_norm = v_norm_sq.sqrt();
                 let cos_sim = if q_norm > 0.0 && v_norm > 0.0 {
                     dot / (q_norm * v_norm)
                 } else {
