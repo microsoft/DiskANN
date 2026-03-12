@@ -1003,6 +1003,49 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CachedPostProcess<P>(pub P);
+
+impl<DP, C, T, S, E, P> glue::PostProcess<CachingProvider<DP, C>, T, CachedPostProcess<P>>
+    for Cached<S>
+where
+    T: ?Sized,
+    P: Send + Sync,
+    DP: DataProvider,
+    S: glue::PostProcess<DP, T, P>
+        + for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>,
+    C: for<'a> AsCacheAccessorFor<
+            'a,
+            SearchAccessor<'a, S, DP, T>,
+            Accessor: NeighborCache<DP::InternalId>,
+            Error = E,
+        > + AsyncFriendly,
+    E: StandardError,
+{
+    fn post_process_with<'a, I, B>(
+        &self,
+        processor: CachedPostProcess<P>,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &T,
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<DP::InternalId>> + Send,
+        B: SearchOutputBuffer<DP::InternalId> + Send + ?Sized,
+    {
+        self.strategy.post_process_with(
+            processor.0,
+            &mut accessor.inner,
+            query,
+            computer,
+            candidates,
+            output,
+        )
+    }
+}
+
 /// We need `S` to be a [`PruneStrategy`] for the underlying provider.
 ///
 /// This strategy has an associated [`PruneElement`] type `E`
@@ -1075,8 +1118,11 @@ where
     DP: DataProvider,
     S: InplaceDeleteStrategy<DP>,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
-    for<'a> Cached<S::SearchStrategy>:
-        glue::DelegateDefaultPostProcessor<CachingProvider<DP, C>, S::DeleteElement<'a>>,
+    for<'a> Cached<S::SearchStrategy>: glue::PostProcess<
+            CachingProvider<DP, C>,
+            S::DeleteElement<'a>,
+            CachedPostProcess<S::SearchPostProcessor>,
+        >,
     C: AsyncFriendly,
 {
     type DeleteElement<'a> = S::DeleteElement<'a>;
@@ -1085,7 +1131,7 @@ where
 
     type PruneStrategy = Cached<S::PruneStrategy>;
     type SearchStrategy = Cached<S::SearchStrategy>;
-    type SearchPostProcessor = glue::DefaultPostProcess;
+    type SearchPostProcessor = CachedPostProcess<S::SearchPostProcessor>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Cached {
@@ -1100,7 +1146,7 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        glue::DefaultPostProcess
+        CachedPostProcess(self.strategy.search_post_processor())
     }
 
     fn get_delete_element<'a>(
