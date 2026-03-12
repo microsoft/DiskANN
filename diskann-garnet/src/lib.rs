@@ -44,6 +44,8 @@ use crate::{
 mod alloc;
 mod dyn_index;
 #[cfg(test)]
+mod ffi_recall_tests;
+#[cfg(test)]
 mod ffi_tests;
 mod fsm;
 mod garnet;
