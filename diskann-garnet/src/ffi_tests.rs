@@ -447,7 +447,7 @@ mod tests {
     }
 
     /// Helper to insert a vector with u32 external ID and FP32 data.
-    unsafe fn insert_f32_vector(
+    fn insert_f32_vector(
         ctx: &Context,
         index_ptr: *const c_void,
         eid: u32,
@@ -471,7 +471,7 @@ mod tests {
     }
 
     /// Helper to insert a vector with a string external ID and FP32 data.
-    unsafe fn insert_f32_vector_str(
+    fn insert_f32_vector_str(
         ctx: &Context,
         index_ptr: *const c_void,
         eid: &str,
@@ -495,7 +495,7 @@ mod tests {
     }
 
     /// Helper to run search_vector and parse the output IDs (u32) and distances.
-    unsafe fn do_search(
+    fn do_search(
         ctx: &Context,
         index_ptr: *const c_void,
         query: &[f32],
@@ -799,7 +799,7 @@ mod tests {
 
         for (eid, vec) in ids.iter().zip(vectors.iter()) {
             assert!(
-                unsafe { insert_f32_vector_str(&ctx, index_ptr, eid, vec) },
+                insert_f32_vector_str(&ctx, index_ptr, eid, vec),
                 "insert failed for eid={eid}"
             );
         }
@@ -952,7 +952,7 @@ mod tests {
 
         for (eid, vec) in ids.iter().zip(vectors.iter()) {
             assert!(
-                unsafe { insert_f32_vector_str(&ctx, index_ptr, eid, vec) },
+                insert_f32_vector_str(&ctx, index_ptr, eid, vec),
                 "insert failed for eid={eid}"
             );
         }
