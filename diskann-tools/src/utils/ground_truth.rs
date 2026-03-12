@@ -29,54 +29,55 @@ use serde_json::{Map, Value};
 
 use crate::utils::{search_index_utils, CMDResult, CMDToolError};
 
-/// Expands a JSON object with array-valued fields into multiple objects with scalar values.
-/// For example: {"country": ["AU", "NZ"], "year": 2007}
-/// becomes: [{"country": "AU", "year": 2007}, {"country": "NZ", "year": 2007}]
+/// Evaluates a query expression against a label, expanding array-valued fields by recursion.
 ///
-/// If multiple fields have arrays, all combinations are generated.
-fn expand_array_fields(value: &Value) -> Vec<Value> {
-    match value {
+/// For each key in the JSON object, if the value is an array the expression is evaluated
+/// against one element at a time (any-match semantics) without materialising the full
+/// Cartesian product. Non-object labels are evaluated directly.
+fn eval_query_with_array_expansion(query_expr: &ASTExpr, label: &Value) -> bool {
+    match label {
         Value::Object(map) => {
-            // Start with a single empty object
-            let mut results: Vec<Map<String, Value>> = vec![Map::new()];
-
-            for (key, val) in map.iter() {
-                if let Value::Array(arr) = val {
-                    // Expand: for each existing result, create copies for each array element
-                    let mut new_results: Vec<Map<String, Value>> = Vec::new();
-                    for existing in results.iter() {
-                        for item in arr.iter() {
-                            let mut new_map: Map<String, Value> = existing.clone();
-                            new_map.insert(key.clone(), item.clone());
-                            new_results.push(new_map);
-                        }
-                    }
-                    // If array is empty, keep existing results without this key
-                    if !arr.is_empty() {
-                        results = new_results;
-                    }
-                } else {
-                    // Non-array field: add to all existing results
-                    for existing in results.iter_mut() {
-                        existing.insert(key.clone(), val.clone());
-                    }
-                }
-            }
-
-            results.into_iter().map(Value::Object).collect()
+            let entries: Vec<(&String, &Value)> = map.iter().collect();
+            eval_map_recursive(query_expr, &entries, Map::new())
         }
-        // If not an object, return as-is
-        _ => vec![value.clone()],
+        _ => eval_query_expr(query_expr, label),
     }
 }
 
-/// Evaluates a query expression against a label, expanding array fields first.
-/// Returns true if any expanded variant matches the query.
-fn eval_query_with_array_expansion(query_expr: &ASTExpr, label: &Value) -> bool {
-    let expanded = expand_array_fields(label);
-    expanded
-        .iter()
-        .any(|item| eval_query_expr(query_expr, item))
+/// Walk `entries` one field at a time, accumulating scalar values into `current`.
+///
+/// * Scalar fields are inserted directly and the walk continues with the remaining entries.
+/// * Array fields branch once per element; evaluation short-circuits on the first branch
+///   that returns `true`.
+/// * An empty array is treated as an absent field (preserving the previous behaviour).
+/// * When all fields have been consumed, `eval_query_expr` is called on the accumulated object.
+fn eval_map_recursive(
+    query_expr: &ASTExpr,
+    entries: &[(&String, &Value)],
+    mut current: Map<String, Value>,
+) -> bool {
+    match entries {
+        [] => eval_query_expr(query_expr, &Value::Object(current)),
+        [(key, Value::Array(arr)), rest @ ..] => {
+            if arr.is_empty() {
+                // Omit this key, matching the original behaviour for empty arrays.
+                eval_map_recursive(query_expr, rest, current)
+            } else {
+                for item in arr {
+                    let mut branch = current.clone();
+                    branch.insert((*key).clone(), item.clone());
+                    if eval_map_recursive(query_expr, rest, branch) {
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+        [(key, val), rest @ ..] => {
+            current.insert((*key).clone(), (*val).clone());
+            eval_map_recursive(query_expr, rest, current)
+        }
+    }
 }
 
 pub fn read_labels_and_compute_bitmap(
