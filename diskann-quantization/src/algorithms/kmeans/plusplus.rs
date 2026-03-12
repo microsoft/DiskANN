@@ -16,9 +16,10 @@ use rand::{
 };
 use thiserror::Error;
 
-use super::common::{BlockTranspose, square_norm};
+use super::common::square_norm;
+use crate::multi_vector::{BlockTransposed, BlockTransposedRef};
 
-/// An internal trait implemented for `BlockTranspose` used to accelerate
+/// An internal trait implemented for `BlockTransposed` used to accelerate
 ///
 /// 1. Computation of distances between a newly selected kmeans++ center and all elements
 ///    in the dataset.
@@ -29,7 +30,7 @@ use super::common::{BlockTranspose, square_norm};
 ///
 /// All of these operations are fused for efficiency.
 ///
-/// This trait is only meant to be implemented by `BlockTranspose`.
+/// This trait is only meant to be implemented by `BlockTransposed`.
 pub(crate) trait MicroKernel {
     /// The intermediate value storing inner products.
     type Intermediate;
@@ -50,8 +51,9 @@ pub(crate) trait MicroKernel {
     ///
     /// # SAFETY
     ///
-    /// `block` must be the base pointer of a data block in a `BlockTranspose` and the
-    /// block size of this block must have the same length as `this`.
+    /// `block` must be the base pointer of a data block in a `BlockTransposed<f32, N>`
+    /// whose column count equals `this.len()`. That is, `N * this.len()` elements must
+    /// be readable from `block`.
     unsafe fn accum_full(block: *const f32, this: &[f32]) -> Self::Intermediate;
 
     /// Accumulate intermediate distances and store the result in `mins`.
@@ -79,7 +81,7 @@ pub(crate) trait MicroKernel {
 
 diskann_wide::alias!(f32s = f32x8);
 
-impl MicroKernel for BlockTranspose<16> {
+impl MicroKernel for BlockTransposed<f32, 16> {
     // Process 16-dimensions concurrently, split across two `Wide`s.
     type Intermediate = (f32s, f32s);
     type RollingSum = f64;
@@ -97,13 +99,13 @@ impl MicroKernel for BlockTranspose<16> {
         this.iter().enumerate().for_each(|(i, b)| {
             let b = f32s::splat(diskann_wide::ARCH, *b);
 
-            // SAFETY: From the requirement that `self.block_size() == this.len()`, then
-            // `this.len() * 16` elements are readible from `block_ptr` and `i < this.len()`.
+            // SAFETY: Each block stores `16 * ncols` contiguous f32s (GROUP=16).
+            // The caller guarantees `ncols == this.len()`, so `16 * this.len()`
+            // elements are readable from `block_ptr` and `i < this.len()`.
             let a = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(16 * i)) };
             s0 = a.mul_add_simd(b, s0);
 
-            // SAFETY: From the requirement that `self.block_size() == this.len()`, then
-            // `this.len() * 16` elements are readible from `block_ptr` and `i < this.len()`.
+            // SAFETY: Same as above; offset `16 * i + 8 < 16 * this.len()`.
             let a = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(16 * i + 8)) };
             s1 = a.mul_add_simd(b, s1);
         });
@@ -235,13 +237,13 @@ impl MicroKernel for BlockTranspose<16> {
 /// Return the sum of the new `square_distances`.
 fn update_distances<const N: usize>(
     square_distances: &mut [f32],
-    transpose: &BlockTranspose<N>,
+    transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
     this: &[f32],
     this_square_norm: f32,
 ) -> f64
 where
-    BlockTranspose<N>: MicroKernel,
+    BlockTransposed<f32, N>: MicroKernel,
 {
     // Establish our safety requirements.
     // Check 1.
@@ -263,8 +265,8 @@ where
         "norms and dataset must have the same length",
     );
 
-    let splat = BlockTranspose::<N>::splat(this_square_norm);
-    let mut rolling_sum = <BlockTranspose<N> as MicroKernel>::RollingSum::default();
+    let splat = BlockTransposed::<f32, N>::splat(this_square_norm);
+    let mut rolling_sum = <BlockTransposed<f32, N> as MicroKernel>::RollingSum::default();
 
     let iter =
         std::iter::zip(norms.chunks_exact(N), square_distances.chunks_exact_mut(N)).enumerate();
@@ -277,9 +279,9 @@ where
 
         // SAFETY: The pointer `base` does point to a full block and by Check 1,
         // `transpose.ncols() == this.len()`.
-        let intermediate = unsafe { BlockTranspose::<N>::accum_full(base, this) };
+        let intermediate = unsafe { BlockTransposed::<f32, N>::accum_full(base, this) };
 
-        rolling_sum = BlockTranspose::<N>::finish(
+        rolling_sum = BlockTransposed::<f32, N>::finish(
             intermediate,
             splat,
             rolling_sum,
@@ -295,14 +297,14 @@ where
         // `transpose.full_blocks() < transpose.num_blocks()`.
         let base = unsafe { transpose.block_ptr_unchecked(transpose.full_blocks()) };
 
-        // A full accumulation is fine because `BlockTranspose` allocates at the granularity
+        // A full accumulation is fine because `BlockTransposed` allocates at the granularity
         // of blocks. We will just ignore the extra lanes.
         // SAFETY: The pointer `base` does point to a full block and by Check 1,
         // `transpose.ncols() == this.len()`.
-        let intermediate = unsafe { BlockTranspose::<N>::accum_full(base, this) };
+        let intermediate = unsafe { BlockTransposed::<f32, N>::accum_full(base, this) };
 
         let start = N * transpose.full_blocks();
-        rolling_sum = BlockTranspose::<N>::finish_last(
+        rolling_sum = BlockTransposed::<f32, N>::finish_last(
             intermediate,
             splat,
             rolling_sum,
@@ -312,7 +314,7 @@ where
         );
     }
 
-    BlockTranspose::<N>::complete_sum(rolling_sum)
+    BlockTransposed::<f32, N>::complete_sum(rolling_sum)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -379,16 +381,16 @@ impl KMeansPlusPlusError {
 pub(crate) fn kmeans_plusplus_into_inner<const N: usize>(
     mut points: MutMatrixView<'_, f32>,
     data: StridedView<'_, f32>,
-    transpose: &BlockTranspose<N>,
+    transpose: BlockTransposedRef<'_, f32, N>,
     norms: &[f32],
     rng: &mut dyn RngCore,
 ) -> Result<(), KMeansPlusPlusError>
 where
-    BlockTranspose<N>: MicroKernel,
+    BlockTransposed<f32, N>: MicroKernel,
 {
     assert_eq!(norms.len(), data.nrows());
     assert_eq!(transpose.nrows(), data.nrows());
-    assert_eq!(transpose.block_size(), data.ncols());
+    assert_eq!(transpose.ncols(), data.ncols());
     assert_eq!(points.ncols(), data.ncols());
 
     // Zero the argument
@@ -513,8 +515,8 @@ pub fn kmeans_plusplus_into(
         *n = square_norm(d);
     }
 
-    let transpose = BlockTranspose::<GROUPSIZE>::from_matrix_view(data);
-    kmeans_plusplus_into_inner(centers, data.into(), &transpose, &norms, rng)
+    let transpose = BlockTransposed::<f32, GROUPSIZE>::from_matrix_view(data);
+    kmeans_plusplus_into_inner(centers, data.into(), transpose.as_view(), &norms, rng)
 }
 
 #[cfg(test)]
@@ -597,7 +599,7 @@ mod tests {
     // floating point values.
     fn test_update_distances_impl<const N: usize, R>(num_points: usize, dim: usize, rng: &mut R)
     where
-        BlockTranspose<N>: MicroKernel,
+        BlockTransposed<f32, N>: MicroKernel,
         R: Rng,
     {
         let context = lazy_format!(
@@ -617,7 +619,7 @@ mod tests {
         let mut samples = Matrix::<f32>::new(0.0, num_samples, dim);
         let mut distances = vec![f32::INFINITY; num_points];
         let distribution = Uniform::<u32>::new(0, (num_points + dim) as u32).unwrap();
-        let transpose = BlockTranspose::<N>::from_matrix_view(data.as_view());
+        let transpose = BlockTransposed::<f32, N>::from_matrix_view(data.as_view());
 
         let mut last_residual = f64::INFINITY;
         for i in 0..num_samples {
@@ -631,7 +633,13 @@ mod tests {
             let row = samples.row(i);
             let norm = square_norm(row);
 
-            let residual = update_distances(&mut distances, &transpose, &square_norms, row, norm);
+            let residual = update_distances(
+                &mut distances,
+                transpose.as_view(),
+                &square_norms,
+                row,
+                norm,
+            );
 
             // Make sure all the distances are correct.
             for (n, (d, data)) in std::iter::zip(distances.iter(), data.row_iter()).enumerate() {
@@ -1015,7 +1023,7 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &norms,
             &this,
             this_square_norm,
@@ -1034,7 +1042,7 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &norms,
             &this,
             this_square_norm,
@@ -1053,7 +1061,7 @@ mod tests {
         let this_square_norm = 0.0;
         update_distances::<16>(
             &mut square_distances,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &norms,
             &this,
             this_square_norm,
