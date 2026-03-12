@@ -10,14 +10,13 @@
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
 use diskann::{
     graph::{
         config::Builder as ConfigBuilder, config::MaxDegree, config::PruneKind,
-        search_output_buffer, DiskANNIndex, SearchParams, StartPointStrategy,
+        search_output_buffer, DiskANNIndex, SearchOutputBuffer, SearchParams, StartPointStrategy,
     },
     provider::DefaultContext,
 };
@@ -31,8 +30,8 @@ use diskann_benchmark_runner::{
     dispatcher::{DispatchRule, FailureScore, MatchScore},
     output::Output,
     registry::Benchmarks,
-    utils::{datatype::DataType, percentiles, MicroSeconds},
-    Any, Checkpoint,
+    utils::{datatype, percentiles, MicroSeconds},
+    Any,
 };
 use diskann_label_filter::{
     attribute::{Attribute, AttributeValue},
@@ -49,6 +48,8 @@ use diskann_providers::model::graph::provider::async_::{
     common::{self, NoStore, TableBasedDeletes},
     inmem::{CreateFullPrecision, DefaultProvider, DefaultProviderParameters, SetStartPoints},
 };
+use diskann_utils::{future::AsyncFriendly, sampling::medoid::ComputeMedoid};
+use diskann_utils::views::MatrixView;
 use diskann_utils::views::Matrix;
 use diskann_vector::PureDistanceFunction;
 use diskann_vector::distance::SquaredL2;
@@ -58,7 +59,6 @@ use serde::Serialize;
 use crate::{
     inputs::document_index::DocumentIndexBuild,
     utils::{
-        self,
         datafiles::{self, BinFile},
         recall::SerializableRecallMetrics,
     },
@@ -296,58 +296,33 @@ impl<'a, T> DocumentIndexJob<'a, T> {
         )?;
         let timer = std::time::Instant::now();
 
-        let insert_strategy: DocumentInsertStrategy<_, [T]> =
-            DocumentInsertStrategy::new(common::FullPrecision);
-        let rt = utils::tokio::runtime(build.num_threads)?;
-
-        // Create control block for parallel work distribution
+        let rt = tokio::runtime(build.num_threads)?;
         let data_arc = Arc::new(data);
         let attributes_arc = Arc::new(attributes);
-        let control_block = DocumentControlBlock::new(
+
+        let builder = DocumentIndexBuilder::new(
+            doc_index.clone(),
             data_arc.clone(),
             attributes_arc.clone(),
-            output.draw_target(),
-        )?;
-
-        let num_tasks = build.num_threads;
-        let insert_latencies = rt.block_on(async {
-            let tasks: Vec<_> = (0..num_tasks)
-                .map(|_| {
-                    let block = control_block.clone();
-                    let index = doc_index.clone();
-                    let strategy = insert_strategy;
-                    tokio::spawn(async move {
-                        let mut latencies = Vec::<MicroSeconds>::new();
-                        let ctx = DefaultContext;
-                        loop {
-                            match block.next() {
-                                Some((id, vector, attrs)) => {
-                                    let doc = Document::new(vector, attrs);
-                                    let start = std::time::Instant::now();
-                                    let result =
-                                        index.insert(strategy, &ctx, &(id as u32), &doc).await;
-                                    latencies.push(MicroSeconds::from(start.elapsed()));
-
-                                    if let Err(e) = result {
-                                        block.cancel();
-                                        return Err(e);
-                                    }
-                                }
-                                None => return Ok(latencies),
-                            }
-                        }
-                    })
-                })
-                .collect();
-
-            // Collect results from all tasks
-            let mut all_latencies = Vec::with_capacity(num_vectors);
-            for task in tasks {
-                let task_latencies = task.await??;
-                all_latencies.extend(task_latencies);
-            }
-            Ok::<_, anyhow::Error>(all_latencies)
-        })?;
+            DocumentInsertStrategy::new(common::FullPrecision),
+        );
+        let num_tasks = NonZeroUsize::new(build.num_threads).unwrap_or(diskann::utils::ONE);
+        let parallelism = Parallelism::dynamic(diskann::utils::ONE, num_tasks);
+        let progress = IndicatifAsProgress({
+            let bar = ProgressBar::with_draw_target(Some(num_vectors as u64), output.draw_target());
+            bar.set_style(
+                ProgressStyle::with_template("Building [{elapsed_precise}] {wide_bar} {percent}")
+                    .expect("valid template"),
+            );
+            bar
+        });
+        let build_results =
+            build::build_tracked(builder, parallelism, &rt, Some(&progress))?;
+        let insert_latencies: Vec<MicroSeconds> = build_results
+            .take_output()
+            .into_iter()
+            .map(|r| r.latency)
+            .collect();
 
         let build_time: MicroSeconds = timer.elapsed().into();
         writeln!(output, "  Index built in {} s", build_time.as_seconds())?;
@@ -832,7 +807,17 @@ impl std::fmt::Display for DocumentIndexStats {
             writeln!(
                 f,
                 "  {:>8} {:>8} {:>10} {:>10} {:>15} {:>12} {:>12} {:>10} {:>8} {:>10} {:>12}",
-                "L", "KNN", "Avg Cmps", "Avg Hops", "QPS -mean(max)", "Avg Latency", "p99 Latency", "Recall", "Threads", "Queries", "WallClock(s)"
+                "L",
+                "KNN",
+                "Avg Cmps",
+                "Avg Hops",
+                "QPS -mean(max)",
+                "Avg Latency",
+                "p99 Latency",
+                "Recall",
+                "Threads",
+                "Queries",
+                "WallClock(s)"
             )?;
             for s in &self.search {
                 let mean_qps = if s.qps.is_empty() {
@@ -844,7 +829,11 @@ impl std::fmt::Display for DocumentIndexStats {
                 let mean_wall_clock = if s.wall_clock_time.is_empty() {
                     0.0
                 } else {
-                    s.wall_clock_time.iter().map(|t| t.as_seconds()).sum::<f64>() / s.wall_clock_time.len() as f64
+                    s.wall_clock_time
+                        .iter()
+                        .map(|t| t.as_seconds())
+                        .sum::<f64>()
+                        / s.wall_clock_time.len() as f64
                 };
                 writeln!(
                     f,
