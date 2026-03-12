@@ -220,20 +220,12 @@ where
             .inner_accessor
             .build_query_computer(from.query())
             .into_ann_result()?;
-        let id_query = EncodedFilterExpr::new(from.filter_expr(), self.attribute_map.clone());
-        let is_valid_filter = id_query.encoded_filter_expr().is_some();
-        if !is_valid_filter {
-            tracing::warn!(
-                "Failed to convert {} into an id expr. This will now be an unfiltered search.",
-                from.filter_expr()
-            );
-        }
+        let id_query = EncodedFilterExpr::try_create(from.filter_expr(), self.attribute_map.clone())?;
 
         Ok(InlineBetaComputer::new(
             inner_computer,
             self.beta_value,
             id_query,
-            is_valid_filter,
         ))
     }
 }
