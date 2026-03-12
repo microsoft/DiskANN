@@ -58,7 +58,7 @@ use crate::{
     utils::{
         self,
         datafiles::{self, BinFile},
-        recall,
+        recall::SerializableRecallMetrics,
     },
 };
 
@@ -810,7 +810,7 @@ pub struct SearchRunStats {
     pub num_queries: usize,
     pub search_n: usize,
     pub search_l: usize,
-    pub recall: recall::RecallMetrics,
+    pub recall: SerializableRecallMetrics,
     pub qps: Vec<f64>,
     pub wall_clock_time: Vec<MicroSeconds>,
     pub mean_latency: f64,
