@@ -8,7 +8,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
-pub(crate) struct SerializableRecallMetrics(benchmark_core::recall::RecallMetrics) {
+pub(crate) struct SerializableRecallMetrics {
     /// The `k` value for `k-recall-at-n`.
     pub(crate) recall_k: usize,
     /// The `n` value for `k-recall-at-n`.
