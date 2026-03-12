@@ -803,12 +803,7 @@ mod tests {
 
     /// Brute-force k nearest neighbors using squared L2 distance.
     /// Returns the set of IDs of the k closest vectors.
-    fn brute_force_l2_knn(
-        ids: &[u32],
-        vectors: &[Vec<f32>],
-        query: &[f32],
-        k: usize,
-    ) -> Vec<u32> {
+    fn brute_force_l2_knn(ids: &[u32], vectors: &[Vec<f32>], query: &[f32], k: usize) -> Vec<u32> {
         let mut scored: Vec<(u32, f32)> = ids
             .iter()
             .zip(vectors.iter())
@@ -842,7 +837,8 @@ mod tests {
     ) -> usize {
         use std::collections::HashMap;
 
-        let id_to_idx: HashMap<u32, usize> = ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+        let id_to_idx: HashMap<u32, usize> =
+            ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
 
         let count_per_dist = |id_set: &[u32]| -> HashMap<u64, usize> {
             let mut counts = HashMap::new();
@@ -868,12 +864,7 @@ mod tests {
     }
 
     /// Helper: create an L2 index, insert grid vectors, query each, return recall.
-    unsafe fn run_grid_recall(
-        store: &Store,
-        dimensions: u32,
-        grid_size: usize,
-        k: usize,
-    ) -> f64 {
+    unsafe fn run_grid_recall(store: &Store, dimensions: u32, grid_size: usize, k: usize) -> f64 {
         store.clear();
         let callbacks = store.callbacks();
         let ctx = Context(0);
@@ -950,7 +941,8 @@ mod tests {
             }
 
             let expected_ids = brute_force_l2_knn(&ids, &vectors, vec, k);
-            let matches = distance_based_intersection(&vectors, &ids, vec, &expected_ids, &result_ids);
+            let matches =
+                distance_based_intersection(&vectors, &ids, vec, &expected_ids, &result_ids);
             total_matches += matches;
             total_expected += expected_ids.len();
         }
@@ -964,40 +956,28 @@ mod tests {
     fn grid_l2_recall_1d_100() {
         let store = Store;
         let recall = unsafe { run_grid_recall(&store, 1, 100, 3) };
-        assert!(
-            recall >= 0.99,
-            "1D grid recall too low: {recall:.4}"
-        );
+        assert!(recall >= 0.99, "1D grid recall too low: {recall:.4}");
     }
 
     #[test]
     fn grid_l2_recall_2d_10() {
         let store = Store;
         let recall = unsafe { run_grid_recall(&store, 2, 10, 3) };
-        assert!(
-            recall >= 0.99,
-            "2D grid recall too low: {recall:.4}"
-        );
+        assert!(recall >= 0.99, "2D grid recall too low: {recall:.4}");
     }
 
     #[test]
     fn grid_l2_recall_3d_7() {
         let store = Store;
         let recall = unsafe { run_grid_recall(&store, 3, 7, 3) };
-        assert!(
-            recall >= 0.99,
-            "3D grid recall too low: {recall:.4}"
-        );
+        assert!(recall >= 0.99, "3D grid recall too low: {recall:.4}");
     }
 
     #[test]
     fn grid_l2_recall_4d_5() {
         let store = Store;
         let recall = unsafe { run_grid_recall(&store, 4, 5, 3) };
-        assert!(
-            recall >= 0.99,
-            "4D grid recall too low: {recall:.4}"
-        );
+        assert!(recall >= 0.99, "4D grid recall too low: {recall:.4}");
     }
 
     // ── Circle sanity-check tests (Cosine distance) ────────────────────
@@ -1044,12 +1024,7 @@ mod tests {
     }
 
     /// Helper: create a cosine index, insert circle vectors, query each, return recall.
-    unsafe fn run_circle_recall(
-        store: &Store,
-        point_count: usize,
-        radius: f32,
-        k: usize,
-    ) -> f64 {
+    unsafe fn run_circle_recall(store: &Store, point_count: usize, radius: f32, k: usize) -> f64 {
         store.clear();
         let callbacks = store.callbacks();
         let ctx = Context(0);
@@ -1145,10 +1120,7 @@ mod tests {
     fn circle_cosine_recall_r1_100pt() {
         let store = Store;
         let recall = unsafe { run_circle_recall(&store, 100, 1.0, 5) };
-        assert!(
-            recall >= 0.99,
-            "circle r=1 recall too low: {recall:.4}"
-        );
+        assert!(recall >= 0.99, "circle r=1 recall too low: {recall:.4}");
     }
 
     /// Circle with 93 points, radius=534.0, cosine distance, k=5
@@ -1156,10 +1128,7 @@ mod tests {
     fn circle_cosine_recall_r534_93pt() {
         let store = Store;
         let recall = unsafe { run_circle_recall(&store, 93, 534.0, 5) };
-        assert!(
-            recall >= 0.99,
-            "circle r=534 recall too low: {recall:.4}"
-        );
+        assert!(recall >= 0.99, "circle r=534 recall too low: {recall:.4}");
     }
 
     /// Circle with 50 points, radius=10.0, cosine distance, k=3
@@ -1167,9 +1136,6 @@ mod tests {
     fn circle_cosine_recall_r10_50pt() {
         let store = Store;
         let recall = unsafe { run_circle_recall(&store, 50, 10.0, 3) };
-        assert!(
-            recall >= 0.99,
-            "circle r=10 recall too low: {recall:.4}"
-        );
+        assert!(recall >= 0.99, "circle r=10 recall too low: {recall:.4}");
     }
 }

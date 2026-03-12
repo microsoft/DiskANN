@@ -52,7 +52,6 @@ mod provider;
 #[cfg(test)]
 mod test_utils;
 
-
 enum IndexState {
     NoStartPoints,
     SettingStartPoints,
