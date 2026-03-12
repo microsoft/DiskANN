@@ -343,27 +343,21 @@ where
     }
 }
 
-impl<'a, V, D, Ctx> Accessor for QuantAccessor<'a, V, D, Ctx>
+impl<V, D, Ctx> Accessor for QuantAccessor<'_, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// The extended element inherets the lifetime of the Accessor.
-    type Extended = spherical::iface::Opaque<'a>;
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// NOTE: We intentionally don't use `'b` here since our implementation borrows
-    /// the inner `Opaque` from the underlying provider.
-    type Element<'b>
+    type Element<'a>
         = spherical::iface::Opaque<'a>
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'b> = spherical::iface::Opaque<'b>;
+    type ElementRef<'a> = spherical::iface::Opaque<'a>;
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;

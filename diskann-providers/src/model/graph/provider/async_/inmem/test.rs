@@ -157,17 +157,15 @@ impl HasId for FlakyAccessor<'_> {
     type Id = u32;
 }
 
-impl<'a> Accessor for FlakyAccessor<'a> {
-    type Extended = Box<[f32]>;
-
+impl Accessor for FlakyAccessor<'_> {
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    type Element<'b>
+    type Element<'a>
         = &'a [f32]
     where
-        Self: 'b;
+        Self: 'a;
 
-    type ElementRef<'b> = &'b [f32];
+    type ElementRef<'a> = &'a [f32];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = TestError;
@@ -265,7 +263,7 @@ impl PruneStrategy<TestProvider> for Flaky {
     type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
     type PruneAccessor<'a> = FlakyAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = workingset::Map<u32, Box<[f32]>>;
+    type State = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -298,8 +296,8 @@ impl InsertStrategy<TestProvider, &[f32]> for Flaky {
 impl diskann::graph::glue::MultiInsertStrategy<TestProvider, diskann_utils::views::Matrix<f32>>
     for Flaky
 {
-    type Seed = workingset::MapSeed<u32, Box<[f32]>>;
-    type State = workingset::Map<u32, Box<[f32]>>;
+    type Seed = workingset::MapSeed<u32, workingset::map::Ref<[f32]>>;
+    type State = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -314,7 +312,7 @@ impl diskann::graph::glue::MultiInsertStrategy<TestProvider, diskann_utils::view
     where
         Itr: ExactSizeIterator<Item = u32>,
     {
-        workingset::MapSeed::from_batch(batch, ids, |v| Box::from(v))
+        workingset::MapSeed::from_batch(batch, ids)
     }
 }
 
@@ -325,7 +323,7 @@ impl PruneStrategy<TestProvider> for SuperFlaky {
     type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
     type PruneAccessor<'a> = FlakyAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = workingset::Map<u32, Box<[f32]>>;
+    type State = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
 
     fn prune_accessor<'a>(
         &'a self,

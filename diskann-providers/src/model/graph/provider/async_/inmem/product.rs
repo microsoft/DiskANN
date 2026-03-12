@@ -145,27 +145,21 @@ where
     }
 }
 
-impl<'a, V, D, Ctx> Accessor for QuantAccessor<'a, V, D, Ctx>
+impl<V, D, Ctx> Accessor for QuantAccessor<'_, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// The extended element inherets the lifetime of the Accessor.
-    type Extended = &'a [u8];
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// NOTE: We intentionally don't use `'b` here since our implementation borrows
-    /// the inner from the underlying provider.
-    type Element<'b>
+    type Element<'a>
         = &'a [u8]
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'b> = &'b [u8];
+    type ElementRef<'a> = &'a [u8];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;
@@ -332,29 +326,23 @@ where
     }
 }
 
-impl<'a, T, D, Ctx> Accessor for HybridAccessor<'a, T, D, Ctx>
+impl<T, D, Ctx> Accessor for HybridAccessor<'_, T, D, Ctx>
 where
     T: VectorRepr,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// The extended element inherets the lifetime of the Accessor.
-    type Extended = distances::pq::Hybrid<&'a [T], &'a [u8]>;
-
     /// The [`distances::pq::Hybrid`] is an enum consisting of either a full-precision
     /// vector or a quantized vector.
     ///
     /// This accessor can return either.
-    ///
-    /// NOTE: We intentionally don't use `'b` here since our implementation borrows
-    /// the inner `CVRef` from the underlying provider.
-    type Element<'b>
+    type Element<'a>
         = distances::pq::Hybrid<&'a [T], &'a [u8]>
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'b> = distances::pq::Hybrid<&'b [T], &'b [u8]>;
+    type ElementRef<'a> = distances::pq::Hybrid<&'a [T], &'a [u8]>;
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;

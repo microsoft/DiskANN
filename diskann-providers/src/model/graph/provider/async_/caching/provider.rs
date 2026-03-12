@@ -746,7 +746,6 @@ where
     A: CacheableAccessor,
     C: ElementCache<A::Id, A::Map>,
 {
-    type Extended = A::Extended;
     type Element<'a>
         = A::Element<'a>
     where

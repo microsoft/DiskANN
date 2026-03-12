@@ -63,16 +63,23 @@ pub mod pq {
     use std::sync::Arc;
 
     use diskann::{graph::workingset, utils::VectorRepr};
-    use diskann_utils::Reborrow;
+    use diskann_utils::{Reborrow, future::AsyncFriendly};
     use diskann_vector::DistanceFunction;
 
     use crate::model::pq::{self, FixedChunkPQTable};
 
     /// A newtype wrapper around [`workingset::Map`] to avoid the default blanket
     /// implementation of [`workingset::Fill`].
-    pub struct HybridMap<F, Q>(workingset::Map<u32, Hybrid<F, Q>>);
+    pub struct HybridMap<F, Q>(workingset::Map<u32, Hybrid<F, Q>>)
+    where
+        F: for<'a> Reborrow<'a> + AsyncFriendly,
+        Q: for<'a> Reborrow<'a> + AsyncFriendly;
 
-    impl<F, Q> HybridMap<F, Q> {
+    impl<F, Q> HybridMap<F, Q>
+    where
+        F: for<'a> Reborrow<'a> + AsyncFriendly,
+        Q: for<'a> Reborrow<'a> + AsyncFriendly,
+    {
         pub fn with_capacity(capacity: usize) -> Self {
             Self(workingset::Map::with_capacity(capacity))
         }
@@ -86,13 +93,21 @@ pub mod pq {
         }
     }
 
-    impl<F, Q> Default for HybridMap<F, Q> {
+    impl<F, Q> Default for HybridMap<F, Q>
+    where
+        F: for<'a> Reborrow<'a> + AsyncFriendly,
+        Q: for<'a> Reborrow<'a> + AsyncFriendly,
+    {
         fn default() -> Self {
             Self(Default::default())
         }
     }
 
-    impl<F, Q> workingset::AsWorkingSet<HybridMap<F, Q>> for workingset::Unseeded {
+    impl<F, Q> workingset::AsWorkingSet<HybridMap<F, Q>> for workingset::Unseeded
+    where
+        F: for<'a> Reborrow<'a> + AsyncFriendly,
+        Q: for<'a> Reborrow<'a> + AsyncFriendly,
+    {
         fn as_working_set(&self, capacity: usize) -> HybridMap<F, Q> {
             HybridMap::with_capacity(capacity)
         }

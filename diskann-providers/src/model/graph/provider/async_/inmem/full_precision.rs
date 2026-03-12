@@ -186,28 +186,22 @@ where
     }
 }
 
-impl<'a, T, Q, D, Ctx> Accessor for FullAccessor<'a, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> Accessor for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
 {
-    /// The extended element inherets the lifetime of the Accessor.
-    type Extended = &'a [T];
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// NOTE: We intentionally don't use `'b` here since our implementation borrows
-    /// the inner `Opaque` from the underlying provider.
-    type Element<'b>
+    type Element<'a>
         = &'a [T]
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'b> = &'b [T];
+    type ElementRef<'a> = &'a [T];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = Panics;

@@ -679,26 +679,20 @@ where
     type Id = u32;
 }
 
-impl<'a, Data, VP> Accessor for DiskAccessor<'a, Data, VP>
+impl<Data, VP> Accessor for DiskAccessor<'_, Data, VP>
 where
     Data: GraphDataType<VectorIdType = u32>,
     VP: VertexProvider<Data>,
 {
-    /// This references the PQ vector in the underlying `pq_data` store.
-    type Extended = &'a [u8];
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// Since the underlying PQ store is shared, we ignore the `'b` lifetime here and
-    /// instead use `'a`.
-    type Element<'b>
+    type Element<'a>
         = &'a [u8]
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` can have arbitrary lifetimes.
-    type ElementRef<'b> = &'b [u8];
+    type ElementRef<'a> = &'a [u8];
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;

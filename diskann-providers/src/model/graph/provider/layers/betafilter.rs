@@ -184,39 +184,6 @@ where
     }
 }
 
-/// The extended version of `Pair`.
-#[derive(Debug, Clone)]
-pub struct ExtendedPair<I, E> {
-    id: I,
-    element: E,
-}
-
-impl<I, E, T> From<Pair<I, E>> for ExtendedPair<I, T>
-where
-    E: Into<T>,
-{
-    fn from(pair: Pair<I, E>) -> Self {
-        Self {
-            id: pair.id,
-            element: pair.element.into(),
-        }
-    }
-}
-
-impl<'a, I, E> Reborrow<'a> for ExtendedPair<I, E>
-where
-    E: Reborrow<'a>,
-    I: Copy,
-{
-    type Target = Pair<I, E::Target>;
-    fn reborrow(&'a self) -> Self::Target {
-        Pair {
-            id: self.id,
-            element: self.element.reborrow(),
-        }
-    }
-}
-
 /// An [`Accessor`] that composes with an `Inner` accessor to provide beta-filtering.
 pub struct BetaAccessor<Inner>
 where
@@ -257,7 +224,6 @@ impl<Inner> Accessor for BetaAccessor<Inner>
 where
     Inner: Accessor,
 {
-    type Extended = ExtendedPair<Self::Id, Inner::Extended>;
     /// Modify `Element` to retain the vector ID.
     type Element<'a>
         = Pair<Self::Id, Inner::Element<'a>>
@@ -460,7 +426,6 @@ mod tests {
     always_escalate!(NotAllowed);
 
     impl Accessor for Doubler {
-        type Extended = u64;
         type Element<'a>
             = u64
         where
@@ -634,16 +599,6 @@ mod tests {
             computer.evaluate_similarity(accessor.get_element(12).await.unwrap()),
             beta * ((12 * 2 + query) as f32)
         );
-
-        // Extended + computation.
-        {
-            type Extended = ExtendedPair<u32, u64>;
-            let v: Extended = accessor.get_element(10).await.unwrap().into();
-            assert_eq!(
-                computer.evaluate_similarity(v.reborrow()),
-                (10 * 2 + query) as f32
-            );
-        }
 
         // Test dummy implementation of `get_neighbors` for code coverage.
         let mut neighbors = AdjacencyList::new();

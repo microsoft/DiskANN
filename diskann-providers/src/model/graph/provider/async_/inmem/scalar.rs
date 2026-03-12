@@ -423,28 +423,22 @@ where
     }
 }
 
-impl<'a, const NBITS: usize, V, D, Ctx> Accessor for QuantAccessor<'a, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx> Accessor for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
     Ctx: ExecutionContext,
     Unsigned: Representation<NBITS>,
 {
-    /// The extended element inherets the lifetime of the Accessor.
-    type Extended = CVRef<'a, NBITS>;
-
     /// This accessor returns raw slices. There *is* a chance of racing when the fast
     /// providers are used. We just have to live with it.
-    ///
-    /// NOTE: We intentionally don't use `'b` here since our implementation borrows
-    /// the inner `CVRef` from the underlying provider.
-    type Element<'b>
+    type Element<'a>
         = CVRef<'a, NBITS>
     where
-        Self: 'b;
+        Self: 'a;
 
     /// `ElementRef` has an arbitrarily short lifetime.
-    type ElementRef<'b> = CVRef<'b, NBITS>;
+    type ElementRef<'a> = CVRef<'a, NBITS>;
 
     /// Choose to panic on an out-of-bounds access rather than propagate an error.
     type GetError = ANNError;

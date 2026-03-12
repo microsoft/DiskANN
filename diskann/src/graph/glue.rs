@@ -825,7 +825,6 @@ mod tests {
     }
 
     impl Accessor for Retriever<'_> {
-        type Extended = f32;
         type Element<'a>
             = f32
         where

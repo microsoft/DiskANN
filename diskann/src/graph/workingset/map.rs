@@ -17,39 +17,10 @@ use crate::{
     ANNError,
     error::{RankedError, ToRanked, TransientError},
     provider::Accessor,
+    graph::glue,
 };
 
-////////////
-// Traits //
-////////////
-
-/// Populate a working set `State` with element data from an accessor.
-///
-/// This is the successor to `FillSet`. The accessor knows how to fetch elements
-/// (via `get_element` or bulk operations) and insert them into the provided state.
-/// Fill is additive — elements already present in state (including any batch overlay)
-/// are skipped.
-pub trait Fill<State>: Accessor {
-    type Error: Into<ANNError> + std::fmt::Debug + Send + Sync;
-
-    type Set<'a>: for<'b> ScopedMap<Self::Id, ElementRef<'b> = Self::ElementRef<'b>> + Send + Sync
-    where
-        Self: 'a,
-        State: 'a;
-
-    fn fill<'a, Itr>(
-        &'a mut self,
-        state: &'a mut State,
-        itr: Itr,
-    ) -> impl SendFuture<Result<Self::Set<'a>, Self::Error>>
-    where
-        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
-        Self: 'a;
-}
-
-pub trait AsWorkingSet<WorkingSet> {
-    fn as_working_set(&self, capacity: usize) -> WorkingSet;
-}
+use super::{Unseeded, Fill, AsWorkingSet, ScopedMap};
 
 /// Blanket implementation of [`Fill`] for [`Map`]-backed working sets.
 ///
@@ -82,19 +53,6 @@ where
     }
 }
 
-/// Read-only view into a working set. Used by `occlude_list` and distance computations.
-pub trait ScopedMap<I> {
-    type ElementRef<'a>;
-    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>>
-    where
-        Self: 'a;
-
-    fn get(&self, id: I) -> Option<Self::Element<'_>>;
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Unseeded;
-
 impl<K, V, P: Projection> AsWorkingSet<Map<K, V, P>> for Unseeded {
     fn as_working_set(&self, capacity: usize) -> Map<K, V, P> {
         Map::with_capacity(capacity)
@@ -113,20 +71,79 @@ pub trait Projection: Send + Sync + 'static {
 #[derive(Debug)]
 pub struct Ref<T: ?Sized>(std::marker::PhantomData<T>);
 
-impl<T> Clone for Ref<T> {
+impl<T> Clone for Ref<T>
+where
+    T: ?Sized,
+{
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T> Copy for Ref<T> {}
+impl<T> Copy for Ref<T> where T: ?Sized {}
 
 impl<T> Projection for Ref<T>
 where
-    T: ?Sized + Send + Sync + 'static
+    T: ?Sized + Send + Sync + 'static,
 {
     type Element<'a> = &'a T;
     type ElementRef<'a> = &'a T;
+}
+
+#[derive(Debug)]
+pub struct Reborrowed<T>(std::marker::PhantomData<T>)
+where
+    T: ?Sized;
+
+impl<T> Clone for Reborrowed<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for Reborrowed<T> {}
+
+impl<T> Projection for Reborrowed<T>
+where
+    T: for<'a> Reborrow<'a> + ?Sized + Send + Sync + 'static,
+{
+    type Element<'a> = AsReborrowed<'a, T>;
+    type ElementRef<'a> = <T as Reborrow<'a>>::Target;
+}
+
+#[derive(Debug)]
+pub struct AsReborrowed<'a, T>(&'a T)
+where
+    T: ?Sized;
+
+impl<T> Clone for AsReborrowed<'_, T>
+where
+    T: ?Sized,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for AsReborrowed<'_, T> where T: ?Sized {}
+
+impl<'a, T> Reborrow<'a> for AsReborrowed<'_, T>
+where
+    T: Reborrow<'a> + ?Sized,
+{
+    type Target = T::Target;
+    fn reborrow(&'a self) -> Self::Target {
+        self.0.reborrow()
+    }
+}
+
+impl<T> Project<Reborrowed<T>> for T
+where
+    T: for<'a> Reborrow<'a> + ?Sized + Send + Sync + 'static,
+{
+    fn project(&self) -> AsReborrowed<'_, T> {
+        AsReborrowed(self)
+    }
 }
 
 pub trait Project<P>
@@ -187,7 +204,7 @@ where
     }
 }
 
-/// Zero-copy seed overlay backed by a [`glue::Batch`](super::glue::Batch).
+/// Zero-copy seed overlay backed by a [`glue::Batch`](glue::Batch).
 ///
 /// Stores the batch behind an `Arc` and an index map from keys to batch positions.
 /// Lookups convert batch elements to `P::Element` via `Into`, which is by-value and
@@ -200,21 +217,17 @@ struct BatchOverlay<K, B> {
 impl<K, B, P> Batch<K, P> for BatchOverlay<K, B>
 where
     K: Hash + Eq + Send + Sync,
-    B: super::glue::Batch,
+    B: for<'a> glue::Batch<Element<'a>: Into<P::Element<'a>>>,
     P: Projection,
-    for<'a> P::Element<'a>: From<<B as super::glue::Batch>::Element<'a>>,
 {
     fn get(&self, key: &K) -> Option<P::Element<'_>> {
-        self.indices
-            .get(key)
-            .map(|&idx| self.batch.get(idx).into())
+        self.indices.get(key).map(|&idx| self.batch.get(idx).into())
     }
 
     fn contains_key(&self, key: &K) -> bool {
         self.indices.contains_key(key)
     }
 }
-
 
 /// Seed for [`Map`]-backed working sets.
 ///
@@ -238,19 +251,16 @@ where
     K: Hash + Eq + Send + Sync + 'static,
     P: Projection,
 {
-    /// Create a zero-copy seed backed directly by a [`glue::Batch`](super::glue::Batch).
+    /// Create a zero-copy seed backed directly by a [`glue::Batch`](glue::Batch).
     ///
     /// Lookups go through the batch via an index map — no element data is copied.
     /// Requires that batch elements convert to `P::Element` via `Into`.
-    pub fn from_batch<B>(
-        batch: &Arc<B>,
-        ids: impl ExactSizeIterator<Item = K>,
-    ) -> Self
+    pub fn from_batch<B>(batch: &Arc<B>, ids: impl ExactSizeIterator<Item = K>) -> Self
     where
-        B: super::glue::Batch,
-        for<'a> P::Element<'a>: From<<B as super::glue::Batch>::Element<'a>>,
+        B: for<'a> glue::Batch<Element<'a>: Into<P::Element<'a>>>,
     {
-        let indices: hashbrown::HashMap<K, usize> = ids.enumerate().map(|(i, id)| (id, i)).collect();
+        let indices: hashbrown::HashMap<K, usize> =
+            ids.enumerate().map(|(i, id)| (id, i)).collect();
         Self {
             overlay: Arc::new(BatchOverlay {
                 batch: Arc::clone(batch),
@@ -290,7 +300,7 @@ where
 ///
 /// Seed keys and map keys are kept disjoint: insertions for keys already present in
 /// the seed are silently skipped.
-pub struct Map<K, V, P: Projection> {
+pub struct Map<K, V, P: Projection = Reborrowed<V>> {
     map: hashbrown::HashMap<K, V>,
     seed: Option<Arc<dyn Batch<K, P>>>,
     _projection: std::marker::PhantomData<P>,
@@ -434,7 +444,7 @@ impl<K, V> VacantEntry<'_, K, V> {
 // ================================
 
 /// A [`ScopedMap`] view over a [`Map`], checking seed then fill layer on each lookup.
-pub struct ScopedMapView<'a, K, V, P: Projection> {
+pub struct ScopedMapView<'a, K, V, P: Projection = Reborrowed<V>> {
     map: &'a Map<K, V, P>,
 }
 
@@ -442,7 +452,7 @@ impl<K, V, P> ScopedMap<K> for ScopedMapView<'_, K, V, P>
 where
     K: Hash + Eq,
     P: Projection,
-    V: Send + Sync + 'static + Project<P>,
+    V: Project<P> + Send + Sync + 'static,
 {
     type ElementRef<'a> = P::ElementRef<'a>;
     type Element<'a>
@@ -458,31 +468,6 @@ where
             .and_then(|s| s.get(&id))
             .or_else(|| self.map.map.get(&id).map(|v| v.project()))
     }
-}
-
-// // ==============
-// // = Ref wrapper
-// // ==============
-//
-// #[derive(Debug, Clone, Copy)]
-// pub struct Ref<'a, T>(pub(crate) &'a T);
-//
-// impl<'a, T> Reborrow<'a> for Ref<'_, T>
-// where
-//     T: Reborrow<'a>,
-// {
-//     type Target = T::Target;
-//     fn reborrow(&'a self) -> T::Target {
-//         self.0.reborrow()
-//     }
-// }
-
-// ===============
-// = Fill helpers
-// ===============
-
-pub fn identity<T>(x: T) -> T {
-    x
 }
 
 /// Fill a [`Map`] using `accessor.get_element` for each missing key.
@@ -544,110 +529,3 @@ where
     }
 }
 
-// ///////////////
-// // Dense Set //
-// ///////////////
-//
-// #[derive(Debug, Clone)]
-// pub struct DenseMap<K, T> {
-//     pub data: Matrix<T>,
-//     pub indices: hashbrown::HashMap<K, usize>,
-// }
-//
-// impl<K, T> DenseMap<K, T>
-// where
-//     K: Hash + Eq + Copy + AsyncFriendly,
-//     T: Default + AsyncFriendly,
-// {
-//     pub fn new(dim: usize) -> Self {
-//         Self {
-//             data: Matrix::new(views::Init(|| T::default()), 0, dim),
-//             indices: hashbrown::HashMap::new(),
-//         }
-//     }
-//
-//     pub fn fill<A, Itr, F>(
-//         &mut self,
-//         accessor: &mut A,
-//         itr: Itr,
-//         mut projection: F,
-//     ) -> impl SendFuture<Result<(), A::GetError>>
-//     where
-//         A: Accessor<Id = K>,
-//         Itr: ExactSizeIterator<Item = K> + Send + Sync,
-//         F: FnMut(&mut [T], A::Element<'_>) + Send,
-//     {
-//         async move {
-//             if itr.len() > self.data.nrows() {
-//                 let dim = self.data.ncols();
-//                 self.data = Matrix::new(views::Init(|| T::default()), itr.len(), dim);
-//             }
-//
-//             self.indices.clear();
-//             for (pos, (row, i)) in std::iter::zip(self.data.row_iter_mut(), itr).enumerate() {
-//                 projection(row, accessor.get_element(i).await?);
-//                 self.indices.insert(i, pos);
-//             }
-//             Ok(())
-//         }
-//     }
-//
-//     pub fn project<P>(&self, projection: P) -> ScopedDenseMap<'_, P, K, T>
-//     where
-//         P: Projection<T>,
-//     {
-//         ScopedDenseMap {
-//             map: &self,
-//             projection,
-//         }
-//     }
-// }
-//
-// pub trait Projection<T>: Send + Sync
-// where
-//     T: AsyncFriendly,
-// {
-//     type ElementRef<'a>;
-//     type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>>;
-//     fn project<'a>(&self, raw: &'a [T]) -> Self::Element<'a>;
-// }
-//
-// pub struct ScopedDenseMap<'a, P, K, T> {
-//     map: &'a DenseMap<K, T>,
-//     projection: P,
-// }
-//
-// impl<P, K, T> ScopedMap<K> for ScopedDenseMap<'_, P, K, T>
-// where
-//     P: Projection<T>,
-//     K: Hash + Eq,
-//     T: AsyncFriendly,
-// {
-//     type ElementRef<'a> = P::ElementRef<'a>;
-//     type Element<'a>
-//         = P::Element<'a>
-//     where
-//         Self: 'a;
-//
-//     fn get(&self, id: K) -> Option<Self::Element<'_>> {
-//         self.map
-//             .indices
-//             .get(&id)
-//             .map(|row| self.projection.project(self.map.data.row(*row)))
-//     }
-// }
-//
-// #[derive(Debug, Clone, Copy)]
-// pub struct Identity;
-//
-// impl<T> Projection<T> for Identity
-// where
-//     T: AsyncFriendly,
-// {
-//     type ElementRef<'a> = &'a [T];
-//     type Element<'a> = &'a [T];
-//
-//     fn project<'a>(&self, raw: &'a [T]) -> Self::Element<'a> {
-//         raw
-//     }
-// }

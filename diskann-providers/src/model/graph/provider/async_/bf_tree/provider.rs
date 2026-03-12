@@ -985,9 +985,6 @@ where
     Q: AsyncFriendly,
     D: AsyncFriendly,
 {
-    /// The lifetime extended version requires an allocation.
-    type Extended = Box<[T]>;
-
     /// This accessor returns a reference to a local copy of the vector.
     type Element<'a>
         = &'a [T]
@@ -1175,9 +1172,6 @@ where
     T: VectorRepr,
     D: AsyncFriendly,
 {
-    /// The extended element type requires an allocation.
-    type Extended = Box<[u8]>;
-
     /// This accessor returns a reference to a local copy of the element.
     type Element<'a>
         = &'a [u8]
@@ -1326,9 +1320,6 @@ where
     T: VectorRepr,
     D: AsyncFriendly,
 {
-    /// Extending requires an allocation.
-    type Extended = distances::pq::Hybrid<Vec<T>, Vec<u8>>;
-
     /// The [`distances::pq::Hybrid`] is an enum consisting of either a full-precision
     /// vector or a quantized vector.
     ///

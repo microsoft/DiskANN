@@ -392,34 +392,20 @@ where
 ///
 /// # Element Relationship
 ///
-/// Accessors are expected to define three associated element types:
+/// Accessors are expected to define two associated element types:
 ///
 /// * `Element<'_>`: The type returned by `get_element`. This is scoped to the borrow
 ///   of the accessor at the `get_element` call site. As a consequence, there may only
-///   be one sucn `Element` active at a time.
+///   be one such `Element` active at a time.
 ///
 /// * `ElementRef<'_>`: A generalized borrowed form of `Element` obtainable via
 ///   `Reborrow`. This is the type on which distance computations are defined and is the
 ///   element type provided to the `on_element_unordered` bulk operation.
 ///
-/// * `Extended`: An extended version of `Element` whose lifetime is only limited to the
-///   lifetime of the `Self` type (rather than scoped to a particular borrow).
-///
-///   This is needed to handle situations where two or more elements are needed
-///   simultaneously from the same `Accessor` and is an escape hatch for the lifetime in
-///   `Element`.
-///
-///   It is expected to [`Reborrow`] to `ElementRef`.
-///
 /// The below diagram summarizes the relationship.
 ///
 /// ```text
-///           Convert (may allocate)
-///      +----- escapes the borrow -------> Extended -----------+
-///      |         of Element                                   |
-///      |                                                   Reborrow
-///      |                                                      |
-/// Element<'_> ------ Reborrow ----> ElementRef<'_> <----------+
+/// Element<'_> ------ Reborrow ----> ElementRef<'_>
 ///        ~~~~                                 ~~~~
 ///         ^                                    ^
 ///         |                                    |
@@ -433,8 +419,6 @@ where
 /// The need for `ElementRef` arises to allow HRTB bounds to distance computers without
 /// inducing a `'static` bound on `Self`. In traits like [`BuildQueryComputer`], attempting
 /// to use `Element` directly will result in such a requirement on the implementing Accessor.
-///
-/// The associated `Extended` type is really only needed for index construction.
 pub trait Accessor: HasId + Send + Sync {
     /// A generalized reference type used for distance computations.
     ///
@@ -447,21 +431,11 @@ pub trait Accessor: HasId + Send + Sync {
     ///
     /// For distance computations, this should be cheaply convertible via [`Reborrow`] to
     /// `Self::ElementRef`.
-    ///
-    /// To persist for a longer lifetime, it must be convertible via [`Into`] to
-    /// `Self::Extended`.
     type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>>
-        + Into<Self::Extended>
         + Send
         + Sync
     where
         Self: 'a;
-
-    /// A version of `Self::Element` whose lifetime is not restricted to a borrow of `Self`.
-    ///
-    /// This is expected to still [`Reborrow`] to `ElementRef` for use in distance
-    /// computations.
-    type Extended: for<'a> Reborrow<'a, Target = Self::ElementRef<'a>> + Send + Sync;
 
     /// The error (if any) returned by [`Self::get_element`].
     type GetError: ToRanked + std::fmt::Debug + Send + Sync + 'static;
@@ -1102,7 +1076,6 @@ mod tests {
         type Id = u32;
     }
     impl Accessor for FloatAccessor<'_> {
-        type Extended = f32;
         type Element<'a>
             = f32
         where
@@ -1169,7 +1142,6 @@ mod tests {
         type Id = u32;
     }
     impl Accessor for StringAccessor<'_> {
-        type Extended = String;
         type Element<'a>
             = &'a str
         where
@@ -1329,7 +1301,6 @@ mod tests {
     common_test_accessor!(Allocating<'_>);
 
     impl Accessor for Allocating<'_> {
-        type Extended = Box<[u8]>;
         type Element<'a>
             = Box<[u8]>
         where
@@ -1357,7 +1328,6 @@ mod tests {
     common_test_accessor!(Forwarding<'_>);
 
     impl<'provider> Accessor for Forwarding<'provider> {
-        type Extended = &'provider [u8];
         // NOTE: The lifetime of `Element` is `'provider` - not `'a`. This is what makes
         // it a forwarding accessor.
         type Element<'a>
@@ -1402,7 +1372,6 @@ mod tests {
     common_test_accessor!(Wrapping<'_>);
 
     impl Accessor for Wrapping<'_> {
-        type Extended = Box<[u8]>;
         type Element<'a>
             = Wrapped<'a>
         where
@@ -1434,7 +1403,6 @@ mod tests {
     common_test_accessor!(Sharing<'_>);
 
     impl Accessor for Sharing<'_> {
-        type Extended = Box<[u8]>;
         type Element<'a>
             = &'a [u8]
         where

@@ -598,7 +598,6 @@ impl HasId for FullAccessor<'_> {
 }
 
 impl Accessor for FullAccessor<'_> {
-    type Extended = Box<[f32]>;
     type Element<'a>
         = &'a [f32]
     where
@@ -710,7 +709,6 @@ impl HasId for QuantAccessor<'_> {
 }
 
 impl Accessor for QuantAccessor<'_> {
-    type Extended = Vec<u8>;
     type Element<'a>
         = Vec<u8>
     where
@@ -795,7 +793,6 @@ impl HasId for HybridAccessor<'_> {
 }
 
 impl Accessor for HybridAccessor<'_> {
-    type Extended = Hybrid<Vec<f32>, Vec<u8>>;
     type Element<'a>
         = Hybrid<Vec<f32>, Vec<u8>>
     where
@@ -871,8 +868,8 @@ impl workingset::Fill<HybridMap<Vec<f32>, Vec<u8>>> for HybridAccessor<'_> {
         let threshold = 1; // one full vec per fill
         let data = self.provider.data();
         itr.enumerate().for_each(|(i, id)| match map.entry(id) {
-            workingset::Entry::Seeded(_) | workingset::Entry::Occupied(_) => {}
-            workingset::Entry::Vacant(v) => {
+            workingset::map::Entry::Seeded(_) | workingset::map::Entry::Occupied(_) => {}
+            workingset::map::Entry::Vacant(v) => {
                 let element = data.get(&id).unwrap();
                 if i < threshold {
                     v.insert(Hybrid::Full(element.full().to_owned()))
