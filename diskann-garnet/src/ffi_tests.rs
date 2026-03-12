@@ -470,6 +470,30 @@ mod tests {
         }
     }
 
+    /// Helper to insert a vector with a string external ID and FP32 data.
+    unsafe fn insert_f32_vector_str(
+        ctx: &Context,
+        index_ptr: *const c_void,
+        eid: &str,
+        vector: &[f32],
+    ) -> bool {
+        let id_bytes = eid.as_bytes();
+        let vector_bytes: &[u8] = bytemuck::cast_slice(vector);
+        unsafe {
+            insert(
+                ctx.0,
+                index_ptr,
+                id_bytes.as_ptr(),
+                id_bytes.len(),
+                VectorValueType::FP32,
+                vector_bytes.as_ptr(),
+                vector.len(),
+                b"".as_ptr(),
+                0,
+            )
+        }
+    }
+
     /// Helper to run search_vector and parse the output IDs (u32) and distances.
     unsafe fn do_search(
         ctx: &Context,
@@ -621,168 +645,12 @@ mod tests {
         }
     }
 
-    /// Insert 27 vectors in a 3x3x3 grid with string external IDs like "v_0_0_0",
-    /// then run multiple VSIM queries each requesting the 3 nearest neighbors.
-    #[test]
-    fn search_grid_with_string_ids() {
-        let store = Store;
-        store.clear();
-
-        let callbacks = store.callbacks();
-        let ctx = Context(0);
-
-        let dim: u32 = 3;
-        let index_ptr = unsafe {
-            create_index(
-                ctx.0,
-                dim,
-                0,
-                VectorQuantType::NoQuant,
-                Metric::L2 as i32,
-                10,
-                20,
-                callbacks.read_callback(),
-                callbacks.write_callback(),
-                callbacks.delete_callback(),
-                callbacks.rmw_callback(),
-            )
-        };
-        assert!(!index_ptr.is_null());
-
-        // Insert 27 vectors in a 3x3x3 grid with string IDs "v_x_y_z"
-        let mut ids: Vec<String> = Vec::new();
-        let mut vectors: Vec<[f32; 3]> = Vec::new();
-        for x in 0..3u32 {
-            for y in 0..3u32 {
-                for z in 0..3u32 {
-                    let id = format!("v_{x}_{y}_{z}");
-                    let vec = [x as f32, y as f32, z as f32];
-
-                    let id_bytes = id.as_bytes();
-                    let vec_bytes: &[u8] = bytemuck::cast_slice(&vec);
-                    let inserted = unsafe {
-                        insert(
-                            ctx.0,
-                            index_ptr,
-                            id_bytes.as_ptr(),
-                            id_bytes.len(),
-                            VectorValueType::FP32,
-                            vec_bytes.as_ptr(),
-                            vec.len(),
-                            b"".as_ptr(),
-                            0,
-                        )
-                    };
-                    assert!(inserted, "failed to insert {id}");
-
-                    ids.push(id);
-                    vectors.push(vec);
-                }
-            }
-        }
-
-        assert_eq!(unsafe { card(ctx.0, index_ptr) }, 27);
-
-        // Helper to run a search and parse variable-length string IDs from the output buffer.
-        let do_grid_search = |query: &[f32; 3], k: usize| -> (Vec<String>, Vec<f32>) {
-            let query_bytes: &[u8] = bytemuck::cast_slice(query);
-            // Each result: 4 bytes id_len + up to 7 bytes for "v_X_Y_Z"
-            let max_id_size = mem::size_of::<u32>() + 7;
-            let mut output_id_buffer = vec![0u8; k * max_id_size];
-            let mut output_dists = vec![0f32; k];
-
-            let delta = 2.0f32;
-            let search_exploration_factor = 100u32;
-            let bitmap_data = ptr::null();
-            let bitmap_len = 0;
-            let max_filtering_effort = 30;
-
-            let count = unsafe {
-                search_vector(
-                    ctx.0,
-                    index_ptr,
-                    VectorValueType::FP32,
-                    query_bytes.as_ptr(),
-                    query.len(),
-                    delta,
-                    search_exploration_factor,
-                    bitmap_data,
-                    bitmap_len,
-                    max_filtering_effort,
-                    output_id_buffer.as_mut_ptr(),
-                    output_id_buffer.len(),
-                    output_dists.as_mut_ptr(),
-                    output_dists.len(),
-                    ptr::null_mut(),
-                )
-            };
-            assert!(count >= 0, "search failed with {count}");
-            let count = count as usize;
-
-            let mut result_ids = Vec::new();
-            let mut offset = 0;
-            for _ in 0..count {
-                let mut id_len = 0u32;
-                bytemuck::bytes_of_mut(&mut id_len)
-                    .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
-                offset += mem::size_of::<u32>();
-
-                let id_str =
-                    std::str::from_utf8(&output_id_buffer[offset..offset + id_len as usize])
-                        .expect("id should be valid utf8");
-                result_ids.push(id_str.to_string());
-                offset += id_len as usize;
-            }
-
-            output_dists.truncate(count);
-            (result_ids, output_dists)
-        };
-
-        // Query 1: exact match at origin — nearest should be v_0_0_0
-        let (ids1, dists1) = do_grid_search(&[0.0, 0.0, 0.0], 3);
-        assert_eq!(ids1.len(), 3, "expected 3 results");
-        assert_eq!(ids1[0], "v_0_0_0", "closest to origin should be v_0_0_0");
-        assert_eq!(dists1[0], 0.0, "exact match should have distance 0");
-
-        // Query 2: exact match at corner — nearest should be v_2_2_2
-        let (ids2, dists2) = do_grid_search(&[2.0, 2.0, 2.0], 3);
-        assert_eq!(ids2.len(), 3, "expected 3 results");
-        assert_eq!(ids2[0], "v_2_2_2", "closest to (2,2,2) should be v_2_2_2");
-        assert_eq!(dists2[0], 0.0, "exact match should have distance 0");
-
-        // Query 3: center of grid — nearest should be v_1_1_1
-        let (ids3, dists3) = do_grid_search(&[1.0, 1.0, 1.0], 3);
-        assert_eq!(ids3.len(), 3, "expected 3 results");
-        assert_eq!(ids3[0], "v_1_1_1", "closest to center should be v_1_1_1");
-        assert_eq!(dists3[0], 0.0, "exact match should have distance 0");
-        // The next 2 results should all be distance 1.0 (one axis off by 1)
-        for d in &dists3[1..] {
-            assert_eq!(
-                *d, 1.0,
-                "neighbors of center should be at squared L2 distance 1.0"
-            );
-        }
-
-        // Query 4: off-grid point — nearest should be v_0_0_0 at squared distance 0.75
-        let (ids4, dists4) = do_grid_search(&[0.5, 0.5, 0.5], 3);
-        assert_eq!(ids4.len(), 3, "expected 3 results");
-        // All 8 corners {0,1}^3 are equidistant at squared L2 = 3*0.25 = 0.75,
-        // but v_0_0_0 and v_1_1_1 etc. are among them — just check the distance.
-        assert_eq!(
-            dists4[0], 0.75,
-            "nearest to (0.5,0.5,0.5) should be at squared distance 0.75"
-        );
-
-        unsafe {
-            drop_index(ctx.0, index_ptr);
-        }
-    }
-
     // ── Grid sanity-check tests (L2 distance) ──────────────────────────
 
     /// Generates `grid_size ^ dimensions` vectors on an integer grid.
-    /// Returns `(ids, vectors)` where each id is a u32 starting at 1.
-    fn generate_grid_vectors(dimensions: usize, grid_size: usize) -> (Vec<u32>, Vec<Vec<f32>>) {
+    /// Returns `(ids, vectors)` where each id is a descriptive string
+    /// like `"grid_vector_00000001_dim3_at_0_0_0"`.
+    fn generate_grid_vectors(dimensions: usize, grid_size: usize) -> (Vec<String>, Vec<Vec<f32>>) {
         let total = grid_size.pow(dimensions as u32);
         let mut ids = Vec::with_capacity(total);
         let mut vectors = Vec::with_capacity(total);
@@ -790,11 +658,25 @@ mod tests {
         for i in 0..total {
             let mut vec = vec![0.0f32; dimensions];
             let mut pos = i;
+            let mut coords = Vec::with_capacity(dimensions);
             for d in (0..dimensions).rev() {
-                vec[d] = (pos % grid_size) as f32;
+                let coord = pos % grid_size;
+                vec[d] = coord as f32;
+                coords.push(coord);
                 pos /= grid_size;
             }
-            ids.push((i + 1) as u32);
+            coords.reverse();
+            let coord_str: String = coords
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join("_");
+            ids.push(format!(
+                "grid_vector_{:08}_dim{}_at_{}",
+                i + 1,
+                dimensions,
+                coord_str
+            ));
             vectors.push(vec);
         }
 
@@ -803,11 +685,16 @@ mod tests {
 
     /// Brute-force k nearest neighbors using squared L2 distance.
     /// Returns the set of IDs of the k closest vectors.
-    fn brute_force_l2_knn(ids: &[u32], vectors: &[Vec<f32>], query: &[f32], k: usize) -> Vec<u32> {
-        let mut scored: Vec<(u32, f32)> = ids
+    fn brute_force_l2_knn(
+        ids: &[String],
+        vectors: &[Vec<f32>],
+        query: &[f32],
+        k: usize,
+    ) -> Vec<String> {
+        let mut scored: Vec<(&String, f32)> = ids
             .iter()
             .zip(vectors.iter())
-            .map(|(&id, vec)| {
+            .map(|(id, vec)| {
                 let dist: f32 = vec
                     .iter()
                     .zip(query.iter())
@@ -818,7 +705,7 @@ mod tests {
             .collect();
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         scored.truncate(k);
-        scored.into_iter().map(|(id, _)| id).collect()
+        scored.into_iter().map(|(id, _)| id.clone()).collect()
     }
 
     fn squared_l2(a: &[f32], b: &[f32]) -> f32 {
@@ -830,20 +717,23 @@ mod tests {
     /// between brute-force and ANN, but the distance counts must match.
     fn distance_based_intersection(
         vectors: &[Vec<f32>],
-        ids: &[u32],
+        ids: &[String],
         query: &[f32],
-        expected: &[u32],
-        actual: &[u32],
+        expected: &[String],
+        actual: &[String],
     ) -> usize {
         use std::collections::HashMap;
 
-        let id_to_idx: HashMap<u32, usize> =
-            ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
+        let id_to_idx: HashMap<&str, usize> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), i))
+            .collect();
 
-        let count_per_dist = |id_set: &[u32]| -> HashMap<u64, usize> {
+        let count_per_dist = |id_set: &[String]| -> HashMap<u64, usize> {
             let mut counts = HashMap::new();
-            for &id in id_set {
-                let idx = id_to_idx[&id];
+            for id in id_set {
+                let idx = id_to_idx[id.as_str()];
                 let dist = squared_l2(&vectors[idx], query);
                 let key = dist.to_bits() as u64;
                 *counts.entry(key).or_insert(0) += 1;
@@ -861,6 +751,24 @@ mod tests {
             }
         }
         intersection
+    }
+
+    /// Parse variable-length string IDs from a search output buffer.
+    /// Each entry is a `u32` length prefix followed by that many UTF-8 bytes.
+    fn parse_string_ids(output_id_buffer: &[u8], count: usize) -> Vec<String> {
+        let mut result_ids = Vec::with_capacity(count);
+        let mut offset = 0;
+        for _ in 0..count {
+            let mut id_len = 0u32;
+            bytemuck::bytes_of_mut(&mut id_len)
+                .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
+            offset += mem::size_of::<u32>();
+            let id_str = std::str::from_utf8(&output_id_buffer[offset..offset + id_len as usize])
+                .expect("id should be valid utf8");
+            result_ids.push(id_str.to_string());
+            offset += id_len as usize;
+        }
+        result_ids
     }
 
     /// Helper: create an L2 index, insert grid vectors, query each, return recall.
@@ -887,10 +795,11 @@ mod tests {
         assert!(!index_ptr.is_null());
 
         let (ids, vectors) = generate_grid_vectors(dimensions as usize, grid_size);
+        let max_id_len = ids.iter().map(|id| id.len()).max().unwrap_or(0);
 
         for (eid, vec) in ids.iter().zip(vectors.iter()) {
             assert!(
-                unsafe { insert_f32_vector(&ctx, index_ptr, *eid, vec) },
+                unsafe { insert_f32_vector_str(&ctx, index_ptr, eid, vec) },
                 "insert failed for eid={eid}"
             );
         }
@@ -900,7 +809,7 @@ mod tests {
 
         for vec in &vectors {
             let query_bytes: &[u8] = bytemuck::cast_slice(vec);
-            let max_id_size = mem::size_of::<u32>() + mem::size_of::<u32>();
+            let max_id_size = mem::size_of::<u32>() + max_id_len;
             let mut output_id_buffer = vec![0u8; k * max_id_size];
             let mut output_dists = vec![0f32; k];
 
@@ -925,21 +834,7 @@ mod tests {
             };
             assert!(count >= 0, "search failed");
 
-            let count = count as usize;
-            let mut result_ids = Vec::new();
-            let mut offset = 0;
-            for _ in 0..count {
-                let mut id_len = 0u32;
-                bytemuck::bytes_of_mut(&mut id_len)
-                    .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
-                offset += mem::size_of::<u32>();
-                let mut id = 0u32;
-                bytemuck::bytes_of_mut(&mut id)
-                    .copy_from_slice(&output_id_buffer[offset..offset + id_len as usize]);
-                offset += id_len as usize;
-                result_ids.push(id);
-            }
-
+            let result_ids = parse_string_ids(&output_id_buffer, count as usize);
             let expected_ids = brute_force_l2_knn(&ids, &vectors, vec, k);
             let matches =
                 distance_based_intersection(&vectors, &ids, vec, &expected_ids, &result_ids);
@@ -983,13 +878,18 @@ mod tests {
     // ── Circle sanity-check tests (Cosine distance) ────────────────────
 
     /// Generates `point_count` 2D vectors evenly spaced on a circle of the given radius.
-    fn generate_circle_vectors(point_count: usize, radius: f32) -> (Vec<u32>, Vec<Vec<f32>>) {
+    fn generate_circle_vectors(point_count: usize, radius: f32) -> (Vec<String>, Vec<Vec<f32>>) {
         let mut ids = Vec::with_capacity(point_count);
         let mut vectors = Vec::with_capacity(point_count);
 
         for i in 0..point_count {
             let theta = 2.0 * std::f32::consts::PI * (i as f32) / (point_count as f32);
-            ids.push((i + 1) as u32);
+            ids.push(format!(
+                "circle_point_{:08}_r{:.2}_theta{:.6}",
+                i + 1,
+                radius,
+                theta
+            ));
             vectors.push(vec![theta.cos() * radius, theta.sin() * radius]);
         }
 
@@ -998,16 +898,16 @@ mod tests {
 
     /// Brute-force k nearest neighbors using cosine distance = 1 - cos_sim.
     fn brute_force_cosine_knn(
-        ids: &[u32],
+        ids: &[String],
         vectors: &[Vec<f32>],
         query: &[f32],
         k: usize,
-    ) -> Vec<u32> {
+    ) -> Vec<String> {
         let q_norm: f32 = query.iter().map(|x| x * x).sum::<f32>().sqrt();
-        let mut scored: Vec<(u32, f32)> = ids
+        let mut scored: Vec<(&String, f32)> = ids
             .iter()
             .zip(vectors.iter())
-            .map(|(&id, vec)| {
+            .map(|(id, vec)| {
                 let dot: f32 = vec.iter().zip(query.iter()).map(|(a, b)| a * b).sum();
                 let v_norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
                 let cos_sim = if q_norm > 0.0 && v_norm > 0.0 {
@@ -1020,7 +920,7 @@ mod tests {
             .collect();
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         scored.truncate(k);
-        scored.into_iter().map(|(id, _)| id).collect()
+        scored.into_iter().map(|(id, _)| id.clone()).collect()
     }
 
     /// Helper: create a cosine index, insert circle vectors, query each, return recall.
@@ -1048,10 +948,11 @@ mod tests {
         assert!(!index_ptr.is_null());
 
         let (ids, vectors) = generate_circle_vectors(point_count, radius);
+        let max_id_len = ids.iter().map(|id| id.len()).max().unwrap_or(0);
 
         for (eid, vec) in ids.iter().zip(vectors.iter()) {
             assert!(
-                unsafe { insert_f32_vector(&ctx, index_ptr, *eid, vec) },
+                unsafe { insert_f32_vector_str(&ctx, index_ptr, eid, vec) },
                 "insert failed for eid={eid}"
             );
         }
@@ -1061,7 +962,7 @@ mod tests {
 
         for vec in &vectors {
             let query_bytes: &[u8] = bytemuck::cast_slice(vec);
-            let max_id_size = mem::size_of::<u32>() + mem::size_of::<u32>();
+            let max_id_size = mem::size_of::<u32>() + max_id_len;
             let mut output_id_buffer = vec![0u8; k * max_id_size];
             let mut output_dists = vec![0f32; k];
 
@@ -1086,21 +987,7 @@ mod tests {
             };
             assert!(count >= 0, "search failed");
 
-            let count = count as usize;
-            let mut result_ids = Vec::new();
-            let mut offset = 0;
-            for _ in 0..count {
-                let mut id_len = 0u32;
-                bytemuck::bytes_of_mut(&mut id_len)
-                    .copy_from_slice(&output_id_buffer[offset..offset + mem::size_of::<u32>()]);
-                offset += mem::size_of::<u32>();
-                let mut id = 0u32;
-                bytemuck::bytes_of_mut(&mut id)
-                    .copy_from_slice(&output_id_buffer[offset..offset + id_len as usize]);
-                offset += id_len as usize;
-                result_ids.push(id);
-            }
-
+            let result_ids = parse_string_ids(&output_id_buffer, count as usize);
             let expected_ids = brute_force_cosine_knn(&ids, &vectors, vec, k);
             let matches = result_ids
                 .iter()
