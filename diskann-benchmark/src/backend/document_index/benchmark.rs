@@ -50,6 +50,8 @@ use diskann_providers::model::graph::provider::async_::{
     inmem::{CreateFullPrecision, DefaultProvider, DefaultProviderParameters, SetStartPoints},
 };
 use diskann_utils::views::Matrix;
+use diskann_vector::PureDistanceFunction;
+use diskann_vector::distance::SquaredL2;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
@@ -146,105 +148,54 @@ fn hashmap_to_attributes(map: std::collections::HashMap<String, AttributeValue>)
         .collect()
 }
 
-/// Compute the index of the row closest to the medoid (centroid) of the data.
-fn compute_medoid_index<T>(data: &Matrix<T>) -> usize
+fn find_medoid_index<T>(x: MatrixView<'_, T>, y: &[T]) -> Option<usize> 
 where
-    T: bytemuck::Pod + Copy + 'static,
+    for<'a> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'a [T], &'a [T], f32>,
 {
-    use diskann_vector::{distance::SquaredL2, PureDistanceFunction};
-
-    let dim = data.ncols();
-    if dim == 0 || data.nrows() == 0 {
-        return 0;
-    }
-
-    // Compute the centroid (mean of all rows) as f64 for precision
-    let mut sum = vec![0.0f64; dim];
-    for i in 0..data.nrows() {
-        let row = data.row(i);
-        for (j, &v) in row.iter().enumerate() {
-            // Convert T to f64 for summation using bytemuck
-            let f64_val: f64 = if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>() {
-                let f32_val: f32 = bytemuck::cast(v);
-                f32_val as f64
-            } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-                let u8_val: u8 = bytemuck::cast(v);
-                u8_val as f64
-            } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<i8>() {
-                let i8_val: i8 = bytemuck::cast(v);
-                i8_val as f64
-            } else {
-                0.0
-            };
-            sum[j] += f64_val;
+    let mut min_dist = f32::INFINITY;
+    let mut min_ind = x.nrows();
+    for (i, row) in x.row_iter().enumerate() {
+        let dist = SquaredL2::evaluate(row, y);
+        if dist < min_dist {
+            min_dist = dist;
+            min_ind = i;
         }
     }
 
-    // Convert centroid to f32 and compute distances
-    let centroid_f32: Vec<f32> = sum
-        .iter()
-        .map(|s| (s / data.nrows() as f64) as f32)
-        .collect();
-
-    // Find the row closest to the centroid
-    let mut min_dist = f32::MAX;
-    let mut medoid_idx = 0;
-    for i in 0..data.nrows() {
-        let row = data.row(i);
-        let row_f32: Vec<f32> = row
-            .iter()
-            .map(|&v| {
-                if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>() {
-                    bytemuck::cast(v)
-                } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-                    let u8_val: u8 = bytemuck::cast(v);
-                    u8_val as f32
-                } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<i8>() {
-                    let i8_val: i8 = bytemuck::cast(v);
-                    i8_val as f32
-                } else {
-                    0.0
-                }
-            })
-            .collect();
-        let d = SquaredL2::evaluate(centroid_f32.as_slice(), row_f32.as_slice());
-        if d < min_dist {
-            min_dist = d;
-            medoid_idx = i;
-        }
+    // No closest neighbor found.
+    if min_ind == x.nrows() {
+        None
+    } else {
+        Some(min_ind)
     }
-
-    medoid_idx
 }
 
-impl<'a> DocumentIndexJob<'a> {
-    fn run(
-        self,
-        _checkpoint: Checkpoint<'_>,
-        mut output: &mut dyn Output,
-    ) -> Result<DocumentIndexStats, anyhow::Error> {
-        // Print the input description
-        writeln!(output, "{}", self.input)?;
-
-        let build = &self.input.build;
-
-        // Dispatch based on data type - retain original type without conversion
-        match build.data_type {
-            DataType::Float32 => self.run_typed::<f32>(output),
-            DataType::UInt8 => self.run_typed::<u8>(output),
-            DataType::Int8 => self.run_typed::<i8>(output),
-            _ => Err(anyhow::anyhow!(
-                "Unsupported data type: {:?}. Supported types: float32, uint8, int8.",
-                build.data_type
-            )),
-        }
+/// Compute the index of the row closest to the medoid (centroid) of the data.
+fn compute_medoid_index<T>(data: &Matrix<T>) -> anyhow::Result<usize>
+where
+    T: bytemuck::Pod + Copy + 'static + ComputeMedoid,
+    for<'a> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'a [T], &'a [T], f32>,
+{
+    let dim = data.ncols();
+    if dim == 0 || data.nrows() == 0 {
+        return Ok(0);
     }
 
-    fn run_typed<T>(self, mut output: &mut dyn Output) -> Result<DocumentIndexStats, anyhow::Error>
+    // returns row closes to centroid.
+    let medoid = T::compute_medoid(data.as_view());
+
+    find_medoid_index(data.as_view(), medoid.as_slice())
+        .ok_or_else(|| anyhow::anyhow!("Failed to find medoid index: no closest row found"))
+}
+
+impl<'a, T> DocumentIndexJob<'a, T> {
+    fn run(self, mut output: &mut dyn Output) -> Result<DocumentIndexStats, anyhow::Error>
     where
-        T: bytemuck::Pod + Copy + Send + Sync + 'static + std::fmt::Debug,
-        T: diskann::graph::SampleableForStart + diskann_utils::future::AsyncFriendly,
-        T: diskann::utils::VectorRepr + diskann_utils::sampling::WithApproximateNorm,
+        T: diskann::utils::VectorRepr
+            + diskann::graph::SampleableForStart
+            + diskann_utils::sampling::WithApproximateNorm
+            + 'static,
+        for<'b> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'b [T], &'b [T]>
     {
         let build = &self.input.build;
 
@@ -326,7 +277,7 @@ impl<'a> DocumentIndexJob<'a> {
 
         // Store attributes for the start point (medoid)
         // Start points are stored at indices num_vectors..num_vectors+frozen_points
-        let medoid_idx = compute_medoid_index(&data);
+        let medoid_idx = compute_medoid_index(&data)?;
         let start_point_id = num_vectors as u32; // Start points begin at max_points
         let medoid_attrs = attributes.get(medoid_idx).cloned().unwrap_or_default();
         use diskann_label_filter::traits::attribute_store::AttributeStore;
