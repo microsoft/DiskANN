@@ -6,7 +6,8 @@
 mod tests {
     use std::{collections::HashMap, ffi::c_void, mem, ptr};
 
-    use diskann_vector::distance::Metric;
+    use diskann_vector::PureDistanceFunction;
+    use diskann_vector::distance::{Cosine, Metric, SquaredL2};
 
     use crate::{
         VectorQuantType, VectorValueType, create_index, drop_index, garnet::Context, insert,
@@ -37,31 +38,13 @@ mod tests {
         }
     }
 
-    fn squared_l2(a: &[f32], b: &[f32]) -> f32 {
-        let mut sum = 0.0f32;
-        for i in 0..a.len() {
-            let diff = a[i] - b[i];
-            sum += diff * diff;
-        }
-        sum
-    }
-
-    fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
-        let mut dot = 0.0f32;
-        let mut a_norm_sq = 0.0f32;
-        let mut b_norm_sq = 0.0f32;
-        for i in 0..a.len() {
-            dot += a[i] * b[i];
-            a_norm_sq += a[i] * a[i];
-            b_norm_sq += b[i] * b[i];
-        }
-        let a_norm = a_norm_sq.sqrt();
-        let b_norm = b_norm_sq.sqrt();
-        if a_norm > 0.0 && b_norm > 0.0 {
-            1.0 - dot / (a_norm * b_norm)
-        } else {
-            1.0
-        }
+    /// Wraps a `PureDistanceFunction` into a plain `fn` pointer so it can be
+    /// passed to helpers that accept `fn(&[f32], &[f32]) -> f32`.
+    fn distance_fn<T>(a: &[f32], b: &[f32]) -> f32
+    where
+        T: for<'a, 'b> PureDistanceFunction<&'a [f32], &'b [f32], f32>,
+    {
+        T::evaluate(a, b)
     }
 
     /// Brute-force k nearest neighbors. Returns the IDs of the k closest
@@ -286,7 +269,15 @@ mod tests {
     /// Helper: create an L2 index, insert grid vectors, query each, return recall.
     fn run_grid_recall(store: &Store, dimensions: u32, grid_size: usize, k: usize) -> f64 {
         let (ids, vectors) = generate_grid_vectors(dimensions as usize, grid_size);
-        run_recall(store, dimensions, Metric::L2, &ids, &vectors, k, squared_l2)
+        run_recall(
+            store,
+            dimensions,
+            Metric::L2,
+            &ids,
+            &vectors,
+            k,
+            distance_fn::<SquaredL2>,
+        )
     }
 
     #[test]
@@ -341,7 +332,15 @@ mod tests {
     /// Helper: create a cosine index, insert circle vectors, query each, return recall.
     fn run_circle_recall(store: &Store, point_count: usize, radius: f32, k: usize) -> f64 {
         let (ids, vectors) = generate_circle_vectors(point_count, radius);
-        run_recall(store, 2, Metric::Cosine, &ids, &vectors, k, cosine_distance)
+        run_recall(
+            store,
+            2,
+            Metric::Cosine,
+            &ids,
+            &vectors,
+            k,
+            distance_fn::<Cosine>,
+        )
     }
 
     /// Circle with 100 points, radius=1.0, cosine distance, k=5
