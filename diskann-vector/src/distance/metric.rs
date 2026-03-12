@@ -42,10 +42,10 @@ impl TryFrom<i32> for Metric {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(Metric::Cosine),
-            1 => Ok(Metric::InnerProduct),
-            2 => Ok(Metric::L2),
-            3 => Ok(Metric::CosineNormalized),
+            x if x == Metric::Cosine.into() => Ok(Metric::Cosine),
+            x if x == Metric::InnerProduct.into() => Ok(Metric::InnerProduct),
+            x if x == Metric::L2.into() => Ok(Metric::L2),
+            x if x == Metric::CosineNormalized.into() => Ok(Metric::CosineNormalized),
             _ => Err(TryFromMetricError(value)),
         }
     }
