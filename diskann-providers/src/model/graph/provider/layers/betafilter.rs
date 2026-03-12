@@ -144,16 +144,16 @@ where
     }
 }
 
-/// [`HasDefaultProcessor`] delegation for [`BetaFilter`]. The processor is composed by
+/// [`DelegateDefaultPostProcessor`] delegation for [`BetaFilter`]. The processor is composed by
 /// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
-impl<Provider, Strategy, T, I, O> glue::HasDefaultProcessor<Provider, T, O>
+impl<Provider, Strategy, T, I, O> glue::DelegateDefaultPostProcessor<Provider, T, O>
     for BetaFilter<Strategy, I>
 where
     T: ?Sized,
     I: VectorId,
     O: Send,
     Provider: DataProvider<InternalId = I>,
-    Strategy: glue::HasDefaultProcessor<Provider, T, O>,
+    Strategy: glue::DelegateDefaultPostProcessor<Provider, T, O>,
 {
     type Processor = glue::Pipeline<Unwrap, Strategy::Processor>;
 
@@ -559,7 +559,7 @@ mod tests {
         }
     }
 
-    impl glue::HasDefaultProcessor<SimpleProvider, u64> for SimpleStrategy {
+    impl glue::DelegateDefaultPostProcessor<SimpleProvider, u64> for SimpleStrategy {
         diskann::delegate_default_post_process!(CopyIds);
     }
 

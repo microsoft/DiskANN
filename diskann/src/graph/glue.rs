@@ -339,7 +339,7 @@ where
 /// [`super::search::Knn`]) bounds on.
 ///
 /// The blanket impl covers `P = DefaultPostProcess` for any strategy implementing
-/// [`HasDefaultProcessor`]. Custom processor types (e.g. `DeterminantDiversitySearchParams`) can have
+/// [`DelegateDefaultPostProcessor`]. Custom processor types (e.g. `DeterminantDiversitySearchParams`) can have
 /// their own `PostProcess` impls without coherence conflicts.
 pub trait PostProcess<Provider, T, P, O = <Provider as DataProvider>::InternalId>:
     SearchStrategy<Provider, T, O>
@@ -369,8 +369,8 @@ where
 ///
 /// Strategies implementing this trait work with [`super::search::Knn`] (no explicit
 /// processor). The old `SearchStrategy::PostProcessor` associated type is replaced by
-/// `HasDefaultProcessor::Processor`.
-pub trait HasDefaultProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
+/// `DelegateDefaultPostProcessor::Processor`.
+pub trait DelegateDefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
     SearchStrategy<Provider, T, O>
 where
     Provider: DataProvider,
@@ -386,7 +386,7 @@ where
 
 /// Aggregate trait for strategies that support both search access and a default post-processor.
 pub trait DefaultSearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T, O> + HasDefaultProcessor<Provider, T, O>
+    SearchStrategy<Provider, T, O> + DelegateDefaultPostProcessor<Provider, T, O>
 where
     Provider: DataProvider,
     T: ?Sized,
@@ -396,20 +396,20 @@ where
 
 impl<S, Provider, T, O> DefaultSearchStrategy<Provider, T, O> for S
 where
-    S: SearchStrategy<Provider, T, O> + HasDefaultProcessor<Provider, T, O>,
+    S: SearchStrategy<Provider, T, O> + DelegateDefaultPostProcessor<Provider, T, O>,
     Provider: DataProvider,
     T: ?Sized,
     O: Send,
 {
 }
 
-/// Convenience macro for implementing [`HasDefaultProcessor`] when the processor
+/// Convenience macro for implementing [`DelegateDefaultPostProcessor`] when the processor
 /// is a [`Default`]-constructible type.
 ///
 /// # Example
 ///
 /// ```ignore
-/// impl HasDefaultProcessor<MyProvider, [f32]> for MyStrategy {
+/// impl DelegateDefaultPostProcessor<MyProvider, [f32]> for MyStrategy {
 ///     delegate_default_post_process!(CopyIds);
 /// }
 /// ```
@@ -433,7 +433,7 @@ pub struct DefaultPostProcess;
 
 impl<S, Provider, T, O> PostProcess<Provider, T, DefaultPostProcess, O> for S
 where
-    S: HasDefaultProcessor<Provider, T, O>,
+    S: DelegateDefaultPostProcessor<Provider, T, O>,
     Provider: DataProvider,
     T: ?Sized + Sync,
     O: Send,
@@ -1158,7 +1158,7 @@ mod tests {
         }
     }
 
-    impl HasDefaultProcessor<SimpleProvider, f32> for Strategy {
+    impl DelegateDefaultPostProcessor<SimpleProvider, f32> for Strategy {
         delegate_default_post_process!(CopyIds);
     }
 

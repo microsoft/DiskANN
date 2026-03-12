@@ -9,8 +9,8 @@ use diskann::delegate_default_post_process;
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
-        self, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor, InplaceDeleteStrategy,
-        InsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
+        self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints,
+        InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -484,7 +484,7 @@ where
     }
 }
 
-impl<T, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]>
+impl<T, D, Ctx> DelegateDefaultPostProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]>
     for Internal<Hybrid>
 where
     T: VectorRepr,
@@ -517,7 +517,8 @@ where
     }
 }
 
-impl<T, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
+impl<T, D, Ctx> DelegateDefaultPostProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]>
+    for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -638,7 +639,7 @@ where
     }
 }
 
-impl<T, D, Ctx> HasDefaultProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]>
+impl<T, D, Ctx> DelegateDefaultPostProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]>
     for Quantized
 where
     T: VectorRepr,

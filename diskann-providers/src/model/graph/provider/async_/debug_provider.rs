@@ -17,7 +17,7 @@ use diskann::{
     graph::{
         AdjacencyList,
         glue::{
-            AsElement, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor,
+            AsElement, DelegateDefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints,
             InplaceDeleteStrategy, InsertStrategy, Pipeline, PruneStrategy, SearchExt,
             SearchStrategy,
         },
@@ -902,7 +902,7 @@ impl SearchStrategy<DebugProvider, [f32]> for Internal<FullPrecision> {
     }
 }
 
-impl HasDefaultProcessor<DebugProvider, [f32]> for Internal<FullPrecision> {
+impl DelegateDefaultPostProcessor<DebugProvider, [f32]> for Internal<FullPrecision> {
     delegate_default_post_process!(postprocess::RemoveDeletedIdsAndCopy);
 }
 
@@ -920,7 +920,7 @@ impl SearchStrategy<DebugProvider, [f32]> for FullPrecision {
     }
 }
 
-impl HasDefaultProcessor<DebugProvider, [f32]> for FullPrecision {
+impl DelegateDefaultPostProcessor<DebugProvider, [f32]> for FullPrecision {
     delegate_default_post_process!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 
@@ -938,7 +938,7 @@ impl SearchStrategy<DebugProvider, [f32]> for Internal<Quantized> {
     }
 }
 
-impl HasDefaultProcessor<DebugProvider, [f32]> for Internal<Quantized> {
+impl DelegateDefaultPostProcessor<DebugProvider, [f32]> for Internal<Quantized> {
     delegate_default_post_process!(postprocess::RemoveDeletedIdsAndCopy);
 }
 
@@ -956,7 +956,7 @@ impl SearchStrategy<DebugProvider, [f32]> for Quantized {
     }
 }
 
-impl HasDefaultProcessor<DebugProvider, [f32]> for Quantized {
+impl DelegateDefaultPostProcessor<DebugProvider, [f32]> for Quantized {
     delegate_default_post_process!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 

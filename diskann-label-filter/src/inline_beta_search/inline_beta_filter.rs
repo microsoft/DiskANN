@@ -61,16 +61,16 @@ where
     }
 }
 
-/// [`HasDefaultProcessor`] delegation for [`InlineBetaStrategy`]. The processor wraps
+/// [`DelegateDefaultPostProcessor`] delegation for [`InlineBetaStrategy`]. The processor wraps
 /// the inner strategy's default processor with [`FilterResults`].
 impl<DP, Strategy, Q>
-    diskann::graph::glue::HasDefaultProcessor<
+    diskann::graph::glue::DelegateDefaultPostProcessor<
         DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
         FilteredQuery<Q>,
     > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
-    Strategy: diskann::graph::glue::HasDefaultProcessor<DP, Q>,
+    Strategy: diskann::graph::glue::DelegateDefaultPostProcessor<DP, Q>,
     Q: AsyncFriendly + Clone,
 {
     type Processor = FilterResults<Strategy::Processor>;

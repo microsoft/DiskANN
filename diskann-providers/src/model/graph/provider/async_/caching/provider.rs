@@ -980,13 +980,13 @@ where
     }
 }
 
-/// [`HasDefaultProcessor`] delegation for [`Cached`]. The processor is composed by
+/// [`DelegateDefaultPostProcessor`] delegation for [`Cached`]. The processor is composed by
 /// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
-impl<DP, C, T, S, E> glue::HasDefaultProcessor<CachingProvider<DP, C>, T> for Cached<S>
+impl<DP, C, T, S, E> glue::DelegateDefaultPostProcessor<CachingProvider<DP, C>, T> for Cached<S>
 where
     T: ?Sized,
     DP: DataProvider,
-    S: glue::HasDefaultProcessor<DP, T>
+    S: glue::DelegateDefaultPostProcessor<DP, T>
         + for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>,
     C: for<'a> AsCacheAccessorFor<
             'a,
@@ -1076,7 +1076,7 @@ where
     S: InplaceDeleteStrategy<DP>,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
     for<'a> Cached<S::SearchStrategy>:
-        glue::HasDefaultProcessor<CachingProvider<DP, C>, S::DeleteElement<'a>>,
+        glue::DelegateDefaultPostProcessor<CachingProvider<DP, C>, S::DeleteElement<'a>>,
     C: AsyncFriendly,
 {
     type DeleteElement<'a> = S::DeleteElement<'a>;

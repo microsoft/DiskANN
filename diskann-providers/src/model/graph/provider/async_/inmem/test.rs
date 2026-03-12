@@ -10,7 +10,7 @@ use diskann::{
     ANNError, ANNResult,
     error::{RankedError, ToRanked, TransientError},
     graph::glue::{
-        AsElement, CopyIds, ExpandBeam, FillSet, HasDefaultProcessor, InsertStrategy,
+        AsElement, CopyIds, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InsertStrategy,
         PruneStrategy, SearchExt, SearchStrategy,
     },
     neighbor::Neighbor,
@@ -251,7 +251,7 @@ impl SearchStrategy<TestProvider, [f32]> for Flaky {
     }
 }
 
-impl HasDefaultProcessor<TestProvider, [f32]> for Flaky {
+impl DelegateDefaultPostProcessor<TestProvider, [f32]> for Flaky {
     delegate_default_post_process!(CopyIds);
 }
 

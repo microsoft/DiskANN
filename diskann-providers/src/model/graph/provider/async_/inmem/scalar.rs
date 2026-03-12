@@ -10,7 +10,7 @@ use diskann::delegate_default_post_process;
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
-        self, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor, InsertStrategy,
+        self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy,
         PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
@@ -624,7 +624,8 @@ where
 }
 
 impl<const NBITS: usize, D, Ctx, T>
-    HasDefaultProcessor<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    DelegateDefaultPostProcessor<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, [T]>
+    for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -661,7 +662,8 @@ where
 }
 
 impl<const NBITS: usize, D, Ctx, T>
-    HasDefaultProcessor<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    DelegateDefaultPostProcessor<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, [T]>
+    for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,

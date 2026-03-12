@@ -964,7 +964,7 @@ impl glue::SearchStrategy<Provider, [f32]> for Strategy {
     }
 }
 
-impl glue::HasDefaultProcessor<Provider, [f32]> for Strategy {
+impl glue::DelegateDefaultPostProcessor<Provider, [f32]> for Strategy {
     delegate_default_post_process!(glue::CopyIds);
 }
 

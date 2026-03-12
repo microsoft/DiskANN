@@ -2229,7 +2229,7 @@ where
     where
         T: ?Sized,
         S: SearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>
-            + glue::HasDefaultProcessor<DP, T, O>,
+            + glue::DelegateDefaultPostProcessor<DP, T, O>,
         I: Iterator<Item = <DP as DataProvider>::InternalId>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,

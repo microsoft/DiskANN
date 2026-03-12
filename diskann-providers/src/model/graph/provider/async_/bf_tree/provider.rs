@@ -22,8 +22,8 @@ use diskann::{
     graph::{
         AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
-            PruneStrategy, SearchExt, SearchStrategy,
+            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy,
+            InsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -1486,7 +1486,7 @@ where
     }
 }
 
-impl<T, Q, D> HasDefaultProcessor<BfTreeProvider<T, Q, D>, [T]> for Internal<FullPrecision>
+impl<T, Q, D> DelegateDefaultPostProcessor<BfTreeProvider<T, Q, D>, [T]> for Internal<FullPrecision>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1517,7 +1517,7 @@ where
     }
 }
 
-impl<T, Q, D> HasDefaultProcessor<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
+impl<T, Q, D> DelegateDefaultPostProcessor<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -1599,7 +1599,8 @@ where
     }
 }
 
-impl<T, D> HasDefaultProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Internal<Hybrid>
+impl<T, D> DelegateDefaultPostProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]>
+    for Internal<Hybrid>
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -1629,7 +1630,7 @@ where
     }
 }
 
-impl<T, D> HasDefaultProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
+impl<T, D> DelegateDefaultPostProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,

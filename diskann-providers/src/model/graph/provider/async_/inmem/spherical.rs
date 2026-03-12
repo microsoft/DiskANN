@@ -12,7 +12,7 @@ use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::glue::{
-        self, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor, InsertStrategy,
+        self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy,
         PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
@@ -572,7 +572,7 @@ where
     }
 }
 
-impl<D, Ctx, T> HasDefaultProcessor<FullPrecisionProvider<T, SphericalStore, D, Ctx>, [T]>
+impl<D, Ctx, T> DelegateDefaultPostProcessor<FullPrecisionProvider<T, SphericalStore, D, Ctx>, [T]>
     for Quantized
 where
     T: VectorRepr,
@@ -605,7 +605,7 @@ where
     }
 }
 
-impl<D, Ctx, T> HasDefaultProcessor<DefaultProvider<NoStore, SphericalStore, D, Ctx>, [T]>
+impl<D, Ctx, T> DelegateDefaultPostProcessor<DefaultProvider<NoStore, SphericalStore, D, Ctx>, [T]>
     for Quantized
 where
     T: VectorRepr,

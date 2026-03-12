@@ -12,7 +12,7 @@ use diskann::{
     graph::{
         SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor,
+            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints,
             InplaceDeleteStrategy, InsertStrategy, PostProcess, PruneStrategy, SearchExt,
             SearchStrategy,
         },
@@ -460,7 +460,8 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
+impl<T, Q, D, Ctx> DelegateDefaultPostProcessor<FullPrecisionProvider<T, Q, D, Ctx>, [T]>
+    for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
