@@ -10,6 +10,7 @@
 #include "parameters.h"
 #include "percentile_stats.h"
 #include "pq.h"
+#include "fixed_chunk_pq_table.h"
 #include "utils.h"
 #include "windows_customizations.h"
 #include "scratch.h"

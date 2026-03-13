@@ -650,7 +650,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
                                                   .build();
         using TagT = uint32_t;
         diskann::Index<T, TagT, LabelT> _index(compareMetric, base_dim, base_num,
-                                               std::make_shared<diskann::IndexWriteParameters>(paras), nullptr,
+                                               std::make_shared<diskann::IndexWriteParameters>(paras), nullptr, "",
                                                defaults::NUM_FROZEN_POINTS_STATIC, false, false, false,
                                                build_pq_bytes > 0, build_pq_bytes, use_opq, use_filters);
         if (!use_filters)
@@ -721,7 +721,7 @@ int build_merged_vamana_index(std::string base_file, diskann::Metric compareMetr
         get_bin_metadata(shard_base_file, shard_base_pts, shard_base_dim);
 
         diskann::Index<T> _index(compareMetric, shard_base_dim, shard_base_pts,
-                                 std::make_shared<diskann::IndexWriteParameters>(low_degree_params), nullptr,
+                                 std::make_shared<diskann::IndexWriteParameters>(low_degree_params), nullptr, "",
                                  defaults::NUM_FROZEN_POINTS_STATIC, false, false, false, build_pq_bytes > 0,
                                  build_pq_bytes, use_opq);
         if (!use_filters)
