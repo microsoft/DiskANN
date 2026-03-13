@@ -41,32 +41,6 @@ pub(crate) fn run<I>(
     })
 }
 
-pub(crate) fn run_determinant_diversity<I>(
-    runner: &dyn DeterminantDiversityKnn<I>,
-    groundtruth: &dyn benchmark_core::recall::Rows<I>,
-    steps: SearchSteps<'_>,
-    eta: f64,
-    power: f64,
-    results_k: Option<usize>,
-) -> anyhow::Result<Vec<SearchResults>> {
-    run_search_determinant_diversity(runner, groundtruth, steps, |setup, search_l, search_n| {
-        let base = diskann::graph::search::Knn::new(search_n, search_l, None).unwrap();
-        let processor =
-                diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams::new(
-                    results_k.unwrap_or(search_n),
-                    eta,
-                    power,
-                ).map_err(|e| anyhow::anyhow!("Invalid determinant-diversity parameters: {}", e))?;
-
-        let search_params =
-            diskann_benchmark_core::search::graph::determinant_diversity::Parameters {
-                inner: base,
-                processor,
-            };
-        Ok(core_search::Run::new(search_params, setup))
-    })
-}
-
 type Run = core_search::Run<diskann::graph::search::Knn>;
 pub(crate) trait Knn<I> {
     fn search_all(
@@ -78,14 +52,15 @@ pub(crate) trait Knn<I> {
     ) -> anyhow::Result<Vec<SearchResults>>;
 }
 
-type DeterminantRun =
-    core_search::Run<diskann_benchmark_core::search::graph::determinant_diversity::Parameters>;
 
-/// Generic search infrastructure that unifies `run()` and `run_determinant_diversity()`.
+///////////
+// Impls //
+///////////
+
+/// Generic search infrastructure.
 ///
 /// This helper extracts the common loop logic (iterating over threads and runs,
 /// and building a setup) leaving parameter construction to a builder closure.
-/// This collapses the benchmark helper infrastructure and reduces duplication.
 fn run_search<I, F>(
     runner: &dyn Knn<I>,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
@@ -116,57 +91,6 @@ where
     }
 
     Ok(all)
-}
-
-/// Generic search infrastructure for determinant-diversity searches.
-///
-/// Mirrors the unified logic of `run_search()` but for the DeterminantDiversityKnn trait.
-fn run_search_determinant_diversity<I, F>(
-    runner: &dyn DeterminantDiversityKnn<I>,
-    groundtruth: &dyn benchmark_core::recall::Rows<I>,
-    steps: SearchSteps<'_>,
-    builder: F,
-) -> anyhow::Result<Vec<SearchResults>>
-where
-    F: Fn(
-        core_search::Setup,
-        usize,
-        usize,
-    ) -> anyhow::Result<
-        core_search::Run<diskann_benchmark_core::search::graph::determinant_diversity::Parameters>,
-    >,
-{
-    let mut all = Vec::new();
-
-    for threads in steps.num_tasks.iter() {
-        for run in steps.runs.iter() {
-            let setup = core_search::Setup {
-                threads: *threads,
-                tasks: *threads,
-                reps: steps.reps,
-            };
-
-            let parameters: Vec<_> = run
-                .search_l
-                .iter()
-                .map(|&search_l| builder(setup.clone(), search_l, run.search_n))
-                .collect::<anyhow::Result<Vec<_>>>()?;
-
-            all.extend(runner.search_all(parameters, groundtruth, run.recall_k, run.search_n)?);
-        }
-    }
-
-    Ok(all)
-}
-
-pub(crate) trait DeterminantDiversityKnn<I> {
-    fn search_all(
-        &self,
-        parameters: Vec<DeterminantRun>,
-        groundtruth: &dyn benchmark_core::recall::Rows<I>,
-        recall_k: usize,
-        recall_n: usize,
-    ) -> anyhow::Result<Vec<SearchResults>>;
 }
 
 ///////////
@@ -225,40 +149,4 @@ where
     }
 }
 
-impl<DP, T, S> DeterminantDiversityKnn<DP::InternalId>
-    for Arc<core_search::graph::determinant_diversity::KNN<DP, T, S>>
-where
-    DP: diskann::provider::DataProvider,
-    core_search::graph::determinant_diversity::KNN<DP, T, S>: core_search::Search<
-        Id = DP::InternalId,
-        Parameters = diskann_benchmark_core::search::graph::determinant_diversity::Parameters,
-        Output = core_search::graph::knn::Metrics,
-    >,
-{
-    fn search_all(
-        &self,
-        parameters: Vec<
-            core_search::Run<
-                diskann_benchmark_core::search::graph::determinant_diversity::Parameters,
-            >,
-        >,
-        groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
-        recall_k: usize,
-        recall_n: usize,
-    ) -> anyhow::Result<Vec<SearchResults>> {
-        let results = core_search::search_all(
-            self.clone(),
-            parameters.into_iter(),
-            core_search::graph::determinant_diversity::Aggregator::new(
-                groundtruth,
-                recall_k,
-                recall_n,
-            ),
-        )?;
 
-        Ok(results
-            .into_iter()
-            .map(SearchResults::new_determinant_diversity)
-            .collect())
-    }
-}

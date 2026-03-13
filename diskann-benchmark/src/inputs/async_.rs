@@ -123,9 +123,6 @@ pub(crate) struct TopkSearchPhase {
     pub(crate) queries: InputFile,
     pub(crate) groundtruth: InputFile,
     pub(crate) reps: NonZeroUsize,
-    pub(crate) determinant_diversity_eta: Option<f64>,
-    pub(crate) determinant_diversity_power: Option<f64>,
-    pub(crate) determinant_diversity_results_k: Option<usize>,
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
@@ -140,36 +137,6 @@ impl CheckDeserialization for TopkSearchPhase {
         for (i, run) in self.runs.iter_mut().enumerate() {
             run.check_deserialization(checker)
                 .with_context(|| format!("search run {}", i))?;
-        }
-
-        if self.determinant_diversity_eta.is_some() != self.determinant_diversity_power.is_some() {
-            return Err(anyhow!(
-                "determinant_diversity_eta and determinant_diversity_power must either both be set or both be omitted"
-            ));
-        }
-
-        if let Some(eta) = self.determinant_diversity_eta {
-            if eta < 0.0 {
-                return Err(anyhow!(
-                    "determinant_diversity_eta must be >= 0.0, got {}",
-                    eta
-                ));
-            }
-        }
-
-        if let Some(power) = self.determinant_diversity_power {
-            if power < 0.0 {
-                return Err(anyhow!(
-                    "determinant_diversity_power must be >= 0.0, got {}",
-                    power
-                ));
-            }
-        }
-
-        if let Some(k) = self.determinant_diversity_results_k {
-            if k == 0 {
-                return Err(anyhow!("determinant_diversity_results_k must be > 0"));
-            }
         }
 
         Ok(())
@@ -197,9 +164,6 @@ impl Example for TopkSearchPhase {
             queries: InputFile::new("path/to/queries"),
             groundtruth: InputFile::new("path/to/groundtruth"),
             reps: REPS,
-            determinant_diversity_eta: None,
-            determinant_diversity_power: None,
-            determinant_diversity_results_k: None,
             num_threads: THREAD_COUNTS.to_vec(),
             runs,
         }

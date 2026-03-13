@@ -44,8 +44,3 @@ pub mod caching;
 #[cfg(test)]
 pub mod debug_provider;
 
-// Determinant-diversity post-processing.
-pub mod determinant_diversity_post_process;
-pub use determinant_diversity_post_process::{
-    DeterminantDiversitySearchParams, determinant_diversity_post_process,
-};

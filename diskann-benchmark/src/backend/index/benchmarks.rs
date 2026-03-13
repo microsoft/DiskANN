@@ -22,7 +22,6 @@ use diskann_benchmark_runner::{
     utils::datatype,
     Any, Checkpoint,
 };
-use diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams;
 use diskann_providers::{
     index::diskann_async,
     model::{configuration::IndexConfiguration, graph::provider::async_::common},
@@ -497,67 +496,6 @@ where
     }
 }
 
-pub(super) fn run_search_outer_full_precision<T, S, DP>(
-    input: &SearchPhase,
-    search_strategy: S,
-    index: Index<DP>,
-    build_stats: Option<BuildStats>,
-    checkpoint: Checkpoint<'_>,
-) -> anyhow::Result<BuildResult>
-where
-    DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
-        + provider::SetElement<[T]>,
-    T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    S: glue::SearchStrategy<DP, [T]>
-        + glue::DelegateDefaultPostProcessor<DP, [T]>
-        + glue::PostProcess<DP, [T], DeterminantDiversitySearchParams>
-        + Clone
-        + AsyncFriendly,
-{
-    if let SearchPhase::Topk(search_phase) = input {
-        if let (Some(eta), Some(power)) = (
-            search_phase.determinant_diversity_eta,
-            search_phase.determinant_diversity_power,
-        ) {
-            let mut result = BuildResult::new_topk(build_stats);
-            checkpoint.checkpoint(&result)?;
-
-            let queries: Arc<Matrix<T>> = Arc::new(datafiles::load_dataset(datafiles::BinFile(
-                &search_phase.queries,
-            ))?);
-
-            let groundtruth =
-                datafiles::load_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
-
-            let knn = benchmark_core::search::graph::determinant_diversity::KNN::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-            )?;
-
-            let steps = search::knn::SearchSteps::new(
-                search_phase.reps,
-                &search_phase.num_threads,
-                &search_phase.runs,
-            );
-
-            let search_results = search::knn::run_determinant_diversity(
-                &knn,
-                &groundtruth,
-                steps,
-                eta,
-                power,
-                search_phase.determinant_diversity_results_k,
-            )?;
-
-            result.append(AggregatedSearchResults::Topk(search_results));
-            return Ok(result);
-        }
-    }
-
-    run_search_outer(input, search_strategy, index, build_stats, checkpoint)
-}
-
 macro_rules! impl_build {
     ($T:ty) => {
         impl<'a> BuildAndSearch<'a> for FullPrecision<'a, $T> {
@@ -609,7 +547,7 @@ macro_rules! impl_build {
                     }
                 };
 
-                let result = run_search_outer_full_precision(
+                let result = run_search_outer(
                     &self.input.search_phase,
                     common::FullPrecision,
                     index,

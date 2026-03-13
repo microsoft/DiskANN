@@ -19,7 +19,6 @@ use diskann_disk::{
     storage::disk_index_reader::DiskIndexReader,
     utils::{instrumentation::PerfLogger, statistics, AlignedFileReaderFactory, QueryStatistics},
 };
-use diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     storage::{
@@ -270,41 +269,14 @@ where
                     as Box<dyn Fn(&u32) -> bool + Send + Sync>)
             };
 
-            let search_result = if let (Some(eta), Some(power)) = (
-                search_params.determinant_diversity_eta,
-                search_params.determinant_diversity_power,
-            ) {
-                match DeterminantDiversitySearchParams::new(
-                    search_params
-                        .determinant_diversity_results_k
-                        .unwrap_or(search_params.recall_at as usize),
-                    eta,
-                    power,
-                ) {
-                    Ok(processor) => searcher.search_determinant_diversity(
-                        q,
-                        search_params.recall_at,
-                        l,
-                        Some(search_params.beam_width),
-                        vector_filter,
-                        search_params.is_flat_search,
-                        processor,
-                    ),
-                    Err(e) => Err(diskann::ANNError::log_index_error(format!(
-                        "Invalid determinant-diversity parameters: {}",
-                        e
-                    ))),
-                }
-            } else {
-                searcher.search(
+            let search_result = searcher.search(
                     q,
                     search_params.recall_at,
                     l,
                     Some(search_params.beam_width),
                     vector_filter,
                     search_params.is_flat_search,
-                )
-            };
+                );
 
             match search_result {
                 Ok(search_result) => {

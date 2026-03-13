@@ -85,9 +85,6 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
     pub(crate) search_io_limit: Option<usize>,
-    pub(crate) determinant_diversity_eta: Option<f64>,
-    pub(crate) determinant_diversity_power: Option<f64>,
-    pub(crate) determinant_diversity_results_k: Option<usize>,
 }
 
 /////////
@@ -238,29 +235,6 @@ impl CheckDeserialization for DiskSearchPhase {
             }
         }
 
-        if self.determinant_diversity_eta.is_some() != self.determinant_diversity_power.is_some() {
-            anyhow::bail!(
-                "determinant_diversity_eta and determinant_diversity_power must either both be set or both omitted"
-            );
-        }
-
-        if let Some(eta) = self.determinant_diversity_eta {
-            if eta < 0.0 {
-                anyhow::bail!("determinant_diversity_eta must be >= 0.0");
-            }
-        }
-
-        if let Some(power) = self.determinant_diversity_power {
-            if power < 0.0 {
-                anyhow::bail!("determinant_diversity_power must be >= 0.0");
-            }
-        }
-
-        if let Some(k) = self.determinant_diversity_results_k {
-            if k == 0 {
-                anyhow::bail!("determinant_diversity_results_k must be > 0");
-            }
-        }
         Ok(())
     }
 }
@@ -299,9 +273,6 @@ impl Example for DiskIndexOperation {
             vector_filters_file: None,
             num_nodes_to_cache: None,
             search_io_limit: None,
-            determinant_diversity_eta: None,
-            determinant_diversity_power: None,
-            determinant_diversity_results_k: None,
         };
 
         Self {
