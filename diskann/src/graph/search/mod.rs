@@ -30,6 +30,8 @@ use crate::{ANNResult, graph::index::DiskANNIndex, provider::DataProvider};
 
 mod knn_search;
 mod multihop_search;
+pub mod rag_post_process;
+mod rag_search;
 mod range_search;
 
 pub mod record;
@@ -88,8 +90,9 @@ where
 }
 
 // Re-export search parameter types.
-pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
+pub use knn_search::{Knn, KnnSearchError, KnnWith, RecordedKnn};
 pub use multihop_search::MultihopSearch;
+pub use rag_search::{RagSearch, RagSearchParams};
 pub use range_search::{Range, RangeSearchError, RangeSearchOutput};
 
 // Feature-gated diverse search.

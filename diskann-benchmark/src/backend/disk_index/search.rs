@@ -44,6 +44,7 @@ pub(super) struct DiskSearchStats {
     pub(crate) is_flat_search: bool,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) uses_vector_filters: bool,
+    pub(crate) is_rag_search: bool,
     pub(super) num_nodes_to_cache: Option<usize>,
     pub(super) search_results_per_l: Vec<DiskSearchResult>,
     span_metrics: serde_json::Value,
@@ -261,6 +262,10 @@ where
             .zip(statistics_vec.par_iter_mut())
             .zip(result_counts.par_iter_mut());
 
+        let is_rag = search_params.is_rag_search.unwrap_or(false);
+        let rag_eta = search_params.rag_eta.unwrap_or(0.01);
+        let rag_power = search_params.rag_power.unwrap_or(2.0);
+
         zipped.for_each_in_pool(&pool, |(((((q, vf), id_chunk), dist_chunk), stats), rc)| {
             let vector_filter = if search_params.vector_filters_file.is_none() {
                 None
@@ -269,14 +274,28 @@ where
                     as Box<dyn Fn(&u32) -> bool + Send + Sync>)
             };
 
-            match searcher.search(
-                q,
-                search_params.recall_at,
-                l,
-                Some(search_params.beam_width),
-                vector_filter,
-                search_params.is_flat_search,
-            ) {
+            let search_result = if is_rag {
+                searcher.search_rag(
+                    q,
+                    search_params.recall_at,
+                    l,
+                    Some(search_params.beam_width),
+                    vector_filter,
+                    rag_eta,
+                    rag_power,
+                )
+            } else {
+                searcher.search(
+                    q,
+                    search_params.recall_at,
+                    l,
+                    Some(search_params.beam_width),
+                    vector_filter,
+                    search_params.is_flat_search,
+                )
+            };
+
+            match search_result {
                 Ok(search_result) => {
                     *stats = search_result.stats.query_statistics;
                     *rc = search_result.results.len() as u32;
@@ -343,6 +362,7 @@ where
         is_flat_search: search_params.is_flat_search,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
+        is_rag_search: search_params.is_rag_search.unwrap_or(false),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
         search_results_per_l,
         span_metrics,
@@ -427,6 +447,7 @@ impl fmt::Display for DiskSearchStats {
         writeln!(f, "Flat search,      : {}", self.is_flat_search)?;
         writeln!(f, "Distance,         : {}", self.distance)?;
         writeln!(f, "Vector filters,   : {}", self.uses_vector_filters)?;
+        writeln!(f, "RAG search,       : {}", self.is_rag_search)?;
         writeln!(
             f,
             "Nodes to cache,   : {}",

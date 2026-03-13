@@ -372,6 +372,115 @@ where
     }
 }
 
+/// RAG post-processing for disk search.
+///
+/// This implementation filters candidates, loads their full-precision vectors,
+/// converts to f32, and runs diversity-maximizing reranking via
+/// [`graph::search::rag_post_process::rag_post_process`].
+impl<'this, Data, ProviderFactory>
+    glue::PostProcess<
+        graph::search::RagSearchParams,
+        DiskProvider<Data>,
+        [Data::VectorDataType],
+        (u32, Data::AssociatedDataType),
+    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    ProviderFactory: VertexProviderFactory<Data>,
+{
+    async fn post_process_with<'a, I, B>(
+        &self,
+        processor: &graph::search::RagSearchParams,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &[Data::VectorDataType],
+        _computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> ANNResult<usize>
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send + ?Sized,
+    {
+        let provider = accessor.provider;
+
+        // Step 1: Filter candidates and compute full-precision distances (like RerankAndFilter).
+        let mut uncached_ids = Vec::new();
+        let mut candidate_entries: Vec<(u32, f32, Data::AssociatedDataType)> = Vec::new();
+
+        for n in candidates
+            .map(|n| n.id)
+            .filter(|id| (self.vector_filter)(id))
+        {
+            if let Some(entry) = accessor.scratch.distance_cache.get(&n) {
+                candidate_entries.push((n, entry.0, entry.1));
+            } else {
+                uncached_ids.push(n);
+            }
+        }
+
+        if !uncached_ids.is_empty() {
+            ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &uncached_ids)?;
+            for n in &uncached_ids {
+                let v = accessor.scratch.vertex_provider.get_vector(n)?;
+                let d = provider.distance_comparer.evaluate_similarity(query, v);
+                let a = accessor.scratch.vertex_provider.get_associated_data(n)?;
+                candidate_entries.push((*n, d, *a));
+            }
+        }
+
+        if candidate_entries.is_empty() {
+            return Ok(0);
+        }
+
+        // Step 2: Load all candidate vertices so we can read their vectors for RAG.
+        let all_ids: Vec<u32> = candidate_entries.iter().map(|(id, _, _)| *id).collect();
+        ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &all_ids)?;
+
+        // Step 3: Convert query to f32.
+        let query_f32 = Data::VectorDataType::as_f32(query)
+            .map_err(|e| ANNError::log_index_error(format!("f32 conversion failed: {e}")))?;
+
+        // Step 4: Build RAG candidates with f32 vectors, using index as Id.
+        let mut rag_data: Vec<(usize, f32, Vec<f32>)> = Vec::with_capacity(candidate_entries.len());
+        for (idx, (id, dist, _)) in candidate_entries.iter().enumerate() {
+            let raw_vec = accessor.scratch.vertex_provider.get_vector(id)?;
+            let vec_f32 = Data::VectorDataType::as_f32(raw_vec)
+                .map_err(|e| ANNError::log_index_error(format!("f32 conversion failed: {e}")))?;
+            rag_data.push((idx, *dist, vec_f32.to_vec()));
+        }
+
+        // Step 5: Run RAG post-processing.
+        let k = output
+            .size_hint()
+            .unwrap_or(candidate_entries.len())
+            .min(candidate_entries.len());
+
+        let borrowed: Vec<(usize, f32, &[f32])> = rag_data
+            .iter()
+            .map(|(idx, dist, v)| (*idx, *dist, v.as_slice()))
+            .collect();
+
+        let reranked = graph::search::rag_post_process::rag_post_process(
+            borrowed,
+            &query_f32,
+            k,
+            processor.rag_eta,
+            processor.rag_power,
+        );
+
+        // Step 6: Map back to output format and write.
+        let result: Vec<((u32, Data::AssociatedDataType), f32)> = reranked
+            .into_iter()
+            .map(|(idx, dist)| {
+                let (id, _, assoc) = &candidate_entries[idx];
+                ((*id, *assoc), dist)
+            })
+            .collect();
+
+        Ok(output.extend(result))
+    }
+}
+
 /// The query computer for the disk provider. This is used to compute the distance between the query vector and the PQ coordinates.
 pub struct DiskQueryComputer {
     num_pq_chunks: usize,
@@ -943,6 +1052,89 @@ where
         let mut search_result = SearchResult {
             results: Vec::with_capacity(return_list_size as usize),
             stats,
+        };
+
+        for ((vertex_id, distance), associated_data) in indices
+            .into_iter()
+            .zip(distances.into_iter())
+            .zip(associated_data.into_iter())
+        {
+            search_result.results.push(SearchResultItem {
+                vertex_id,
+                distance,
+                data: associated_data,
+            });
+        }
+
+        Ok(search_result)
+    }
+
+    /// Perform a RAG (diversity-maximizing) search on the disk index.
+    ///
+    /// This uses the same graph traversal as [`Self::search`] but applies RAG
+    /// post-processing instead of the default reranking, using
+    /// [`graph::search::RagSearch`] with the strategy's
+    /// [`PostProcess<RagSearchParams>`](glue::PostProcess) implementation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn search_rag(
+        &self,
+        query: &[Data::VectorDataType],
+        return_list_size: u32,
+        search_list_size: u32,
+        beam_width: Option<usize>,
+        vector_filter: Option<VectorFilter<Data>>,
+        rag_eta: f64,
+        rag_power: f64,
+    ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
+        let mut query_stats = QueryStatistics::default();
+        let mut indices = vec![0u32; return_list_size as usize];
+        let mut distances = vec![0f32; return_list_size as usize];
+        let mut associated_data =
+            vec![Data::AssociatedDataType::default(); return_list_size as usize];
+
+        let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
+            &mut indices[..return_list_size as usize],
+            &mut distances[..return_list_size as usize],
+            &mut associated_data[..return_list_size as usize],
+        );
+
+        let filter = vector_filter.unwrap_or(default_vector_filter::<Data>());
+        let strategy = self.search_strategy(query, &filter);
+        let timer = Instant::now();
+        let k = return_list_size as usize;
+        let l = search_list_size as usize;
+
+        let rag_search =
+            graph::search::RagSearch::new(Knn::new(k, l, beam_width)?, rag_eta, rag_power);
+        let stats = self.runtime.block_on(self.index.search(
+            rag_search,
+            &strategy,
+            &DefaultContext,
+            strategy.query,
+            &mut result_output_buffer,
+        ))?;
+
+        query_stats.total_comparisons = stats.cmps;
+        query_stats.search_hops = stats.hops;
+        query_stats.total_execution_time_us = timer.elapsed().as_micros();
+        query_stats.io_time_us = IOTracker::time(&strategy.io_tracker.io_time_us) as u128;
+        query_stats.total_io_operations = strategy.io_tracker.io_count() as u32;
+        query_stats.total_vertices_loaded = strategy.io_tracker.io_count() as u32;
+        query_stats.query_pq_preprocess_time_us =
+            IOTracker::time(&strategy.io_tracker.preprocess_time_us) as u128;
+        query_stats.cpu_time_us = query_stats.total_execution_time_us
+            - query_stats.io_time_us
+            - query_stats.query_pq_preprocess_time_us;
+
+        let stat_result = SearchResultStats {
+            cmps: query_stats.total_comparisons,
+            result_count: stats.result_count,
+            query_statistics: query_stats,
+        };
+
+        let mut search_result = SearchResult {
+            results: Vec::with_capacity(return_list_size as usize),
+            stats: stat_result,
         };
 
         for ((vertex_id, distance), associated_data) in indices

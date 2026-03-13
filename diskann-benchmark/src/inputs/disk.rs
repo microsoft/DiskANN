@@ -85,6 +85,15 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
     pub(crate) search_io_limit: Option<usize>,
+    /// When true, apply RAG (diversity-maximizing) post-processing to search results.
+    #[serde(default)]
+    pub(crate) is_rag_search: Option<bool>,
+    /// Ridge regularization parameter for RAG post-processing.
+    #[serde(default)]
+    pub(crate) rag_eta: Option<f64>,
+    /// Power to raise similarity scores to before scaling vectors in RAG.
+    #[serde(default)]
+    pub(crate) rag_power: Option<f64>,
 }
 
 /////////
@@ -272,6 +281,9 @@ impl Example for DiskIndexOperation {
             vector_filters_file: None,
             num_nodes_to_cache: None,
             search_io_limit: None,
+            is_rag_search: None,
+            rag_eta: None,
+            rag_power: None,
         };
 
         Self {
@@ -396,6 +408,11 @@ impl DiskSearchPhase {
         match &self.search_io_limit {
             Some(lim) => write_field!(f, "Search IO Limit", format!("{lim}"))?,
             None => write_field!(f, "Search IO Limit", "none (defaults to `usize::MAX`)")?,
+        }
+        write_field!(f, "RAG Search", self.is_rag_search.unwrap_or(false))?;
+        if self.is_rag_search.unwrap_or(false) {
+            write_field!(f, "RAG Eta", self.rag_eta.unwrap_or(0.0))?;
+            write_field!(f, "RAG Power", self.rag_power.unwrap_or(1.0))?;
         }
         Ok(())
     }

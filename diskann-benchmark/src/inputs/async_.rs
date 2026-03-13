@@ -170,6 +170,33 @@ impl Example for TopkSearchPhase {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RagSearchPhase {
+    pub(crate) queries: InputFile,
+    pub(crate) groundtruth: InputFile,
+    pub(crate) reps: NonZeroUsize,
+    // Enable sweeping threads
+    pub(crate) num_threads: Vec<NonZeroUsize>,
+    pub(crate) runs: Vec<GraphSearch>,
+    pub(crate) rag_eta: f64,
+    pub(crate) rag_power: f64,
+}
+
+impl CheckDeserialization for RagSearchPhase {
+    fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
+        // Check the validity of the input files.
+        self.queries.check_deserialization(checker)?;
+
+        self.groundtruth.check_deserialization(checker)?;
+        for (i, run) in self.runs.iter_mut().enumerate() {
+            run.check_deserialization(checker)
+                .with_context(|| format!("search run {}", i))?;
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct RangeSearchPhase {
     pub(crate) queries: InputFile,
@@ -333,6 +360,7 @@ pub(crate) enum SearchPhase {
     Range(RangeSearchPhase),
     TopkBetaFilter(BetaSearchPhase),
     TopkMultihopFilter(MultiHopSearchPhase),
+    TopkRag(RagSearchPhase),
 }
 
 impl CheckDeserialization for SearchPhase {
@@ -342,6 +370,7 @@ impl CheckDeserialization for SearchPhase {
             SearchPhase::Range(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkBetaFilter(phase) => phase.check_deserialization(checker),
             SearchPhase::TopkMultihopFilter(phase) => phase.check_deserialization(checker),
+            SearchPhase::TopkRag(phase) => phase.check_deserialization(checker),
         }
     }
 }

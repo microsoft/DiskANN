@@ -83,7 +83,7 @@ use diskann_vector::{DistanceFunction, PreprocessedDistanceFunction};
 
 use crate::{
     ANNError, ANNResult,
-    error::{ErrorExt, RankedError, StandardError, ToRanked, TransientError},
+    error::{ErrorExt, IntoANNResult, RankedError, StandardError, ToRanked, TransientError},
     graph::{AdjacencyList, SearchOutputBuffer},
     neighbor::Neighbor,
     provider::{
@@ -338,6 +338,91 @@ where
     /// Construct the [`SearchPostProcess`] struct to post-process the results of search and
     /// store them into the output container.
     fn post_processor(&self) -> Self::PostProcessor;
+}
+
+/// A composable post-processing override for search strategies.
+///
+/// This trait allows search results to be post-processed in different ways without
+/// duplicating the core search algorithm. The `Processor` type parameter selects which
+/// post-processing behavior to use.
+///
+/// For example, a standard k-NN search can be combined with RAG-aware
+/// post-processing by implementing `PostProcess<RagSearchParams>` for a
+/// strategy, without rewriting the search loop.
+///
+/// A blanket implementation exists for [`DefaultPostProcess`], which delegates to the
+/// strategy's [`SearchPostProcess`]or via [`SearchStrategy::post_processor()`]. This means
+/// every [`SearchStrategy`] automatically supports `PostProcess<DefaultPostProcess>`
+/// with no additional code.
+///
+/// # Usage
+///
+/// Search types like [`super::search::KnnWith`] accept a `Processor` type parameter and
+/// require `S: PostProcess<Processor, Provider, T, O>` in their `Search` impl. This
+/// enables composing any search algorithm with any post-processing strategy.
+pub trait PostProcess<Processor, Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<Provider, T, O>
+where
+    Provider: DataProvider,
+    T: ?Sized,
+    O: Send,
+{
+    /// Post-process search results using the given `processor`.
+    ///
+    /// This method bridges between the strategy's accessor/computer and the processor's
+    /// logic. Implementations should extract any data the processor needs from the
+    /// accessor and delegate to the processor.
+    fn post_process_with<'a, I, B>(
+        &self,
+        processor: &Processor,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &T,
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
+        B: SearchOutputBuffer<O> + Send + ?Sized;
+}
+
+/// Marker for default post-processing behavior.
+///
+/// When used with [`PostProcess`], delegates to the strategy's existing
+/// [`SearchPostProcess`]or via [`SearchStrategy::post_processor()`].
+///
+/// A blanket implementation is provided so that every [`SearchStrategy`] automatically
+/// implements `PostProcess<DefaultPostProcess>`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DefaultPostProcess;
+
+/// Blanket implementation: every [`SearchStrategy`] supports default post-processing.
+impl<S, Provider, T, O> PostProcess<DefaultPostProcess, Provider, T, O> for S
+where
+    S: SearchStrategy<Provider, T, O>,
+    Provider: DataProvider,
+    T: ?Sized + Sync,
+    O: Send,
+{
+    async fn post_process_with<'a, I, B>(
+        &self,
+        _processor: &DefaultPostProcess,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &T,
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> ANNResult<usize>
+    where
+        I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
+        B: SearchOutputBuffer<O> + Send + ?Sized,
+    {
+        self.post_processor()
+            .post_process(accessor, query, computer, candidates, output)
+            .send()
+            .await
+            .into_ann_result()
+    }
 }
 
 /// Perform post-processing on the results of search, storing the results in an output buffer.

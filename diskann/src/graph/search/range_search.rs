@@ -5,7 +5,7 @@
 
 //! Range-based search within a distance radius.
 
-use diskann_utils::future::{AssertSend, SendFuture};
+use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
 use super::{Search, scratch::SearchScratch};
@@ -13,7 +13,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, ExpandBeam, SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{self, DefaultPostProcess, ExpandBeam, PostProcess, SearchExt},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer,
@@ -171,7 +171,7 @@ impl<DP, S, T, O> Search<DP, S, T, O, ()> for Range
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
+    S: PostProcess<DefaultPostProcess, DP, T, O>,
     O: Send + Default + Clone,
 {
     type Output = RangeSearchOutput<O>;
@@ -251,17 +251,15 @@ where
             );
 
             let _ = strategy
-                .post_processor()
-                .post_process(
+                .post_process_with(
+                    &DefaultPostProcess,
                     &mut accessor,
                     query,
                     &computer,
                     scratch.in_range.iter().copied(),
                     &mut output_buffer,
                 )
-                .send()
-                .await
-                .into_ann_result()?;
+                .await?;
 
             // Filter by inner/outer radius
             let inner_cutoff = if let Some(inner_radius) = self.inner_radius() {
