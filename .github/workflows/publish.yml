@@ -2,7 +2,12 @@
 # Licensed under the MIT license.
 
 # Publishes all workspace crates to crates.io.
-# Triggered by pushing a version tag (v{major}.{minor}.{patch}) or manually via workflow_dispatch.
+#
+# Triggers:
+#   - push tag v{major}.{minor}.{patch} → real publish
+#   - pull_request touching Cargo.toml   → automatic dry-run (pre-merge check)
+#   - workflow_dispatch                  → manual dry-run or real publish
+#
 # Requires CRATES_IO_TOKEN secret. Rust toolchain version is read from rust-toolchain.toml.
 
 name: Publish to crates.io
@@ -11,6 +16,10 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - 'Cargo.toml'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -21,6 +30,10 @@ on:
         options:
           - 'true'
           - 'false'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -34,7 +47,14 @@ permissions:
 
 jobs:
   publish:
-    name: ${{ github.event.inputs.dry_run == 'true' && 'Dry-run publish test' || 'Publish crates to crates.io' }}
+    name: >-
+      ${{
+        github.event_name == 'pull_request'
+          && 'Dry-run publish test'
+          || github.event.inputs.dry_run == 'true'
+            && 'Dry-run publish test'
+            || 'Publish crates to crates.io'
+      }}
     runs-on: ubuntu-latest
 
     steps:
@@ -74,7 +94,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
         run: |
           DRY_RUN_FLAG=""
-          if [ "${{ github.event.inputs.dry_run || 'false' }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event.inputs.dry_run || 'false' }}" = "true" ]; then
             DRY_RUN_FLAG="--dry-run"
             echo "🧪 DRY-RUN MODE"
           fi

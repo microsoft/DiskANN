@@ -4,7 +4,9 @@ Publishing DiskANN crates to [crates.io](https://crates.io).
 
 ## Overview
 
-All workspace crates are published together with synchronized version numbers using `cargo publish --workspace`, which automatically resolves dependency order and waits for each crate to be indexed before publishing its dependents. The release is triggered by pushing a version tag. The Rust toolchain version is read from [`rust-toolchain.toml`](../../rust-toolchain.toml).
+All workspace crates are published together with synchronized version numbers using `cargo publish --workspace`, which automatically resolves dependency order and waits for each crate to be indexed before publishing its dependents. The Rust toolchain version is read from [`rust-toolchain.toml`](../../rust-toolchain.toml).
+
+Releases follow a pull-request workflow: bump the version on a branch, open a PR, let the dry-run check pass, merge, then tag the release via the GitHub UI.
 
 ## Prerequisites
 
@@ -16,15 +18,15 @@ All workspace crates are published together with synchronized version numbers us
 
 ## Dry-Run Testing
 
-**Always test before publishing a real release.**
+A `cargo publish --workspace --dry-run` runs **automatically** as a pull-request check whenever `Cargo.toml` is changed. You can also trigger a dry-run manually:
 
-### Option 1: GitHub Actions (Recommended)
+### Manual: GitHub Actions
 
 1. Navigate to: `https://github.com/microsoft/DiskANN/actions/workflows/publish.yml`
 2. Click **Run workflow**, select your branch, keep **dry-run = true**
 3. Watch the workflow — look for successful `cargo publish --workspace --dry-run`
 
-### Option 2: Local
+### Manual: Local
 
 ```bash
 cargo publish --locked --workspace --dry-run
@@ -42,7 +44,14 @@ cargo publish --locked --workspace --dry-run
 
 ## Release Steps
 
-1. **Update version** in root `Cargo.toml`:
+1. **Create a release branch** from `main`:
+
+   ```bash
+   git checkout main && git pull
+   git checkout -b release-0.46.0
+   ```
+
+2. **Update version** in root `Cargo.toml`:
 
    ```toml
    [workspace.package]
@@ -51,54 +60,40 @@ cargo publish --locked --workspace --dry-run
 
    All workspace crates inherit this via `version.workspace = true`.
 
-2. **Update CHANGELOG** (if applicable).
+3. **Update CHANGELOG** (if applicable).
 
-3. **Run dry-run** on a branch to validate (see above).
-
-4. **Tag and push**:
+4. **Push and open a pull request** to `main`:
 
    ```bash
-   git tag v0.46.0
-   git push origin v0.46.0
+   git commit -am "Bump version to 0.46.0"
+   git push origin release-0.46.0
    ```
 
-   Tag format: `v{major}.{minor}.{patch}`
+   Open a PR on GitHub. The **Publish to crates.io / Dry-run publish test** check runs automatically.
 
-5. **Monitor** the workflow in the Actions tab.
+5. **Wait for checks** — the dry-run and CI must both pass before merge.
 
-6. **Verify**:
+6. **Merge the PR** into `main`.
+
+7. **Create a release** via the GitHub UI:
+   - Go to **Releases → Draft a new release**
+   - Create a new tag `v0.46.0` targeting `main`
+   - Add release notes describing changes
+   - Click **Publish release**
+
+   Pushing the tag triggers the real publish workflow.
+
+8. **Verify** the published crates:
 
    ```bash
    cargo search diskann --limit 20
    ```
 
-### Example Pre-Release Flow
-
-```bash
-# Update version
-vim Cargo.toml  # Change to 0.46.0
-
-# Commit to a branch (don't tag yet)
-git checkout -b release-0.46.0
-git commit -am "Bump version to 0.46.0"
-git push origin release-0.46.0
-
-# Run dry-run via GitHub Actions UI on release-0.46.0
-
-# If successful, merge and tag
-git checkout main
-git merge release-0.46.0
-git tag v0.46.0
-git push origin main --tags  # Triggers the real publish
-```
-
 ## Pre-release Checklist
 
-- [ ] All CI checks pass on the main branch
+- [ ] All CI checks pass on the PR
 - [ ] Version number is updated in `Cargo.toml`
 - [ ] CHANGELOG is updated (if applicable)
 - [ ] Documentation is up to date
 - [ ] Breaking changes are clearly documented
-- [ ] All tests pass locally: `cargo test --workspace`
-- [ ] Code builds without warnings: `cargo build --workspace --release`
-- [ ] **Dry-run workflow test passes successfully**
+- [ ] **Dry-run publish check passes on the PR**
