@@ -7,13 +7,13 @@
 
 use std::{future::Future, sync::Mutex};
 
-use diskann::delegate_default_post_process;
+use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::glue::{
-        DelegateDefaultPostProcessor, ExpandBeam, FillSet, InsertStrategy, PruneStrategy,
-        SearchExt, SearchStrategy,
+        ExpandBeam, FillSet, HasDefaultProcessor, InsertStrategy, PruneStrategy, SearchExt,
+        SearchStrategy,
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -572,14 +572,14 @@ where
     }
 }
 
-impl<D, Ctx, T> DelegateDefaultPostProcessor<FullPrecisionProvider<T, SphericalStore, D, Ctx>, [T]>
+impl<D, Ctx, T> HasDefaultProcessor<FullPrecisionProvider<T, SphericalStore, D, Ctx>, [T]>
     for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    delegate_default_post_process!(Rerank);
+    has_default_processor!(Rerank);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
@@ -605,14 +605,14 @@ where
     }
 }
 
-impl<D, Ctx, T> DelegateDefaultPostProcessor<DefaultProvider<NoStore, SphericalStore, D, Ctx>, [T]>
+impl<D, Ctx, T> HasDefaultProcessor<DefaultProvider<NoStore, SphericalStore, D, Ctx>, [T]>
     for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
+    has_default_processor!(RemoveDeletedIdsAndCopy);
 }
 
 impl<V, D, Ctx> PruneStrategy<DefaultProvider<V, SphericalStore, D, Ctx>> for Quantized

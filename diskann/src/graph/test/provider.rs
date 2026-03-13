@@ -16,9 +16,10 @@ use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use crate::{
-    ANNError, ANNResult, has_default_processor,
+    ANNError, ANNResult,
     error::{Infallible, message},
     graph::{AdjacencyList, glue, test::synthetic},
+    has_default_processor,
     internal::counter::{Counter, LocalCounter},
     provider,
     utils::VectorRepr,

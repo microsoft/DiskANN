@@ -11,15 +11,15 @@ use std::{
     },
 };
 
-use diskann::delegate_default_post_process;
+use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{
-            AsElement, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy,
-            InsertStrategy, PostProcess, PruneStrategy, SearchExt, SearchStrategy,
+            AsElement, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy,
+            InsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -903,33 +903,8 @@ impl SearchStrategy<DebugProvider, [f32]> for FullPrecision {
     }
 }
 
-impl DelegateDefaultPostProcessor<DebugProvider, [f32]> for FullPrecision {
-    delegate_default_post_process!(postprocess::RemoveDeletedIdsAndCopy);
-}
-
-impl PostProcess<DebugProvider, [f32], postprocess::RemoveDeletedIdsAndCopy> for FullPrecision {
-    #[allow(clippy::manual_async_fn)]
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: postprocess::RemoveDeletedIdsAndCopy,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &[f32],
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
-    {
-        async move {
-            diskann::graph::glue::SearchPostProcess::post_process(
-                &processor, accessor, query, computer, candidates, output,
-            )
-            .await
-            .into_ann_result()
-        }
-    }
+impl HasDefaultProcessor<DebugProvider, [f32]> for FullPrecision {
+    has_default_processor!(postprocess::RemoveDeletedIdsAndCopy);
 }
 
 impl SearchStrategy<DebugProvider, [f32]> for Quantized {
@@ -946,33 +921,8 @@ impl SearchStrategy<DebugProvider, [f32]> for Quantized {
     }
 }
 
-impl DelegateDefaultPostProcessor<DebugProvider, [f32]> for Quantized {
-    delegate_default_post_process!(postprocess::RemoveDeletedIdsAndCopy);
-}
-
-impl PostProcess<DebugProvider, [f32], postprocess::RemoveDeletedIdsAndCopy> for Quantized {
-    #[allow(clippy::manual_async_fn)]
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: postprocess::RemoveDeletedIdsAndCopy,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &[f32],
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
-    {
-        async move {
-            diskann::graph::glue::SearchPostProcess::post_process(
-                &processor, accessor, query, computer, candidates, output,
-            )
-            .await
-            .into_ann_result()
-        }
-    }
+impl HasDefaultProcessor<DebugProvider, [f32]> for Quantized {
+    has_default_processor!(postprocess::RemoveDeletedIdsAndCopy);
 }
 
 impl PruneStrategy<DebugProvider> for FullPrecision {

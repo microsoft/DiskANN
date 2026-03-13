@@ -349,10 +349,7 @@ where
     DP: DataProvider<Context = DefaultContext, InternalId = u32, ExternalId = u32>
         + provider::SetElement<[T]>,
     T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
-    S: glue::SearchStrategy<DP, [T]>
-        + glue::DelegateDefaultPostProcessor<DP, [T]>
-        + Clone
-        + AsyncFriendly,
+    S: glue::DefaultSearchStrategy<DP, [T]> + Clone + AsyncFriendly,
 {
     match &input {
         SearchPhase::Topk(search_phase) => {

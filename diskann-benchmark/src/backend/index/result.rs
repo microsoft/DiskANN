@@ -155,7 +155,6 @@ impl SearchResults {
             mean_hops: mean_hops as f32,
         }
     }
-
 }
 
 fn format_search_results_table<F>(

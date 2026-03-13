@@ -980,13 +980,13 @@ where
     }
 }
 
-/// [`DelegateDefaultPostProcessor`] delegation for [`Cached`]. The processor is composed by
+/// [`HasDefaultProcessor`] delegation for [`Cached`]. The processor is composed by
 /// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
-impl<DP, C, T, S, E> glue::DelegateDefaultPostProcessor<CachingProvider<DP, C>, T> for Cached<S>
+impl<DP, C, T, S, E> glue::HasDefaultProcessor<CachingProvider<DP, C>, T> for Cached<S>
 where
     T: ?Sized,
     DP: DataProvider,
-    S: glue::DelegateDefaultPostProcessor<DP, T>
+    S: glue::HasDefaultProcessor<DP, T>
         + for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>,
     C: for<'a> AsCacheAccessorFor<
             'a,
@@ -1000,49 +1000,6 @@ where
 
     fn create_processor(&self) -> Self::Processor {
         Pipeline::new(Unwrap, self.strategy.create_processor())
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct CachedPostProcess<P>(pub P);
-
-impl<DP, C, T, S, E, P> glue::PostProcess<CachingProvider<DP, C>, T, CachedPostProcess<P>>
-    for Cached<S>
-where
-    T: ?Sized,
-    P: Send + Sync,
-    DP: DataProvider,
-    S: glue::PostProcess<DP, T, P>
-        + for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>,
-    C: for<'a> AsCacheAccessorFor<
-            'a,
-            SearchAccessor<'a, S, DP, T>,
-            Accessor: NeighborCache<DP::InternalId>,
-            Error = E,
-        > + AsyncFriendly,
-    E: StandardError,
-{
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: CachedPostProcess<P>,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &T,
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<DP::InternalId>> + Send,
-        B: SearchOutputBuffer<DP::InternalId> + Send + ?Sized,
-    {
-        self.strategy.post_process_with(
-            processor.0,
-            &mut accessor.inner,
-            query,
-            computer,
-            candidates,
-            output,
-        )
     }
 }
 
@@ -1118,11 +1075,6 @@ where
     DP: DataProvider,
     S: InplaceDeleteStrategy<DP>,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
-    for<'a> Cached<S::SearchStrategy>: glue::PostProcess<
-            CachingProvider<DP, C>,
-            S::DeleteElement<'a>,
-            CachedPostProcess<S::SearchPostProcessor>,
-        >,
     C: AsyncFriendly,
 {
     type DeleteElement<'a> = S::DeleteElement<'a>;
@@ -1131,7 +1083,7 @@ where
 
     type PruneStrategy = Cached<S::PruneStrategy>;
     type SearchStrategy = Cached<S::SearchStrategy>;
-    type SearchPostProcessor = CachedPostProcess<S::SearchPostProcessor>;
+    type SearchPostProcessor = Pipeline<Unwrap, S::SearchPostProcessor>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Cached {
@@ -1146,7 +1098,7 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        CachedPostProcess(self.strategy.search_post_processor())
+        Pipeline::new(Unwrap, self.strategy.search_post_processor())
     }
 
     fn get_delete_element<'a>(

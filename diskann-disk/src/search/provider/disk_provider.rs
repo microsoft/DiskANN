@@ -16,12 +16,11 @@ use std::{
 };
 
 use diskann::{
-    error::IntoANNResult,
     graph::{
         self,
         glue::{
-            self, DelegateDefaultPostProcessor, ExpandBeam, IdIterator, PostProcess, SearchExt,
-            SearchPostProcess, SearchStrategy,
+            self, ExpandBeam, HasDefaultProcessor, IdIterator, SearchExt, SearchPostProcess,
+            SearchStrategy,
         },
         search::Knn,
         search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
@@ -372,7 +371,7 @@ where
 }
 
 impl<'this, Data, ProviderFactory>
-    DelegateDefaultPostProcessor<
+    HasDefaultProcessor<
         DiskProvider<Data>,
         [Data::VectorDataType],
         (

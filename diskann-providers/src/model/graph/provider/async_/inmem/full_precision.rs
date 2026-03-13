@@ -5,15 +5,14 @@
 
 use std::{collections::HashMap, fmt::Debug, future::Future};
 
-use diskann::delegate_default_post_process;
+use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNResult,
-    error::IntoANNResult,
     graph::{
         SearchOutputBuffer,
         glue::{
-            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy,
-            InsertStrategy, PostProcess, PruneStrategy, SearchExt, SearchStrategy,
+            self, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
+            PruneStrategy, SearchExt, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -480,47 +479,14 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> DelegateDefaultPostProcessor<FullPrecisionProvider<T, Q, D, Ctx>, [T]>
-    for FullPrecision
+impl<T, Q, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
-}
-
-impl<T, Q, D, Ctx> PostProcess<FullPrecisionProvider<T, Q, D, Ctx>, [T], RemoveDeletedIdsAndCopy>
-    for FullPrecision
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    #[allow(clippy::manual_async_fn)]
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: RemoveDeletedIdsAndCopy,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &[T],
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
-    {
-        async move {
-            glue::SearchPostProcess::post_process(
-                &processor, accessor, query, computer, candidates, output,
-            )
-            .await
-            .into_ann_result()
-        }
-    }
+    has_default_processor!(RemoveDeletedIdsAndCopy);
 }
 
 // Pruning

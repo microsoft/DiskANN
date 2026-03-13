@@ -4,17 +4,15 @@
  */
 
 use dashmap::DashMap;
-use diskann::delegate_default_post_process;
+use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
-    error::IntoANNResult,
     graph::{
         AdjacencyList, SearchOutputBuffer,
         config::defaults::MAX_OCCLUSION_SIZE,
         glue::{
-            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy,
-            InsertStrategy, PostProcess, PruneStrategy, SearchExt, SearchPostProcess,
-            SearchStrategy,
+            self, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
+            PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -771,10 +769,8 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], GarnetId> for FullPre
     }
 }
 
-impl<T: VectorRepr> DelegateDefaultPostProcessor<GarnetProvider<T>, [T], GarnetId>
-    for FullPrecision
-{
-    delegate_default_post_process!(glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>);
+impl<T: VectorRepr> HasDefaultProcessor<GarnetProvider<T>, [T], GarnetId> for FullPrecision {
+    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>);
 }
 
 impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecision {
@@ -791,60 +787,8 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecisio
     }
 }
 
-impl<T: VectorRepr> DelegateDefaultPostProcessor<GarnetProvider<T>, [T], u32> for FullPrecision {
-    delegate_default_post_process!(glue::CopyIds);
-}
-
-impl<T: VectorRepr> PostProcess<GarnetProvider<T>, [T], glue::CopyIds, u32> for FullPrecision {
-    #[allow(clippy::manual_async_fn)]
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: glue::CopyIds,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &[T],
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
-    {
-        async move {
-            diskann::graph::glue::SearchPostProcess::post_process(
-                &processor, accessor, query, computer, candidates, output,
-            )
-            .await
-            .into_ann_result()
-        }
-    }
-}
-
-impl<T: VectorRepr> PostProcess<GarnetProvider<T>, [T], CopyExternalIds, GarnetId>
-    for FullPrecision
-{
-    #[allow(clippy::manual_async_fn)]
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: CopyExternalIds,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &[T],
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<GarnetId> + Send + ?Sized,
-    {
-        async move {
-            diskann::graph::glue::SearchPostProcess::post_process(
-                &processor, accessor, query, computer, candidates, output,
-            )
-            .await
-            .into_ann_result()
-        }
-    }
+impl<T: VectorRepr> HasDefaultProcessor<GarnetProvider<T>, [T], u32> for FullPrecision {
+    has_default_processor!(glue::CopyIds);
 }
 
 impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for FullPrecision {

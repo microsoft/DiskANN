@@ -5,12 +5,12 @@
 
 use std::{future::Future, sync::Mutex};
 
-use diskann::delegate_default_post_process;
+use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNResult,
     error::{RankedError, ToRanked, TransientError},
     graph::glue::{
-        AsElement, CopyIds, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InsertStrategy,
+        AsElement, CopyIds, ExpandBeam, FillSet, HasDefaultProcessor, InsertStrategy,
         PruneStrategy, SearchExt, SearchStrategy,
     },
     neighbor::Neighbor,
@@ -251,8 +251,8 @@ impl SearchStrategy<TestProvider, [f32]> for Flaky {
     }
 }
 
-impl DelegateDefaultPostProcessor<TestProvider, [f32]> for Flaky {
-    delegate_default_post_process!(CopyIds);
+impl HasDefaultProcessor<TestProvider, [f32]> for Flaky {
+    has_default_processor!(CopyIds);
 }
 
 impl FillSet for FlakyAccessor<'_> {}

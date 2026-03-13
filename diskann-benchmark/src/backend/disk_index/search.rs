@@ -270,13 +270,13 @@ where
             };
 
             let search_result = searcher.search(
-                    q,
-                    search_params.recall_at,
-                    l,
-                    Some(search_params.beam_width),
-                    vector_filter,
-                    search_params.is_flat_search,
-                );
+                q,
+                search_params.recall_at,
+                l,
+                Some(search_params.beam_width),
+                vector_filter,
+                search_params.is_flat_search,
+            );
 
             match search_result {
                 Ok(search_result) => {

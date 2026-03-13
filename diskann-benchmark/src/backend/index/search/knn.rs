@@ -52,7 +52,6 @@ pub(crate) trait Knn<I> {
     ) -> anyhow::Result<Vec<SearchResults>>;
 }
 
-
 ///////////
 // Impls //
 ///////////
@@ -148,5 +147,3 @@ where
         Ok(results.into_iter().map(SearchResults::new).collect())
     }
 }
-
-

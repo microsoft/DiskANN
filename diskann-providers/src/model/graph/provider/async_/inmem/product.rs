@@ -5,16 +5,13 @@
 
 use std::{collections::HashMap, future::Future, sync::Arc};
 
-use diskann::delegate_default_post_process;
+use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNResult,
-    error::IntoANNResult,
-    graph::SearchOutputBuffer,
     graph::glue::{
-        self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy,
-        InsertStrategy, PostProcess, PruneStrategy, SearchExt, SearchStrategy,
+        self, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
+        PruneStrategy, SearchExt, SearchStrategy,
     },
-    neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
         HasId,
@@ -486,44 +483,13 @@ where
     }
 }
 
-impl<T, D, Ctx> DelegateDefaultPostProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]>
-    for Hybrid
+impl<T, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    delegate_default_post_process!(Rerank);
-}
-
-impl<T, D, Ctx> PostProcess<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T], Rerank> for Hybrid
-where
-    T: VectorRepr,
-    D: AsyncFriendly + DeletionCheck,
-    Ctx: ExecutionContext,
-{
-    #[allow(clippy::manual_async_fn)]
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: Rerank,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &[T],
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
-    {
-        async move {
-            glue::SearchPostProcess::post_process(
-                &processor, accessor, query, computer, candidates, output,
-            )
-            .await
-            .into_ann_result()
-        }
-    }
+    has_default_processor!(Rerank);
 }
 
 impl<T, D, Ctx> PruneStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>> for Hybrid
@@ -640,14 +606,14 @@ where
     }
 }
 
-impl<T, D, Ctx> DelegateDefaultPostProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]>
+impl<T, D, Ctx> HasDefaultProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]>
     for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
+    has_default_processor!(RemoveDeletedIdsAndCopy);
 }
 
 impl<D, Ctx> PruneStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>> for Quantized

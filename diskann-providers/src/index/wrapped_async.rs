@@ -232,7 +232,7 @@ where
     ) -> ANNResult<SearchStats>
     where
         T: Sync + ?Sized,
-        S: SearchStrategy<DP, T, O> + glue::DelegateDefaultPostProcessor<DP, T, O>,
+        S: glue::DefaultSearchStrategy<DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,
     {

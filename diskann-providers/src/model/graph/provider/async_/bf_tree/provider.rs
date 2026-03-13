@@ -16,15 +16,15 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use bf_tree::{BfTree, Config};
-use diskann::delegate_default_post_process;
+use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNResult,
     error::IntoANNResult,
     graph::{
         AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
-            self, DelegateDefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy,
-            InsertStrategy, PostProcess, PruneStrategy, SearchExt, SearchStrategy,
+            self, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
+            PruneStrategy, SearchExt, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -1485,43 +1485,13 @@ where
     }
 }
 
-impl<T, Q, D> DelegateDefaultPostProcessor<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
+impl<T, Q, D> HasDefaultProcessor<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
 {
-    delegate_default_post_process!(RemoveDeletedIdsAndCopy);
-}
-
-impl<T, Q, D> PostProcess<BfTreeProvider<T, Q, D>, [T], RemoveDeletedIdsAndCopy> for FullPrecision
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-{
-    #[allow(clippy::manual_async_fn)]
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: RemoveDeletedIdsAndCopy,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &[T],
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
-    {
-        async move {
-            glue::SearchPostProcess::post_process(
-                &processor, accessor, query, computer, candidates, output,
-            )
-            .await
-            .into_ann_result()
-        }
-    }
+    has_default_processor!(RemoveDeletedIdsAndCopy);
 }
 
 /// An [`glue::SearchPostProcess`] implementation that reranks PQ vectors.
@@ -1619,41 +1589,12 @@ where
     }
 }
 
-impl<T, D> DelegateDefaultPostProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
+impl<T, D> HasDefaultProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
 {
-    delegate_default_post_process!(Rerank);
-}
-
-impl<T, D> PostProcess<BfTreeProvider<T, QuantVectorProvider, D>, [T], Rerank> for Hybrid
-where
-    T: VectorRepr,
-    D: AsyncFriendly + DeletionCheck,
-{
-    #[allow(clippy::manual_async_fn)]
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: Rerank,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &[T],
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
-    {
-        async move {
-            glue::SearchPostProcess::post_process(
-                &processor, accessor, query, computer, candidates, output,
-            )
-            .await
-            .into_ann_result()
-        }
-    }
+    has_default_processor!(Rerank);
 }
 
 // Pruning

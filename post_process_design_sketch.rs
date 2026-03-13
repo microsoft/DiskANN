@@ -161,8 +161,8 @@ where
     fn create_processor(&self) -> Self::Processor;
 }
 
-// Convenience macro (same idea as exhibit-B's delegate_default_post_process!).
-macro_rules! delegate_default_post_process {
+// Convenience macro (same idea as exhibit-B's has_default_processor!).
+macro_rules! has_default_processor {
     ($Processor:ty) => {
         type Processor = $Processor;
         fn create_processor(&self) -> Self::Processor {
@@ -291,7 +291,7 @@ impl SearchStrategy<MyProvider, [f32]> for MyStrategy {
 
 // Opt in to the default: "my default post-processor is CopyIds"
 impl HasDefaultProcessor<MyProvider, [f32]> for MyStrategy {
-    delegate_default_post_process!(CopyIds);
+    has_default_processor!(CopyIds);
 }
 // That's it — Knn now works with MyStrategy.
 
@@ -392,7 +392,7 @@ where
 // A. HRTB on HasDefaultProcessor::Processor
 //    The bound `for<'a> SearchPostProcess<Self::SearchAccessor<'a>, T, O>`
 //    is the same one that lived on SearchStrategy::PostProcessor before.
-//    It's not new — it just moved.  The delegate_default_post_process! macro
+//    It's not new — it just moved.  The has_default_processor! macro
 //    should absorb this.
 //
 // B. BetaFilter's generic P delegation

@@ -144,16 +144,16 @@ where
     }
 }
 
-/// [`DelegateDefaultPostProcessor`] delegation for [`BetaFilter`]. The processor is composed by
+/// [`HasDefaultProcessor`] delegation for [`BetaFilter`]. The processor is composed by
 /// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
-impl<Provider, Strategy, T, I, O> glue::DelegateDefaultPostProcessor<Provider, T, O>
+impl<Provider, Strategy, T, I, O> glue::HasDefaultProcessor<Provider, T, O>
     for BetaFilter<Strategy, I>
 where
     T: ?Sized,
     I: VectorId,
     O: Send,
     Provider: DataProvider<InternalId = I>,
-    Strategy: glue::DelegateDefaultPostProcessor<Provider, T, O>,
+    Strategy: glue::HasDefaultProcessor<Provider, T, O>,
 {
     type Processor = glue::Pipeline<Unwrap, Strategy::Processor>;
 
@@ -559,8 +559,8 @@ mod tests {
         }
     }
 
-    impl glue::DelegateDefaultPostProcessor<SimpleProvider, u64> for SimpleStrategy {
-        diskann::delegate_default_post_process!(CopyIds);
+    impl glue::HasDefaultProcessor<SimpleProvider, u64> for SimpleStrategy {
+        diskann::has_default_processor!(CopyIds);
     }
 
     /// A simple `QueryLabelProvider` that matches multiples of 3.
