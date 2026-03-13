@@ -491,3 +491,38 @@ error reporting in the event of a dispatch fail much easier for the user to unde
 
 Refer to implementations within the benchmarking framework for what some of this may look like.
 
+## Autotuner Tool
+
+The `autotuner` tool builds on top of the benchmark framework to automatically sweep over parameter combinations and identify the best configuration based on optimization criteria (QPS, latency, or recall).
+
+The autotuner uses a **path-based configuration system** that doesn't hardcode JSON structure, making it robust to changes in the benchmark framework. You specify which parameters to sweep by providing JSON paths.
+
+See [diskann-tools/AUTOTUNER.md](../diskann-tools/AUTOTUNER.md) for detailed documentation.
+
+### Quick Start
+
+```sh
+# Generate an example sweep configuration
+cargo run --release --package diskann-tools --bin autotuner -- example --output sweep_config.json
+
+# Run parameter sweep to find optimal configuration
+cargo run --release --package diskann-tools --bin autotuner -- sweep \
+  --base-config base_config.json \
+  --sweep-config sweep_config.json \
+  --output-dir ./autotuner_results \
+  --criterion qps \
+  --target-recall 0.95
+```
+
+The sweep configuration uses JSON paths to specify parameters:
+```json
+{
+  "parameters": [
+    {"path": "jobs.0.content.source.max_degree", "values": [16, 32, 64]},
+    {"path": "jobs.0.content.source.l_build", "values": [50, 75, 100]}
+  ]
+}
+```
+
+This design makes the autotuner adaptable to any benchmark configuration format without requiring code changes when the benchmark framework evolves.
+

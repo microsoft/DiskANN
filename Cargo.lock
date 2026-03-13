@@ -916,6 +916,7 @@ dependencies = [
  "rayon",
  "rstest",
  "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "vfs",
