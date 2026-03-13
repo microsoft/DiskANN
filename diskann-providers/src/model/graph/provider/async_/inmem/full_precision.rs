@@ -317,30 +317,6 @@ where
 {
 }
 
-// impl<T, Q, D, Ctx> FillSet for FullAccessor<'_, T, Q, D, Ctx>
-// where
-//     T: VectorRepr,
-//     Q: AsyncFriendly,
-//     D: AsyncFriendly,
-//     Ctx: ExecutionContext,
-// {
-//     async fn fill_set<Itr>(
-//         &mut self,
-//         set: &mut HashMap<Self::Id, Self::Extended>,
-//         itr: Itr,
-//     ) -> Result<(), Self::GetError>
-//     where
-//         Itr: Iterator<Item = Self::Id> + Send + Sync,
-//     {
-//         for i in itr {
-//             set.entry(i).or_insert_with(|| unsafe {
-//                 self.provider.base_vectors.get_vector_sync(i.into_usize())
-//             });
-//         }
-//         Ok(())
-//     }
-// }
-
 //-------------------//
 // In-mem Extensions //
 //-------------------//

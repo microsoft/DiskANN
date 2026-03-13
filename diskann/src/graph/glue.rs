@@ -59,13 +59,13 @@
 //!   an [`Accessor`] and a random access [`DistanceFunction`] for performing distance
 //!   calculations on the retrieve elements.
 //!
-//!   One subtle aspect is the use of the [`FillSet`] trait. For clients with expensive
+//!   One subtle aspect is the use of the [`workingset::Fill`] trait. For clients with expensive
 //!   vector retrieval calls, we wish to only retrieve vector IDs once for pruning.
 //!
-//!   This is done by using a hash-map to store the elements retrieved by the
+//!   This is done by using a working set to store the elements retrieved by the
 //!   `PruneAccessor`. To give implementers the ability to perform a hybrid prune
 //!   (consisting of a mix of full-precision and quantized vectors), **without** the index
-//!   algorithm being aware of these two levels, the trait [`FillSet`] is used to delegate
+//!   algorithm being aware of these two levels, the trait [`workingset::Fill`] is used to delegate
 //!   the responsibility of populating this cache to the [`DataProvider`].
 //!
 //! * [`InplaceDeleteStrategy`]: This follows the trend of defining accessors and related
@@ -1049,108 +1049,4 @@ mod tests {
         // Ensure that no reads were emitted.
         assert_eq!(ctx.count(), 0);
     }
-
-    // TODO: Port FillSet tests to Fill<Map> tests once migration is complete.
-    //
-    // #[tokio::test]
-    // async fn test_default_fill_set() {
-    //     let ctx = CountGetVector::default();
-    //     let num_points: usize = 100;
-    //     let provider = SimpleProvider {
-    //         items: (0..num_points).map(|i| i as f32).collect(),
-    //     };
-    //
-    //     let mut s = HashMap::new();
-    //     let mut accessor = Retriever::new(&provider, &ctx, true);
-    //
-    //     assert_eq!(ctx.count(), 0, "default count should be 0");
-    //     accessor
-    //         .fill_set(&mut s, [0, 1, 2, 3].into_iter())
-    //         .await
-    //         .unwrap();
-    //     assert_eq!(s.len(), 4);
-    //     assert_eq!(*s.get(&0).unwrap(), 0.0);
-    //     assert_eq!(*s.get(&1).unwrap(), 1.0);
-    //     assert_eq!(*s.get(&2).unwrap(), 2.0);
-    //     assert_eq!(*s.get(&3).unwrap(), 3.0);
-    //
-    //     assert_eq!(ctx.count(), 4, "expected 1 load per element");
-    //     ctx.clear();
-    //
-    //     accessor
-    //         .fill_set(&mut s, [2, 3, 4, 5].into_iter())
-    //         .await
-    //         .unwrap();
-    //     assert_eq!(s.len(), 6);
-    //     assert_eq!(*s.get(&0).unwrap(), 0.0);
-    //     assert_eq!(*s.get(&1).unwrap(), 1.0);
-    //     assert_eq!(*s.get(&2).unwrap(), 2.0);
-    //     assert_eq!(*s.get(&3).unwrap(), 3.0);
-    //     assert_eq!(*s.get(&4).unwrap(), 4.0);
-    //     assert_eq!(*s.get(&5).unwrap(), 5.0);
-    //
-    //     assert_eq!(
-    //         ctx.count(),
-    //         2,
-    //         "expected 1 load per element not already in the set"
-    //     );
-    //
-    //     // Check error propagation.
-    //     let _: InvalidVectorId = accessor
-    //         .fill_set(&mut s, [8, 9, num_points as u32].into_iter())
-    //         .await
-    //         .unwrap_err();
-    // }
-    //
-    // #[tokio::test]
-    // async fn test_default_fill_set_transient_error() {
-    //     let ctx = CountGetVector::default();
-    //     let num_points: usize = 100;
-    //     let provider = SimpleProvider {
-    //         items: (0..num_points).map(|i| i as f32).collect(),
-    //     };
-    //
-    //     let mut s = HashMap::new();
-    //     let mut accessor = Retriever::new(&provider, &ctx, false);
-    //
-    //     assert_eq!(ctx.count(), 0, "default count should be 0");
-    //     accessor
-    //         .fill_set(&mut s, [0, 1, 2, 3].into_iter())
-    //         .await
-    //         .unwrap();
-    //     assert_eq!(s.len(), 4);
-    //     assert_eq!(*s.get(&0).unwrap(), 0.0);
-    //     assert_eq!(*s.get(&1).unwrap(), 1.0);
-    //     assert_eq!(*s.get(&2).unwrap(), 2.0);
-    //     assert_eq!(*s.get(&3).unwrap(), 3.0);
-    //
-    //     assert_eq!(ctx.count(), 4, "expected 1 load per element");
-    //     ctx.clear();
-    //
-    //     // Transient errors should be recorded and asknowledged, but not stop processing.
-    //     let err = accessor
-    //         .fill_set(
-    //             &mut s,
-    //             [2, 3, num_points as u32, 4, num_points as u32 + 1, 5].into_iter(),
-    //         )
-    //         .await
-    //         .unwrap_err();
-    //
-    //     assert!(!err.unrecoverable);
-    //     err.acknowledge("acknowledging to satisfy drop logic");
-    //
-    //     assert_eq!(s.len(), 6);
-    //     assert_eq!(*s.get(&0).unwrap(), 0.0);
-    //     assert_eq!(*s.get(&1).unwrap(), 1.0);
-    //     assert_eq!(*s.get(&2).unwrap(), 2.0);
-    //     assert_eq!(*s.get(&3).unwrap(), 3.0);
-    //     assert_eq!(*s.get(&4).unwrap(), 4.0);
-    //     assert_eq!(*s.get(&5).unwrap(), 5.0);
-    //
-    //     assert_eq!(
-    //         ctx.count(),
-    //         2,
-    //         "expected 1 load per element not already in the set"
-    //     );
-    // }
 }

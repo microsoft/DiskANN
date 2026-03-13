@@ -295,7 +295,7 @@ pub struct BfTreeProviderParameters {
     pub metric: Metric,
 
     // If quantization is used, this parameter controls how many full-precision
-    // vectors are retrieved for each [`FillSet`] operation
+    // vectors are retrieved for each fill operation
     pub max_fp_vecs_per_fill: Option<usize>,
 
     // The maximum number of neighbors to store for each vector
@@ -1061,34 +1061,6 @@ where
     D: AsyncFriendly,
 {
 }
-
-// impl<T, Q, D> FillSet for FullAccessor<'_, T, Q, D>
-// where
-//     T: VectorRepr,
-//     Q: AsyncFriendly,
-//     D: AsyncFriendly,
-// {
-//     async fn fill_set<Itr>(
-//         &mut self,
-//         set: &mut HashMap<Self::Id, Self::Extended>,
-//         itr: Itr,
-//     ) -> Result<(), Self::GetError>
-//     where
-//         Itr: Iterator<Item = Self::Id> + Send + Sync,
-//     {
-//         for i in itr {
-//             set.entry(i).or_insert_with(|| {
-//                 #[allow(clippy::expect_used)]
-//                 self.provider
-//                     .full_vectors
-//                     .get_vector_sync(i.into_usize())
-//                     .expect("Full vector provider failed to retrieve element")
-//                     .into()
-//             });
-//         }
-//         Ok(())
-//     }
-// }
 
 impl<'a, T, Q, D> AsDeletionCheck for FullAccessor<'a, T, Q, D>
 where

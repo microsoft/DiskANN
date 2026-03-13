@@ -179,7 +179,7 @@ where
         }
     }
 
-    /// Borrow as a [`ScopedMap`]-compatible view.
+    /// Borrow as a [`View`].
     pub fn view(&self) -> View<'_, K, V, P> {
         View { map: self }
     }
@@ -202,6 +202,7 @@ pub enum Entry<'a, K, V, P: Projection> {
     Vacant(VacantEntry<'a, K, V>),
 }
 
+/// An entry in the mutable map layer that already has a value.
 pub struct OccupiedEntry<'a, K, V> {
     entry: hash_map::OccupiedEntry<'a, K, V>,
 }
@@ -220,6 +221,7 @@ impl<'a, K, V> OccupiedEntry<'a, K, V> {
     }
 }
 
+/// An entry in the mutable map layer with no existing value.
 pub struct VacantEntry<'a, K, V> {
     entry: hash_map::VacantEntry<'a, K, V>,
 }
@@ -278,11 +280,19 @@ impl<K, V, P: Projection> AsWorkingSet<Map<K, V, P>> for Unseeded {
 // Projections //
 /////////////////
 
+/// Defines how stored values `V` are projected to element types for lookups.
+///
+/// A projection decouples the owned storage type (`V`) from the borrowed view type
+/// returned by [`View::get`](super::View::get). For example, `Ref<[T]>` projects
+/// `Box<[T]>` to `&[T]`, while `Reborrowed<V>` uses `V`'s own [`Reborrow`] impl.
 pub trait Projection: Send + Sync + 'static {
     type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send;
     type ElementRef<'a>;
 }
 
+/// Projection that borrows stored values as `&T` slices.
+///
+/// Use this when `V = Box<[T]>` and the view should yield `&[T]`.
 #[derive(Debug)]
 pub struct Ref<T: ?Sized>(std::marker::PhantomData<T>);
 
@@ -305,6 +315,11 @@ where
     type ElementRef<'a> = &'a T;
 }
 
+/// Default projection that uses the value's [`Reborrow`] impl.
+///
+/// This is the default `P` parameter for [`Map`]. It delegates to `V::reborrow()`,
+/// wrapping the value in [`AsReborrowed`] so the view's element type matches
+/// the accessor's `ElementRef`.
 #[derive(Debug)]
 pub struct Reborrowed<T>(std::marker::PhantomData<T>)
 where
@@ -326,6 +341,10 @@ where
     type ElementRef<'a> = <T as Reborrow<'a>>::Target;
 }
 
+/// Wrapper that implements [`Reborrow`] by delegating to the inner value.
+///
+/// Used by the [`Reborrowed`] projection to provide a [`Reborrow`]-compatible element
+/// type from a `&V` reference.
 #[derive(Debug)]
 pub struct AsReborrowed<'a, T>(&'a T)
 where
@@ -361,6 +380,7 @@ where
     }
 }
 
+/// Convert a stored value `V` to the projection's element type for read access.
 pub trait Project<P>
 where
     P: Projection,
@@ -393,7 +413,7 @@ where
 /// Object-safe seed overlay trait, parameterized by [`Projection`].
 ///
 /// The seed stores pre-populated elements (e.g. from a multi-insert batch) and
-/// returns them as `P::Element<'_>` — the same type that [`ScopedMapView`] produces
+/// returns them as `P::Element<'_>` — the same type that [`View`] produces
 /// from the fill layer via [`Project`]. This decouples the seed's storage type from
 /// the fill layer's value type `V`.
 pub trait MapLike<K, P: Projection>: Debug + Send + Sync {
@@ -515,7 +535,7 @@ where
 // View //
 //////////
 
-/// A [`ScopedMap`] view over a [`Map`], checking seed then fill layer on each lookup.
+/// A read-only view over a [`Map`], checking seed then fill layer on each lookup.
 #[derive(Debug)]
 pub struct View<'a, K, V, P: Projection = Reborrowed<V>> {
     map: &'a Map<K, V, P>,

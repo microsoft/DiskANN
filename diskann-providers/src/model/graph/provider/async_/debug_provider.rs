@@ -888,41 +888,6 @@ impl workingset::Fill<HybridMap<f32, u8>> for HybridAccessor<'_> {
     }
 }
 
-// impl FillSet for HybridAccessor<'_> {
-//     async fn fill_set<Itr>(
-//         &mut self,
-//         set: &mut HashMap<Self::Id, Self::Extended>,
-//         itr: Itr,
-//     ) -> Result<(), Self::GetError>
-//     where
-//         Itr: Iterator<Item = Self::Id> + Send + Sync,
-//     {
-//         let threshold = 1; // one full vec per fill
-//         let data = self.provider.data();
-//         itr.enumerate().for_each(|(i, id)| {
-//             let e = set.entry(id);
-//             if i < threshold {
-//                 e.and_modify(|v| {
-//                     if !v.is_full() {
-//                         let element = data.get(&id).unwrap();
-//                         *v = Hybrid::Full(element.full().to_owned());
-//                     }
-//                 })
-//                 .or_insert_with(|| {
-//                     let element = data.get(&id).unwrap();
-//                     Hybrid::Full(element.full().to_owned())
-//                 });
-//             } else {
-//                 e.or_insert_with(|| {
-//                     let element = data.get(&id).unwrap();
-//                     Hybrid::Quant(element.quant().to_owned())
-//                 });
-//             }
-//         });
-//         Ok(())
-//     }
-// }
-
 ////////////////
 // Strategies //
 ////////////////

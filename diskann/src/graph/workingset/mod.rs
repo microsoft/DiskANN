@@ -21,12 +21,11 @@ pub use map::Map;
 // Traits //
 ////////////
 
-/// Populate a working set `State` with element data from an accessor.
+/// Populate a working set with element data from an accessor.
 ///
-/// This is the successor to `FillSet`. The accessor knows how to fetch elements
-/// (via `get_element` or bulk operations) and insert them into the provided state.
-/// Fill is additive — elements already present in state (including any batch overlay)
-/// are skipped.
+/// The accessor fetches elements (via `get_element` or bulk operations) and inserts
+/// them into the provided state. Fill clears the state first — elements already present
+/// in the seed overlay are skipped.
 pub trait Fill<Set>: Accessor {
     type Error: Into<ANNError> + std::fmt::Debug + Send + Sync;
 
