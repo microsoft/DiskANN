@@ -76,6 +76,15 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Prevent publish from non-main branch
+        if: >-
+          github.event_name == 'workflow_dispatch'
+          && github.event.inputs.dry_run != 'true'
+          && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Live publishing is only allowed from main. Use dry-run for other branches."
+          exit 1
+
       - name: Verify version matches tag
         if: github.event_name == 'push'
         run: |
