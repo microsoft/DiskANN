@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{collections::HashMap, fmt::Debug, future::Future};
+use std::{fmt::Debug, future::Future};
 
 use diskann::{
     ANNError, ANNResult,
@@ -23,7 +23,7 @@ use diskann::{
     },
     utils::{IntoUsize, VectorRepr},
 };
-use diskann_utils::future::{AsyncFriendly, SendFuture};
+use diskann_utils::future::AsyncFriendly;
 use diskann_vector::{DistanceFunction, distance::Metric};
 
 use crate::model::graph::{
@@ -503,7 +503,7 @@ where
     type DistanceComputer = T::Distance;
     type PruneAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = PassThrough;
+    type WorkingSet = PassThrough;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -513,7 +513,7 @@ where
         Ok(FullAccessor::new(provider))
     }
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
         PassThrough
     }
 }
@@ -527,7 +527,7 @@ where
 {
     type Error = Infallible;
 
-    type Set<'a>
+    type View<'a>
         = &'a Self
     where
         Self: 'a;
@@ -536,7 +536,7 @@ where
         &'a mut self,
         _state: &'a mut PassThrough,
         _itr: Itr,
-    ) -> Result<Self::Set<'a>, Self::Error>
+    ) -> Result<Self::View<'a>, Self::Error>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a,
@@ -545,7 +545,7 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> workingset::ScopedMap<u32> for &FullAccessor<'_, T, Q, D, Ctx>
+impl<T, Q, D, Ctx> workingset::View<u32> for &FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
     Q: AsyncFriendly,
@@ -591,7 +591,7 @@ where
         >,
 {
     type Seed = PassThrough;
-    type State = PassThrough;
+    type WorkingSet = PassThrough;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {

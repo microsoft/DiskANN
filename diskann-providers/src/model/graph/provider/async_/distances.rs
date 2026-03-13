@@ -68,6 +68,8 @@ pub mod pq {
 
     use crate::model::pq::{self, FixedChunkPQTable};
 
+    type InnerMap<F, Q> = workingset::Map<u32, Hybrid<Vec<F>, Vec<Q>>, Projection<F, Q>>;
+
     pub struct Projection<F, Q> {
         _marker: std::marker::PhantomData<(F, Q)>,
     }
@@ -81,9 +83,19 @@ pub mod pq {
         type ElementRef<'a> = Hybrid<&'a [F], &'a [Q]>;
     }
 
+    impl<F, Q> workingset::map::Project<Projection<F, Q>> for Hybrid<Vec<F>, Vec<Q>>
+    where
+        F: AsyncFriendly,
+        Q: AsyncFriendly,
+    {
+        fn project(&self) -> Hybrid<&[F], &[Q]> {
+            self.reborrow()
+        }
+    }
+
     /// A newtype wrapper around [`workingset::Map`] to avoid the default blanket
     /// implementation of [`workingset::Fill`].
-    pub struct HybridMap<F, Q>(workingset::Map<u32, Hybrid<Vec<F>, Vec<Q>>, Projection<F, Q>>)
+    pub struct HybridMap<F, Q>(InnerMap<F, Q>)
     where
         F: AsyncFriendly,
         Q: AsyncFriendly;
@@ -99,18 +111,16 @@ pub mod pq {
 
         pub fn with_capacity_and(
             capacity: usize,
-            seed: Arc<dyn workingset::map::Batch<u32, Projection<F, Q>>>,
+            seed: workingset::map::Overlay<u32, Projection<F, Q>>,
         ) -> Self {
             Self(workingset::Map::with_capacity_and(capacity, seed))
         }
 
-        pub fn get(&self) -> &workingset::Map<u32, Hybrid<Vec<F>, Vec<Q>>, Projection<F, Q>> {
+        pub fn get(&self) -> &InnerMap<F, Q> {
             &self.0
         }
 
-        pub fn get_mut(
-            &mut self,
-        ) -> &mut workingset::Map<u32, Hybrid<Vec<F>, Vec<Q>>, Projection<F, Q>> {
+        pub fn get_mut(&mut self) -> &mut InnerMap<F, Q> {
             &mut self.0
         }
     }
@@ -122,6 +132,17 @@ pub mod pq {
     {
         fn default() -> Self {
             Self(Default::default())
+        }
+    }
+
+    impl<F, Q> workingset::AsWorkingSet<HybridMap<F, Q>>
+        for workingset::map::Overlay<u32, Projection<F, Q>>
+    where
+        F: AsyncFriendly,
+        Q: AsyncFriendly,
+    {
+        fn as_working_set(&self, capacity: usize) -> HybridMap<F, Q> {
+            HybridMap::with_capacity_and(capacity, self.clone())
         }
     }
 

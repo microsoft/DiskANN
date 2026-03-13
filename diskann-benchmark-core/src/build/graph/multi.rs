@@ -9,7 +9,6 @@ use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     graph::{self, glue},
     provider,
-    utils::async_tools::VectorIdBoxSlice,
 };
 use diskann_utils::{future::AsyncFriendly, views::Matrix};
 

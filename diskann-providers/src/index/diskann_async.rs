@@ -185,7 +185,7 @@ pub(crate) mod tests {
             AsNeighbor, AsNeighborMut, BuildQueryComputer, DataProvider, DefaultContext, Delete,
             ExecutionContext, Guard, NeighborAccessor, NeighborAccessorMut, SetElement,
         },
-        utils::{IntoUsize, ONE, async_tools::VectorIdBoxSlice},
+        utils::{IntoUsize, ONE},
     };
     use diskann_quantization::scalar::train::ScalarQuantizationParameters;
     use diskann_utils::{test_data_root, views::Matrix};

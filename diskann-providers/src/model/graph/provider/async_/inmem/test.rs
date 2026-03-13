@@ -259,11 +259,55 @@ const STATIC_PRUNE_THRESHOLD: usize = 5;
 /// item retrieved is a failure.
 static START_COUNT: Mutex<usize> = Mutex::new(STATIC_PRUNE_THRESHOLD);
 
+/// A new-type wrapper around `Box<[f32]>` to avoid the default blanket implementation
+/// of `fill`. This is needed to ensure that we don't hit the blanket implementation.
+#[derive(Debug, Clone)]
+pub struct Boxed(Box<[f32]>);
+
+type WorkingSet = workingset::map::Map<u32, Boxed, workingset::map::Ref<[f32]>>;
+type WorkingSetView<'a> = workingset::map::View<'a, u32, Boxed, workingset::map::Ref<[f32]>>;
+
+impl workingset::map::Project<workingset::map::Ref<[f32]>> for Boxed {
+    fn project(&self) -> &[f32] {
+        &self.0
+    }
+}
+
+impl workingset::Fill<WorkingSet> for FlakyAccessor<'_> {
+    type Error = diskann::error::Infallible;
+    type View<'a>
+        = WorkingSetView<'a>
+    where
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        set: &'a mut WorkingSet,
+        itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
+    {
+        set.clear();
+        for id in itr {
+            if let workingset::map::Entry::Vacant(v) = set.entry(id) {
+                // Always succeed — flakiness is limited to get_element in search/insert paths,
+                // not fill. Direct vector access is infallible.
+                // SAFETY: same as get_element — we accept the race risk in tests.
+                let vector = unsafe { self.provider.base_vectors.get_vector_sync(id.into_usize()) };
+                v.insert(Boxed(Box::from(vector)));
+            }
+        }
+        Ok(set.view())
+    }
+}
+
 impl PruneStrategy<TestProvider> for Flaky {
     type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
     type PruneAccessor<'a> = FlakyAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+    type WorkingSet = WorkingSet;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -280,8 +324,8 @@ impl PruneStrategy<TestProvider> for Flaky {
         Ok(FlakyAccessor::new(provider, STATIC_PRUNE_THRESHOLD, start))
     }
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
-        Self::State::default()
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
+        Self::WorkingSet::default()
     }
 }
 
@@ -296,8 +340,8 @@ impl InsertStrategy<TestProvider, &[f32]> for Flaky {
 impl diskann::graph::glue::MultiInsertStrategy<TestProvider, diskann_utils::views::Matrix<f32>>
     for Flaky
 {
-    type Seed = workingset::MapSeed<u32, workingset::map::Ref<[f32]>>;
-    type State = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+    type Seed = workingset::map::Overlay<u32, workingset::map::Ref<[f32]>>;
+    type WorkingSet = WorkingSet;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -312,7 +356,7 @@ impl diskann::graph::glue::MultiInsertStrategy<TestProvider, diskann_utils::view
     where
         Itr: ExactSizeIterator<Item = u32>,
     {
-        workingset::MapSeed::from_batch(batch, ids)
+        workingset::map::Overlay::from_batch(batch, ids)
     }
 }
 
@@ -323,7 +367,7 @@ impl PruneStrategy<TestProvider> for SuperFlaky {
     type DistanceComputer = <FullAccessor<'static> as BuildDistanceComputer>::DistanceComputer;
     type PruneAccessor<'a> = FlakyAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -333,7 +377,7 @@ impl PruneStrategy<TestProvider> for SuperFlaky {
         Ok(FlakyAccessor::new(provider, 1, 1))
     }
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
-        Self::State::default()
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
+        Self::WorkingSet::default()
     }
 }

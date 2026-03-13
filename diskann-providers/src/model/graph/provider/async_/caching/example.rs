@@ -18,7 +18,7 @@ use crate::model::graph::provider::async_::{
 use super::{
     bf_cache::{self, Cache},
     error::CacheAccessError,
-    provider::{self as cache_provider, CachingError, NeighborStatus},
+    provider::{self as cache_provider, NeighborStatus},
     utils::{CacheKey, Graph, HitStats, KeyGen, LocalStats},
 };
 
@@ -201,7 +201,7 @@ impl<'a> cache_provider::AsCacheAccessorFor<'a, debug_provider::FullAccessor<'a>
     }
 }
 
-type FullAccessorState = workingset::Map<u32, Box<[f32]>>;
+type FullAccessorState = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
 type FullAccessorCache<'a> = CacheAccessor<'a, bf_cache::VecCacher<f32>>;
 
 impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, FullAccessorState>
@@ -214,7 +214,7 @@ impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, FullAccessorState>
         itr: Itr,
     ) -> impl diskann_utils::future::SendFuture<
         Result<
-            <Self as workingset::Fill<FullAccessorState>>::Set<'b>,
+            <Self as workingset::Fill<FullAccessorState>>::View<'b>,
             cache_provider::CachingError<
                 <Self as workingset::Fill<FullAccessorState>>::Error,
                 <FullAccessorCache<'a> as cache_provider::ElementCache<
@@ -233,8 +233,8 @@ impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, FullAccessorState>
         async move {
             for i in itr {
                 match state.entry(i) {
-                    workingset::Entry::Seeded(_) | workingset::Entry::Occupied(_) => {}
-                    workingset::Entry::Vacant(vacant) => {
+                    workingset::map::Entry::Seeded(_) | workingset::map::Entry::Occupied(_) => {}
+                    workingset::map::Entry::Vacant(vacant) => {
                         match cache.get_cached(i).map_err(CachingError::Cache)? {
                             Some(element) => {
                                 vacant.insert(
@@ -253,7 +253,7 @@ impl<'a> cache_provider::CachedFill<FullAccessorCache<'a>, FullAccessorState>
                     }
                 }
             }
-            Ok(state.scoped())
+            Ok(state.view())
         }
     }
 }
@@ -273,7 +273,6 @@ mod tests {
         provider::{
             Accessor, DataProvider, Delete, NeighborAccessor, NeighborAccessorMut, SetElement,
         },
-        utils::async_tools,
     };
     use diskann_quantization::num::PowerOfTwo;
     use diskann_utils::views::Matrix;

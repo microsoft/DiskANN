@@ -666,9 +666,9 @@ where
     type DistanceComputer = DistanceComputer;
     type PruneAccessor<'a> = QuantAccessor<'a, NBITS, V, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = PassThrough;
+    type WorkingSet = PassThrough;
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
         PassThrough
     }
 
@@ -681,15 +681,6 @@ where
     }
 }
 
-// impl<const NBITS: usize, V, D, Ctx> FillSet for QuantAccessor<'_, NBITS, V, D, Ctx>
-// where
-//     V: AsyncFriendly,
-//     D: AsyncFriendly + DeletionCheck,
-//     Ctx: ExecutionContext,
-//     Unsigned: Representation<NBITS>,
-// {
-// }
-
 impl<const NBITS: usize, V, D, Ctx> workingset::Fill<PassThrough>
     for QuantAccessor<'_, NBITS, V, D, Ctx>
 where
@@ -699,7 +690,7 @@ where
     Unsigned: Representation<NBITS>,
 {
     type Error = std::convert::Infallible;
-    type Set<'a>
+    type View<'a>
         = &'a Self
     where
         Self: 'a;
@@ -708,7 +699,7 @@ where
         &'a mut self,
         _state: &'a mut PassThrough,
         _itr: Itr,
-    ) -> Result<Self::Set<'a>, Self::Error>
+    ) -> Result<Self::View<'a>, Self::Error>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a,
@@ -717,8 +708,7 @@ where
     }
 }
 
-impl<const NBITS: usize, V, D, Ctx> workingset::ScopedMap<u32>
-    for &QuantAccessor<'_, NBITS, V, D, Ctx>
+impl<const NBITS: usize, V, D, Ctx> workingset::View<u32> for &QuantAccessor<'_, NBITS, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
@@ -763,14 +753,14 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
     B: glue::Batch,
-    Self: PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, State = PassThrough>
+    Self: PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>, WorkingSet = PassThrough>
         + for<'a> InsertStrategy<
             DefaultProvider<V, SQStore<NBITS>, D, Ctx>,
             B::Element<'a>,
             PruneStrategy = Self,
         >,
 {
-    type State = PassThrough;
+    type WorkingSet = PassThrough;
     type Seed = PassThrough;
     type InsertStrategy = Self;
 
@@ -778,7 +768,7 @@ where
         *self
     }
 
-    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::State
+    fn finish<Itr>(&self, _batch: &std::sync::Arc<B>, _ids: Itr) -> Self::Seed
     where
         Itr: ExactSizeIterator<Item = u32>,
     {

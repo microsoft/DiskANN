@@ -401,7 +401,7 @@ where
     Ctx: ExecutionContext,
 {
     type Error = std::convert::Infallible;
-    type Set<'a>
+    type View<'a>
         = MaybeFullPrecision<'a, 'accessor, T, D, Ctx>
     where
         Self: 'a;
@@ -410,7 +410,7 @@ where
         &'a mut self,
         state: &'a mut FullPrecisionTracker,
         itr: Itr,
-    ) -> Result<Self::Set<'a>, Self::Error>
+    ) -> Result<Self::View<'a>, Self::Error>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a,
@@ -432,7 +432,7 @@ where
     full: &'a FullPrecisionTracker,
 }
 
-impl<T, D, Ctx> workingset::ScopedMap<u32> for MaybeFullPrecision<'_, '_, T, D, Ctx>
+impl<T, D, Ctx> workingset::View<u32> for MaybeFullPrecision<'_, '_, T, D, Ctx>
 where
     T: VectorRepr,
     D: AsyncFriendly,
@@ -468,7 +468,7 @@ where
     Ctx: ExecutionContext,
 {
     type Error = std::convert::Infallible;
-    type Set<'a>
+    type View<'a>
         = &'a Self
     where
         Self: 'a;
@@ -477,7 +477,7 @@ where
         &'a mut self,
         _state: &'a mut PassThrough,
         _itr: Itr,
-    ) -> Result<Self::Set<'a>, Self::Error>
+    ) -> Result<Self::View<'a>, Self::Error>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a,
@@ -486,7 +486,7 @@ where
     }
 }
 
-impl<V, D, Ctx> workingset::ScopedMap<u32> for &QuantAccessor<'_, V, D, Ctx>
+impl<V, D, Ctx> workingset::View<u32> for &QuantAccessor<'_, V, D, Ctx>
 where
     V: AsyncFriendly,
     D: AsyncFriendly,
@@ -577,9 +577,9 @@ where
     type DistanceComputer = distances::pq::HybridComputer<T>;
     type PruneAccessor<'a> = HybridAccessor<'a, T, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = FullPrecisionTracker;
+    type WorkingSet = FullPrecisionTracker;
 
-    fn create_state(&self, capacity: usize) -> Self::State {
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
         FullPrecisionTracker(hashbrown::HashSet::with_capacity(capacity))
     }
 
@@ -621,7 +621,7 @@ where
         >,
 {
     type Seed = workingset::Unseeded;
-    type State = FullPrecisionTracker;
+    type WorkingSet = FullPrecisionTracker;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -705,9 +705,9 @@ where
     type DistanceComputer = pq::distance::DistanceComputer<Arc<FixedChunkPQTable>>;
     type PruneAccessor<'a> = QuantAccessor<'a, NoStore, D, Ctx>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = PassThrough;
+    type WorkingSet = PassThrough;
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
         PassThrough
     }
 
@@ -745,7 +745,7 @@ where
         >,
 {
     type Seed = PassThrough;
-    type State = PassThrough;
+    type WorkingSet = PassThrough;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {

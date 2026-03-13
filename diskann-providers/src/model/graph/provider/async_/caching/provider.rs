@@ -56,15 +56,11 @@
 //!   by the inner [`Accessor`] and is customized for a cache accessor.
 //! * The traits [`Evict`] and [`AsCacheAccessorFor`] are implemented by the **cache**.
 
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    fmt::Debug,
-    sync::Arc,
-};
+use std::{fmt::Debug, sync::Arc};
 
 use diskann::{
     ANNResult,
-    error::{self as core_error, IntoANNResult, StandardError, ToRanked},
+    error::{self as core_error, IntoANNResult, StandardError},
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{
@@ -349,7 +345,7 @@ where
         cache: &'a mut C,
         state: &'a mut State,
         itr: Itr,
-    ) -> impl SendFuture<Result<Self::Set<'a>, CachingError<Self::Error, C::Error>>>
+    ) -> impl SendFuture<Result<Self::View<'a>, CachingError<Self::Error, C::Error>>>
     where
         Itr: Iterator<Item = Self::Id> + Send + Sync;
 }
@@ -800,8 +796,8 @@ where
 {
     type Error = CachingError<A::Error, C::Error>;
 
-    type Set<'a>
-        = <A as workingset::Fill<State>>::Set<'a>
+    type View<'a>
+        = <A as workingset::Fill<State>>::View<'a>
     where
         Self: 'a,
         State: 'a;
@@ -810,7 +806,7 @@ where
         &'a mut self,
         state: &'a mut Cached<State>,
         itr: Itr,
-    ) -> impl SendFuture<Result<Self::Set<'a>, Self::Error>>
+    ) -> impl SendFuture<Result<Self::View<'a>, Self::Error>>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a,
@@ -960,11 +956,11 @@ where
         > + AsyncFriendly,
     for<'a> S::PruneAccessor<'a>: CachedFill<
             <C as AsCacheAccessorFor<'a, PruneAccessor<'a, S, DP>>>::Accessor,
-            <S as PruneStrategy<DP>>::State,
+            <S as PruneStrategy<DP>>::WorkingSet,
         >,
     E: StandardError,
 {
-    type State = Cached<<S as PruneStrategy<DP>>::State>;
+    type WorkingSet = Cached<<S as PruneStrategy<DP>>::WorkingSet>;
     type DistanceComputer = S::DistanceComputer;
     type PruneAccessor<'a> = CachingAccessor<
         PruneAccessor<'a, S, DP>,
@@ -988,8 +984,8 @@ where
             .map_err(CachingError::Cache)
     }
 
-    fn create_state(&self, capacity: usize) -> Self::State {
-        Cached::new(self.strategy.create_state(capacity))
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        Cached::new(self.strategy.create_working_set(capacity))
     }
 }
 
@@ -1058,12 +1054,15 @@ where
     Cached<S::InsertStrategy>: for<'a> InsertStrategy<
             CachingProvider<DP, C>,
             B::Element<'a>,
-            PruneStrategy: PruneStrategy<CachingProvider<DP, C>, State = Cached<S::State>>,
+            PruneStrategy: PruneStrategy<
+                CachingProvider<DP, C>,
+                WorkingSet = Cached<S::WorkingSet>,
+            >,
         >,
     C: AsyncFriendly,
 {
     type Seed = Cached<S::Seed>;
-    type State = Cached<S::State>;
+    type WorkingSet = Cached<S::WorkingSet>;
     type InsertStrategy = Cached<S::InsertStrategy>;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {

@@ -602,7 +602,7 @@ mod tests {
     impl Project<TestProjection> for Box<[f32]> {
         fn project(&self) -> Wrapped<'_> {
             Wrapped {
-                data: &*self,
+                data: self,
                 source: Source::Project,
             }
         }
@@ -627,7 +627,9 @@ mod tests {
         Matrix::try_from(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0].into_boxed_slice(), 3, 2).unwrap()
     }
 
-    fn test_overlay() -> (Arc<Matrix<f32>>, Overlay<u32, Ref<[f32]>>) {
+    type TestOverlay = Overlay<u32, Ref<[f32]>>;
+
+    fn test_overlay() -> (Arc<Matrix<f32>>, TestOverlay) {
         let batch = Arc::new(test_matrix());
         let ids = [10u32, 20, 30];
         let overlay = Overlay::from_batch(&batch, ids.into_iter());
@@ -1134,6 +1136,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::clone_on_copy, reason = "explicitly testing Clone impl")]
     fn as_reborrowed_clone() {
         let value: Box<[f32]> = Box::new([3.0, 4.0]);
         let ar = AsReborrowed(&*value);

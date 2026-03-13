@@ -846,18 +846,23 @@ impl BuildDistanceComputer for HybridAccessor<'_> {
     }
 }
 
-impl workingset::Fill<HybridMap<Vec<f32>, Vec<u8>>> for HybridAccessor<'_> {
+impl workingset::Fill<HybridMap<f32, u8>> for HybridAccessor<'_> {
     type Error = diskann::error::Infallible;
-    type Set<'a>
-        = workingset::ScopedMapView<'a, u32, Hybrid<Vec<f32>, Vec<u8>>>
+    type View<'a>
+        = workingset::map::View<
+        'a,
+        u32,
+        Hybrid<Vec<f32>, Vec<u8>>,
+        distances::pq::Projection<f32, u8>,
+    >
     where
         Self: 'a;
 
     async fn fill<'a, Itr>(
         &'a mut self,
-        state: &'a mut HybridMap<Vec<f32>, Vec<u8>>,
+        state: &'a mut HybridMap<f32, u8>,
         itr: Itr,
-    ) -> Result<Self::Set<'a>, Self::Error>
+    ) -> Result<Self::View<'a>, Self::Error>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a,
@@ -879,7 +884,7 @@ impl workingset::Fill<HybridMap<Vec<f32>, Vec<u8>>> for HybridAccessor<'_> {
             }
         });
 
-        Ok(map.scoped())
+        Ok(map.view())
     }
 }
 
@@ -1002,7 +1007,7 @@ impl PruneStrategy<DebugProvider> for FullPrecision {
     type DistanceComputer = <f32 as VectorRepr>::Distance;
     type PruneAccessor<'a> = FullAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = workingset::Map<u32, Box<[f32]>>;
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -1012,8 +1017,8 @@ impl PruneStrategy<DebugProvider> for FullPrecision {
         Ok(FullAccessor::new(provider))
     }
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
-        Default::default()
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        workingset::Map::with_capacity(capacity)
     }
 }
 
@@ -1021,7 +1026,7 @@ impl PruneStrategy<DebugProvider> for Quantized {
     type DistanceComputer = distances::pq::HybridComputer<f32>;
     type PruneAccessor<'a> = HybridAccessor<'a>;
     type PruneAccessorError = diskann::error::Infallible;
-    type State = HybridMap<Vec<f32>, Vec<u8>>;
+    type WorkingSet = HybridMap<f32, u8>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -1031,8 +1036,8 @@ impl PruneStrategy<DebugProvider> for Quantized {
         Ok(HybridAccessor::new(provider))
     }
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
-        Default::default()
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        HybridMap::with_capacity(capacity)
     }
 }
 
@@ -1128,28 +1133,7 @@ where
     Self: for<'a> InsertStrategy<DebugProvider, B::Element<'a>, PruneStrategy = Self>,
 {
     type Seed = workingset::Unseeded;
-    type State = workingset::Map<u32, Box<[f32]>>;
-    type InsertStrategy = Self;
-
-    fn insert_strategy(&self) -> Self::InsertStrategy {
-        *self
-    }
-
-    fn finish<Itr>(&self, batch: &Arc<B>, ids: Itr) -> Self::Seed
-    where
-        Itr: ExactSizeIterator<Item = u32>,
-    {
-        workingset::Unseeded
-    }
-}
-
-impl<B> glue::MultiInsertStrategy<DebugProvider, B> for Quantized
-where
-    B: glue::Batch,
-    Self: for<'a> InsertStrategy<DebugProvider, B::Element<'a>, PruneStrategy = Self>,
-{
-    type Seed = workingset::Unseeded;
-    type State = HybridMap<Vec<f32>, Vec<u8>>;
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -1161,6 +1145,27 @@ where
         Itr: ExactSizeIterator<Item = u32>,
     {
         workingset::Unseeded
+    }
+}
+
+impl<B> glue::MultiInsertStrategy<DebugProvider, B> for Quantized
+where
+    B: for<'a> glue::Batch<Element<'a> = &'a [f32]> + std::fmt::Debug,
+    Self: for<'a> InsertStrategy<DebugProvider, &'a [f32], PruneStrategy = Self>,
+{
+    type Seed = workingset::map::Overlay<u32, distances::pq::Projection<f32, u8>>;
+    type WorkingSet = HybridMap<f32, u8>;
+    type InsertStrategy = Self;
+
+    fn insert_strategy(&self) -> Self::InsertStrategy {
+        *self
+    }
+
+    fn finish<Itr>(&self, batch: &Arc<B>, ids: Itr) -> Self::Seed
+    where
+        Itr: ExactSizeIterator<Item = u32>,
+    {
+        workingset::map::Overlay::from_batch(batch, ids)
     }
 }
 

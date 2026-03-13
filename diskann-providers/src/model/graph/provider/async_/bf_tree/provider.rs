@@ -4,7 +4,6 @@
  */
 
 use std::{
-    collections::HashMap,
     fmt::Debug,
     future::Future,
     io::{Read, Write},
@@ -1373,22 +1372,27 @@ where
     }
 }
 
-impl<T, D> workingset::Fill<distances::pq::HybridMap<Vec<T>, Vec<u8>>> for HybridAccessor<'_, T, D>
+impl<T, D> workingset::Fill<distances::pq::HybridMap<T, u8>> for HybridAccessor<'_, T, D>
 where
     T: VectorRepr,
     D: AsyncFriendly,
 {
     type Error = ANNError;
-    type Set<'a>
-        = workingset::ScopedMapView<'a, u32, distances::pq::Hybrid<Vec<T>, Vec<u8>>>
+    type View<'a>
+        = workingset::map::View<
+        'a,
+        u32,
+        distances::pq::Hybrid<Vec<T>, Vec<u8>>,
+        distances::pq::Projection<T, u8>,
+    >
     where
         Self: 'a;
 
     async fn fill<'a, Itr>(
         &'a mut self,
-        state: &'a mut distances::pq::HybridMap<Vec<T>, Vec<u8>>,
+        state: &'a mut distances::pq::HybridMap<T, u8>,
         itr: Itr,
-    ) -> Result<Self::Set<'a>, Self::Error>
+    ) -> Result<Self::View<'a>, Self::Error>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a,
@@ -1398,8 +1402,8 @@ where
         let threshold = self.provider.max_fp_vecs_per_fill;
         itr.enumerate().try_for_each(|(i, id)| -> ANNResult<()> {
             match map.entry(id) {
-                workingset::Entry::Seeded(_) | workingset::Entry::Occupied(_) => {}
-                workingset::Entry::Vacant(vacant) => {
+                workingset::map::Entry::Seeded(_) | workingset::map::Entry::Occupied(_) => {}
+                workingset::map::Entry::Vacant(vacant) => {
                     let element = if i < threshold {
                         let vec = self
                             .provider
@@ -1422,7 +1426,7 @@ where
             Ok(())
         })?;
 
-        Ok(map.scoped())
+        Ok(map.view())
     }
 }
 
@@ -1596,7 +1600,7 @@ where
     Q: AsyncFriendly,
     D: AsyncFriendly,
 {
-    type State = workingset::Map<u32, Box<[T]>>;
+    type WorkingSet = workingset::Map<u32, Box<[T]>, workingset::map::Ref<[T]>>;
     type DistanceComputer = T::Distance;
     type PruneAccessor<'a> = FullAccessor<'a, T, Q, D>;
     type PruneAccessorError = diskann::error::Infallible;
@@ -1609,7 +1613,7 @@ where
         Ok(FullAccessor::new(provider))
     }
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
         Default::default()
     }
 }
@@ -1619,7 +1623,7 @@ where
     T: VectorRepr,
     D: AsyncFriendly,
 {
-    type State = distances::pq::HybridMap<Vec<T>, Vec<u8>>;
+    type WorkingSet = distances::pq::HybridMap<T, u8>;
     type DistanceComputer = distances::pq::HybridComputer<T>;
     type PruneAccessor<'a> = HybridAccessor<'a, T, D>;
     type PruneAccessorError = diskann::error::Infallible;
@@ -1632,7 +1636,7 @@ where
         Ok(HybridAccessor::new(provider))
     }
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
         Default::default()
     }
 }

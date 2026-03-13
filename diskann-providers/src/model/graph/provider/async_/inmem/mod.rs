@@ -17,7 +17,7 @@ pub use provider::{DefaultProvider, DefaultProviderParameters, SetStartPoints};
 pub struct PassThrough;
 
 impl workingset::AsWorkingSet<Self> for PassThrough {
-    fn as_working_set(&self, capacity: usize) -> Self {
+    fn as_working_set(&self, _capacity: usize) -> Self {
         *self
     }
 }
