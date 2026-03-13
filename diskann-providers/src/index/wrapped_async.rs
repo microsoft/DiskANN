@@ -8,12 +8,16 @@ use std::{num::NonZeroUsize, sync::Arc};
 use diskann::{
     ANNResult,
     graph::{
-        self, ConsolidateKind, InplaceDeleteMethod,
+        self, ConsolidateKind, InplaceDeleteMethod, RangeSearchParams, SearchParams,
         glue::{
-            self, AsElement, InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchStrategy,
+            self, AsElement, IdIterator, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
+            SearchStrategy,
         },
-        index::{DegreeStats, PartitionedNeighbors, SearchState, SearchStats},
+        index::{
+            DegreeStats, PartitionedNeighbors, QueryLabelProvider, SearchState, SearchStats,
+        },
         search::Knn,
+        search::record::SearchRecord,
         search_output_buffer,
     },
     neighbor::Neighbor,
@@ -296,6 +300,32 @@ where
             search_state,
             k,
             result_output,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn multihop_search<S, T, O, OB>(
+        &self,
+        strategy: &S,
+        context: &DP::Context,
+        query: &T,
+        search_params: &SearchParams,
+        output: &mut OB,
+        query_label_evaluator: &dyn QueryLabelProvider<DP::InternalId>,
+    ) -> ANNResult<SearchStats>
+    where
+        T: Sync + ?Sized,
+        S: SearchStrategy<DP, T, O>,
+        O: Send,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send,
+    {
+        self.handle.block_on(self.inner.multihop_search(
+            strategy,
+            context,
+            query,
+            search_params,
+            output,
+            query_label_evaluator,
         ))
     }
 
