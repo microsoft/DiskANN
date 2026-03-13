@@ -15,7 +15,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{PostProcess, SearchExt},
+        glue::{SearchExt, SearchPostProcess},
         index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
@@ -157,10 +157,10 @@ impl Knn {
     where
         DP: DataProvider,
         T: Sync + ?Sized,
-        S: PostProcess<DP, T, PP, O>,
+        S: crate::graph::glue::SearchStrategy<DP, T, O>,
         O: Send,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
-        PP: Send + Sync,
+        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
     {
         let mut accessor = strategy
             .search_accessor(&index.data_provider, context)
@@ -182,16 +182,16 @@ impl Knn {
             )
             .await?;
 
-        let result_count = strategy
-            .post_process_with(
-                post_processor,
+        let result_count = post_processor
+            .post_process(
                 &mut accessor,
                 query,
                 &computer,
                 scratch.best.iter().take(self.l_value.get().into_usize()),
                 output,
             )
-            .await?;
+            .await
+            .into_ann_result()?;
 
         Ok(stats.finish(result_count as u32))
     }
@@ -200,6 +200,7 @@ impl Knn {
 impl<DP, S, T, O> Search<DP, S, T, O> for Knn
 where
     DP: DataProvider,
+    S: crate::graph::glue::SearchStrategy<DP, T, O>,
     T: Sync + ?Sized,
     O: Send,
 {
@@ -216,8 +217,7 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        S: PostProcess<DP, T, PP, O>,
-        PP: Send + Sync,
+        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
@@ -252,6 +252,7 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
 impl<'r, DP, S, T, O, SR> Search<DP, S, T, O> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
+    S: crate::graph::glue::SearchStrategy<DP, T, O>,
     T: Sync + ?Sized,
     O: Send,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
@@ -268,8 +269,7 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        S: PostProcess<DP, T, PP, O>,
-        PP: Send + Sync,
+        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
@@ -293,9 +293,8 @@ where
                 )
                 .await?;
 
-            let result_count = strategy
-                .post_process_with(
-                    processor,
+            let result_count = processor
+                .post_process(
                     &mut accessor,
                     query,
                     &computer,
@@ -305,7 +304,8 @@ where
                         .take(self.inner.l_value.get().into_usize()),
                     output,
                 )
-                .await?;
+                .await
+                .into_ann_result()?;
 
             Ok(stats.finish(result_count as u32))
         }

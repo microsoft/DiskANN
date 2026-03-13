@@ -27,7 +27,7 @@ use super::{
     AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod,
     glue::{
         self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
-        PostProcess, PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
+        PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
     },
     internal::{BackedgeBuffer, SortedNeighbors, prune},
     search::{
@@ -1297,16 +1297,16 @@ where
             // placed into the output.
             let proxy = v.async_lower();
             let post_processor = strategy.search_post_processor();
-            let num_results = search_strategy
-                .post_process_with(
-                    post_processor,
+            let num_results = post_processor
+                .post_process(
                     &mut search_accessor,
                     &*proxy,
                     &computer,
                     scratch.best.iter(),
                     &mut neighbor::BackInserter::new(output.as_mut_slice()),
                 )
-                .await?;
+                .await
+                .into_ann_result()?;
 
             let mut undeleted_ids: Vec<_> = output
                 .iter()
@@ -2153,20 +2153,13 @@ where
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
         P: super::search::Search<DP, S, T, O>,
-        S: glue::PostProcess<DP, T, glue::DefaultPostProcess, O>,
-        glue::DefaultPostProcess: Send + Sync,
+        S: glue::HasDefaultProcessor<DP, T, O>,
         O: Send,
         OB: super::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
     {
-        self.search_with(
-            search_params,
-            strategy,
-            glue::DefaultPostProcess,
-            context,
-            query,
-            output,
-        )
+        let processor = strategy.create_processor();
+        self.search_with(search_params, strategy, processor, context, query, output)
     }
 
     /// Execute a search with an explicit post-processor parameter.
@@ -2181,8 +2174,8 @@ where
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
         P: super::search::Search<DP, S, T, O>,
-        S: glue::PostProcess<DP, T, PP, O>,
-        PP: Send + Sync,
+        S: glue::SearchStrategy<DP, T, O>,
+        PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
         O: Send,
         OB: super::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
@@ -2229,7 +2222,7 @@ where
     where
         T: ?Sized,
         S: SearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>
-            + glue::DelegateDefaultPostProcessor<DP, T, O>,
+            + glue::HasDefaultProcessor<DP, T, O>,
         I: Iterator<Item = <DP as DataProvider>::InternalId>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,

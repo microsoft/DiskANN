@@ -13,7 +13,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, ExpandBeam, PostProcess, SearchExt},
+        glue::{self, ExpandBeam, SearchExt, SearchPostProcess},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::{self, SearchOutputBuffer},
@@ -170,6 +170,7 @@ impl Range {
 impl<DP, S, T, O> Search<DP, S, T, O> for Range
 where
     DP: DataProvider,
+    S: glue::SearchStrategy<DP, T, O>,
     T: Sync + ?Sized,
     O: Send + Default + Clone,
 {
@@ -185,8 +186,7 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        S: PostProcess<DP, T, PP, O>,
-        PP: Send + Sync,
+        PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
@@ -255,16 +255,16 @@ where
                 result_dists.as_mut_slice(),
             );
 
-            let _ = strategy
-                .post_process_with(
-                    processor,
+            let _ = processor
+                .post_process(
                     &mut accessor,
                     query,
                     &computer,
                     scratch.in_range.iter().copied(),
                     &mut output_buffer,
                 )
-                .await?;
+                .await
+                .into_ann_result()?;
 
             // Filter by inner/outer radius
             let inner_cutoff = if let Some(inner_radius) = self.inner_radius() {

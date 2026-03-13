@@ -16,7 +16,8 @@ use crate::{
     error::{ErrorExt, IntoANNResult},
     graph::{
         glue::{
-            self, ExpandBeam, HybridPredicate, PostProcess, Predicate, PredicateMut, SearchExt,
+            self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
+            SearchPostProcess,
         },
         index::{
             DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
@@ -55,6 +56,7 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
 impl<'q, DP, S, T, O> Search<DP, S, T, O> for MultihopSearch<'q, DP::InternalId>
 where
     DP: DataProvider,
+    S: glue::SearchStrategy<DP, T, O>,
     T: Sync + ?Sized,
     O: Send,
 {
@@ -70,8 +72,7 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        S: PostProcess<DP, T, PP, O>,
-        PP: Send + Sync,
+        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
@@ -95,16 +96,16 @@ where
             )
             .await?;
 
-            let result_count = strategy
-                .post_process_with(
-                    processor,
+            let result_count = processor
+                .post_process(
                     &mut accessor,
                     query,
                     &computer,
                     scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )
-                .await?;
+                .await
+                .into_ann_result()?;
 
             Ok(stats.finish(result_count as u32))
         }

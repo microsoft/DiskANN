@@ -333,44 +333,12 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError>;
 }
 
-/// Strategy-level bridge connecting a [`SearchStrategy`] to a specific processor type `P`.
-///
-/// This trait is the surface that the search infrastructure (for example,
-/// [`super::search::Knn`]) bounds on.
-///
-/// The blanket impl covers `P = DefaultPostProcess` for any strategy implementing
-/// [`DelegateDefaultPostProcessor`]. Custom processor types (e.g. `DeterminantDiversitySearchParams`) can have
-/// their own `PostProcess` impls without coherence conflicts.
-pub trait PostProcess<Provider, T, P, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T, O>
-where
-    Provider: DataProvider,
-    T: ?Sized,
-    O: Send,
-    P: Send + Sync,
-{
-    /// Run post-processing with the given `processor` on `candidates`, writing
-    /// results into `output`.
-    fn post_process_with<'a, I, B>(
-        &self,
-        processor: P,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &T,
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
-        B: SearchOutputBuffer<O> + Send + ?Sized;
-}
-
 /// Opt-in trait for strategies that have a default post-processor.
 ///
 /// Strategies implementing this trait work with [`super::search::Knn`] (no explicit
-/// processor). The old `SearchStrategy::PostProcessor` associated type is replaced by
-/// `DelegateDefaultPostProcessor::Processor`.
-pub trait DelegateDefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
+/// processor). The search infrastructure will call `create_processor()` to obtain the
+/// processor and invoke its [`SearchPostProcess::post_process`] method.
+pub trait HasDefaultProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
     SearchStrategy<Provider, T, O>
 where
     Provider: DataProvider,
@@ -386,7 +354,7 @@ where
 
 /// Aggregate trait for strategies that support both search access and a default post-processor.
 pub trait DefaultSearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T, O> + DelegateDefaultPostProcessor<Provider, T, O>
+    SearchStrategy<Provider, T, O> + HasDefaultProcessor<Provider, T, O>
 where
     Provider: DataProvider,
     T: ?Sized,
@@ -396,70 +364,31 @@ where
 
 impl<S, Provider, T, O> DefaultSearchStrategy<Provider, T, O> for S
 where
-    S: SearchStrategy<Provider, T, O> + DelegateDefaultPostProcessor<Provider, T, O>,
+    S: SearchStrategy<Provider, T, O> + HasDefaultProcessor<Provider, T, O>,
     Provider: DataProvider,
     T: ?Sized,
     O: Send,
 {
 }
 
-/// Convenience macro for implementing [`DelegateDefaultPostProcessor`] when the processor
+/// Convenience macro for implementing [`HasDefaultProcessor`] when the processor
 /// is a [`Default`]-constructible type.
 ///
 /// # Example
 ///
 /// ```ignore
-/// impl DelegateDefaultPostProcessor<MyProvider, [f32]> for MyStrategy {
-///     delegate_default_post_process!(CopyIds);
+/// impl HasDefaultProcessor<MyProvider, [f32]> for MyStrategy {
+///     has_default_processor!(CopyIds);
 /// }
 /// ```
 #[macro_export]
-macro_rules! delegate_default_post_process {
+macro_rules! has_default_processor {
     ($Processor:ty) => {
         type Processor = $Processor;
         fn create_processor(&self) -> Self::Processor {
             Default::default()
         }
     };
-}
-
-/// A zero-sized marker representing "use the default post-processor".
-///
-/// The blanket `PostProcess` impl covers exactly `P = DefaultPostProcess`.
-/// Custom processor types are free to have their own `PostProcess` impls
-/// without coherence conflicts.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DefaultPostProcess;
-
-impl<S, Provider, T, O> PostProcess<Provider, T, DefaultPostProcess, O> for S
-where
-    S: DelegateDefaultPostProcessor<Provider, T, O>,
-    Provider: DataProvider,
-    T: ?Sized + Sync,
-    O: Send,
-{
-    fn post_process_with<'a, I, B>(
-        &self,
-        _processor: DefaultPostProcess,
-        accessor: &mut Self::SearchAccessor<'a>,
-        query: &T,
-        computer: &Self::QueryComputer,
-        candidates: I,
-        output: &mut B,
-    ) -> impl Future<Output = ANNResult<usize>> + Send
-    where
-        I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
-        B: SearchOutputBuffer<O> + Send + ?Sized,
-    {
-        use crate::error::IntoANNResult;
-        async move {
-            self.create_processor()
-                .post_process(accessor, query, computer, candidates, output)
-                .send()
-                .await
-                .into_ann_result()
-        }
-    }
 }
 
 /// Perform post-processing on the results of search, storing the results in an output buffer.
@@ -864,12 +793,14 @@ where
     type PruneStrategy: PruneStrategy<Provider>;
 
     /// The processor used during the delete-search phase.
-    type SearchPostProcessor: Send + Sync;
+    type SearchPostProcessor: for<'a> SearchPostProcess<
+            <Self::SearchStrategy as SearchStrategy<Provider, Self::DeleteElement<'a>>>::SearchAccessor<'a>,
+            Self::DeleteElement<'a>,
+        > + Send
+        + Sync;
 
     /// The type of the search strategy to use for graph traversal.
-    /// It must support [`PostProcess`] with [`Self::SearchPostProcessor`].
-    type SearchStrategy: for<'a> SearchStrategy<Provider, Self::DeleteElement<'a>>
-        + for<'a> PostProcess<Provider, Self::DeleteElement<'a>, Self::SearchPostProcessor>;
+    type SearchStrategy: for<'a> SearchStrategy<Provider, Self::DeleteElement<'a>>;
 
     /// Construct the prune strategy object.
     fn prune_strategy(&self) -> Self::PruneStrategy;
@@ -1158,8 +1089,8 @@ mod tests {
         }
     }
 
-    impl DelegateDefaultPostProcessor<SimpleProvider, f32> for Strategy {
-        delegate_default_post_process!(CopyIds);
+    impl HasDefaultProcessor<SimpleProvider, f32> for Strategy {
+        has_default_processor!(CopyIds);
     }
 
     // Use the provided implementation.

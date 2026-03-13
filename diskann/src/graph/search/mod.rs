@@ -51,6 +51,7 @@ pub(crate) mod scratch;
 pub trait Search<DP, S, T: ?Sized, O>
 where
     DP: DataProvider,
+    S: crate::graph::glue::SearchStrategy<DP, T, O>,
     O: Send,
 {
     /// The result type returned by this search.
@@ -88,8 +89,12 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        S: crate::graph::glue::PostProcess<DP, T, PP, O>,
-        PP: Send + Sync,
+        PP: for<'a> crate::graph::glue::SearchPostProcess<
+                <S as crate::graph::glue::SearchStrategy<DP, T, O>>::SearchAccessor<'a>,
+                T,
+                O,
+            > + Send
+            + Sync,
         OB: crate::graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 

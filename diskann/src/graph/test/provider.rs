@@ -16,7 +16,7 @@ use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use crate::{
-    ANNError, ANNResult, delegate_default_post_process,
+    ANNError, ANNResult, has_default_processor,
     error::{Infallible, message},
     graph::{AdjacencyList, glue, test::synthetic},
     internal::counter::{Counter, LocalCounter},
@@ -964,8 +964,8 @@ impl glue::SearchStrategy<Provider, [f32]> for Strategy {
     }
 }
 
-impl glue::DelegateDefaultPostProcessor<Provider, [f32]> for Strategy {
-    delegate_default_post_process!(glue::CopyIds);
+impl glue::HasDefaultProcessor<Provider, [f32]> for Strategy {
+    has_default_processor!(glue::CopyIds);
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {
@@ -1015,7 +1015,7 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type DeleteElementError = AccessedInvalidId;
     type PruneStrategy = Self;
     type SearchStrategy = Self;
-    type SearchPostProcessor = glue::DefaultPostProcess;
+    type SearchPostProcessor = glue::CopyIds;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
