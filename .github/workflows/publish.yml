@@ -101,9 +101,9 @@ jobs:
       - name: Publish workspace crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
-          DRY_RUN_FLAG=""
-          if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event.inputs.dry_run || 'false' }}" = "true" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ] || [ "$DRY_RUN" = "true" ]; then
             DRY_RUN_FLAG="--dry-run"
             echo "🧪 DRY-RUN MODE"
           else
