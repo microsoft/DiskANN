@@ -4,7 +4,6 @@
  */
 
 pub(crate) mod common;
-pub use common::BlockTranspose;
 pub(crate) use common::square_norm;
 
 pub mod lloyds;

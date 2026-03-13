@@ -722,6 +722,53 @@ impl<T> SIMDUnsigned for T where
 pub trait SIMDSigned: SIMDUnsigned + SIMDAbs {}
 impl<T> SIMDSigned for T where T: SIMDUnsigned + SIMDAbs {}
 
+/// Element-wise zip and unzip of two half-width SIMD vectors.
+///
+/// `zip` interleaves elements from two halves into one full-width vector:
+///   `zip([a0, a1, …], [b0, b1, …]) = [a0, b0, a1, b1, …]`
+///
+/// `unzip` is the inverse, separating even- and odd-indexed elements:
+///   `unzip([a0, b0, a1, b1, …]) = ([a0, a1, …], [b0, b1, …])`
+///
+/// Two additional "flat" methods operate on a single full-width register:
+///
+/// `zip_flat` treats the low half of `self` as one input and the high half as the other,
+/// interleaving them in-place:
+///   `zip_flat([a0, a1, …, b0, b1, …]) = [a0, b0, a1, b1, …]`
+///
+/// `unzip_flat` is the inverse, collecting even-indexed elements into the low half and
+/// odd-indexed elements into the high half:
+///   `unzip_flat([a0, b0, a1, b1, …]) = [a0, a1, …, b0, b1, …]`
+///
+/// `zip` and `unzip` are required. `zip_flat` and `unzip_flat` have default
+/// implementations that delegate through [`SplitJoin::split`] / [`SplitJoin::join`].
+/// Backends should override whichever pair is cheapest on their ISA.
+pub trait ZipUnzip: crate::SplitJoin + Sized {
+    /// Interleave elements from `halves.lo` and `halves.hi` into `Self`.
+    fn zip(halves: crate::LoHi<Self::Halved>) -> Self;
+
+    /// Separate even-indexed elements into `lo` and odd-indexed into `hi`.
+    fn unzip(self) -> crate::LoHi<Self::Halved>;
+
+    /// Interleave in-place: the low half of `self` supplies the even-indexed
+    /// positions and the high half supplies the odd-indexed positions.
+    ///
+    /// Equivalent to `Self::zip(self.split())` but may be implemented with a
+    /// single cross-lane permute on architectures that support it.
+    fn zip_flat(self) -> Self {
+        Self::zip(self.split())
+    }
+
+    /// Deinterleave in-place: even-indexed elements are collected into the low
+    /// half of the result and odd-indexed elements into the high half.
+    ///
+    /// Equivalent to `Self::join(self.unzip())` but may be implemented with a
+    /// single cross-lane permute on architectures that support it.
+    fn unzip_flat(self) -> Self {
+        Self::unzip(self).join()
+    }
+}
+
 // Since it is so difficult to work directly with generic integers, resort to using a macro
 // to stamp out implementations of `SIMDMask` for `BitMask`.
 //

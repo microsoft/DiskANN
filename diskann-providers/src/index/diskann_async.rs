@@ -4380,4 +4380,97 @@ pub(crate) mod tests {
             filter.visit_count()
         );
     }
+
+    #[tokio::test]
+    async fn vectors_with_infinity_values_should_be_inserted_and_searched_without_panic() {
+        let l_build: usize = 20;
+        // We need to insert more points than l_build to ensure that the priority queue gets filled in.
+        let insert_count = l_build + 10;
+        const VECTORS_DIMENSION: usize = 384;
+        // Last third of inserted vectors will have infinity values.
+        let vector_value_start: f32 = half::f16::MAX.to_f32() - insert_count as f32 / 3.0;
+
+        let (config, mut parameters) = simplified_builder(
+            l_build,
+            32,
+            Metric::L2,
+            VECTORS_DIMENSION,
+            insert_count,
+            |_| {},
+        )
+        .unwrap();
+
+        parameters.frozen_points = NonZeroUsize::new(1).unwrap();
+        let index = new_index::<half::f16, _>(config, parameters, NoDeletes).unwrap();
+
+        let vectors = (0..insert_count)
+            .map(move |i| [half::f16::from_f32(vector_value_start + i as f32); VECTORS_DIMENSION])
+            .collect::<Vec<_>>();
+
+        assert_ne!(
+            vectors[0][0],
+            half::f16::INFINITY,
+            "First vector should not have infinity value"
+        );
+        assert_eq!(
+            vectors[vectors.len() - 1][0],
+            half::f16::INFINITY,
+            "Last vector should have infinity value"
+        );
+
+        for (i, vector) in vectors.iter().take(insert_count).enumerate() {
+            let vector_id = i as u32;
+            index
+                .insert(FullPrecision, &DefaultContext, &vector_id, vector)
+                .await
+                .unwrap();
+        }
+
+        let query_count: usize = 1;
+        let mut queries = crate::common::AlignedBoxWithSlice::<half::f16>::new(
+            query_count * VECTORS_DIMENSION,
+            32,
+        )
+        .unwrap();
+
+        for i in 0..query_count {
+            for val in queries.as_mut_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION]
+                .iter_mut()
+            {
+                *val = half::f16::from_f32(0f32);
+            }
+        }
+
+        let top_k = l_build;
+        let search_l = l_build;
+        let mut ids = vec![0; top_k];
+        let mut distances = vec![0.0; top_k];
+        let ctx = DefaultContext;
+        let search_params = graph::search::Knn::new_default(top_k, search_l).unwrap();
+        for i in 0..query_count {
+            let query_vector =
+                &queries.as_slice()[i * VECTORS_DIMENSION..(i + 1) * VECTORS_DIMENSION];
+
+            let mut result_output_buffer =
+                search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+
+            // Full Precision Search.
+            let search_result = index
+                .search(
+                    search_params,
+                    &FullPrecision,
+                    &ctx,
+                    query_vector,
+                    &mut result_output_buffer,
+                )
+                .await
+                .unwrap();
+
+            assert!(
+                search_result.result_count > 0,
+                "Expected non-empty result for query {}",
+                i
+            );
+        }
+    }
 }

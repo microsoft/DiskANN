@@ -1,0 +1,15 @@
+error: lifetime may not live long enough
+  --> tests/compile-fail/multi/matmut_invariant.rs:16:5
+   |
+12 | fn bad<'long, 'short, 'a>(v: MatMut<'a, Standard<&'long u8>>) -> MatMut<'a, Standard<&'short u8>>
+   |        -----  ------ lifetime `'short` defined here
+   |        |
+   |        lifetime `'long` defined here
+...
+16 |     v
+   |     ^ function was supposed to return data with lifetime `'long` but it is returning data with lifetime `'short`
+   |
+   = help: consider adding the following bound: `'short: 'long`
+   = note: requirement occurs because of the type `MatMut<'_, Standard<&u8>>`, which makes the generic argument `Standard<&u8>` invariant
+   = note: the struct `MatMut<'a, T>` is invariant over the parameter `T`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
