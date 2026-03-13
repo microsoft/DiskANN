@@ -4,7 +4,7 @@
 #include <omp.h>
 
 #include <type_traits>
-
+#include <atomic>
 #include "boost/dynamic_bitset.hpp"
 #include "index_factory.h"
 #include "memory_mapper.h"
@@ -24,6 +24,9 @@
 #include "index.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
+
+//bool reduce_prune = false;
+std::atomic<unsigned long long> count_prune = 0;
 
 namespace diskann
 {
@@ -1073,7 +1076,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
                                           InMemQueryScratch<T> *scratch,
                                           const tsl::robin_set<uint32_t> *const delete_set_ptr)
-{
+{   
+    count_prune++;
     if (pool.size() == 0)
         return;
 
@@ -1089,7 +1093,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
-    float cur_alpha = 1;
+    // Change the cur_alpha to alpha
+    float cur_alpha = alpha;
     while (cur_alpha <= alpha && result.size() < degree)
     {
         // used for MIPS, where we store a value of eps in cur_alpha to
@@ -1283,6 +1288,18 @@ void Index<T, TagT, LabelT>::inter_insert(uint32_t n, std::vector<uint32_t> &pru
     inter_insert(n, pruned_list, _indexingRange, scratch);
 }
 
+template <typename T>
+bool comp(const std::pair<float, uint32_t> &a, const std::pair<float, uint32_t> &b)
+{
+    if (a.first < b.first){
+        return true;
+    }
+    else if (a.first == b.first){
+        return a.second < b.second;
+    }
+    return false;
+}
+
 template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT>::link()
 {
     uint32_t num_threads = _indexingThreads;
@@ -1294,22 +1311,29 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
     std::vector<diskann::Neighbor> pool, tmp;
     tsl::robin_set<uint32_t> visited;
     visit_order.reserve(_nd + _num_frozen_pts);
-    for (uint32_t i = 0; i < (uint32_t)_nd; i++)
-    {
-        visit_order.emplace_back(i);
-    }
-
-    // If there are any frozen points, add them all.
-    for (uint32_t frozen = (uint32_t)_max_points; frozen < _max_points + _num_frozen_pts; frozen++)
-    {
-        visit_order.emplace_back(frozen);
-    }
 
     // if there are frozen points, the first such one is set to be the _start
     if (_num_frozen_pts > 0)
         _start = (uint32_t)_max_points;
     else
         _start = calculate_entry_point();
+    
+    std::vector<std::pair<T, uint32_t>> distances_to_mediod;
+    for (uint32_t i = 0; i < (uint32_t)_nd; i++)
+    {
+        float cur_distance = _data_store->get_distance(i, _start);
+        distances_to_mediod.emplace_back(std::make_pair(cur_distance, i));
+    }
+    std::sort(distances_to_mediod.begin(), distances_to_mediod.end(), comp<float>);
+
+    for (uint32_t i = 0; i < (uint32_t)_nd; i++)
+        visit_order.emplace_back(distances_to_mediod[i].second);
+
+    // If there are any frozen points, add them all.
+    for (uint32_t frozen = (uint32_t)_max_points; frozen < _max_points + _num_frozen_pts; frozen++)
+    {
+        visit_order.emplace_back(frozen);
+    }
 
     diskann::Timer link_timer;
 
@@ -1343,8 +1367,7 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
         if (node_ctr % 100000 == 0)
         {
-            diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed."
-                          << std::flush;
+            diskann::cout << "\r" << (100.0 * node_ctr) / (visit_order.size()) << "% of index build completed. Distance to mediod: " << (float)(distances_to_mediod[node_ctr].first) << std::flush;
         }
     }
 
@@ -1571,7 +1594,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
     }
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
-
+    diskann::cout << "Robust Prune Calls: " << count_prune << std::endl;
     _has_built = true;
 }
 template <typename T, typename TagT, typename LabelT>
