@@ -10,8 +10,8 @@ use diskann::{
     graph::{
         SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, FilterStartPoints, InplaceDeleteStrategy, InsertStrategy,
-            PruneStrategy, SearchExt, SearchStrategy,
+            self, DefaultPostProcess, ExpandBeam, FillSet, FilterStartPoints,
+            InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -453,7 +453,6 @@ where
     type QueryComputer = T::QueryDistance;
     type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
     type SearchAccessorError = Panics;
-    type PostProcessor = RemoveDeletedIdsAndCopy;
 
     fn search_accessor<'a>(
         &'a self,
@@ -462,10 +461,18 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+
+impl<T, Q, D, Ctx> DefaultPostProcess<FullPrecisionProvider<T, Q, D, Ctx>, [T]>
+    for Internal<FullPrecision>
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    diskann::delegate_default_post_process!(RemoveDeletedIdsAndCopy);
 }
 
 /// Perform a search entirely in the full-precision space.
@@ -481,7 +488,6 @@ where
     type QueryComputer = T::QueryDistance;
     type SearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
     type SearchAccessorError = Panics;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -490,10 +496,18 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+
+impl<T, Q, D, Ctx> DefaultPostProcess<FullPrecisionProvider<T, Q, D, Ctx>, [T]>
+    for FullPrecision
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+{
+    diskann::delegate_default_post_process!(glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 // Pruning
@@ -561,12 +575,17 @@ where
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
     type SearchStrategy = Internal<Self>;
+    type SearchPostProcessor = RemoveDeletedIdsAndCopy;
     fn search_strategy(&self) -> Self::SearchStrategy {
         Internal(Self)
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        Default::default()
     }
 
     async fn get_delete_element<'a>(

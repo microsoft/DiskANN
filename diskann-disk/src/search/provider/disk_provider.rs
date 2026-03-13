@@ -18,7 +18,7 @@ use std::{
 use diskann::{
     graph::{
         self,
-        glue::{self, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{self, DefaultPostProcess, DelegatePostProcess, ExpandBeam, IdIterator, SearchExt, SearchPostProcess, SearchStrategy},
         search::Knn,
         search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
     },
@@ -351,7 +351,6 @@ where
     type QueryComputer = DiskQueryComputer;
     type SearchAccessor<'a> = DiskAccessor<'a, Data, ProviderFactory::VertexProviderType>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = RerankAndFilter<'this>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -366,8 +365,30 @@ where
             self.scratch_pool,
         )
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
+impl<'this, Data, ProviderFactory> DelegatePostProcess
+    for DiskSearchStrategy<'this, Data, ProviderFactory>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    ProviderFactory: VertexProviderFactory<Data>,
+{}
+
+impl<'this, Data, ProviderFactory>
+    DefaultPostProcess<
+        DiskProvider<Data>,
+        [Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    ProviderFactory: VertexProviderFactory<Data>,
+{
+    type Processor = RerankAndFilter<'this>;
+    fn create_processor(&self) -> Self::Processor {
         RerankAndFilter::new(self.vector_filter)
     }
 }

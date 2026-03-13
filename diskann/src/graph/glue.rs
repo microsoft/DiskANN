@@ -297,6 +297,10 @@ where
 /// but it can differ depending on the use case. For example, it might represent
 /// associated data or alternative identifiers.
 ///
+/// Post-processing of search results is handled by the separate [`PostProcess`]
+/// and [`DefaultPostProcess`] traits, which decouple the post-processing logic
+/// from the core search strategy.
+///
 /// [`crate::index::diskann_async::DiskANNIndex::search`].
 pub trait SearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
     Send + Sync
@@ -316,9 +320,6 @@ where
         + Sync
         + 'static;
 
-    /// The associated [`SearchPostProcess`]or for the final results.
-    type PostProcessor: for<'a> SearchPostProcess<Self::SearchAccessor<'a>, T, O> + Send + Sync;
-
     /// An error that can occur when getting a search_accessor.
     type SearchAccessorError: StandardError;
 
@@ -334,10 +335,129 @@ where
         provider: &'a Provider,
         context: &'a Provider::Context,
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError>;
+}
 
-    /// Construct the [`SearchPostProcess`] struct to post-process the results of search and
-    /// store them into the output container.
-    fn post_processor(&self) -> Self::PostProcessor;
+/// A sub-trait of [`SearchStrategy`] that defines how post-processing is performed
+/// with a given processor type `P`.
+///
+/// This trait decouples the post-processing logic from the search strategy itself,
+/// allowing different processor types `P` to be used with the same strategy. This
+/// provides flexibility to pass different kinds of parameters or use different
+/// post-processing pipelines for different scenarios.
+///
+/// For the default search infrastructure (e.g., [`crate::graph::search::Knn`]),
+/// see [`DefaultPostProcess`] which selects a specific processor type automatically.
+pub trait PostProcess<Provider, T, P, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<Provider, T, O>
+where
+    Provider: DataProvider,
+    T: ?Sized,
+    O: Send,
+    P: Send + Sync,
+{
+    /// Perform post-processing on search results using the provided `processor`.
+    ///
+    /// Implementations prepare the parameters (accessor, candidates, etc.) as needed
+    /// and delegate to the processor's post-processing logic.
+    fn post_process<'a, I, B>(
+        &self,
+        processor: &P,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &T,
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl Future<Output = ANNResult<usize>> + Send
+    where
+        I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
+        B: SearchOutputBuffer<O> + Send + ?Sized;
+}
+
+/// Marker trait for strategies whose [`PostProcess`] implementation simply delegates
+/// to the processor's [`SearchPostProcess::post_process`] method.
+///
+/// Implementing this trait provides a blanket [`PostProcess`] implementation that calls
+/// `processor.post_process(accessor, query, computer, candidates, output)` and converts
+/// the result via [`IntoANNResult`](crate::error::IntoANNResult).
+///
+/// Strategies that need custom post-processing (e.g., unwrapping layered accessors)
+/// should **not** implement this trait and should provide their own [`PostProcess`] impl
+/// instead.
+pub trait DelegatePostProcess {}
+
+impl<S, Provider, T, P, O> PostProcess<Provider, T, P, O> for S
+where
+    S: SearchStrategy<Provider, T, O> + DelegatePostProcess,
+    Provider: DataProvider,
+    T: ?Sized + Sync,
+    O: Send,
+    P: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+{
+    async fn post_process<'a, I, B>(
+        &self,
+        processor: &P,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &T,
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> ANNResult<usize>
+    where
+        I: Iterator<Item = Neighbor<Provider::InternalId>> + Send,
+        B: SearchOutputBuffer<O> + Send + ?Sized,
+    {
+        use crate::error::IntoANNResult;
+        processor
+            .post_process(accessor, query, computer, candidates, output)
+            .await
+            .into_ann_result()
+    }
+}
+
+/// A strategy that provides a default post-processor.
+///
+/// This trait is used by the search infrastructure to obtain the appropriate
+/// post-processor for a given strategy without requiring callers to specify the
+/// concrete processor type.
+///
+/// For advanced use cases where a custom processor is needed, use
+/// [`PostProcess`] directly.
+pub trait DefaultPostProcess<Provider, T, O = <Provider as DataProvider>::InternalId>:
+    PostProcess<Provider, T, Self::Processor, O>
+where
+    Provider: DataProvider,
+    T: ?Sized,
+    O: Send,
+{
+    /// The default processor type for this strategy.
+    type Processor: Send + Sync;
+
+    /// Create the default processor instance.
+    fn create_processor(&self) -> Self::Processor;
+}
+
+/// Generates the body of a [`DefaultPostProcess`] implementation where the processor
+/// is constructed via [`Default::default()`].
+///
+/// Use this macro inside an `impl DefaultPostProcess<Provider, T> for Strategy { ... }`
+/// block to avoid repeating the boilerplate `type Processor` and `fn create_processor`
+/// items.
+///
+/// # Example
+///
+/// ```ignore
+/// impl DefaultPostProcess<MyProvider, [f32]> for MyStrategy {
+///     delegate_default_post_process!(CopyIds);
+/// }
+/// ```
+#[macro_export]
+macro_rules! delegate_default_post_process {
+    ($Processor:ty) => {
+        type Processor = $Processor;
+        fn create_processor(&self) -> Self::Processor {
+            Default::default()
+        }
+    };
 }
 
 /// Perform post-processing on the results of search, storing the results in an output buffer.
@@ -741,14 +861,21 @@ where
     /// The pruning strategy to use after the initial search is complete.
     type PruneStrategy: PruneStrategy<Provider>;
 
+    /// The post-processor type used during the search phase of inplace deletion.
+    type SearchPostProcessor: Send + Sync;
+
     /// The type of the search strategy to use for graph traversal.
-    type SearchStrategy: for<'a> SearchStrategy<Provider, Self::DeleteElement<'a>>;
+    type SearchStrategy: for<'a> SearchStrategy<Provider, Self::DeleteElement<'a>>
+        + for<'a> PostProcess<Provider, Self::DeleteElement<'a>, Self::SearchPostProcessor>;
 
     /// Construct the prune strategy object.
     fn prune_strategy(&self) -> Self::PruneStrategy;
 
     /// Construct the search strategy object.
     fn search_strategy(&self) -> Self::SearchStrategy;
+
+    /// Create the search post-processor for the deletion search phase.
+    fn search_post_processor(&self) -> Self::SearchPostProcessor;
 
     /// Construct the accessor used to retrieve the item being deleted.
     fn get_delete_element<'a>(
@@ -1012,7 +1139,6 @@ mod tests {
 
     impl SearchStrategy<SimpleProvider, f32> for Strategy {
         type QueryComputer = QueryComputer;
-        type PostProcessor = CopyIds;
         type SearchAccessorError = ANNError;
         type SearchAccessor<'a> = Retriever<'a>;
 
@@ -1027,10 +1153,12 @@ mod tests {
                 self.errors_are_unrecoverable,
             ))
         }
+    }
 
-        fn post_processor(&self) -> Self::PostProcessor {
-            Default::default()
-        }
+    impl DelegatePostProcess for Strategy {}
+
+    impl DefaultPostProcess<SimpleProvider, f32> for Strategy {
+        delegate_default_post_process!(CopyIds);
     }
 
     // Use the provided implementation.
@@ -1080,9 +1208,10 @@ mod tests {
             for output_len in 0..10 {
                 let mut output = vec![Neighbor::<u32>::default(); output_len];
 
+                let processor = strategy.create_processor();
                 let count = strategy
-                    .post_processor()
                     .post_process(
+                        &processor,
                         &mut accessor,
                         &query,
                         &computer,

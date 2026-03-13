@@ -69,8 +69,9 @@ use diskann::{
     graph::{
         AdjacencyList, SearchOutputBuffer,
         glue::{
-            self, AsElement, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy, Pipeline,
-            PruneStrategy, SearchExt, SearchPostProcessStep, SearchStrategy,
+            self, AsElement, DefaultPostProcess, ExpandBeam, FillSet, InplaceDeleteStrategy,
+            InsertStrategy, PostProcess, PruneStrategy, SearchExt, SearchPostProcessStep,
+            SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -465,6 +466,11 @@ impl<A, C> CachingAccessor<A, C> {
     /// Return a reference to the cache accessor.
     pub fn cache(&self) -> &C {
         &self.cache
+    }
+
+    /// Return a mutable reference to the inner accessor for the underlying provider.
+    pub fn inner_mut(&mut self) -> &mut A {
+        &mut self.inner
     }
 }
 
@@ -962,7 +968,6 @@ where
         <C as AsCacheAccessorFor<'a, SearchAccessor<'a, S, DP, T>>>::Accessor,
     >;
     type SearchAccessorError = CachingError<S::SearchAccessorError, E>;
-    type PostProcessor = Pipeline<Unwrap, S::PostProcessor>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -979,9 +984,60 @@ where
             .as_cache_accessor_for(inner)
             .map_err(CachingError::Cache)
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Pipeline::new(Unwrap, self.strategy.post_processor())
+impl<DP, C, T, S, P, E> PostProcess<CachingProvider<DP, C>, T, P> for Cached<S>
+where
+    T: ?Sized,
+    DP: DataProvider,
+    S: for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>
+        + PostProcess<DP, T, P>,
+    C: for<'a> AsCacheAccessorFor<
+            'a,
+            SearchAccessor<'a, S, DP, T>,
+            Accessor: NeighborCache<DP::InternalId>,
+            Error = E,
+        > + AsyncFriendly,
+    P: Send + Sync,
+    E: StandardError,
+{
+    async fn post_process<'a, I, B>(
+        &self,
+        processor: &P,
+        accessor: &mut Self::SearchAccessor<'a>,
+        query: &T,
+        computer: &Self::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> ANNResult<usize>
+    where
+        I: Iterator<Item = Neighbor<DP::InternalId>> + Send,
+        B: SearchOutputBuffer<DP::InternalId> + Send + ?Sized,
+    {
+        let inner = accessor.inner_mut();
+        self.strategy
+            .post_process(processor, inner, query, computer, candidates, output)
+            .await
+    }
+}
+
+impl<DP, C, T, S, E> DefaultPostProcess<CachingProvider<DP, C>, T> for Cached<S>
+where
+    T: ?Sized,
+    DP: DataProvider,
+    S: for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>
+        + DefaultPostProcess<DP, T>,
+    C: for<'a> AsCacheAccessorFor<
+            'a,
+            SearchAccessor<'a, S, DP, T>,
+            Accessor: NeighborCache<DP::InternalId>,
+            Error = E,
+        > + AsyncFriendly,
+    E: StandardError,
+{
+    type Processor = S::Processor;
+    fn create_processor(&self) -> Self::Processor {
+        self.strategy.create_processor()
     }
 }
 
@@ -1057,7 +1113,12 @@ where
     DP: DataProvider,
     S: InplaceDeleteStrategy<DP>,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
-    Cached<S::SearchStrategy>: for<'a> SearchStrategy<CachingProvider<DP, C>, S::DeleteElement<'a>>,
+    Cached<S::SearchStrategy>: for<'a> SearchStrategy<CachingProvider<DP, C>, S::DeleteElement<'a>>
+        + for<'a> PostProcess<
+            CachingProvider<DP, C>,
+            S::DeleteElement<'a>,
+            <S as InplaceDeleteStrategy<DP>>::SearchPostProcessor,
+        >,
     C: AsyncFriendly,
 {
     type DeleteElement<'a> = S::DeleteElement<'a>;
@@ -1065,6 +1126,7 @@ where
     type DeleteElementError = S::DeleteElementError;
 
     type PruneStrategy = Cached<S::PruneStrategy>;
+    type SearchPostProcessor = <S as InplaceDeleteStrategy<DP>>::SearchPostProcessor;
     type SearchStrategy = Cached<S::SearchStrategy>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
@@ -1077,6 +1139,10 @@ where
         Cached {
             strategy: self.strategy.search_strategy(),
         }
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        self.strategy.search_post_processor()
     }
 
     fn get_delete_element<'a>(

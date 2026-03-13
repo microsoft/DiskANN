@@ -4,7 +4,7 @@
  */
 
 use diskann::error::IntoANNResult;
-use diskann::graph::glue::{SearchPostProcess, SearchStrategy};
+use diskann::graph::glue::{DefaultPostProcess, DelegatePostProcess, SearchPostProcess, SearchStrategy};
 use diskann::neighbor::Neighbor;
 use diskann::provider::{Accessor, BuildQueryComputer, DataProvider};
 
@@ -37,7 +37,6 @@ where
     Q: AsyncFriendly + Clone,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
-    type PostProcessor = FilterResults<Strategy::PostProcessor>;
     type SearchAccessorError = ANNError;
     type SearchAccessor<'a> = EncodedDocumentAccessor<Strategy::SearchAccessor<'a>>;
 
@@ -61,9 +60,24 @@ where
         ))
     }
 
-    fn post_processor(&self) -> Self::PostProcessor {
+}
+
+impl<Strategy> DelegatePostProcess for InlineBetaStrategy<Strategy> {}
+
+impl<DP, Strategy, Q>
+    DefaultPostProcess<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, FilteredQuery<Q>>
+    for InlineBetaStrategy<Strategy>
+where
+    DP: DataProvider,
+    Strategy: DefaultPostProcess<DP, Q>,
+    Strategy::Processor:
+        for<'a> SearchPostProcess<Strategy::SearchAccessor<'a>, Q> + Send + Sync,
+    Q: AsyncFriendly + Clone,
+{
+    type Processor = FilterResults<Strategy::Processor>;
+    fn create_processor(&self) -> Self::Processor {
         FilterResults {
-            inner_post_processor: self.inner.post_processor(),
+            inner_post_processor: self.inner.create_processor(),
         }
     }
 }

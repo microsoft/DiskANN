@@ -14,7 +14,7 @@ use crate::{
     error::IntoANNResult,
     graph::{
         DiverseSearchParams,
-        glue::{SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{DefaultPostProcess, SearchExt},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
@@ -96,7 +96,7 @@ impl<DP, S, T, O, OB, P> Search<DP, S, T, O, OB> for Diverse<P>
 where
     DP: DataProvider,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
+    S: DefaultPostProcess<DP, T, O>,
     O: Send,
     OB: SearchOutputBuffer<O> + Send,
     P: AttributeValueProvider<Id = DP::InternalId>,
@@ -135,9 +135,10 @@ where
             // Post-process diverse results
             diverse_scratch.best.post_process();
 
+            let processor = strategy.create_processor();
             let result_count = strategy
-                .post_processor()
                 .post_process(
+                    &processor,
                     &mut accessor,
                     query,
                     &computer,
@@ -145,8 +146,7 @@ where
                     output,
                 )
                 .send()
-                .await
-                .into_ann_result()?;
+                .await?;
 
             Ok(stats.finish(result_count as u32))
         }

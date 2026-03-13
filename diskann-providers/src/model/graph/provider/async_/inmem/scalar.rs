@@ -8,9 +8,11 @@ use std::{future::Future, sync::Mutex};
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use diskann::{
     ANNError, ANNResult,
-    graph::glue::{
-        self, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy, PruneStrategy, SearchExt,
-        SearchStrategy,
+    graph::{
+        glue::{
+            self, DefaultPostProcess, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy,
+            PruneStrategy, SearchExt, SearchStrategy,
+        },
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -612,7 +614,6 @@ where
     type QueryComputer = QueryComputer<NBITS>;
     type SearchAccessor<'a> = QuantAccessor<'a, NBITS, FullPrecisionStore<T>, D, Ctx>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, Rerank>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -621,10 +622,19 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, true))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+
+impl<const NBITS: usize, D, Ctx, T>
+    DefaultPostProcess<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    Unsigned: Representation<NBITS>,
+    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+{
+    diskann::delegate_default_post_process!(glue::Pipeline<FilterStartPoints, Rerank>);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
@@ -642,7 +652,6 @@ where
     type QueryComputer = QueryComputer<NBITS>;
     type SearchAccessor<'a> = QuantAccessor<'a, NBITS, NoStore, D, Ctx>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -651,10 +660,20 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider, true))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+// DelegatePostProcess for Quantized is already implemented above.
+
+impl<const NBITS: usize, D, Ctx, T>
+    DefaultPostProcess<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+    Ctx: ExecutionContext,
+    Unsigned: Representation<NBITS>,
+    QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
+{
+    diskann::delegate_default_post_process!(glue::Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 impl<const NBITS: usize, V, D, Ctx> PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>>

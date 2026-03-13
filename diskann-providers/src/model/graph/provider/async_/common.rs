@@ -8,6 +8,7 @@ use std::{cell::UnsafeCell, mem, num::NonZeroUsize, ops::Deref, slice, sync::Arc
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
 use arc_swap::Guard;
 use diskann::{ANNError, ANNResult, always_escalate, utils::IntoUsize};
+use diskann::graph::glue::DelegatePostProcess;
 use diskann_utils::future::AsyncFriendly;
 use diskann_vector::distance::Metric;
 
@@ -419,6 +420,12 @@ impl Hybrid {
 /// Internal variant of above strategy types to avoid start point filtering.
 #[derive(Debug)]
 pub struct Internal<T>(pub T);
+
+// Marker trait impls: strategies that simply delegate `PostProcess` to the processor.
+impl DelegatePostProcess for FullPrecision {}
+impl DelegatePostProcess for Quantized {}
+impl DelegatePostProcess for Hybrid {}
+impl<T> DelegatePostProcess for Internal<T> {}
 
 #[cfg(test)]
 pub struct TestCallCount {
