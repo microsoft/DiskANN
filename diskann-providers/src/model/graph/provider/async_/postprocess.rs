@@ -6,7 +6,6 @@
 //! Shared search post-processing.
 
 use diskann::{
-    ANNError,
     graph::{SearchOutputBuffer, glue},
     neighbor::Neighbor,
     provider::BuildQueryComputer,
@@ -35,60 +34,36 @@ pub(crate) trait DeletionCheck {
 
 /// A [`SearchPostProcess`] routine that fuses the removal of deleted elements with the
 /// copying of IDs into an output buffer.
-#[derive(Debug, Clone, Copy)]
-pub struct RemoveDeletedIdsAndCopy {
-    pub filter_start_points: bool,
-}
-
-impl Default for RemoveDeletedIdsAndCopy {
-    fn default() -> Self {
-        Self {
-            filter_start_points: true,
-        }
-    }
-}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RemoveDeletedIdsAndCopy;
 
 impl<A, T> glue::SearchPostProcess<A, T> for RemoveDeletedIdsAndCopy
 where
-    A: BuildQueryComputer<T, Id = u32> + AsDeletionCheck + glue::SearchExt,
-    <A as AsDeletionCheck>::Checker: Sync,
-    T: ?Sized + Sync,
+    A: BuildQueryComputer<T, Id = u32> + AsDeletionCheck,
+    T: ?Sized,
 {
-    type Error = ANNError;
+    type Error = std::convert::Infallible;
 
-    async fn post_process<I, B>(
+    fn post_process<I, B>(
         &self,
         accessor: &mut A,
         _query: &T,
         _computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
-    ) -> Result<usize, Self::Error>
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        let is_not_start_point = if self.filter_start_points {
-            Some(accessor.is_not_start_point().await?)
-        } else {
-            None
-        };
-
         let checker = accessor.as_deletion_check();
-        let filtered = candidates.filter_map(|n| {
+        let count = output.extend(candidates.filter_map(|n| {
             if checker.deletion_check(n.id) {
                 None
             } else {
                 Some((n.id, n.distance))
             }
-        });
-
-        let count = if let Some(filter) = is_not_start_point {
-            output.extend(filtered.filter(|(id, _)| filter(*id)))
-        } else {
-            output.extend(filtered)
-        };
-
-        Ok(count)
+        }));
+        std::future::ready(Ok(count))
     }
 }

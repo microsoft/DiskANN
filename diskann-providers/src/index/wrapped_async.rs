@@ -10,7 +10,8 @@ use diskann::{
     graph::{
         self, ConsolidateKind, InplaceDeleteMethod,
         glue::{
-            self, AsElement, InplaceDeleteStrategy, InsertStrategy, PruneStrategy, SearchStrategy,
+            self, AsElement, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
+            PruneStrategy, SearchStrategy,
         },
         index::{DegreeStats, PartitionedNeighbors, SearchState, SearchStats},
         search::Knn,
@@ -232,7 +233,7 @@ where
     ) -> ANNResult<SearchStats>
     where
         T: Sync + ?Sized,
-        S: glue::DefaultSearchStrategy<DP, T, O>,
+        S: DefaultSearchStrategy<DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,
     {

@@ -35,40 +35,6 @@ pub(crate) fn run<I>(
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
     steps: SearchSteps<'_>,
 ) -> anyhow::Result<Vec<SearchResults>> {
-    run_search(runner, groundtruth, steps, |setup, search_l, search_n| {
-        let search_params = diskann::graph::search::Knn::new(search_n, search_l, None).unwrap();
-        core_search::Run::new(search_params, setup)
-    })
-}
-
-type Run = core_search::Run<diskann::graph::search::Knn>;
-pub(crate) trait Knn<I> {
-    fn search_all(
-        &self,
-        parameters: Vec<Run>,
-        groundtruth: &dyn benchmark_core::recall::Rows<I>,
-        recall_k: usize,
-        recall_n: usize,
-    ) -> anyhow::Result<Vec<SearchResults>>;
-}
-
-///////////
-// Impls //
-///////////
-
-/// Generic search infrastructure.
-///
-/// This helper extracts the common loop logic (iterating over threads and runs,
-/// and building a setup) leaving parameter construction to a builder closure.
-fn run_search<I, F>(
-    runner: &dyn Knn<I>,
-    groundtruth: &dyn benchmark_core::recall::Rows<I>,
-    steps: SearchSteps<'_>,
-    builder: F,
-) -> anyhow::Result<Vec<SearchResults>>
-where
-    F: Fn(core_search::Setup, usize, usize) -> core_search::Run<diskann::graph::search::Knn>,
-{
     let mut all = Vec::new();
 
     for threads in steps.num_tasks.iter() {
@@ -82,7 +48,12 @@ where
             let parameters: Vec<_> = run
                 .search_l
                 .iter()
-                .map(|&search_l| builder(setup.clone(), search_l, run.search_n))
+                .map(|search_l| {
+                    let search_params =
+                        diskann::graph::search::Knn::new(run.search_n, *search_l, None).unwrap();
+
+                    core_search::Run::new(search_params, setup.clone())
+                })
                 .collect();
 
             all.extend(runner.search_all(parameters, groundtruth, run.recall_k, run.search_n)?);
@@ -90,6 +61,17 @@ where
     }
 
     Ok(all)
+}
+
+type Run = core_search::Run<diskann::graph::search::Knn>;
+pub(crate) trait Knn<I> {
+    fn search_all(
+        &self,
+        parameters: Vec<Run>,
+        groundtruth: &dyn benchmark_core::recall::Rows<I>,
+        recall_k: usize,
+        recall_n: usize,
+    ) -> anyhow::Result<Vec<SearchResults>>;
 }
 
 ///////////

@@ -17,8 +17,9 @@ use diskann::{
     graph::{
         AdjacencyList,
         glue::{
-            AsElement, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy,
-            InsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
+            AsElement, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor,
+            InplaceDeleteStrategy, InsertStrategy, Pipeline, PruneStrategy, SearchExt,
+            SearchStrategy,
         },
     },
     provider::{
@@ -902,7 +903,7 @@ impl SearchStrategy<DebugProvider, [f32]> for FullPrecision {
 }
 
 impl HasDefaultProcessor<DebugProvider, [f32]> for FullPrecision {
-    has_default_processor!(postprocess::RemoveDeletedIdsAndCopy);
+    has_default_processor!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 
 impl SearchStrategy<DebugProvider, [f32]> for Quantized {
@@ -920,7 +921,7 @@ impl SearchStrategy<DebugProvider, [f32]> for Quantized {
 }
 
 impl HasDefaultProcessor<DebugProvider, [f32]> for Quantized {
-    has_default_processor!(postprocess::RemoveDeletedIdsAndCopy);
+    has_default_processor!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 
 impl PruneStrategy<DebugProvider> for FullPrecision {
@@ -1024,9 +1025,7 @@ impl InplaceDeleteStrategy<DebugProvider> for FullPrecision {
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        postprocess::RemoveDeletedIdsAndCopy {
-            filter_start_points: false,
-        }
+        postprocess::RemoveDeletedIdsAndCopy
     }
 
     fn get_delete_element<'a>(
@@ -1057,9 +1056,7 @@ impl InplaceDeleteStrategy<DebugProvider> for Quantized {
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        postprocess::RemoveDeletedIdsAndCopy {
-            filter_start_points: false,
-        }
+        postprocess::RemoveDeletedIdsAndCopy
     }
 
     fn get_delete_element<'a>(

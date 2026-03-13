@@ -16,7 +16,6 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use bf_tree::{BfTree, Config};
-use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNResult,
     error::IntoANNResult,
@@ -27,6 +26,7 @@ use diskann::{
             PruneStrategy, SearchExt, SearchStrategy,
         },
     },
+    has_default_processor,
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DefaultContext,
@@ -1491,75 +1491,54 @@ where
     Q: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
 {
-    has_default_processor!(RemoveDeletedIdsAndCopy);
+    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 /// An [`glue::SearchPostProcess`] implementation that reranks PQ vectors.
-#[derive(Debug, Clone, Copy)]
-pub struct Rerank {
-    pub filter_start_points: bool,
-}
-
-impl Default for Rerank {
-    fn default() -> Self {
-        Self {
-            filter_start_points: true,
-        }
-    }
-}
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Rerank;
 
 impl<'a, T, D> glue::SearchPostProcess<QuantAccessor<'a, T, D>, [T]> for Rerank
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
 {
-    type Error = ANNError;
+    type Error = Panics;
 
-    async fn post_process<I, B>(
+    fn post_process<I, B>(
         &self,
         accessor: &mut QuantAccessor<'a, T, D>,
         query: &[T],
         _computer: &pq::distance::QueryComputer<Arc<FixedChunkPQTable>>,
         candidates: I,
         output: &mut B,
-    ) -> Result<usize, Self::Error>
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
         let provider = &accessor.provider;
-        let f = T::distance(provider.metric, Some(provider.full_vectors.dim()));
-        let is_not_start_point = if self.filter_start_points {
-            Some(accessor.is_not_start_point().await?)
-        } else {
-            None
-        };
         let checker = accessor.as_deletion_check();
+        let f = T::distance(provider.metric, Some(provider.full_vectors.dim()));
 
         let mut reranked: Vec<(u32, f32)> = candidates
             .filter_map(|n| {
                 if checker.deletion_check(n.id) {
-                    return None;
+                    None
+                } else {
+                    #[allow(clippy::expect_used)]
+                    let vec = provider
+                        .full_vectors
+                        .get_vector_sync(n.id.into_usize())
+                        .expect("Full vector provider failed to retrieve element");
+                    Some((n.id, f.evaluate_similarity(query, &vec)))
                 }
-
-                if let Some(filter) = is_not_start_point.as_ref()
-                    && !filter(n.id)
-                {
-                    return None;
-                }
-
-                #[allow(clippy::expect_used)]
-                let vec = provider
-                    .full_vectors
-                    .get_vector_sync(n.id.into_usize())
-                    .expect("Full vector provider failed to retrieve element");
-                Some((n.id, f.evaluate_similarity(query, &vec)))
             })
             .collect();
 
         reranked
             .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(output.extend(reranked))
+        std::future::ready(Ok(output.extend(reranked)))
     }
 }
 
@@ -1590,7 +1569,7 @@ where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
 {
-    has_default_processor!(Rerank);
+    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
 }
 
 // Pruning
@@ -1712,9 +1691,7 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        RemoveDeletedIdsAndCopy {
-            filter_start_points: false,
-        }
+        RemoveDeletedIdsAndCopy
     }
 
     async fn get_delete_element<'a>(
@@ -1753,9 +1730,7 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        Rerank {
-            filter_start_points: false,
-        }
+        Rerank
     }
 
     async fn get_delete_element<'a>(

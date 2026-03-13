@@ -269,16 +269,14 @@ where
                     as Box<dyn Fn(&u32) -> bool + Send + Sync>)
             };
 
-            let search_result = searcher.search(
+            match searcher.search(
                 q,
                 search_params.recall_at,
                 l,
                 Some(search_params.beam_width),
                 vector_filter,
                 search_params.is_flat_search,
-            );
-
-            match search_result {
+            ) {
                 Ok(search_result) => {
                     *stats = search_result.stats.query_statistics;
                     *rc = search_result.results.len() as u32;

@@ -10,8 +10,8 @@ use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
-        ExpandBeam, FillSet, HasDefaultProcessor, InsertStrategy, PruneStrategy, SearchExt,
-        SearchStrategy,
+        ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor, InsertStrategy, Pipeline,
+        PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DelegateNeighbor, ExecutionContext,
@@ -632,7 +632,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
 {
-    has_default_processor!(Rerank);
+    has_default_processor!(Pipeline<FilterStartPoints, Rerank>);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
@@ -669,7 +669,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
 {
-    has_default_processor!(RemoveDeletedIdsAndCopy);
+    has_default_processor!(Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 impl<const NBITS: usize, V, D, Ctx> PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>>

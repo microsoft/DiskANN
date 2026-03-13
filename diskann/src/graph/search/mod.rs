@@ -89,11 +89,8 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        PP: for<'a> crate::graph::glue::SearchPostProcess<
-                <S as crate::graph::glue::SearchStrategy<DP, T, O>>::SearchAccessor<'a>,
-                T,
-                O,
-            > + Send
+        PP: for<'a> crate::graph::glue::SearchPostProcess<S::SearchAccessor<'a>, T, O>
+            + Send
             + Sync,
         OB: crate::graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }

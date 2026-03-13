@@ -489,7 +489,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    has_default_processor!(Rerank);
+    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
 }
 
 impl<T, D, Ctx> PruneStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>> for Hybrid
@@ -565,9 +565,7 @@ where
     }
 
     fn search_post_processor(&self) -> Self::SearchPostProcessor {
-        Rerank {
-            filter_start_points: false,
-        }
+        Rerank
     }
 
     async fn get_delete_element<'a>(
@@ -613,7 +611,7 @@ where
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    has_default_processor!(RemoveDeletedIdsAndCopy);
+    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 impl<D, Ctx> PruneStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>> for Quantized
