@@ -106,5 +106,7 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ] || [ "${{ github.event.inputs.dry_run || 'false' }}" = "true" ]; then
             DRY_RUN_FLAG="--dry-run"
             echo "🧪 DRY-RUN MODE"
+          else
+            echo "📦 LIVE MODE - Publishing to crates.io"
           fi
           cargo publish --locked --workspace $DRY_RUN_FLAG
