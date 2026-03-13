@@ -1,0 +1,70 @@
+Reading (with alignment) bin file /nvmessd1/fbv4/queries384d.bin ...Metadata: #pts = 13265, #dims = 384, aligned_dim = 384... allocating aligned memory of 5093760 bytes... done. Copying data to mem_aligned buffer... done.
+Opened: /nvmessd1/fbv4/gt100_prec40M, size: 10612008, cache_size: 10612008
+Reading truthset file /nvmessd1/fbv4/gt100_prec40M ...
+Metadata: #pts = 13265, #dims = 100... 
+Using AVX2 distance computation DistanceL2Int8.
+Resizing took: 1.41602s
+From graph header, expected_file_size: 7438757948, _max_observed_degree: 64, _start: 11890341, file_frozen_pts: 0
+Loading vamana graph /nvmessd1/fbv4/avarhade/prec40M_memory_index_r64_l100.......done. Index has 40469609 nodes and 1819219872 out-edges, _start is set to 11890341
+Num frozen points:0 _nd: 40469609 _start: 11890341 size(_location_to_tag): 0 size(_tag_to_location):0 Max points: 40469609
+Index loaded
+Using 1 threads to search
+  Ls         QPS     Avg dist cmps          Avg hops  Mean Latency (mus)   99.9 Latency   Recall@25
+===================================================================================================
+  30     5281.62            332.92              7.77              189.31        1354.39        5.83
+  40     7050.04            332.92              7.77              141.82         863.16        5.83
+  50     6997.94            332.92              7.77              142.87         877.10        5.83
+  60     6873.09            332.92              7.77              145.47         868.20        5.83
+  70     6157.34            357.67              8.26              162.38         951.35        6.32
+  80     5790.40            381.73              8.75              172.67         927.46        7.00
+  90     5606.04            392.64              8.97              178.35         900.73        7.33
+ 100     4926.95            438.01             10.00              202.94         953.73        8.21
+Done searching. Now saving results 
+Writing bin: /home/rakri/avarhade/Dump/tmp_30_idx_uint32.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_30_dists_float.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_40_idx_uint32.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_40_dists_float.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_50_idx_uint32.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_50_dists_float.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_60_idx_uint32.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_60_dists_float.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_70_idx_uint32.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_70_dists_float.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_80_idx_uint32.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_80_dists_float.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_90_idx_uint32.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_90_dists_float.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_100_idx_uint32.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
+Writing bin: /home/rakri/avarhade/Dump/tmp_100_dists_float.bin
+bin: #pts = 13265, #dims = 25, size = 1326508B
+Finished writing bin.
