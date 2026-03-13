@@ -16,6 +16,42 @@ DiskANN is a suite of scalable, accurate and cost-effective approximate nearest 
 This code is based on ideas from Microsoft's [DiskANN](https://aka.ms/AboutDiskANN).
 The main branch now contains a rearchitected project written in Rust.
 
+## Architectural direction
+
+The Rust implementation is organized as a modular workspace so algorithm development, storage, and tooling can evolve independently:
+
+- **Base & numerics**: `diskann-wide`, `diskann-vector`, `diskann-linalg`, `diskann-utils`, and `diskann-quantization`
+- **Core algorithm**: `diskann`
+- **Providers & storage**: `diskann-providers`, `diskann-disk`, and `diskann-label-filter`
+- **Benchmarks & tools**: `diskann-benchmark*` and `diskann-tools`
+
+## Providers
+
+DiskANN exposes pluggable providers for graph storage, vectors, and deletes. Current provider implementations include:
+
+- In-memory async providers (default `inmem` provider in `diskann-providers`)
+- Bf-tree providers (feature `bf_tree` in `diskann-providers`)
+- Caching providers (feature `bf_tree` in `diskann-providers`)
+- Disk vertex providers for on-disk indices (`diskann-disk`)
+- Label filter providers for metadata filtering (`diskann-label-filter`)
+
+## Getting started
+
+1. Install Rust using the toolchain in `rust-toolchain.toml`.
+2. Build the workspace: `cargo build`.
+3. Run tests: `cargo test`.
+4. Explore the core API in `diskann/` and disk index support in `diskann-disk/`.
+5. For benchmarking, see the links below.
+
+## Benchmarks
+
+- Benchmark runner and scenarios: [`diskann-benchmark/README.md`](diskann-benchmark/README.md)
+- Label filter benchmarks: [`diskann-label-filter/README.md`](diskann-label-filter/README.md)
+
+## Papers
+
+The list of DiskANN papers is maintained in the [DiskANN Wiki](https://github.com/microsoft/DiskANN/wiki).
+
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/).
 For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
 contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
