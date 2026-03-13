@@ -3222,7 +3222,7 @@ mod tests {
                     (dist_8bit.sample(&mut *rng), dist_mbit.sample(&mut *rng))
                 })
                 .check_with(
-                    lazy_format!("IP(8,{}) dim={dim}, trial={trial} -- {context}", M),
+                    &lazy_format!("IP(8,{}) dim={dim}, trial={trial} -- {context}", M),
                     evaluate_ip,
                 );
             }
@@ -3250,7 +3250,7 @@ mod tests {
         let dims = [127, 128, 129, 255, 256, 512, 768, 896, 3072];
         for &dim in &dims {
             let case = HetCase::<M>::new(dim, |_| (255, max_val));
-            case.check_with(lazy_format!("max-value {context} dim={dim}"), evaluate);
+            case.check_with(&lazy_format!("max-value {context} dim={dim}"), evaluate);
         }
     }
 
@@ -3320,7 +3320,7 @@ mod tests {
         // x > 127 sweep (vpmaddubsw unsigned treatment).
         for x_val in [128i64, 170, 200, 240, 255] {
             HetCase::<M>::new(block_size, move |_| (x_val, y_half))
-                .check_with(lazy_format!("x > 127 (x_val={x_val})"), evaluate);
+                .check_with(&lazy_format!("x > 127 (x_val={x_val})"), evaluate);
         }
 
         // Dim = block_size - 1 (no full block, all scalar).
