@@ -752,6 +752,15 @@ template <typename T, typename TagT, typename LabelT> std::vector<uint32_t> Inde
         }
     }
 
+    // if(_nd > 50000){
+    //     std::random_device rd;
+    //     std::mt19937 gen(rd());
+    //     std::uniform_int_distribution<uint32_t> dis(0, (uint32_t)_nd-1);
+    //     for(uint32_t i=0;i<1000;i++){
+    //         init_ids.emplace_back((uint32_t)dis(gen));
+    //     }
+    // }
+
     return init_ids;
 }
 
@@ -894,11 +903,20 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
 
     uint32_t hops = 0;
     uint32_t cmps = 0;
-
     while (best_L_nodes.has_unexpanded_node())
     {
         auto nbr = best_L_nodes.closest_unexpanded();
         auto n = nbr.id;
+        
+        // if(search_invocation){
+        //     std::vector<uint32_t> id_scratch_temp = {n};
+        //     std::vector<float> dist_scratch_temp = {0.0};
+        //     compute_dists(id_scratch_temp, dist_scratch_temp);
+        //     diskann::cout<<"Iteration/Hop: #"<<hops+1<<std::endl;
+        //     diskann::cout<<"Current L size: "<<best_L_nodes.size()<<std::endl;
+        //     diskann::cout<<"Node expanded(ID) : "<<nbr.id<<" Distance(ID,Query): "<<dist_scratch_temp[0]<<std::endl;     
+        // }
+        hops++;
 
         // Add node to expanded nodes to create pool for prune later
         if (!search_invocation)
@@ -981,11 +999,28 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::iterate_to_fixed_point(
         compute_dists(id_scratch, dist_scratch);
         cmps += (uint32_t)id_scratch.size();
 
-        // Insert <id, dist> pairs into the pool of candidates
+        // // Insert <id, dist> pairs into the pool of candidates
+        // if (search_invocation){
+        //     diskann::cout<<"Comparisons(Neighbors of ID) "<<(uint32_t)id_scratch.size()<<std::endl;
+        //     diskann::cout<<"Distances of Neighbors: ID, Query"<<std::endl;
+        // }
         for (size_t m = 0; m < id_scratch.size(); ++m)
         {
+            // if(search_invocation){
+            //     float cur_dist = _pq_data_store->get_distance(id_scratch[m], n);
+            //     diskann::cout<<"pt #"<<m+1<<": "<<cur_dist<<std::setw(10)<<dist_scratch[m]<<std::endl;
+            // }
             best_L_nodes.insert(Neighbor(id_scratch[m], dist_scratch[m]));
         }
+    }
+    if (search_invocation){
+        diskann::cout<<"Total Iterations/Hops: "<<hops<<std::endl;
+        diskann::cout<<"Total comparisons: "<<cmps<<std::endl;
+        // diskann::cout<<"L size: "<<best_L_nodes.size()<<std::endl;
+        // diskann::cout<<"Expanded Nodes List"<<scratch->expanded_nodes_vec().size()<<std::endl;
+        // for(auto neighbor : scratch->expanded_nodes_vec()){
+        //     diskann::cout<<neighbor.id<<std::endl;
+        // }       
     }
     return std::make_pair(hops, cmps);
 }
@@ -1992,11 +2027,23 @@ std::pair<uint32_t, uint32_t> Index<T, TagT, LabelT>::search(const T *query, con
     }
 
     const std::vector<LabelT> unused_filter_label;
-    const std::vector<uint32_t> init_ids = get_init_ids();
+    const std::vector<uint32_t> init_ids_temp = get_init_ids();
 
     std::shared_lock<std::shared_timed_mutex> lock(_update_lock);
 
     _data_store->preprocess_query(query, scratch);
+
+    std::vector<uint32_t> init_ids;
+    float min_dist = std::numeric_limits<float>::max();
+    for(auto id:init_ids_temp){
+
+        float dist = _data_store->get_distance(query,id);
+        if(dist < min_dist){
+            min_dist = dist;
+            init_ids.clear();
+            init_ids.push_back(id);
+        }
+    }
 
     auto retval = iterate_to_fixed_point(scratch, L, init_ids, false, unused_filter_label, true);
 
