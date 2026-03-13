@@ -14,15 +14,13 @@ use std::{
 use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
-    error::IntoANNResult,
     graph::{
-        AdjacencyList, SearchOutputBuffer,
+        AdjacencyList,
         glue::{
             AsElement, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy,
             InsertStrategy, PruneStrategy, SearchExt, SearchStrategy,
         },
     },
-    neighbor::Neighbor,
     provider::{
         self, Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DefaultAccessor,
         DefaultContext, DelegateNeighbor, Delete, ElementStatus, HasId, NeighborAccessor,

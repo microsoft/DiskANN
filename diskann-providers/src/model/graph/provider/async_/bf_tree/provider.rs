@@ -1557,9 +1557,8 @@ where
             })
             .collect();
 
-        reranked.sort_unstable_by(|a, b| {
-            (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        reranked
+            .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         Ok(output.extend(reranked))
     }
 }
