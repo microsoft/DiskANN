@@ -20,13 +20,12 @@ pub(crate) struct EncodedFilterExpr {
 }
 
 impl EncodedFilterExpr {
-    pub fn new(
-        ast_expr: &ASTExpr,
-        attribute_map: Arc<RwLock<AttributeEncoder>>,
-    ) -> ANNResult<Self> {
+    pub fn try_create(ast_expr: &ASTExpr, attribute_map: Arc<RwLock<AttributeEncoder>>) -> ANNResult<Self> {
         let mut mapper = ASTLabelIdMapper::new(attribute_map);
         let ast_id_expr = ast_expr.accept(&mut mapper)?;
-        Ok(Self { ast_id_expr })
+        Ok(Self {
+            ast_id_expr,
+        })
     }
 
     pub(crate) fn encoded_filter_expr(&self) -> &ASTIdExpr<u64> {

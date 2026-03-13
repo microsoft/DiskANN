@@ -4,6 +4,7 @@
  */
 
 mod disk_index;
+mod document_index;
 mod exhaustive;
 mod filters;
 mod index;
@@ -13,4 +14,5 @@ pub(crate) fn register_benchmarks(registry: &mut diskann_benchmark_runner::regis
     disk_index::register_benchmarks(registry);
     index::register_benchmarks(registry);
     filters::register_benchmarks(registry);
+    document_index::register_benchmarks(registry);
 }

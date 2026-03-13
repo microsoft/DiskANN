@@ -8,12 +8,12 @@ use diskann_utils::reborrow::Reborrow;
 
 ///Simple container class that clients can use to
 /// supply diskann with a vector and its attributes
-pub struct Document<'a, V> {
+pub struct Document<'a, V: ?Sized> {
     vector: &'a V,
     attributes: Vec<Attribute>,
 }
 
-impl<'a, V> Document<'a, V> {
+impl<'a, V: ?Sized> Document<'a, V> {
     pub fn new(vector: &'a V, attributes: Vec<Attribute>) -> Self {
         Self { vector, attributes }
     }

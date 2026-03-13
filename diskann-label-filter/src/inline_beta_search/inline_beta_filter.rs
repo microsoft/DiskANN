@@ -28,6 +28,13 @@ pub struct InlineBetaStrategy<Strategy> {
     inner: Strategy,
 }
 
+impl<Strategy> InlineBetaStrategy<Strategy> {
+    /// Create a new InlineBetaStrategy with the given beta value and inner strategy.
+    pub fn new(beta: f32, inner: Strategy) -> Self {
+        Self { beta, inner }
+    }
+}
+
 impl<DP, Strategy, Q>
     SearchStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, FilteredQuery<Q>>
     for InlineBetaStrategy<Strategy>
@@ -110,11 +117,9 @@ where
                 }
             }
             Err(_) => {
-                //TODO: If predicate evaluation fails, we are taking the approach that we will simply
-                //return the score returned by the inner computer, as though no predicate was specified.
-                tracing::warn!(
-                    "Predicate evaluation failed in OnlineBetaComputer::evaluate_similarity()"
-                );
+                //If predicate evaluation fails for any reason, we simply revert
+                //to unfiltered search.
+                tracing::warn!("Predicate evaluation failed");
                 sim
             }
         }
