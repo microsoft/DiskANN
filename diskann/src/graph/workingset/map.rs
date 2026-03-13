@@ -3,7 +3,7 @@
  * Licensed under the MIT license.
  */
 
-use std::{hash::Hash, sync::Arc, fmt::Debug};
+use std::{fmt::Debug, hash::Hash, sync::Arc};
 
 use diskann_utils::{Reborrow, future::SendFuture};
 use hashbrown::hash_map;

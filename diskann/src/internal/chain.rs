@@ -44,6 +44,10 @@ where
     fn size_hint(&self) -> (usize, Option<usize>) {
         let (a_lo, _) = self.a.size_hint();
         let (b_lo, _) = self.b.size_hint();
+        #[expect(
+            clippy::expect_used,
+            reason = "internally - we should never even get close"
+        )]
         let len = a_lo.checked_add(b_lo).expect("Chain length overflow");
         (len, Some(len))
     }
@@ -55,6 +59,10 @@ where
     B: ExactSizeIterator<Item = A::Item>,
 {
     fn len(&self) -> usize {
+        #[expect(
+            clippy::expect_used,
+            reason = "internally - we should never even get close"
+        )]
         self.a
             .len()
             .checked_add(self.b.len())

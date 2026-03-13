@@ -149,6 +149,44 @@ where
     list.push(v)
 }
 
+impl<I> BackedgeBuffer<I>
+where
+    I: Ord + Copy,
+{
+    /// Copy the contents of this buffer into `buf` in sorted order, reusing `buf`'s
+    /// allocation.
+    ///
+    /// For the common small cases (≤ 4 elements), this sorts a tiny fixed-size array
+    /// inline before copying. For the `Many` case, it copies then sorts via the
+    /// standard library.
+    pub(crate) fn sorted_into(&self, buf: &mut Vec<I>) {
+        buf.clear();
+        match &self.inner {
+            Inner::None => {}
+            Inner::One(v) => buf.push(*v),
+            Inner::Two(v) => {
+                let mut a = *v;
+                a.sort_unstable();
+                buf.extend_from_slice(&a);
+            }
+            Inner::Three(v) => {
+                let mut a = *v;
+                a.sort_unstable();
+                buf.extend_from_slice(&a);
+            }
+            Inner::Four(v) => {
+                let mut a = *v;
+                a.sort_unstable();
+                buf.extend_from_slice(&a);
+            }
+            Inner::Many(adj) => {
+                buf.extend_from_slice(adj);
+                buf.sort_unstable();
+            }
+        }
+    }
+}
+
 impl<I> Deref for BackedgeBuffer<I> {
     type Target = [I];
     fn deref(&self) -> &[I] {
@@ -214,5 +252,63 @@ mod tests {
                 assert!(!buf.push(*j), "repeat elements are not allowed");
             }
         }
+    }
+
+    #[test]
+    fn test_sorted_into() {
+        let mut buf = Vec::new();
+
+        // None: empty
+        let empty = BackedgeBuffer::<u32>::default();
+        empty.sorted_into(&mut buf);
+        assert_eq!(buf, &[] as &[u32]);
+
+        // One: trivially sorted
+        let one = BackedgeBuffer::new(42u32);
+        one.sorted_into(&mut buf);
+        assert_eq!(buf, &[42]);
+
+        // Two: reverse order
+        let mut two = BackedgeBuffer::new(10u32);
+        two.push(3);
+        two.sorted_into(&mut buf);
+        assert_eq!(buf, &[3, 10]);
+
+        // Two: already sorted
+        let mut two_sorted = BackedgeBuffer::new(1u32);
+        two_sorted.push(5);
+        two_sorted.sorted_into(&mut buf);
+        assert_eq!(buf, &[1, 5]);
+
+        // Three: reverse order
+        let mut three = BackedgeBuffer::new(30u32);
+        three.push(20);
+        three.push(10);
+        three.sorted_into(&mut buf);
+        assert_eq!(buf, &[10, 20, 30]);
+
+        // Four: scrambled
+        let mut four = BackedgeBuffer::new(4u32);
+        four.push(2);
+        four.push(3);
+        four.push(1);
+        four.sorted_into(&mut buf);
+        assert_eq!(buf, &[1, 2, 3, 4]);
+
+        // Many (>4): scrambled
+        let mut many = BackedgeBuffer::new(9u32);
+        for v in [7, 5, 3, 1, 8, 6, 4, 2] {
+            many.push(v);
+        }
+        assert_eq!(many.len(), 9);
+        many.sorted_into(&mut buf);
+        assert_eq!(buf, &[1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+        // Verify buf allocation is reused across calls (capacity not shrunk).
+        let cap = buf.capacity();
+        let one = BackedgeBuffer::new(99u32);
+        one.sorted_into(&mut buf);
+        assert_eq!(buf, &[99]);
+        assert!(buf.capacity() >= cap, "sorted_into should reuse allocation");
     }
 }

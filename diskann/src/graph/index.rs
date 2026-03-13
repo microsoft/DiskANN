@@ -416,6 +416,10 @@ where
 
     /// Perform a search for the given `vector_id, vector`, prune and return the visited set.
     /// Returns a tuple of the `vector_id` and a list of nodes from which to append an edge to `vector_id`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "internal method with tightly coupled params"
+    )]
     fn search_and_prune<S, B, Set>(
         &self,
         strategy: &S,
@@ -497,7 +501,7 @@ where
                     options,
                 )
                 .await
-                .unwrap();
+                .escalate("self id retrieval must succeed")?;
 
                 let should_retry = insert_retry
                     .is_some_and(|v| v.should_retry(attempt, prune_scratch.neighbors.len()));
@@ -577,7 +581,13 @@ where
     {
         async move {
             if batch.len() != ids.len() {
-                panic!("todo: return ann error with a local error type");
+                return Err(ANNError::new(
+                    ANNErrorKind::IndexError,
+                    BatchIdMismatch {
+                        batch_len: batch.len(),
+                        ids_len: ids.len(),
+                    },
+                ));
             }
 
             let partitions = async_tools::PartitionIter::new(batch.len(), ntasks);
@@ -989,11 +999,12 @@ where
             // Check if number of unique back edges source is very small. If so, we do kick
             // off the bootstrap routine and add edges from within the batch.
             //
-            // If `work.len() == 1`, then there is nothing to bootstrap since there are no
-            // other edges in the batch.
-            if self.config.intra_batch_candidates().is_none()
-                && backedges.len().div_ceil(8) <= work.len() /* NB: update docs if 8 changes */
-                && work.len() != 1
+            // Bootstrap is skipped when intra-batch candidates cover the full batch (i.e.
+            // `All` or a `Max(n)` that resolves to >= batch size), since every item already
+            // had full visibility of the batch during pruning.
+            let resolved_ibc = self.config.intra_batch_candidates().get(work.len());
+            if resolved_ibc < work.len() && backedges.len().div_ceil(8) <= work.len()
+            /* NB: update docs if 8 changes */
             {
                 edges = boxit(self.clone().multi_insert_bootstrap(
                     || strategy.insert_strategy().prune_strategy(),
@@ -1042,12 +1053,15 @@ where
                         let itr = backedges_clone.iter().skip(range.start).take(range.len());
 
                         let mut prune_scratch = prune::Scratch::new();
+                        let mut sorted_buf = Vec::new();
                         for (source, adj_list) in itr {
+                            adj_list.sorted_into(&mut sorted_buf);
+
                             self_clone
                                 .add_edge_and_prune(
                                     &strategy_clone,
                                     &context_clone,
-                                    adj_list,
+                                    &sorted_buf,
                                     *source,
                                     &mut prune_scratch,
                                     &mut working_set,
@@ -2723,6 +2737,10 @@ where
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "internal method with tightly coupled params"
+    )]
     fn robust_prune_with<A, Set, Itr>(
         &self,
         accessor: &mut A,
@@ -2739,7 +2757,7 @@ where
         Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
     {
         async move {
-            let computer = accessor.build_distance_computer().unwrap();
+            let computer = accessor.build_distance_computer().into_ann_result()?;
             let view = accessor
                 .fill(
                     working_set,
@@ -2753,7 +2771,10 @@ where
                 .into_ann_result()?;
 
             if extras.len() != 0 {
-                let this_vector = view.get(internal_id).expect("this should really succeed");
+                let this_vector = view
+                    .get(internal_id)
+                    .ok_or_else(|| prune::ListError::failed_retrieval(internal_id))?;
+
                 for id in extras {
                     if let Some(element) = view.get(id) {
                         record.push(Neighbor::new(
@@ -3091,3 +3112,11 @@ impl InternalSearchStats {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, Error)]
+#[error("batch length ({}) does not match ids length ({})", self.batch_len, self.ids_len)]
+struct BatchIdMismatch {
+    batch_len: usize,
+    ids_len: usize,
+}
+
