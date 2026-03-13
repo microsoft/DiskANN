@@ -4,7 +4,7 @@
 #include <omp.h>
 
 #include <type_traits>
-
+#include <atomic>
 #include "boost/dynamic_bitset.hpp"
 #include "index_factory.h"
 #include "memory_mapper.h"
@@ -24,6 +24,9 @@
 #include "index.h"
 
 #define MAX_POINTS_FOR_USING_BITSET 10000000
+
+//bool reduce_prune = false;
+std::atomic<unsigned long long> count_prune = 0;
 
 namespace diskann
 {
@@ -1047,7 +1050,7 @@ void Index<T, TagT, LabelT>::search_for_point_and_prune(int location, uint32_t L
     }
 
     auto &pool = scratch->pool();
-
+    //diskann::cout<<"Pool Size (search_point_and_prune) "<<pool.size()<<std::endl;
     for (uint32_t i = 0; i < pool.size(); i++)
     {
         if (pool[i].id == (uint32_t)location)
@@ -1073,7 +1076,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
                                           const uint32_t degree, const uint32_t maxc, std::vector<uint32_t> &result,
                                           InMemQueryScratch<T> *scratch,
                                           const tsl::robin_set<uint32_t> *const delete_set_ptr)
-{
+{   
+    count_prune++;
     if (pool.size() == 0)
         return;
 
@@ -1082,6 +1086,7 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     assert(result.size() == 0);
     if (pool.size() > maxc)
         pool.resize(maxc);
+        
     std::vector<float> &occlude_factor = scratch->occlude_factor();
     // occlude_list can be called with the same scratch more than once by
     // search_for_point_and_add_link through inter_insert.
@@ -1089,7 +1094,8 @@ void Index<T, TagT, LabelT>::occlude_list(const uint32_t location, std::vector<N
     // Initialize occlude_factor to pool.size() many 0.0f values for correctness
     occlude_factor.insert(occlude_factor.end(), pool.size(), 0.0f);
 
-    float cur_alpha = 1;
+    // Change the cur_alpha to alpha
+    float cur_alpha = alpha;
     while (cur_alpha <= alpha && result.size() < degree)
     {
         // used for MIPS, where we store a value of eps in cur_alpha to
@@ -1196,8 +1202,12 @@ void Index<T, TagT, LabelT>::prune_neighbors(const uint32_t location, std::vecto
     pruned_list.clear();
     pruned_list.reserve(range);
 
+    //diskann::cout<<"Pool Size (prune_neighbors before occlude) "<<pool.size()<<std::endl;
+
     occlude_list(location, pool, alpha, range, max_candidate_size, pruned_list, scratch);
     assert(pruned_list.size() <= range);
+
+    //diskann::cout<<"Pool Size (prune_neighbors after occlude) "<<pool.size()<<std::endl;
 
     if (_saturate_graph && alpha > 1)
     {
@@ -1334,8 +1344,18 @@ template <typename T, typename TagT, typename LabelT> void Index<T, TagT, LabelT
 
         {
             LockGuard guard(_locks[node]);
+            
+            std::vector<uint32_t> reduced_pruned_list = pruned_list;
+            bool reduce_prune = true;
+            if (reduce_prune){
+                //diskann::cout << "Reducing pruned list for node " << std::endl;
+                float KK = 4;
+                uint32_t reduced_pruned_list_size = (uint32_t)(_indexingRange/KK*(1+KK*(node_ctr/(visit_order.size()))));
+                reduced_pruned_list_size = std::min(reduced_pruned_list_size, (uint32_t)reduced_pruned_list.size());
+                reduced_pruned_list.resize(reduced_pruned_list_size);
+            }
 
-            _graph_store->set_neighbours(node, pruned_list);
+            _graph_store->set_neighbours(node, reduced_pruned_list);
             assert(_graph_store->get_neighbours((location_t)node).size() <= _indexingRange);
         }
 
@@ -1571,7 +1591,7 @@ void Index<T, TagT, LabelT>::build_with_data_populated(const std::vector<TagT> &
     }
     diskann::cout << "Index built with degree: max:" << max << "  avg:" << (float)total / (float)(_nd + _num_frozen_pts)
                   << "  min:" << min << "  count(deg<2):" << cnt << std::endl;
-
+     diskann::cout << "Robust Prune Calls: " << count_prune << std::endl;
     _has_built = true;
 }
 template <typename T, typename TagT, typename LabelT>
