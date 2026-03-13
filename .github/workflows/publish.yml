@@ -96,6 +96,7 @@ jobs:
           fi
 
       - name: Run tests
+        if: github.event.inputs.dry_run != 'true' || github.event_name == 'push'
         run: cargo test --locked --workspace --profile ci
 
       - name: Publish workspace crates
