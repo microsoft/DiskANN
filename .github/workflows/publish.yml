@@ -60,7 +60,7 @@ jobs:
         if: github.event_name == 'push'
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -n1 | sed 's/.*"\(.*\)".*/\1/')
+          CARGO_VERSION=$(grep -A 5 '^\[workspace\.package\]' Cargo.toml | grep 'version = ' | head -n1 | sed 's/.*"\(.*\)".*/\1/')
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
             echo "::error::Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
             exit 1
