@@ -12,7 +12,11 @@
 #ifdef _WINDOWS
 #include "windows_aligned_file_reader.h"
 #else
+#ifndef IOURING
 #include "linux_aligned_file_reader.h"
+#else
+#include "linux_aligned_file_reader_uring.h"
+#endif
 #endif
 
 #define READ_U64(stream, val) stream.read((char *)&val, sizeof(uint64_t))
