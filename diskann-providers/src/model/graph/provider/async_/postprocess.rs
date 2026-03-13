@@ -52,46 +52,43 @@ impl<A, T> glue::SearchPostProcess<A, T> for RemoveDeletedIdsAndCopy
 where
     A: BuildQueryComputer<T, Id = u32> + AsDeletionCheck + glue::SearchExt,
     <A as AsDeletionCheck>::Checker: Sync,
-    T: ?Sized,
+    T: ?Sized + Sync,
 {
     type Error = ANNError;
 
-    #[allow(clippy::manual_async_fn)]
-    fn post_process<I, B>(
+    async fn post_process<I, B>(
         &self,
         accessor: &mut A,
         _query: &T,
         _computer: &<A as BuildQueryComputer<T>>::QueryComputer,
         candidates: I,
         output: &mut B,
-    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        async move {
-            let is_not_start_point = if self.filter_start_points {
-                Some(accessor.is_not_start_point().await?)
-            } else {
+        let is_not_start_point = if self.filter_start_points {
+            Some(accessor.is_not_start_point().await?)
+        } else {
+            None
+        };
+
+        let checker = accessor.as_deletion_check();
+        let filtered = candidates.filter_map(|n| {
+            if checker.deletion_check(n.id) {
                 None
-            };
-
-            let checker = accessor.as_deletion_check();
-            let filtered = candidates.filter_map(|n| {
-                if checker.deletion_check(n.id) {
-                    None
-                } else {
-                    Some((n.id, n.distance))
-                }
-            });
-
-            let count = if let Some(filter) = is_not_start_point {
-                output.extend(filtered.filter(|(id, _)| filter(*id)))
             } else {
-                output.extend(filtered)
-            };
+                Some((n.id, n.distance))
+            }
+        });
 
-            Ok(count)
-        }
+        let count = if let Some(filter) = is_not_start_point {
+            output.extend(filtered.filter(|(id, _)| filter(*id)))
+        } else {
+            output.extend(filtered)
+        };
+
+        Ok(count)
     }
 }

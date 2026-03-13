@@ -399,56 +399,53 @@ where
 {
     type Error = ANNError;
 
-    #[allow(clippy::manual_async_fn)]
-    fn post_process<I, B>(
+    async fn post_process<I, B>(
         &self,
         accessor: &mut A,
         query: &[T],
         _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
-    ) -> impl Future<Output = Result<usize, Self::Error>> + Send
+    ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        async move {
-            let full = accessor.as_full_precision();
-            let f = full.distance();
-            let is_not_start_point = if self.filter_start_points {
-                Some(accessor.is_not_start_point().await?)
-            } else {
-                None
-            };
-            let checker = accessor.as_deletion_check();
+        let full = accessor.as_full_precision();
+        let f = full.distance();
+        let is_not_start_point = if self.filter_start_points {
+            Some(accessor.is_not_start_point().await?)
+        } else {
+            None
+        };
+        let checker = accessor.as_deletion_check();
 
-            let mut reranked: Vec<(u32, f32)> = candidates
-                .filter_map(|n| {
-                    if checker.deletion_check(n.id) {
-                        return None;
-                    }
+        let mut reranked: Vec<(u32, f32)> = candidates
+            .filter_map(|n| {
+                if checker.deletion_check(n.id) {
+                    return None;
+                }
 
-                    if let Some(filter) = is_not_start_point.as_ref()
-                        && !filter(n.id)
-                    {
-                        return None;
-                    }
+                if let Some(filter) = is_not_start_point.as_ref()
+                    && !filter(n.id)
+                {
+                    return None;
+                }
 
-                    Some((
-                        n.id,
-                        f.evaluate_similarity(query, unsafe {
-                            full.get_vector_sync(n.id.into_usize())
-                        }),
-                    ))
-                })
-                .collect();
+                Some((
+                    n.id,
+                    f.evaluate_similarity(query, unsafe {
+                        full.get_vector_sync(n.id.into_usize())
+                    }),
+                ))
+            })
+            .collect();
 
-            reranked.sort_unstable_by(|a, b| {
-                (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
+        reranked.sort_unstable_by(|a, b| {
+            (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-            Ok(output.extend(reranked))
-        }
+        Ok(output.extend(reranked))
     }
 }
 

@@ -1515,55 +1515,52 @@ where
 {
     type Error = ANNError;
 
-    #[allow(clippy::manual_async_fn)]
-    fn post_process<I, B>(
+    async fn post_process<I, B>(
         &self,
         accessor: &mut QuantAccessor<'a, T, D>,
         query: &[T],
         _computer: &pq::distance::QueryComputer<Arc<FixedChunkPQTable>>,
         candidates: I,
         output: &mut B,
-    ) -> impl Future<Output = Result<usize, Self::Error>> + Send
+    ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
         B: SearchOutputBuffer<u32> + Send + ?Sized,
     {
-        async move {
-            let provider = &accessor.provider;
-            let f = T::distance(provider.metric, Some(provider.full_vectors.dim()));
-            let is_not_start_point = if self.filter_start_points {
-                Some(accessor.is_not_start_point().await?)
-            } else {
-                None
-            };
-            let checker = accessor.as_deletion_check();
+        let provider = &accessor.provider;
+        let f = T::distance(provider.metric, Some(provider.full_vectors.dim()));
+        let is_not_start_point = if self.filter_start_points {
+            Some(accessor.is_not_start_point().await?)
+        } else {
+            None
+        };
+        let checker = accessor.as_deletion_check();
 
-            let mut reranked: Vec<(u32, f32)> = candidates
-                .filter_map(|n| {
-                    if checker.deletion_check(n.id) {
-                        return None;
-                    }
+        let mut reranked: Vec<(u32, f32)> = candidates
+            .filter_map(|n| {
+                if checker.deletion_check(n.id) {
+                    return None;
+                }
 
-                    if let Some(filter) = is_not_start_point.as_ref()
-                        && !filter(n.id)
-                    {
-                        return None;
-                    }
+                if let Some(filter) = is_not_start_point.as_ref()
+                    && !filter(n.id)
+                {
+                    return None;
+                }
 
-                    #[allow(clippy::expect_used)]
-                    let vec = provider
-                        .full_vectors
-                        .get_vector_sync(n.id.into_usize())
-                        .expect("Full vector provider failed to retrieve element");
-                    Some((n.id, f.evaluate_similarity(query, &vec)))
-                })
-                .collect();
+                #[allow(clippy::expect_used)]
+                let vec = provider
+                    .full_vectors
+                    .get_vector_sync(n.id.into_usize())
+                    .expect("Full vector provider failed to retrieve element");
+                Some((n.id, f.evaluate_similarity(query, &vec)))
+            })
+            .collect();
 
-            reranked.sort_unstable_by(|a, b| {
-                (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            Ok(output.extend(reranked))
-        }
+        reranked.sort_unstable_by(|a, b| {
+            (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Ok(output.extend(reranked))
     }
 }
 
