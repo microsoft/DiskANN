@@ -11,7 +11,7 @@ use diskann::{
     provider::{Accessor, AsNeighbor, BuildQueryComputer, DelegateNeighbor, HasId},
     ANNError, ANNErrorKind,
 };
-use diskann_utils::{Reborrow};
+use diskann_utils::Reborrow;
 use roaring::RoaringTreemap;
 
 use crate::traits::attribute_accessor::AttributeAccessor;

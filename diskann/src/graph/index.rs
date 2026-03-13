@@ -35,12 +35,12 @@ use super::{
         scratch::{self, PriorityQueueConfiguration, SearchScratch, SearchScratchParams},
     },
     search_output_buffer,
-    workingset::{AsWorkingSet, Fill, ScopedMap},
+    workingset::{AsWorkingSet, Fill, View},
 };
 
 use crate::{
     ANNError, ANNErrorKind, ANNResult,
-    error::{ErrorExt, IntoANNResult, RankedError, ToRanked, TransientError},
+    error::{ErrorExt, IntoANNResult},
     internal,
     neighbor::{self, Neighbor, NeighborPriorityQueue, NeighborQueue},
     provider::{
@@ -329,7 +329,7 @@ where
             let num_insert_attempts = insert_retry.map_or(1, |v| v.max_retries().get());
 
             // N.B.: Working set needs to be outlived by `accessor`.
-            let mut working_set = prune_strategy.create_state(self.max_occlusion_size());
+            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut prune_scratch = prune::Scratch::new();
             let mut new_neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
 
@@ -416,24 +416,24 @@ where
 
     /// Perform a search for the given `vector_id, vector`, prune and return the visited set.
     /// Returns a tuple of the `vector_id` and a list of nodes from which to append an edge to `vector_id`.
-    fn search_and_prune<S, B, State>(
+    fn search_and_prune<S, B, Set>(
         &self,
         strategy: &S,
         context: &DP::Context,
         batch: &B,
         ids: &[DP::InternalId],
         position: usize,
-        state: &mut State,
+        working_set: &mut Set,
         prune_scratch: &mut prune::Scratch<DP::InternalId>,
     ) -> impl SendFuture<ANNResult<PendingEdge<DP::InternalId>>>
     where
         S: for<'a> InsertStrategy<
                 DP,
                 B::Element<'a>,
-                PruneStrategy: PruneStrategy<DP, State = State>,
+                PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
             >,
         B: Batch,
-        State: Send + Sync,
+        Set: Send + Sync,
     {
         async move {
             // Copy vectors to the vector provider, quantize them and set quant vec provider if necessary
@@ -493,7 +493,7 @@ where
                     async_tools::around(ids, position, candidates).copied(),
                     &mut search_record,
                     prune_scratch,
-                    state,
+                    working_set,
                     options,
                 )
                 .await
@@ -623,22 +623,22 @@ where
     ///
     /// Returns a pair `(edges, result)`. Whether or not `result` is an error, `edges` will
     /// contain all edges successfully processed by this task.
-    fn search_and_prune_batch<S, B, State>(
+    fn search_and_prune_batch<S, B, Set>(
         &self,
         strategy: &S,
         context: &DP::Context,
         batch: &B,
         work: &DynamicBalancer<DP::InternalId>,
-        state: &mut State,
+        working_set: &mut Set,
     ) -> impl SendFuture<BatchResult<Vec<PendingEdge<DP::InternalId>>>>
     where
         B: Batch,
         S: for<'a> InsertStrategy<
                 DP,
                 B::Element<'a>,
-                PruneStrategy: PruneStrategy<DP, State = State>,
+                PruneStrategy: PruneStrategy<DP, WorkingSet = Set>,
             >,
-        State: Send + Sync,
+        Set: Send + Sync,
     {
         async move {
             let mut output = Vec::new();
@@ -648,10 +648,10 @@ where
                     .search_and_prune(
                         strategy,
                         context,
-                        &batch,
+                        batch,
                         work.all(),
                         position,
-                        state,
+                        working_set,
                         &mut prune_scratch,
                     )
                     .await
@@ -701,7 +701,7 @@ where
                 .into_ann_result()?;
 
             let mut prune_scratch = prune::Scratch::new();
-            let mut working_set = strategy.create_state(self.max_occlusion_size());
+            let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
             // During bootstrap, we want the graph to be as dense as possible to aid
             // in early navigation.
@@ -933,7 +933,7 @@ where
                     let context_clone = context.clone();
                     let vectors_clone = vectors.clone();
                     let work_clone = work.clone();
-                    let mut state = seed.as_working_set(self.max_occlusion_size());
+                    let mut working_set = seed.as_working_set(self.max_occlusion_size());
 
                     let future = async move {
                         self_clone
@@ -942,7 +942,7 @@ where
                                 &context_clone,
                                 &vectors_clone,
                                 &work_clone,
-                                &mut state,
+                                &mut working_set,
                             )
                             .await
                     };
@@ -1034,7 +1034,7 @@ where
                     let context_clone = context.clone();
                     let strategy_clone = strategy.insert_strategy().prune_strategy();
                     let backedges_clone = backedges.clone();
-                    let mut state = seed.as_working_set(self.max_occlusion_size());
+                    let mut working_set = seed.as_working_set(self.max_occlusion_size());
 
                     tokio::spawn(context.wrap_spawn(async move {
                         // Get the range of items to process in this task.
@@ -1050,7 +1050,7 @@ where
                                     adj_list,
                                     *source,
                                     &mut prune_scratch,
-                                    &mut state,
+                                    &mut working_set,
                                     None,
                                 )
                                 .await?;
@@ -1521,7 +1521,7 @@ where
 
                             let mut prune_scratch = prune::Scratch::new();
                             let mut working_set =
-                                strategy_clone.create_state(self_clone.max_occlusion_size());
+                                strategy_clone.create_working_set(self_clone.max_occlusion_size());
 
                             match result {
                                 Some(source) => {
@@ -1613,7 +1613,7 @@ where
             delete_set.insert(vector_id);
             let prune_strategy = strategy.prune_strategy();
 
-            let mut working_set = prune_strategy.create_state(self.max_occlusion_size());
+            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut prune_scratch = prune::Scratch::new();
 
             for (neighbor, edges) in edges_to_add.iter() {
@@ -1690,7 +1690,7 @@ where
             };
 
             let prune_strategy = strategy.prune_strategy();
-            let mut working_set_state = prune_strategy.create_state(self.max_occlusion_size());
+            let mut working_set = prune_strategy.create_working_set(self.max_occlusion_size());
             let mut accessor = prune_strategy
                 .prune_accessor(&self.data_provider, context)
                 .into_ann_result()?;
@@ -1706,9 +1706,9 @@ where
                 .await?;
 
             let computer = accessor.build_distance_computer().into_ann_result()?;
-            let working_set = accessor
+            let view = accessor
                 .fill(
-                    &mut working_set_state,
+                    &mut working_set,
                     internal::chain(
                         internal::chain(
                             replace_candidates.iter().copied(),
@@ -1725,7 +1725,7 @@ where
             let mut pool = Vec::<Neighbor<DP::InternalId>>::new();
             for neighbor in in_neighbors.iter() {
                 pool.clear();
-                let candidate = match working_set.get(*neighbor) {
+                let candidate = match view.get(*neighbor) {
                     Some(candidate) => candidate,
                     None => continue,
                 };
@@ -1736,7 +1736,7 @@ where
                         continue;
                     }
 
-                    let other = match working_set.get(*other_id) {
+                    let other = match view.get(*other_id) {
                         Some(other) => other,
                         None => continue,
                     };
@@ -1755,7 +1755,7 @@ where
             for neighbor in adjacency_list {
                 pool.clear();
 
-                let candidate = match working_set.get(neighbor) {
+                let candidate = match view.get(neighbor) {
                     Some(candidate) => candidate,
                     None => continue,
                 };
@@ -1766,7 +1766,7 @@ where
                         continue;
                     }
 
-                    let other = match working_set.get(*other_id) {
+                    let other = match view.get(*other_id) {
                         Some(other) => other,
                         None => continue,
                     };
@@ -1931,7 +1931,7 @@ where
                     neighbors
                 } else {
                     let mut prune_scratch = prune::Scratch::new();
-                    let mut working_set = strategy.create_state(self.max_occlusion_size());
+                    let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
                     // Force saturation is mainly used for the retry insert logic.
                     //
@@ -2500,7 +2500,7 @@ where
         targets: &[DP::InternalId],
         source: DP::InternalId,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        working_set: &mut S::State,
+        working_set: &mut S::WorkingSet,
         to_remove: Option<&HashSet<DP::InternalId>>,
     ) -> impl SendFuture<ANNResult<()>>
     where
@@ -2579,21 +2579,21 @@ where
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`FillSet::fill_set`]. Transient errors from
+    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
     /// this API are suppressed and any IDs that failed will be skipped during prune.
     ///
     /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
-    fn robust_prune<A, State>(
+    fn robust_prune<A, Set>(
         &self,
         accessor: &mut A,
         location: DP::InternalId,
         mut context: prune::Context<'_, DP::InternalId>,
-        state: &mut State,
+        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<ANNResult<()>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<State>,
-        State: Send + Sync,
+        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
+        Set: Send + Sync,
     {
         async move {
             // Early exit.
@@ -2603,16 +2603,16 @@ where
 
             let computer = accessor.build_distance_computer().into_ann_result()?;
 
-            let scoped_map = accessor
-                .fill(state, context.pool.iter().map(|n| n.id))
+            let view = accessor
+                .fill(working_set, context.pool.iter().map(|n| n.id))
                 .send()
                 .await
                 .into_ann_result()?;
 
-            self.occlude_list::<A::Set<'_>, _, _>(
+            self.occlude_list::<A::View<'_>, _, _>(
                 &computer,
                 &mut context,
-                scoped_map,
+                view,
                 |id| id == location,
                 options,
             );
@@ -2623,17 +2623,17 @@ where
 
     /// A specialization of [`Self::robust_prune`] that prunes the IDs in an [`AdjacencyList`].
     ///
-    /// The resulting candidates list will be placed into `state's`
+    /// The resulting candidates list will be placed into `scratch`'s
     /// [`prune::Scratch::neighbors`] field.
     ///
-    /// All other fields of `state` are clobbered.
+    /// All other fields of `scratch` are clobbered.
     ///
     /// This works by first retrieving `location` and all ids in `list` into `working_set`
-    /// via [`FillSet`] and then computing distances to populate the candidate pool.
+    /// via [`Fill`] and then computing distances to populate the candidate pool.
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`FillSet::fill_set`]. Transient errors from
+    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
     /// this API are suppressed and any IDs that failed will be skipped during prune unless
     /// the vector that was not retrieved was `location`. If this is the case,
     /// [`prune::ListError::FailedVectorRetrieval`] is returned to delegate escalation to
@@ -2642,35 +2642,35 @@ where
     /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
     /// A specialization of [`Self::robust_prune`] that prunes the IDs in an [`AdjacencyList`].
     ///
-    /// The resulting candidates list will be placed into `state's`
+    /// The resulting candidates list will be placed into `scratch`'s
     /// [`prune::Scratch::neighbors`] field.
     ///
-    /// All other fields of `state` are clobbered.
+    /// All other fields of `scratch` are clobbered.
     ///
     /// This works by first retrieving `location` and all ids in `list` into `working_set`
-    /// via [`FillSet`] and then computing distances to populate the candidate pool.
+    /// via [`Fill`] and then computing distances to populate the candidate pool.
     ///
     /// # Errors
     ///
-    /// Forwards critical errors from [`FillSet::fill_set`]. Transient errors from
+    /// Forwards critical errors from [`Fill::fill`]. Transient errors from
     /// this API are suppressed and any IDs that failed will be skipped during prune unless
     /// the vector that was not retrieved was `location`. If this is the case,
     /// [`prune::ListError::FailedVectorRetrieval`] is returned to delegate escalation to
     /// the caller.
     ///
     /// Errors due to [`BuildDistanceComputer::build_distance_computer`] are propagated.
-    fn robust_prune_list<A, State>(
+    fn robust_prune_list<A, Set>(
         &self,
         accessor: &mut A,
         location: DP::InternalId,
         list: &AdjacencyList<DP::InternalId>,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        state: &mut State,
+        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<State>,
-        State: Send + Sync,
+        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
+        Set: Send + Sync,
     {
         async move {
             // Early exit.
@@ -2681,9 +2681,9 @@ where
             let computer = accessor.build_distance_computer().into_ann_result()?;
 
             // Fetch into the working set, including the source location.
-            let scoped_map = accessor
+            let view = accessor
                 .fill(
-                    state,
+                    working_set,
                     internal::chain(std::iter::once(location), list.iter().copied()),
                 )
                 .send()
@@ -2695,13 +2695,13 @@ where
 
             // Look up the source vector from the working set and compute distances.
             {
-                let vector = match scoped_map.get(location) {
+                let vector = match view.get(location) {
                     Some(v) => v,
                     None => return Err(prune::ListError::failed_retrieval(location)),
                 };
 
                 for id in list.iter().filter(|&&i| i != location) {
-                    if let Some(other) = scoped_map.get(*id) {
+                    if let Some(other) = view.get(*id) {
                         scratch.pool.push(Neighbor::new(
                             *id,
                             computer.evaluate_similarity(vector.reborrow(), other.reborrow()),
@@ -2711,10 +2711,10 @@ where
             }
 
             // Note: Turbofish needed to help inference.
-            self.occlude_list::<A::Set<'_>, _, _>(
+            self.occlude_list::<A::View<'_>, _, _>(
                 &computer,
                 &mut scratch.as_context(self.max_occlusion_size()),
-                scoped_map,
+                view,
                 |id| id == location,
                 options,
             );
@@ -2723,26 +2723,26 @@ where
         }
     }
 
-    fn robust_prune_with<A, State, Itr>(
+    fn robust_prune_with<A, Set, Itr>(
         &self,
         accessor: &mut A,
         internal_id: DP::InternalId,
         extras: Itr,
         record: &mut VisitedSearchRecord<DP::InternalId>,
         scratch: &mut prune::Scratch<DP::InternalId>,
-        state: &mut State,
+        working_set: &mut Set,
         options: prune::Options,
     ) -> impl SendFuture<Result<(), prune::ListError<DP::InternalId>>>
     where
-        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<State>,
-        State: Send + Sync,
+        A: Accessor<Id = DP::InternalId> + BuildDistanceComputer + Fill<Set>,
+        Set: Send + Sync,
         Itr: ExactSizeIterator<Item = DP::InternalId> + Clone + Send + Sync,
     {
         async move {
             let computer = accessor.build_distance_computer().unwrap();
-            let working_set = accessor
+            let view = accessor
                 .fill(
-                    state,
+                    working_set,
                     internal::chain(
                         std::iter::once(internal_id),
                         internal::chain(extras.clone(), record.ids()),
@@ -2753,11 +2753,9 @@ where
                 .into_ann_result()?;
 
             if extras.len() != 0 {
-                let this_vector = working_set
-                    .get(internal_id)
-                    .expect("this should really succeed");
+                let this_vector = view.get(internal_id).expect("this should really succeed");
                 for id in extras {
-                    if let Some(element) = working_set.get(id) {
+                    if let Some(element) = view.get(id) {
                         record.push(Neighbor::new(
                             id,
                             computer
@@ -2774,10 +2772,10 @@ where
                 neighbors: &mut scratch.neighbors,
             };
 
-            self.occlude_list::<A::Set<'_>, _, _>(
+            self.occlude_list::<A::View<'_>, _, _>(
                 &computer,
                 &mut context,
-                working_set,
+                view,
                 |id| id == internal_id,
                 options,
             );
@@ -2825,7 +2823,7 @@ where
         exclude: F,
         options: prune::Options,
     ) where
-        M: ScopedMap<DP::InternalId>,
+        M: View<DP::InternalId>,
         C: for<'a, 'b> DistanceFunction<M::ElementRef<'a>, M::ElementRef<'b>, f32>,
         F: Fn(DP::InternalId) -> bool,
     {
@@ -3026,7 +3024,7 @@ where
                 .prune_accessor(&self.data_provider, context)
                 .into_ann_result()?;
 
-            let mut working_set = strategy.create_state(self.max_occlusion_size());
+            let mut working_set = strategy.create_working_set(self.max_occlusion_size());
 
             let mut neighbors = AdjacencyList::with_capacity(self.max_degree_with_slack());
             let mut prune_scratch = prune::Scratch::<DP::InternalId>::new();

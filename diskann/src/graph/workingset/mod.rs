@@ -3,28 +3,19 @@
  * Licensed under the MIT license.
  */
 
-use std::hash::Hash;
-use std::sync::Arc;
+//! The working-set is a core scratch data structure used during the pruning
+//!
 
-use diskann_utils::{
-    Reborrow,
-    future::{AsyncFriendly, SendFuture},
-    views::{self, Matrix},
-};
-use hashbrown::hash_map;
+use diskann_utils::{Reborrow, future::SendFuture};
 
-use crate::{
-    ANNError,
-    error::{RankedError, ToRanked, TransientError},
-    provider::Accessor,
-};
+use crate::{ANNError, provider::Accessor};
 
 /////////////
 // Exports //
 /////////////
 
 pub mod map;
-pub use map::{Map, ScopedMapView, MapSeed};
+pub use map::Map;
 
 ////////////
 // Traits //
@@ -36,30 +27,30 @@ pub use map::{Map, ScopedMapView, MapSeed};
 /// (via `get_element` or bulk operations) and insert them into the provided state.
 /// Fill is additive — elements already present in state (including any batch overlay)
 /// are skipped.
-pub trait Fill<State>: Accessor {
+pub trait Fill<Set>: Accessor {
     type Error: Into<ANNError> + std::fmt::Debug + Send + Sync;
 
-    type Set<'a>: for<'b> ScopedMap<Self::Id, ElementRef<'b> = Self::ElementRef<'b>> + Send + Sync
+    type View<'a>: for<'b> View<Self::Id, ElementRef<'b> = Self::ElementRef<'b>> + Send + Sync
     where
         Self: 'a,
-        State: 'a;
+        Set: 'a;
 
     fn fill<'a, Itr>(
         &'a mut self,
-        state: &'a mut State,
+        set: &'a mut Set,
         itr: Itr,
-    ) -> impl SendFuture<Result<Self::Set<'a>, Self::Error>>
+    ) -> impl SendFuture<Result<Self::View<'a>, Self::Error>>
     where
         Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
         Self: 'a;
 }
 
-pub trait AsWorkingSet<WorkingSet> {
-    fn as_working_set(&self, capacity: usize) -> WorkingSet;
+pub trait AsWorkingSet<Set> {
+    fn as_working_set(&self, capacity: usize) -> Set;
 }
 
 /// Read-only view into a working set. Used by `occlude_list` and distance computations.
-pub trait ScopedMap<I> {
+pub trait View<I> {
     type ElementRef<'a>;
     type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>>
     where
@@ -70,4 +61,3 @@ pub trait ScopedMap<I> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Unseeded;
-

@@ -431,9 +431,7 @@ pub trait Accessor: HasId + Send + Sync {
     ///
     /// For distance computations, this should be cheaply convertible via [`Reborrow`] to
     /// `Self::ElementRef`.
-    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>>
-        + Send
-        + Sync
+    type Element<'a>: for<'b> Reborrow<'b, Target = Self::ElementRef<'b>> + Send + Sync
     where
         Self: 'a;
 

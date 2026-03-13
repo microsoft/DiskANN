@@ -18,7 +18,7 @@ use thiserror::Error;
 
 use crate::{
     ANNError, ANNResult,
-    error::{Infallible, message},
+    error::{Infallible, RankedError, ToRanked, TransientError, message},
     graph::{AdjacencyList, glue, test::synthetic, workingset},
     internal::counter::{Counter, LocalCounter},
     provider,
@@ -744,6 +744,99 @@ impl From<AccessedInvalidId> for ANNError {
     }
 }
 
+/// A transient error from the test accessor — the ID exists but the retrieval
+/// temporarily failed. Must be acknowledged or escalated before being dropped.
+#[derive(Debug)]
+pub struct TransientAccessError {
+    id: u32,
+    handled: bool,
+}
+
+impl TransientAccessError {
+    fn new(id: u32) -> Self {
+        Self { id, handled: false }
+    }
+}
+
+impl std::fmt::Display for TransientAccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "transient error accessing id: {}", self.id)
+    }
+}
+
+impl std::error::Error for TransientAccessError {}
+
+impl Drop for TransientAccessError {
+    fn drop(&mut self) {
+        assert!(
+            self.handled,
+            "dropping an unhandled transient error for id {}!",
+            self.id
+        );
+    }
+}
+
+impl TransientError<AccessedInvalidId> for TransientAccessError {
+    fn acknowledge<D>(mut self, _why: D)
+    where
+        D: std::fmt::Display,
+    {
+        self.handled = true;
+    }
+
+    fn escalate<D>(mut self, _why: D) -> AccessedInvalidId
+    where
+        D: std::fmt::Display,
+    {
+        self.handled = true;
+        AccessedInvalidId(self.id)
+    }
+}
+
+/// A test error that can represent both transient (flaky) and critical (invalid
+/// ID) errors.
+///
+/// Paired with [`Accessor`]'s configurable flakiness to exercise transient error
+/// handling paths in both `Map::fill_with` and `index.rs` operations.
+#[derive(Debug)]
+pub enum AccessError {
+    /// The ID does not exist in the provider.
+    InvalidId(AccessedInvalidId),
+    /// The ID exists but the retrieval temporarily failed.
+    Transient(TransientAccessError),
+}
+
+impl std::fmt::Display for AccessError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidId(e) => e.fmt(f),
+            Self::Transient(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for AccessError {}
+
+impl ToRanked for AccessError {
+    type Transient = TransientAccessError;
+    type Error = AccessedInvalidId;
+
+    fn to_ranked(self) -> RankedError<TransientAccessError, AccessedInvalidId> {
+        match self {
+            Self::InvalidId(e) => RankedError::Error(e),
+            Self::Transient(e) => RankedError::Transient(e),
+        }
+    }
+
+    fn from_transient(transient: TransientAccessError) -> Self {
+        Self::Transient(transient)
+    }
+
+    fn from_error(error: AccessedInvalidId) -> Self {
+        Self::InvalidId(error)
+    }
+}
+
 impl provider::DefaultAccessor for Provider {
     type Accessor<'a> = NeighborAccessor<'a>;
 
@@ -856,15 +949,30 @@ pub struct Accessor<'a> {
     provider: &'a Provider,
     buffer: Box<[f32]>,
     get_vector: LocalCounter<'a>,
+    /// IDs that will produce transient errors when accessed.
+    transient_ids: Option<HashSet<u32>>,
 }
 
 impl<'a> Accessor<'a> {
+    /// Creates an accessor with no flaky behavior (backward-compatible).
     pub fn new(provider: &'a Provider) -> Self {
+        Self::new_inner(provider, None)
+    }
+
+    /// Creates an accessor where `get_element` returns a transient error for
+    /// any ID in `transient_ids`. The ID must still exist in the provider —
+    /// accessing a truly missing ID remains a critical `InvalidId` error.
+    pub fn flaky(provider: &'a Provider, transient_ids: HashSet<u32>) -> Self {
+        Self::new_inner(provider, Some(transient_ids))
+    }
+
+    fn new_inner(provider: &'a Provider, transient_ids: Option<HashSet<u32>>) -> Self {
         let buffer = (0..provider.dim()).map(|_| 0.0).collect();
         Self {
             provider,
             buffer,
             get_vector: provider.get_vector.local(),
+            transient_ids,
         }
     }
 }
@@ -879,16 +987,22 @@ impl provider::Accessor for Accessor<'_> {
     where
         Self: 'a;
     type ElementRef<'a> = &'a [f32];
-    type GetError = AccessedInvalidId;
+    type GetError = AccessError;
 
-    async fn get_element(&mut self, id: u32) -> Result<&[f32], AccessedInvalidId> {
+    async fn get_element(&mut self, id: u32) -> Result<&[f32], AccessError> {
         match self.provider.terms.get(&id) {
             Some(term) => {
+                if let Some(transient) = &self.transient_ids
+                    && transient.contains(&id)
+                {
+                    return Err(AccessError::Transient(TransientAccessError::new(id)));
+                }
+
                 self.get_vector.increment();
                 self.buffer.copy_from_slice(&term.data);
                 Ok(&*self.buffer)
             }
-            None => Err(AccessedInvalidId(id)),
+            None => Err(AccessError::InvalidId(AccessedInvalidId(id))),
         }
     }
 }
@@ -969,12 +1083,12 @@ impl glue::SearchStrategy<Provider, &[f32]> for Strategy {
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {
-    type State = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
     type DistanceComputer = <f32 as VectorRepr>::Distance;
     type PruneAccessor<'a> = Accessor<'a>;
     type PruneAccessorError = Infallible;
 
-    fn create_state(&self, _capacity: usize) -> Self::State {
+    fn create_working_set(&self, _capacity: usize) -> Self::WorkingSet {
         workingset::Map::new()
     }
 
@@ -1004,8 +1118,8 @@ impl glue::InsertStrategy<Provider, &[f32]> for Strategy {
 }
 
 impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
-    type State = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
-    type Seed = workingset::MapSeed<u32, workingset::map::Ref<[f32]>>;
+    type WorkingSet = workingset::Map<u32, Box<[f32]>, workingset::map::Ref<[f32]>>;
+    type Seed = workingset::map::Overlay<u32, workingset::map::Ref<[f32]>>;
     type InsertStrategy = Self;
 
     fn insert_strategy(&self) -> Self::InsertStrategy {
@@ -1016,7 +1130,7 @@ impl glue::MultiInsertStrategy<Provider, Matrix<f32>> for Strategy {
     where
         Itr: ExactSizeIterator<Item = u32>,
     {
-        workingset::MapSeed::from_batch(batch, ids)
+        workingset::map::Overlay::from_batch(batch, ids)
     }
 }
 

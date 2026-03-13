@@ -68,35 +68,57 @@ pub mod pq {
 
     use crate::model::pq::{self, FixedChunkPQTable};
 
+    pub struct Projection<F, Q> {
+        _marker: std::marker::PhantomData<(F, Q)>,
+    }
+
+    impl<F, Q> workingset::map::Projection for Projection<F, Q>
+    where
+        F: AsyncFriendly,
+        Q: AsyncFriendly,
+    {
+        type Element<'a> = Hybrid<&'a [F], &'a [Q]>;
+        type ElementRef<'a> = Hybrid<&'a [F], &'a [Q]>;
+    }
+
     /// A newtype wrapper around [`workingset::Map`] to avoid the default blanket
     /// implementation of [`workingset::Fill`].
-    pub struct HybridMap<F, Q>(workingset::Map<u32, Hybrid<F, Q>>)
+    pub struct HybridMap<F, Q>(workingset::Map<u32, Hybrid<Vec<F>, Vec<Q>>, Projection<F, Q>>)
     where
-        F: for<'a> Reborrow<'a> + AsyncFriendly,
-        Q: for<'a> Reborrow<'a> + AsyncFriendly;
+        F: AsyncFriendly,
+        Q: AsyncFriendly;
 
     impl<F, Q> HybridMap<F, Q>
     where
-        F: for<'a> Reborrow<'a> + AsyncFriendly,
-        Q: for<'a> Reborrow<'a> + AsyncFriendly,
+        F: AsyncFriendly,
+        Q: AsyncFriendly,
     {
         pub fn with_capacity(capacity: usize) -> Self {
             Self(workingset::Map::with_capacity(capacity))
         }
 
-        pub fn get(&self) -> &workingset::Map<u32, Hybrid<F, Q>> {
+        pub fn with_capacity_and(
+            capacity: usize,
+            seed: Arc<dyn workingset::map::Batch<u32, Projection<F, Q>>>,
+        ) -> Self {
+            Self(workingset::Map::with_capacity_and(capacity, seed))
+        }
+
+        pub fn get(&self) -> &workingset::Map<u32, Hybrid<Vec<F>, Vec<Q>>, Projection<F, Q>> {
             &self.0
         }
 
-        pub fn get_mut(&mut self) -> &mut workingset::Map<u32, Hybrid<F, Q>> {
+        pub fn get_mut(
+            &mut self,
+        ) -> &mut workingset::Map<u32, Hybrid<Vec<F>, Vec<Q>>, Projection<F, Q>> {
             &mut self.0
         }
     }
 
     impl<F, Q> Default for HybridMap<F, Q>
     where
-        F: for<'a> Reborrow<'a> + AsyncFriendly,
-        Q: for<'a> Reborrow<'a> + AsyncFriendly,
+        F: AsyncFriendly,
+        Q: AsyncFriendly,
     {
         fn default() -> Self {
             Self(Default::default())
@@ -105,8 +127,8 @@ pub mod pq {
 
     impl<F, Q> workingset::AsWorkingSet<HybridMap<F, Q>> for workingset::Unseeded
     where
-        F: for<'a> Reborrow<'a> + AsyncFriendly,
-        Q: for<'a> Reborrow<'a> + AsyncFriendly,
+        F: AsyncFriendly,
+        Q: AsyncFriendly,
     {
         fn as_working_set(&self, capacity: usize) -> HybridMap<F, Q> {
             HybridMap::with_capacity(capacity)
@@ -123,6 +145,12 @@ pub mod pq {
     impl<F, Q> Hybrid<F, Q> {
         pub fn is_full(&self) -> bool {
             matches!(self, Self::Full(_))
+        }
+    }
+
+    impl<'a, F, Q> From<&'a [F]> for Hybrid<&'a [F], &'a [Q]> {
+        fn from(slice: &'a [F]) -> Self {
+            Self::Full(slice)
         }
     }
 

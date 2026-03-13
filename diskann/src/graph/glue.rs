@@ -560,11 +560,11 @@ pub trait PruneStrategy<Provider>: Send + Sync + 'static
 where
     Provider: DataProvider,
 {
-    /// The working set state used during pruning.
+    /// The working set used during pruning.
     ///
     /// For single insert this is typically an empty [`Map`](super::workingset::Map).
     /// For multi-insert it may be pre-seeded with batch elements.
-    type State: Send + Sync;
+    type WorkingSet: Send + Sync;
 
     /// The distance computer used during pruning.
     ///
@@ -581,25 +581,25 @@ where
     /// The concrete type of the accessor that is used to access `Self` during pruning.
     ///
     /// The accessor implements [`workingset::Fill`] for the strategy's
-    /// [`State`](Self::State) type, which controls how elements are fetched and cached for
-    /// distance computations.
+    /// [`WorkingSet`](Self::WorkingSet) type, which controls how elements are fetched and
+    /// cached for distance computations.
     ///
     /// Implementations are encouraged to have [`Accessor::get_element`] return the
     /// highest-precision applicable value for a given element type.
     type PruneAccessor<'a>: Accessor<Id = Provider::InternalId>
         + BuildDistanceComputer<DistanceComputer = Self::DistanceComputer>
         + AsNeighborMut
-        + workingset::Fill<Self::State>;
+        + workingset::Fill<Self::WorkingSet>;
 
     /// An error that can occur when getting the prune accessor.
     type PruneAccessorError: StandardError;
 
-    /// Create a fresh working set state pre-sized for up to `capacity` elements.
+    /// Create a fresh working set pre-sized for up to `capacity` elements.
     ///
     /// `capacity` is a contractual upper-bound: callers guarantee that no more than
-    /// `capacity` elements will be inserted into the state during a single fill cycle.
-    /// Implementations may use this to pre-allocate or panic if exceeded.
-    fn create_state(&self, capacity: usize) -> Self::State;
+    /// `capacity` elements will be inserted into the working set during a single fill
+    /// cycle. Implementations may use this to pre-allocate or panic if exceeded.
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet;
 
     /// Return the prune accessor.
     fn prune_accessor<'a>(
@@ -614,6 +614,10 @@ pub trait Batch: Send + Sync + 'static {
 
     fn len(&self) -> usize;
     fn get(&self, i: usize) -> Self::Element<'_>;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<T: Send + Sync + 'static> Batch for diskann_utils::views::Matrix<T> {
@@ -633,12 +637,12 @@ where
     Provider: DataProvider,
     B: Batch,
 {
-    type State: Send + Sync + 'static;
-    type Seed: workingset::AsWorkingSet<Self::State> + Send + Sync + 'static;
+    type WorkingSet: Send + Sync + 'static;
+    type Seed: workingset::AsWorkingSet<Self::WorkingSet> + Send + Sync + 'static;
     type InsertStrategy: for<'a> InsertStrategy<
             Provider,
             B::Element<'a>,
-            PruneStrategy: PruneStrategy<Provider, State = Self::State>,
+            PruneStrategy: PruneStrategy<Provider, WorkingSet = Self::WorkingSet>,
         >;
 
     fn insert_strategy(&self) -> Self::InsertStrategy;
