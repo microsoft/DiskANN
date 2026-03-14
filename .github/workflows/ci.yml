@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: rustfmt
@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: clippy
@@ -107,7 +107,7 @@ jobs:
           lfs: true
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: clippy
@@ -142,7 +142,7 @@ jobs:
           languages: rust
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
 
@@ -163,7 +163,7 @@ jobs:
   #   steps:
   #     - uses: actions/checkout@v4
   #     - name: Install Rust ${{ env.rust_stable }}
-  #       uses: dtolnay/rust-toolchain@stable
+  #       uses: dtolnay/rust-toolchain@master
   #       with:
   #         toolchain: ${{ env.rust_stable }}
   #     - uses: Swatinem/rust-cache@v2
@@ -242,7 +242,7 @@ jobs:
           lfs: true
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
 
@@ -275,7 +275,7 @@ jobs:
           lfs: true
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
 
@@ -309,7 +309,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: llvm-tools-preview
@@ -372,7 +372,7 @@ jobs:
           lfs: true
 
       - name: Install Rust nightly with miri
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
           components: miri
