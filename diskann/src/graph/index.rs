@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 
 use super::{
-    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod,
+    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
     glue::{
         self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
         PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
@@ -2151,10 +2151,10 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: super::search::Search<DP, S, T, O>,
+        P: Search<DP, S, T, O>,
         S: glue::HasDefaultProcessor<DP, T, O>,
         O: Send,
-        OB: super::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
     {
         let processor = strategy.create_processor();
@@ -2172,11 +2172,11 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: super::search::Search<DP, S, T, O>,
+        P: Search<DP, S, T, O>,
         S: glue::SearchStrategy<DP, T, O>,
         PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
         O: Send,
-        OB: super::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
     {
         search_params.search(self, strategy, processor, context, query, output)
@@ -2220,8 +2220,7 @@ where
     ) -> ANNResult<SearchStats>
     where
         T: ?Sized,
-        S: SearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>
-            + glue::HasDefaultProcessor<DP, T, O>,
+        S: glue::DefaultSearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>,
         I: Iterator<Item = <DP as DataProvider>::InternalId>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,

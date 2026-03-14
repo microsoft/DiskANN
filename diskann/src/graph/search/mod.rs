@@ -25,7 +25,11 @@
 
 use diskann_utils::future::SendFuture;
 
-use crate::{ANNResult, graph::index::DiskANNIndex, provider::DataProvider};
+use crate::{
+    ANNResult,
+    graph::{self, index::DiskANNIndex},
+    provider::DataProvider,
+};
 
 mod knn_search;
 mod multihop_search;
@@ -88,10 +92,8 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
-        PP: for<'a> crate::graph::glue::SearchPostProcess<S::SearchAccessor<'a>, T, O>
-            + Send
-            + Sync,
-        OB: crate::graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
+        PP: for<'a> graph::glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        OB: graph::search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized;
 }
 
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};

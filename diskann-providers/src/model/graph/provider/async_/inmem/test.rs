@@ -5,7 +5,6 @@
 
 use std::{future::Future, sync::Mutex};
 
-use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNResult,
     error::{RankedError, ToRanked, TransientError},
@@ -13,6 +12,7 @@ use diskann::{
         AsElement, CopyIds, ExpandBeam, FillSet, HasDefaultProcessor, InsertStrategy,
         PruneStrategy, SearchExt, SearchStrategy,
     },
+    has_default_processor,
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DefaultContext, DelegateNeighbor,

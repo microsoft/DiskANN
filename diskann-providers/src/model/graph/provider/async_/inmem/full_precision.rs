@@ -395,10 +395,10 @@ where
         _computer: &A::QueryComputer,
         candidates: I,
         output: &mut B,
-    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    ) -> impl Future<Output = Result<usize, Self::Error>> + Send
     where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
+        I: Iterator<Item = Neighbor<u32>>,
+        B: SearchOutputBuffer<u32> + ?Sized,
     {
         let full = accessor.as_full_precision();
         let checker = accessor.as_deletion_check();

@@ -1512,15 +1512,16 @@ where
         _computer: &pq::distance::QueryComputer<Arc<FixedChunkPQTable>>,
         candidates: I,
         output: &mut B,
-    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    ) -> impl Future<Output = Result<usize, Self::Error>> + Send
     where
-        I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<u32> + Send + ?Sized,
+        I: Iterator<Item = Neighbor<u32>>,
+        B: SearchOutputBuffer<u32> + ?Sized,
     {
         let provider = &accessor.provider;
         let checker = accessor.as_deletion_check();
         let f = T::distance(provider.metric, Some(provider.full_vectors.dim()));
 
+        // Filter before computing the full precision distances.
         let mut reranked: Vec<(u32, f32)> = candidates
             .filter_map(|n| {
                 if checker.deletion_check(n.id) {
@@ -1536,16 +1537,15 @@ where
             })
             .collect();
 
+        // Sort the full precision distances.
         reranked
             .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Store the reranked results.
         std::future::ready(Ok(output.extend(reranked)))
     }
 }
 
 /// Perform a search entirely in the quantized space.
-///
-/// Starting points are are filtered out of the final results and results are reranked using
-/// the full-precision data.
 impl<T, D> SearchStrategy<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
 where
     T: VectorRepr,
@@ -1564,6 +1564,8 @@ where
     }
 }
 
+/// Starting points are filtered out of the final results and results are reranked using
+/// the full-precision data.
 impl<T, D> HasDefaultProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
 where
     T: VectorRepr,

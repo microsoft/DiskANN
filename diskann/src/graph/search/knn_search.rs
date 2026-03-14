@@ -15,7 +15,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{SearchExt, SearchPostProcess},
+        glue::{self, SearchExt, SearchPostProcess},
         index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
@@ -252,7 +252,7 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
 impl<'r, DP, S, T, O, SR> Search<DP, S, T, O> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
-    S: crate::graph::glue::SearchStrategy<DP, T, O>,
+    S: glue::SearchStrategy<DP, T, O>,
     T: Sync + ?Sized,
     O: Send,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
