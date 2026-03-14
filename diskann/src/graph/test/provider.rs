@@ -414,6 +414,14 @@ impl Provider {
     pub fn neighbors(&self) -> NeighborAccessor<'_> {
         NeighborAccessor::new(self)
     }
+
+    /// Return the adjacency lists in `self` as `source -> { destinations ... }` pairs.
+    pub fn dump_neighbors(&self) -> Vec<(u32, AdjacencyList<u32>)> {
+        self.terms
+            .iter()
+            .map(|ref_multi| (*ref_multi.key(), ref_multi.value().neighbors.clone()))
+            .collect()
+    }
 }
 
 /// Provider level metrics.
