@@ -49,11 +49,9 @@ jobs:
   publish:
     name: >-
       ${{
-        github.event_name == 'pull_request'
+        (github.event_name == 'pull_request' || github.event.inputs.dry_run == 'true')
           && 'Dry-run publish test'
-          || github.event.inputs.dry_run == 'true'
-            && 'Dry-run publish test'
-            || 'Publish crates to crates.io'
+          || 'Publish crates to crates.io'
       }}
     runs-on: ubuntu-latest
 
