@@ -295,7 +295,10 @@ where
         if (self.predicate)(distance) {
             self.inner.push(id, distance)
         } else {
-            search_output_buffer::BufferState::Available
+            match self.inner.size_hint() {
+                Some(0) => search_output_buffer::BufferState::Full,
+                _ => search_output_buffer::BufferState::Available,
+            }
         }
     }
 
