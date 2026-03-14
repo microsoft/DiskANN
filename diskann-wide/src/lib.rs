@@ -231,6 +231,7 @@ fn get_test_arch() -> Option<String> {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 pub(crate) mod helpers;
 
 #[cfg(test)]
