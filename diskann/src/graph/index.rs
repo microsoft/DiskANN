@@ -1018,11 +1018,12 @@ where
             // Check if number of unique back edges source is very small. If so, we do kick
             // off the bootstrap routine and add edges from within the batch.
             //
-            // If `work.len() == 1`, then there is nothing to bootstrap since there are no
-            // other edges in the batch.
-            if self.config.intra_batch_candidates().is_none()
-                && backedges.len().div_ceil(8) <= work.len() /* NB: update docs if 8 changes */
-                && work.len() != 1
+            // Bootstrap is skipped when intra-batch candidates cover the full batch (i.e.
+            // `All` or a `Max(n)` that resolves to >= batch size), since every item already
+            // had full visibility of the batch during pruning.
+            let resolved_ibc = self.config.intra_batch_candidates().get(work.len());
+            if resolved_ibc < work.len() && backedges.len().div_ceil(8) <= work.len()
+            /* NB: update docs if 8 changes */
             {
                 edges = boxit(self.clone().multi_insert_bootstrap(
                     strategy.prune_strategy(),
@@ -1070,16 +1071,22 @@ where
 
                         let mut prune_scratch = prune::Scratch::new();
                         let mut working_set = HashMap::new();
+                        let mut sorted_buf = Vec::new();
 
                         for (source, adj_list) in itr {
                             // FIXME: Give providers control over the size of the working
                             // set.
                             working_set.clear();
+
+                            // Sort backedges so that add_edge_and_prune produces
+                            // deterministic results regardless of HashMap iteration order.
+                            adj_list.sorted_into(&mut sorted_buf);
+
                             self_clone
                                 .add_edge_and_prune(
                                     &strategy_clone,
                                     &context_clone,
-                                    adj_list,
+                                    &sorted_buf,
                                     *source,
                                     &mut prune_scratch,
                                     &mut working_set,
