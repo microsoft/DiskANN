@@ -336,7 +336,7 @@ where
 /// Opt-in trait for strategies that have a default post-processor.
 ///
 /// Strategies implementing this trait work with [`super::search::Knn`] (no explicit
-/// processor). The search infrastructure will call `create_processor()` to obtain the
+/// processor). The search infrastructure will call `default_post_processor()` to obtain the
 /// processor and invoke its [`SearchPostProcess::post_process`] method.
 pub trait DefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
     SearchStrategy<Provider, T, O>
@@ -349,7 +349,7 @@ where
     type Processor: for<'a> SearchPostProcess<Self::SearchAccessor<'a>, T, O> + Send + Sync;
 
     /// Create the default post-processor.
-    fn create_processor(&self) -> Self::Processor;
+    fn default_post_processor(&self) -> Self::Processor;
 }
 
 /// Aggregate trait for strategies that support both search access and a default post-processor.
@@ -385,7 +385,7 @@ where
 macro_rules! default_post_processor {
     ($Processor:ty) => {
         type Processor = $Processor;
-        fn create_processor(&self) -> Self::Processor {
+        fn default_post_processor(&self) -> Self::Processor {
             Default::default()
         }
     };
@@ -1154,7 +1154,7 @@ mod tests {
                 let mut output = vec![Neighbor::<u32>::default(); output_len];
 
                 let count = strategy
-                    .create_processor()
+                    .default_post_processor()
                     .post_process(
                         &mut accessor,
                         &query,

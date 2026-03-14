@@ -2157,7 +2157,7 @@ where
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
     {
-        let processor = strategy.create_processor();
+        let processor = strategy.default_post_processor();
         self.search_with(search_params, strategy, processor, context, query, output)
     }
 
@@ -2255,7 +2255,7 @@ where
         }
 
         let result_count = strategy
-            .create_processor()
+            .default_post_processor()
             .post_process(
                 &mut accessor,
                 query,

@@ -998,8 +998,8 @@ where
 {
     type Processor = Pipeline<Unwrap, S::Processor>;
 
-    fn create_processor(&self) -> Self::Processor {
-        Pipeline::new(Unwrap, self.strategy.create_processor())
+    fn default_post_processor(&self) -> Self::Processor {
+        Pipeline::new(Unwrap, self.strategy.default_post_processor())
     }
 }
 

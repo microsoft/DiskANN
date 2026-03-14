@@ -387,7 +387,7 @@ where
 {
     type Processor = RerankAndFilter<'this>;
 
-    fn create_processor(&self) -> Self::Processor {
+    fn default_post_processor(&self) -> Self::Processor {
         RerankAndFilter::new(self.vector_filter)
     }
 }

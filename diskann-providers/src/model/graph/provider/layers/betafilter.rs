@@ -157,8 +157,8 @@ where
 {
     type Processor = glue::Pipeline<Unwrap, Strategy::Processor>;
 
-    fn create_processor(&self) -> Self::Processor {
-        glue::Pipeline::new(Unwrap, self.strategy.create_processor())
+    fn default_post_processor(&self) -> Self::Processor {
+        glue::Pipeline::new(Unwrap, self.strategy.default_post_processor())
     }
 }
 

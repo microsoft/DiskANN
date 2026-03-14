@@ -75,9 +75,9 @@ where
 {
     type Processor = FilterResults<Strategy::Processor>;
 
-    fn create_processor(&self) -> Self::Processor {
+    fn default_post_processor(&self) -> Self::Processor {
         FilterResults {
-            inner_post_processor: self.inner.create_processor(),
+            inner_post_processor: self.inner.default_post_processor(),
         }
     }
 }
