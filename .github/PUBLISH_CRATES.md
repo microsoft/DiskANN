@@ -53,12 +53,24 @@ cargo publish --locked --workspace --dry-run
 
 2. **Update version** in root `Cargo.toml`:
 
-   ```toml
-   [workspace.package]
-   version = "0.46.0"
-   ```
+   - Set `workspace.package.version`:
 
-   All workspace crates inherit this via `version.workspace = true`.
+     ```toml
+     [workspace.package]
+     version = "0.46.0"
+     ```
+
+   - Update **all internal crate entries** under `[workspace.dependencies]` to match:
+
+     ```toml
+     diskann-wide = { path = "diskann-wide", version = "0.46.0" }
+     diskann-vector = { path = "diskann-vector", version = "0.46.0" }
+     # ... etc
+     ```
+
+   Member crates inherit `workspace.package.version` via `version.workspace = true`,
+   but `[workspace.dependencies]` versions must be set explicitly (they're baked into
+   published manifests for crates.io consumers). The publish workflow verifies these match.
 
 3. **Update CHANGELOG** (if applicable).
 

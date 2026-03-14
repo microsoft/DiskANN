@@ -70,7 +70,7 @@ jobs:
           echo "channel=$RUST_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust ${{ steps.rust-version.outputs.channel }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust-version.outputs.channel }}
 
