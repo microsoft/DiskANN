@@ -95,8 +95,23 @@ jobs:
             exit 1
           fi
 
+      - name: Verify all crates use workspace version
+        run: |
+          bad_crates=()
+          for manifest in $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].manifest_path'); do
+            dir=$(dirname "$manifest")
+            name=$(basename "$dir")
+            if [ "$manifest" != "$(pwd)/Cargo.toml" ] && ! grep -qE 'version\s*=\s*\{\s*workspace\s*=\s*true\s*\}|version\.workspace\s*=\s*true' "$manifest"; then
+              bad_crates+=("$name")
+            fi
+          done
+          if [ ${#bad_crates[@]} -gt 0 ]; then
+            echo "::error::The following crates do not use version.workspace = true: ${bad_crates[*]}"
+            exit 1
+          fi
+
       - name: Run tests
-        if: github.event.inputs.dry_run != 'true' || github.event_name == 'push'
+        if: github.event_name != 'pull_request' && github.event.inputs.dry_run != 'true'
         run: cargo test --locked --workspace --profile ci
 
       - name: Publish workspace crates
@@ -104,6 +119,7 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
+          DRY_RUN_FLAG=""
           if [ "${{ github.event_name }}" = "pull_request" ] || [ "$DRY_RUN" = "true" ]; then
             DRY_RUN_FLAG="--dry-run"
             echo "🧪 DRY-RUN MODE"
