@@ -461,9 +461,6 @@ where
 ////////////
 
 /// Perform a search entirely in the quantized space.
-///
-/// Starting points are filtered out of the final results and results are reranked using
-/// the full-precision data.
 impl<T, D, Ctx> SearchStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
 where
     T: VectorRepr,
@@ -483,6 +480,8 @@ where
     }
 }
 
+/// Starting points are filtered out of the final results and results are reranked using
+/// the full-precision data.
 impl<T, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
 where
     T: VectorRepr,

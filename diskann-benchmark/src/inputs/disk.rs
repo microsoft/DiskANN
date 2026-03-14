@@ -234,7 +234,6 @@ impl CheckDeserialization for DiskSearchPhase {
                 anyhow::bail!("search_io_limit must be positive if specified");
             }
         }
-
         Ok(())
     }
 }

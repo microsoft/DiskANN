@@ -146,7 +146,7 @@ impl Knn {
 impl<DP, S, T, O> Search<DP, S, T, O> for Knn
 where
     DP: DataProvider,
-    S: crate::graph::glue::SearchStrategy<DP, T, O>,
+    S: glue::SearchStrategy<DP, T, O>,
     T: Sync + ?Sized,
     O: Send,
 {

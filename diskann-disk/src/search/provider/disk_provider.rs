@@ -23,7 +23,7 @@ use diskann::{
             SearchStrategy,
         },
         search::Knn,
-        search_output_buffer, AdjacencyList, DiskANNIndex, SearchOutputBuffer,
+        search_output_buffer, AdjacencyList, DiskANNIndex,
     },
     neighbor::Neighbor,
     provider::{
@@ -303,7 +303,9 @@ where
     ) -> Result<usize, Self::Error>
     where
         I: Iterator<Item = Neighbor<u32>> + Send,
-        B: SearchOutputBuffer<(u32, Data::AssociatedDataType)> + Send + ?Sized,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
     {
         let provider = accessor.provider;
 
@@ -470,7 +472,7 @@ where
             let load_ids: Box<[_]> = ids.take(io_limit).collect();
 
             self.ensure_loaded(&load_ids)?;
-            let mut ids: Vec<u32> = Vec::new();
+            let mut ids = Vec::new();
             for i in load_ids {
                 ids.clear();
                 ids.extend(

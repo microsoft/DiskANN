@@ -54,7 +54,7 @@ pub(crate) mod scratch;
 pub trait Search<DP, S, T: ?Sized, O>
 where
     DP: DataProvider,
-    S: crate::graph::glue::SearchStrategy<DP, T, O>,
+    S: graph::glue::SearchStrategy<DP, T, O>,
     O: Send,
 {
     /// The result type returned by this search.

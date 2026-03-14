@@ -404,6 +404,7 @@ where
         let checker = accessor.as_deletion_check();
         let f = full.distance();
 
+        // Filter before computing the full precision distances.
         let mut reranked: Vec<(u32, f32)> = candidates
             .filter_map(|n| {
                 if checker.deletion_check(n.id) {
@@ -419,9 +420,11 @@ where
             })
             .collect();
 
+        // Sort the full precision distances.
         reranked
             .sort_unstable_by(|a, b| (a.1).partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
+        // Store the reranked results.
         std::future::ready(Ok(output.extend(reranked)))
     }
 }
@@ -431,8 +434,6 @@ where
 ////////////////
 
 /// Perform a search entirely in the full-precision space.
-///
-/// Starting points are not filtered out of the final results.
 impl<T, Q, D, Ctx> SearchStrategy<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
 where
     T: VectorRepr,
