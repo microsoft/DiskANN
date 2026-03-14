@@ -6,22 +6,14 @@ use std::{collections::HashSet, fmt, hash::Hash, io::Read, mem::size_of};
 
 use bytemuck::cast_slice;
 use diskann::{ANNError, ANNResult};
-use diskann_providers::model::graph::traits::GraphDataType;
 use diskann_providers::storage::StorageReadProvider;
 use diskann_utils::io::Metadata;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::utils::CMDToolError;
 
 pub struct TruthSet {
     pub index_nodes: Vec<u32>,
-    pub distances: Option<Vec<f32>>,
-    pub index_num_points: usize,
-    pub index_dimension: usize,
-}
-
-pub struct TruthSetWithAssociatedData<Data: GraphDataType> {
-    pub index_nodes: Vec<<Data as GraphDataType>::AssociatedDataType>,
     pub distances: Option<Vec<f32>>,
     pub index_num_points: usize,
     pub index_dimension: usize,
@@ -176,41 +168,6 @@ pub fn calculate_recall<T: Eq + Hash + Copy>(
     Ok(total_recall / num_queries as f64 * (100.0 / recall_bounds.get_k() as f64))
 }
 
-pub fn calculate_range_search_recall(
-    num_queries: u32,
-    groundtruth: &[Vec<u32>],
-    our_results: &[Vec<u32>],
-) -> ANNResult<f64> {
-    let mut total_recall = 0.0;
-    for i in 0..num_queries as usize {
-        let mut gt: HashSet<u32> = HashSet::new();
-        let mut res: HashSet<u32> = HashSet::new();
-
-        for &item in &groundtruth[i] {
-            gt.insert(item);
-        }
-
-        for &item in &our_results[i] {
-            res.insert(item);
-        }
-
-        let mut cur_recall = 0;
-        for &v in &gt {
-            if res.contains(&v) {
-                cur_recall += 1;
-            }
-        }
-
-        if !gt.is_empty() {
-            total_recall += (100.0 * cur_recall as f64) / gt.len() as f64;
-        } else {
-            total_recall += 100.0;
-        }
-    }
-
-    Ok(total_recall / num_queries as f64)
-}
-
 /// Calculates the filtered search recall for a set of queries.
 ///
 /// This function computes the recall percentage for a filtered search scenario, where the recall
@@ -327,38 +284,6 @@ pub fn calculate_filtered_search_recall(
     Ok(total_recall / num_queries as f64)
 }
 
-pub fn get_graph_num_frozen_points(
-    storage_provider: &impl StorageReadProvider,
-    graph_file: &str,
-) -> ANNResult<usize> {
-    let mut file = storage_provider.open_reader(graph_file)?;
-    let mut usize_buffer = [0; size_of::<usize>()];
-    let mut u32_buffer = [0; size_of::<u32>()];
-
-    file.read_exact(&mut usize_buffer)?;
-    file.read_exact(&mut u32_buffer)?;
-    file.read_exact(&mut u32_buffer)?;
-    file.read_exact(&mut usize_buffer)?;
-    let file_frozen_pts = usize::from_le_bytes(usize_buffer);
-
-    Ok(file_frozen_pts)
-}
-
-pub fn get_graph_max_observed_degree(
-    storage_provider: &impl StorageReadProvider,
-    graph_file: &str,
-) -> ANNResult<u32> {
-    let mut file = storage_provider.open_reader(graph_file)?;
-    let mut usize_buffer = [0; size_of::<usize>()];
-    let mut u32_buffer = [0; size_of::<u32>()];
-
-    file.read_exact(&mut usize_buffer)?;
-    file.read_exact(&mut u32_buffer)?;
-    let max_observed_degree = u32::from_le_bytes(u32_buffer);
-
-    Ok(max_observed_degree)
-}
-
 pub fn load_truthset(
     storage_provider: &impl StorageReadProvider,
     bin_file: &str,
@@ -409,49 +334,6 @@ pub fn load_truthset(
     Ok(TruthSet {
         index_nodes: ids,
         distances: None,
-        index_num_points: npts,
-        index_dimension: dim,
-    })
-}
-
-pub fn load_truthset_with_associated_data<Data: GraphDataType>(
-    storage_provider: &impl StorageReadProvider,
-    bin_file: &str,
-) -> ANNResult<TruthSetWithAssociatedData<Data>> {
-    let mut file = storage_provider.open_reader(bin_file)?;
-
-    let metadata = Metadata::read(&mut file)?;
-    let (npts, dim) = metadata.into_dims();
-
-    info!("Metadata: #pts = {}, #dims = {}...", npts, dim);
-
-    let mut associated_data: Vec<Data::AssociatedDataType> =
-        vec![Data::AssociatedDataType::default(); npts * dim];
-
-    for associated_datum in associated_data.iter_mut().take(npts * dim) {
-        let mut associated_data_buf = vec![0u8; size_of::<Data::AssociatedDataType>()];
-        file.read_exact(&mut associated_data_buf)
-            .map_err(ANNError::log_io_error)?;
-
-        match bincode::deserialize::<Data::AssociatedDataType>(&associated_data_buf) {
-            Ok(datum) => {
-                *associated_datum = datum;
-            }
-            Err(_) => {
-                error!("Error deserializing associated data");
-                return Err(ANNError::log_index_error("Error reading associated data"));
-            }
-        }
-    }
-
-    let mut dists: Vec<f32> = vec![0.0; npts * dim];
-    let mut buffer = vec![0; npts * dim * size_of::<f32>()];
-    file.read_exact(&mut buffer)?;
-    dists.clone_from_slice(cast_slice::<u8, f32>(&buffer));
-
-    Ok(TruthSetWithAssociatedData {
-        index_nodes: associated_data,
-        distances: Some(dists),
         index_num_points: npts,
         index_dimension: dim,
     })
@@ -706,51 +588,6 @@ mod test_search_index_utils {
     }
 
     #[test]
-    fn test_calculate_range_search_recall() {
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![5, 6],], &[vec![5, 6, 7, 8, 9],]).unwrap(),
-            100.0,
-            "Returned more results than ground truth"
-        );
-
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![0, 1, 2, 3, 4],], &[vec![0, 1],]).unwrap(),
-            40.0,
-            "Returned less results than ground truth"
-        );
-
-        let groundtruth: Vec<Vec<u32>> = vec![vec![0, 1, 2, 3, 4], vec![5, 6]];
-
-        let our_results: Vec<Vec<u32>> = vec![vec![0, 1], vec![5, 6, 7, 8, 9]];
-
-        assert_eq!(
-            calculate_range_search_recall(2, &groundtruth, &our_results).unwrap(),
-            70.0,
-            "Combination of both cases"
-        );
-
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![0, 1, 2, 3, 4],], &[vec![0, 1, 2, 3, 4],])
-                .unwrap(),
-            100.0,
-            "The result matched the ground truth"
-        );
-
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![0, 1, 2, 3, 4],], &[vec![0, 1, 12, 13, 14],])
-                .unwrap(),
-            40.0,
-            "The result partially matched the ground truth"
-        );
-
-        assert_eq!(
-            calculate_range_search_recall(1, &[vec![0; 0],], &[vec![0, 1, 2, 3, 4],]).unwrap(),
-            100.0,
-            "The empty ground truth"
-        );
-    }
-
-    #[test]
     fn test_calculate_filtered_search_recall() {
         let filtered_search_recall =
             calculate_filtered_search_recall(1, None, &[vec![5, 6]], &[vec![5, 6, 7, 8, 9]], 1000)
@@ -758,18 +595,6 @@ mod test_search_index_utils {
         assert_eq!(
             filtered_search_recall, 40.0,
             "Returned more results than ground truth"
-        );
-
-        let range_search_recall =
-            calculate_range_search_recall(1, &[vec![5, 6]], &[vec![5, 6, 7, 8, 9]]).unwrap();
-        assert_eq!(
-            range_search_recall, 100.0,
-            "Returned more results than ground truth"
-        );
-
-        assert_ne!(
-            filtered_search_recall, range_search_recall,
-            "This test case showcases the difference between range and filtered search"
         );
 
         assert_eq!(
