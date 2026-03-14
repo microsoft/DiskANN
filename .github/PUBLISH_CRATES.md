@@ -83,7 +83,7 @@ cargo publish --locked --workspace --dry-run
 
    Pushing the tag triggers the real publish workflow.
 
-8. **Verify** the published crates:
+8. **Verify** the published crates — confirm the new version appears in the output:
 
    ```bash
    cargo search diskann --limit 20
