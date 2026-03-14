@@ -1075,6 +1075,7 @@ where
     DP: DataProvider,
     S: InplaceDeleteStrategy<DP>,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
+    for<'a> Cached<S::SearchStrategy>: SearchStrategy<CachingProvider<DP, C>, S::DeleteElement<'a>>,
     C: AsyncFriendly,
 {
     type DeleteElement<'a> = S::DeleteElement<'a>;

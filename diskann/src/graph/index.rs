@@ -2138,10 +2138,9 @@ where
     /// let params = Knn::new(10, 100, None)?;
     /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     ///
-    /// // Range search (note: uses () as output buffer, results in Output type)
+    /// // Range search (results written to output buffer)
     /// let params = Range::new(100, 0.5)?;
-    /// let result = index.search(params, &strategy, &context, &query, &mut ()).await?;
-    /// // result.ids and result.distances contain the matches
+    /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     /// ```
     pub fn search<S, T, O, OB, P>(
         &self,

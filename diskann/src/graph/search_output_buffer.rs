@@ -36,27 +36,6 @@ pub trait SearchOutputBuffer<I, D = f32> {
         Itr: IntoIterator<Item = (I, D)>;
 }
 
-impl<I, D> SearchOutputBuffer<I, D> for () {
-    fn size_hint(&self) -> Option<usize> {
-        None
-    }
-
-    fn push(&mut self, _id: I, _distance: D) -> BufferState {
-        BufferState::Available
-    }
-
-    fn current_len(&self) -> usize {
-        0
-    }
-
-    fn extend<Itr>(&mut self, _itr: Itr) -> usize
-    where
-        Itr: IntoIterator<Item = (I, D)>,
-    {
-        0
-    }
-}
-
 /// Indicate whether future calls to [`SearchOutputBuffer::push`] will succeed or not.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[must_use = "This type indicates whether the output buffer is full or not."]

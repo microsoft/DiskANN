@@ -105,20 +105,16 @@ where
     {
         let context = DP::Context::default();
         let range_search = *parameters;
-        let result = self
+        let _ = self
             .index
             .search(
                 range_search,
                 self.strategy.get(index)?,
                 &context,
                 self.queries.row(index),
-                &mut (),
+                buffer,
             )
             .await?;
-        buffer.extend(std::iter::zip(
-            result.ids.into_iter(),
-            result.distances.into_iter(),
-        ));
 
         Ok(Metrics {})
     }

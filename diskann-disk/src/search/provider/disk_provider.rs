@@ -470,7 +470,7 @@ where
             let load_ids: Box<[_]> = ids.take(io_limit).collect();
 
             self.ensure_loaded(&load_ids)?;
-            let mut ids = Vec::new();
+            let mut ids: Vec<u32> = Vec::new();
             for i in load_ids {
                 ids.clear();
                 ids.extend(

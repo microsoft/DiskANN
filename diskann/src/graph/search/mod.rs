@@ -20,8 +20,7 @@
 //!
 //! // Range search
 //! let params = Range::new(100, 0.5)?;
-//! let result = index.search(params, &strategy, &context, &query, &mut ()).await?;
-//! println!("Found {} points within radius", result.ids.len());
+//! let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
 //! ```
 
 use diskann_utils::future::SendFuture;
@@ -74,7 +73,7 @@ where
     /// # Returns
     ///
     /// Returns `Self::Output` which varies by search type (e.g., [`SearchStats`](super::index::SearchStats)
-    /// for k-NN, [`RangeSearchOutput`] for range search).
+    /// for k-NN and range search).
     ///
     /// # Errors
     ///
@@ -97,7 +96,7 @@ where
 
 pub use knn_search::{Knn, KnnSearchError, RecordedKnn};
 pub use multihop_search::MultihopSearch;
-pub use range_search::{Range, RangeSearchError, RangeSearchOutput};
+pub use range_search::{Range, RangeSearchError};
 
 // Feature-gated diverse search.
 #[cfg(feature = "experimental_diversity_search")]

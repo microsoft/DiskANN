@@ -2283,23 +2283,27 @@ pub(crate) mod tests {
             {
                 // Full Precision Search.
                 let range_search = Range::new(starting_l_value, radius).unwrap();
-                let result = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &result.ids, radius, None);
+                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
             {
                 // Quantized Search
                 let range_search = Range::new(starting_l_value, radius).unwrap();
-                let result = index
-                    .search(range_search, &Hybrid::new(None), ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &Hybrid::new(None), ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &result.ids, radius, None);
+                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
             {
@@ -2316,27 +2320,30 @@ pub(crate) mod tests {
                     1.0,
                 )
                 .unwrap();
-                let result = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &result.ids, radius, Some(inner_radius));
+                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                assert_range_results_exactly_match(q, &gt, &ids, radius, Some(inner_radius));
             }
 
             {
                 // Test with a lower initial beam to trigger more two-round searches
                 // We don't expect results to exactly match here
                 let range_search = Range::new(lower_l_value, radius).unwrap();
-                let result = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
                 // check that ids don't have duplicates
                 let mut ids_set = std::collections::HashSet::new();
-                for id in &result.ids {
-                    assert!(ids_set.insert(*id));
+                for n in &results {
+                    assert!(ids_set.insert(n.id));
                 }
             }
         }

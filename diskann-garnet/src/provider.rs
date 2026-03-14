@@ -4,7 +4,6 @@
  */
 
 use dashmap::DashMap;
-use diskann::has_default_processor;
 use diskann::{
     ANNError, ANNErrorKind, ANNResult,
     graph::{
@@ -15,6 +14,7 @@ use diskann::{
             PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
         },
     },
+    has_default_processor,
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DelegateNeighbor,
@@ -785,10 +785,6 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecisio
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider, context, true))
     }
-}
-
-impl<T: VectorRepr> HasDefaultProcessor<GarnetProvider<T>, [T], u32> for FullPrecision {
-    has_default_processor!(glue::CopyIds);
 }
 
 impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for FullPrecision {
