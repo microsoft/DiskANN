@@ -245,7 +245,7 @@ where
                 {
                     return false;
                 }
-                dist < radius
+                dist <= radius
             });
 
             let result_count = processor
