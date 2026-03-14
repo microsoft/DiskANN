@@ -677,4 +677,3 @@ where
 
     Ok(neighbor_queues)
 }
-
