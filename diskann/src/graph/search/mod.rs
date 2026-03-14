@@ -12,15 +12,26 @@
 //! # Usage
 //!
 //! ```ignore
-//! use diskann::graph::{search::{Knn, Range, MultihopSearch}, Search};
+//! use diskann::graph::{
+//!     neighbor::{BackInserter, Neighbor},
+//!     search::{Knn, Range, MultihopSearch},
+//!     Search,
+//! };
 //!
-//! // Standard k-NN search
+//! // Standard k-NN search: use a fixed-capacity output buffer
 //! let params = Knn::new(10, 100, None)?;
-//! let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
+//! let mut knn_storage = [Neighbor::default(); 10];
+//! let mut knn_output = BackInserter::new(&mut knn_storage);
+//! let stats = index
+//!     .search(params, &strategy, &context, &query, &mut knn_output)
+//!     .await?;
 //!
-//! // Range search
+//! // Range search: use a growable Vec buffer for an unknown number of results
 //! let params = Range::new(100, 0.5)?;
-//! let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
+//! let mut range_output: Vec<Neighbor<_>> = Vec::new();
+//! let stats = index
+//!     .search(params, &strategy, &context, &query, &mut range_output)
+//!     .await?;
 //! ```
 
 use diskann_utils::future::SendFuture;
