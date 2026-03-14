@@ -143,60 +143,6 @@ impl Knn {
     }
 }
 
-impl Knn {
-    /// Shared search core parameterised over the post-processor type.
-    async fn search_core<DP, S, T, O, OB, PP>(
-        &self,
-        index: &DiskANNIndex<DP>,
-        strategy: &S,
-        context: &DP::Context,
-        query: &T,
-        output: &mut OB,
-        post_processor: PP,
-    ) -> ANNResult<SearchStats>
-    where
-        DP: DataProvider,
-        T: Sync + ?Sized,
-        S: crate::graph::glue::SearchStrategy<DP, T, O>,
-        O: Send,
-        OB: SearchOutputBuffer<O> + Send + ?Sized,
-        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
-    {
-        let mut accessor = strategy
-            .search_accessor(&index.data_provider, context)
-            .into_ann_result()?;
-
-        let computer = accessor.build_query_computer(query).into_ann_result()?;
-        let start_ids = accessor.starting_points().await?;
-
-        let mut scratch = index.search_scratch(self.l_value.get(), start_ids.len());
-
-        let stats = index
-            .search_internal(
-                Some(self.beam_width.get()),
-                &start_ids,
-                &mut accessor,
-                &computer,
-                &mut scratch,
-                &mut NoopSearchRecord::new(),
-            )
-            .await?;
-
-        let result_count = post_processor
-            .post_process(
-                &mut accessor,
-                query,
-                &computer,
-                scratch.best.iter().take(self.l_value.get().into_usize()),
-                output,
-            )
-            .await
-            .into_ann_result()?;
-
-        Ok(stats.finish(result_count as u32))
-    }
-}
-
 impl<DP, S, T, O> Search<DP, S, T, O> for Knn
 where
     DP: DataProvider,
@@ -206,7 +152,31 @@ where
 {
     type Output = SearchStats;
 
-    /// Execute the k-NN search on the given index using the default post-processor.
+    /// Execute the k-NN search on the given index.
+    ///
+    /// This method executes a search using the provided `strategy` to access and process elements.
+    /// It computes the similarity between the query vector and the elements in the index, traversing
+    /// the graph towards the nearest neighbors according to the search parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The DiskANN index to search.
+    /// * `strategy` - The search strategy to use for accessing and processing elements.
+    /// * `processor` - The post-processor to apply to the search results.
+    /// * `context` - The context to pass through to providers.
+    /// * `query` - The query vector for which nearest neighbors are sought.
+    /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
+    ///
+    /// # Returns
+    ///
+    /// Returns [`SearchStats`] containing:
+    /// - The number of distance computations performed.
+    /// - The number of hops (graph traversal steps).
+    /// - Timing information for the search operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there is a failure accessing elements or computing distances.
     fn search<PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
@@ -221,8 +191,38 @@ where
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {
         async move {
-            self.search_core(index, strategy, context, query, output, processor)
+            let mut accessor = strategy
+                .search_accessor(&index.data_provider, context)
+                .into_ann_result()?;
+
+            let computer = accessor.build_query_computer(query).into_ann_result()?;
+            let start_ids = accessor.starting_points().await?;
+
+            let mut scratch = index.search_scratch(self.l_value.get(), start_ids.len());
+
+            let stats = index
+                .search_internal(
+                    Some(self.beam_width.get()),
+                    &start_ids,
+                    &mut accessor,
+                    &computer,
+                    &mut scratch,
+                    &mut NoopSearchRecord::new(),
+                )
+                .await?;
+
+            let result_count = processor
+                .post_process(
+                    &mut accessor,
+                    query,
+                    &computer,
+                    scratch.best.iter().take(self.l_value.get().into_usize()),
+                    output,
+                )
                 .await
+                .into_ann_result()?;
+
+            Ok(stats.finish(result_count as u32))
         }
     }
 }
