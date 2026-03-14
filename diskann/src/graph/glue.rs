@@ -338,7 +338,7 @@ where
 /// Strategies implementing this trait work with [`super::search::Knn`] (no explicit
 /// processor). The search infrastructure will call `create_processor()` to obtain the
 /// processor and invoke its [`SearchPostProcess::post_process`] method.
-pub trait HasDefaultProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
+pub trait DefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
     SearchStrategy<Provider, T, O>
 where
     Provider: DataProvider,
@@ -354,7 +354,7 @@ where
 
 /// Aggregate trait for strategies that support both search access and a default post-processor.
 pub trait DefaultSearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T, O> + HasDefaultProcessor<Provider, T, O>
+    SearchStrategy<Provider, T, O> + DefaultPostProcessor<Provider, T, O>
 where
     Provider: DataProvider,
     T: ?Sized,
@@ -364,25 +364,25 @@ where
 
 impl<S, Provider, T, O> DefaultSearchStrategy<Provider, T, O> for S
 where
-    S: SearchStrategy<Provider, T, O> + HasDefaultProcessor<Provider, T, O>,
+    S: SearchStrategy<Provider, T, O> + DefaultPostProcessor<Provider, T, O>,
     Provider: DataProvider,
     T: ?Sized,
     O: Send,
 {
 }
 
-/// Convenience macro for implementing [`HasDefaultProcessor`] when the processor
+/// Convenience macro for implementing [`DefaultPostProcessor`] when the processor
 /// is a [`Default`]-constructible type.
 ///
 /// # Example
 ///
 /// ```ignore
-/// impl HasDefaultProcessor<MyProvider, [f32]> for MyStrategy {
-///     has_default_processor!(CopyIds);
+/// impl DefaultPostProcessor<MyProvider, [f32]> for MyStrategy {
+///     default_post_processor!(CopyIds);
 /// }
 /// ```
 #[macro_export]
-macro_rules! has_default_processor {
+macro_rules! default_post_processor {
     ($Processor:ty) => {
         type Processor = $Processor;
         fn create_processor(&self) -> Self::Processor {
@@ -1089,8 +1089,8 @@ mod tests {
         }
     }
 
-    impl HasDefaultProcessor<SimpleProvider, f32> for Strategy {
-        has_default_processor!(CopyIds);
+    impl DefaultPostProcessor<SimpleProvider, f32> for Strategy {
+        default_post_processor!(CopyIds);
     }
 
     // Use the provided implementation.

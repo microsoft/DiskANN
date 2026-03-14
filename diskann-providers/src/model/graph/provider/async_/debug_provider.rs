@@ -11,13 +11,12 @@ use std::{
     },
 };
 
-use diskann::has_default_processor;
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNErrorKind, ANNResult, default_post_processor,
     graph::{
         AdjacencyList,
         glue::{
-            AsElement, ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor,
+            AsElement, DefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints,
             InplaceDeleteStrategy, InsertStrategy, Pipeline, PruneStrategy, SearchExt,
             SearchStrategy,
         },
@@ -902,8 +901,8 @@ impl SearchStrategy<DebugProvider, [f32]> for FullPrecision {
     }
 }
 
-impl HasDefaultProcessor<DebugProvider, [f32]> for FullPrecision {
-    has_default_processor!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
+impl DefaultPostProcessor<DebugProvider, [f32]> for FullPrecision {
+    default_post_processor!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 
 impl SearchStrategy<DebugProvider, [f32]> for Quantized {
@@ -920,8 +919,8 @@ impl SearchStrategy<DebugProvider, [f32]> for Quantized {
     }
 }
 
-impl HasDefaultProcessor<DebugProvider, [f32]> for Quantized {
-    has_default_processor!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
+impl DefaultPostProcessor<DebugProvider, [f32]> for Quantized {
+    default_post_processor!(Pipeline<FilterStartPoints, postprocess::RemoveDeletedIdsAndCopy>);
 }
 
 impl PruneStrategy<DebugProvider> for FullPrecision {

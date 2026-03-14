@@ -16,10 +16,9 @@ use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use crate::{
-    ANNError, ANNResult,
+    ANNError, ANNResult, default_post_processor,
     error::{Infallible, message},
     graph::{AdjacencyList, glue, test::synthetic},
-    has_default_processor,
     internal::counter::{Counter, LocalCounter},
     provider,
     utils::VectorRepr,
@@ -965,8 +964,8 @@ impl glue::SearchStrategy<Provider, [f32]> for Strategy {
     }
 }
 
-impl glue::HasDefaultProcessor<Provider, [f32]> for Strategy {
-    has_default_processor!(glue::CopyIds);
+impl glue::DefaultPostProcessor<Provider, [f32]> for Strategy {
+    default_post_processor!(glue::CopyIds);
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {

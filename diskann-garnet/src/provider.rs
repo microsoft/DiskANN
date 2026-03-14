@@ -5,16 +5,15 @@
 
 use dashmap::DashMap;
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNErrorKind, ANNResult, default_post_processor,
     graph::{
         AdjacencyList, SearchOutputBuffer,
         config::defaults::MAX_OCCLUSION_SIZE,
         glue::{
-            self, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
+            self, DefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy,
             PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
         },
     },
-    has_default_processor,
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DelegateNeighbor,
@@ -769,8 +768,8 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], GarnetId> for FullPre
     }
 }
 
-impl<T: VectorRepr> HasDefaultProcessor<GarnetProvider<T>, [T], GarnetId> for FullPrecision {
-    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>);
+impl<T: VectorRepr> DefaultPostProcessor<GarnetProvider<T>, [T], GarnetId> for FullPrecision {
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>);
 }
 
 impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecision {

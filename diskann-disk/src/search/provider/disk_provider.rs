@@ -19,7 +19,7 @@ use diskann::{
     graph::{
         self,
         glue::{
-            self, ExpandBeam, HasDefaultProcessor, IdIterator, SearchExt, SearchPostProcess,
+            self, DefaultPostProcessor, ExpandBeam, IdIterator, SearchExt, SearchPostProcess,
             SearchStrategy,
         },
         search::Knn,
@@ -371,7 +371,7 @@ where
 }
 
 impl<'this, Data, ProviderFactory>
-    HasDefaultProcessor<
+    DefaultPostProcessor<
         DiskProvider<Data>,
         [Data::VectorDataType],
         (

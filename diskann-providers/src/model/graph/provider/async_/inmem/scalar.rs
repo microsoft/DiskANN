@@ -6,11 +6,11 @@
 use std::{future::Future, sync::Mutex};
 
 use crate::storage::{StorageReadProvider, StorageWriteProvider};
-use diskann::has_default_processor;
+use diskann::default_post_processor;
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
-        ExpandBeam, FillSet, FilterStartPoints, HasDefaultProcessor, InsertStrategy, Pipeline,
+        DefaultPostProcessor, ExpandBeam, FillSet, FilterStartPoints, InsertStrategy, Pipeline,
         PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
@@ -624,7 +624,7 @@ where
 }
 
 impl<const NBITS: usize, D, Ctx, T>
-    HasDefaultProcessor<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    DefaultPostProcessor<FullPrecisionProvider<T, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -632,7 +632,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
 {
-    has_default_processor!(Pipeline<FilterStartPoints, Rerank>);
+    default_post_processor!(Pipeline<FilterStartPoints, Rerank>);
 }
 
 /// SearchStrategy for quantized search when only the quantized store is present.
@@ -661,7 +661,7 @@ where
 }
 
 impl<const NBITS: usize, D, Ctx, T>
-    HasDefaultProcessor<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
+    DefaultPostProcessor<DefaultProvider<NoStore, SQStore<NBITS>, D, Ctx>, [T]> for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
@@ -669,7 +669,7 @@ where
     Unsigned: Representation<NBITS>,
     QueryComputer<NBITS>: for<'a> PreprocessedDistanceFunction<CVRef<'a, NBITS>, f32>,
 {
-    has_default_processor!(Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
+    default_post_processor!(Pipeline<FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 impl<const NBITS: usize, V, D, Ctx> PruneStrategy<DefaultProvider<V, SQStore<NBITS>, D, Ctx>>

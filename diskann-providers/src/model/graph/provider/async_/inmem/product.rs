@@ -5,11 +5,11 @@
 
 use std::{collections::HashMap, future::Future, sync::Arc};
 
-use diskann::has_default_processor;
+use diskann::default_post_processor;
 use diskann::{
     ANNError, ANNResult,
     graph::glue::{
-        self, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
+        self, DefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy,
         PruneStrategy, SearchExt, SearchStrategy,
     },
     provider::{
@@ -483,13 +483,13 @@ where
     }
 }
 
-impl<T, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
+impl<T, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, DefaultQuant, D, Ctx>, [T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
 }
 
 impl<T, D, Ctx> PruneStrategy<FullPrecisionProvider<T, DefaultQuant, D, Ctx>> for Hybrid
@@ -604,14 +604,14 @@ where
     }
 }
 
-impl<T, D, Ctx> HasDefaultProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]>
+impl<T, D, Ctx> DefaultPostProcessor<DefaultProvider<NoStore, DefaultQuant, D, Ctx>, [T]>
     for Quantized
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 impl<D, Ctx> PruneStrategy<DefaultProvider<NoStore, DefaultQuant, D, Ctx>> for Quantized

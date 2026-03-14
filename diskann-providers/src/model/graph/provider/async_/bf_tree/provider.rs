@@ -17,16 +17,15 @@ use serde::{Deserialize, Serialize};
 
 use bf_tree::{BfTree, Config};
 use diskann::{
-    ANNError, ANNResult,
+    ANNError, ANNResult, default_post_processor,
     error::IntoANNResult,
     graph::{
         AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
+            self, DefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy,
             PruneStrategy, SearchExt, SearchStrategy,
         },
     },
-    has_default_processor,
     neighbor::Neighbor,
     provider::{
         Accessor, BuildDistanceComputer, BuildQueryComputer, DataProvider, DefaultContext,
@@ -1485,13 +1484,13 @@ where
     }
 }
 
-impl<T, Q, D> HasDefaultProcessor<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
+impl<T, Q, D> DefaultPostProcessor<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
 {
-    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 /// An [`glue::SearchPostProcess`] implementation that reranks PQ vectors.
@@ -1566,12 +1565,12 @@ where
 
 /// Starting points are filtered out of the final results and results are reranked using
 /// the full-precision data.
-impl<T, D> HasDefaultProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
+impl<T, D> DefaultPostProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
 where
     T: VectorRepr,
     D: AsyncFriendly + DeletionCheck,
 {
-    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
 }
 
 // Pruning

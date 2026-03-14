@@ -5,13 +5,13 @@
 
 use std::{collections::HashMap, fmt::Debug, future::Future};
 
-use diskann::has_default_processor;
+use diskann::default_post_processor;
 use diskann::{
     ANNError, ANNResult,
     graph::{
         SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, HasDefaultProcessor, InplaceDeleteStrategy, InsertStrategy,
+            self, DefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy,
             PruneStrategy, SearchExt, SearchStrategy,
         },
     },
@@ -453,14 +453,14 @@ where
     }
 }
 
-impl<T, Q, D, Ctx> HasDefaultProcessor<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
+impl<T, Q, D, Ctx> DefaultPostProcessor<FullPrecisionProvider<T, Q, D, Ctx>, [T]> for FullPrecision
 where
     T: VectorRepr,
     Q: AsyncFriendly,
     D: AsyncFriendly + DeletionCheck,
     Ctx: ExecutionContext,
 {
-    has_default_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 // Pruning

@@ -2152,7 +2152,7 @@ where
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
         P: Search<DP, S, T, O>,
-        S: glue::HasDefaultProcessor<DP, T, O>,
+        S: glue::DefaultPostProcessor<DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
