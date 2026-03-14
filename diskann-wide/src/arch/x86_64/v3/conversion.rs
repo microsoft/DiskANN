@@ -6,7 +6,7 @@
 // x86 intrinsics
 use std::arch::x86_64::*;
 
-use super::{f16x8, f16x16, f32x8, f32x16, i8x16, i16x16, i32x8, u8x16, u32x8};
+use super::{f16x8, f16x16, f32x8, f32x16, i8x16, i16x8, i16x16, i32x8, u8x16, u32x8};
 use crate::{LoHi, SIMDCast, SIMDReinterpret, SplitJoin, helpers};
 
 /////////////////
@@ -97,6 +97,18 @@ helpers::unsafe_map_cast!(i32x8 => (f32, f32x8), _mm256_cvtepi32_ps, "avx");
 impl SIMDReinterpret<i16x16> for u32x8 {
     fn reinterpret_simd(self) -> i16x16 {
         i16x16(self.0)
+    }
+}
+
+impl SIMDReinterpret<u8x16> for i16x8 {
+    fn reinterpret_simd(self) -> u8x16 {
+        u8x16(self.0)
+    }
+}
+
+impl SIMDReinterpret<i16x8> for u8x16 {
+    fn reinterpret_simd(self) -> i16x8 {
+        i16x8(self.0)
     }
 }
 

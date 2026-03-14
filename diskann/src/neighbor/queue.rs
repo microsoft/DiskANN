@@ -131,6 +131,11 @@ impl<I: NeighborPriorityQueueIdType> NeighborPriorityQueue<I> {
     /// Due to the performance sensitiveness of this function - we don't check for uniqueness of the item.
     /// Inserting the same item twice will cause undefined behavior.
     pub fn insert(&mut self, nbr: Neighbor<I>) {
+        if nbr.distance.is_nan() {
+            // We don't support NaN distances. If we see one, we ignore the insert since we can't determine where it belongs in the sorted order.
+            return;
+        }
+
         self.dbgassert_unique_insert(nbr.id);
 
         if self.auto_resizable {
@@ -1262,6 +1267,72 @@ mod neighbor_priority_queue_test {
         assert_eq!(queue.get(1).id, 6); // 0.8
         assert_eq!(queue.get(2).id, 1); // 1.0
         assert_eq!(queue.get(3).id, 5); // 2.0
+    }
+
+    #[test]
+    fn test_insert_neighbors_with_infinity_distance() {
+        let mut queue = NeighborPriorityQueue::new(5);
+
+        assert_eq!(queue.size(), 0);
+        assert_eq!(queue.capacity(), 5);
+
+        for id in 0..2 {
+            queue.insert(Neighbor::new(id, f32::INFINITY));
+        }
+
+        assert_eq!(queue.size(), 2);
+        assert_eq!(queue.capacity(), 5);
+
+        for id in 2..10 {
+            queue.insert(Neighbor::new(id, f32::INFINITY));
+        }
+
+        assert_eq!(queue.size(), 5);
+        assert_eq!(queue.capacity(), 5);
+
+        assert!(queue.get(0).id >= 0, "First element should be retrievable");
+    }
+
+    #[test]
+    fn test_normal_distances_should_push_infinity_distances_away_from_queue() {
+        let mut queue = NeighborPriorityQueue::new(5);
+
+        assert_eq!(queue.size(), 0);
+        assert_eq!(queue.capacity(), 5);
+
+        for id in 0..=4 {
+            queue.insert(Neighbor::new(id, f32::INFINITY));
+        }
+
+        assert_eq!(queue.size(), 5);
+        assert_eq!(queue.capacity(), 5);
+
+        assert!(queue.get(0).id >= 0, "First element should be retrievable");
+
+        for id in 5..=7 {
+            queue.insert(Neighbor::new(id, id as f32));
+        }
+
+        assert_eq!(queue.size(), 5);
+        assert_eq!(queue.capacity(), 5);
+
+        // The normal distance neighbors should be at the front of the queue
+        assert_eq!(queue.get(0).id, 5);
+        assert_eq!(queue.get(1).id, 6);
+        assert_eq!(queue.get(2).id, 7);
+
+        // The infinity distance neighbors should be pushed to the end of the queue
+        assert_eq!(queue.get(3).id, 4);
+        assert_eq!(queue.get(4).id, 3);
+    }
+
+    #[test]
+    fn test_insert_neighbor_with_nan_distance_is_ignored() {
+        let mut queue = NeighborPriorityQueue::new(5);
+
+        assert_eq!(queue.size(), 0);
+        queue.insert(Neighbor::new(0, f32::NAN));
+        assert_eq!(queue.size(), 0);
     }
 
     #[test]

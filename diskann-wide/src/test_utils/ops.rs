@@ -9,7 +9,7 @@ use std::fmt::Debug;
 use super::common::{self, ScalarTraits};
 use crate::{
     BitMask, Const, SIMDMask, SIMDMinMax, SIMDPartialEq, SIMDPartialOrd, SIMDSumTree, SIMDVector,
-    SplitJoin, SupportedLaneCount, arch,
+    SplitJoin, SupportedLaneCount, ZipUnzip, arch,
     reference::{ReferenceScalarOps, ReferenceShifts, TreeReduce},
 };
 
@@ -1003,6 +1003,104 @@ macro_rules! test_splitjoin {
     }
 }
 
+//////////////
+// ZipUnzip //
+//////////////
+
+pub fn test_zipunzip_impl<V, H, T, const N: usize, const N2: usize>(arch: V::Arch, a: &[T])
+where
+    T: Copy + Debug + ScalarTraits,
+    [T; N]: SplitJoin<Halved = [T; N2]>,
+    Const<N>: SupportedLaneCount,
+    Const<N2>: SupportedLaneCount,
+    V: SIMDVector<Scalar = T, ConstLanes = Const<N>> + ZipUnzip<Halved = H>,
+    H: SIMDVector<Scalar = T, ConstLanes = Const<N2>, Arch = V::Arch>,
+{
+    use crate::LoHi;
+
+    assert!(2 * N2 == N, "zip/unzip should logically halve dimensions");
+    let a: &[T; N] = a.try_into().unwrap();
+
+    // Unzip
+    let LoHi { lo, hi } = V::from_array(arch, *a).unzip();
+    let evens: [T; N2] = core::array::from_fn(|i| a[2 * i]);
+    let odds: [T; N2] = core::array::from_fn(|i| a[2 * i + 1]);
+    test_unary_op(&lo.to_array(), &evens, &identity, "unzip evens");
+    test_unary_op(&hi.to_array(), &odds, &identity, "unzip odds");
+
+    // Zip
+    let LoHi {
+        lo: lo_arr,
+        hi: hi_arr,
+    } = a.split();
+    let lo_half = H::from_array(arch, lo_arr);
+    let hi_half = H::from_array(arch, hi_arr);
+    let zipped = LoHi::new(lo_half, hi_half).zip::<V>();
+    let expected: [T; N] =
+        core::array::from_fn(|i| if i % 2 == 0 { a[i / 2] } else { a[N2 + i / 2] });
+    test_unary_op(&zipped.to_array(), &expected, &identity, "zip");
+
+    // --- Test unzip_flat: deinterleave staying in full width ---
+    let unzipped_flat = V::from_array(arch, *a).unzip_flat();
+    let expected_flat: [T; N] = {
+        let mut out = *a;
+        for i in 0..N2 {
+            out[i] = a[2 * i];
+            out[N2 + i] = a[2 * i + 1];
+        }
+        out
+    };
+    test_unary_op(
+        &unzipped_flat.to_array(),
+        &expected_flat,
+        &identity,
+        "unzip_flat",
+    );
+
+    // --- Test zip_flat: interleave staying in full width ---
+    // Input: [a0..a_{N/2-1}, b0..b_{N/2-1}]  (concatenated halves)
+    // Expected: [a0,b0, a1,b1, ...]
+    let zip_flat_result = V::from_array(arch, *a).zip_flat();
+    let expected_zip_flat: [T; N] =
+        core::array::from_fn(|i| if i % 2 == 0 { a[i / 2] } else { a[N2 + i / 2] });
+    test_unary_op(
+        &zip_flat_result.to_array(),
+        &expected_zip_flat,
+        &identity,
+        "zip_flat",
+    );
+}
+
+macro_rules! test_zipunzip {
+    ($wide:ident $(< $($ps:tt),+ >)? => $half:ident $(< $($hs:tt),+ >)?, $seed:literal, $arch:expr) => {
+        paste::paste! {
+            #[test]
+            fn [<zipunzip_ $wide:lower $(_$($ps )x+)?>]() {
+                use $crate::SIMDVector;
+                type Wide = $wide $(< $($ps),+>)?;
+                type Half = $half $(< $($hs),+>)?;
+
+                type Scalar = <Wide as SIMDVector>::Scalar;
+
+                if let Some(arch) = $arch {
+                    let f = move |a: &[Scalar]| {
+                        $crate::test_utils::ops::test_zipunzip_impl::<
+                            Wide,
+                            Half,
+                            Scalar,
+                            { <Wide>::LANES },
+                            { <Half>::LANES },
+                        >(arch, a)
+                    };
+
+                    let n = <Wide>::LANES;
+                    $crate::test_utils::driver::drive_unary(&f, n, $seed)
+                }
+            }
+        }
+    }
+}
+
 ///////////////////
 // Macro Exports //
 ///////////////////
@@ -1020,6 +1118,7 @@ pub(crate) use test_select;
 pub(crate) use test_splitjoin;
 pub(crate) use test_sub;
 pub(crate) use test_sumtree;
+pub(crate) use test_zipunzip;
 
 ///////////
 // Tests //
