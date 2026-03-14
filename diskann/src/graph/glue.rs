@@ -335,9 +335,12 @@ where
 
 /// Opt-in trait for strategies that have a default post-processor.
 ///
-/// Strategies implementing this trait work with [`super::search::Knn`] (no explicit
-/// processor). The search infrastructure will call `default_post_processor()` to obtain the
-/// processor and invoke its [`SearchPostProcess::post_process`] method.
+/// Strategies implementing this trait can be used with index-level search APIs such as
+/// [`crate::index::diskann_async::DiskANNIndex::search`] and
+/// [`crate::index::diskann_async::DiskANNIndex::search_with`] when no explicit
+/// post-processor is specified. The search infrastructure will call
+/// `default_post_processor()` to obtain the processor and invoke its
+/// [`SearchPostProcess::post_process`] method.
 pub trait DefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
     SearchStrategy<Provider, T, O>
 where
