@@ -152,7 +152,6 @@ mod timer_tests {
         } else if cfg!(target_os = "linux") {
             assert!(timer.cycles.is_some());
         } else if cfg!(target_os = "macos") {
-            // On macOS, verify that get_process_cycle_time() returns a value
             assert!(timer.cycles.is_some());
         } else {
             panic!("No timer::test_new defined for current configuration");
