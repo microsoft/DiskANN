@@ -6,11 +6,11 @@
 use std::{future::Future, sync::Mutex};
 
 use diskann::{
-    ANNError, ANNResult,
+    ANNError, ANNResult, default_post_processor,
     error::{RankedError, ToRanked, TransientError},
     graph::glue::{
-        AsElement, CopyIds, ExpandBeam, FillSet, InsertStrategy, PruneStrategy, SearchExt,
-        SearchStrategy,
+        AsElement, CopyIds, DefaultPostProcessor, ExpandBeam, FillSet, InsertStrategy,
+        PruneStrategy, SearchExt, SearchStrategy,
     },
     neighbor::Neighbor,
     provider::{
@@ -236,7 +236,6 @@ impl SearchStrategy<TestProvider, [f32]> for Flaky {
     type QueryComputer = <FullAccessor<'static> as BuildQueryComputer<[f32]>>::QueryComputer;
     type SearchAccessor<'a> = FlakyAccessor<'a>;
     type SearchAccessorError = ANNError;
-    type PostProcessor = CopyIds;
 
     fn search_accessor<'a>(
         &'a self,
@@ -249,10 +248,10 @@ impl SearchStrategy<TestProvider, [f32]> for Flaky {
             self.fail_every,
         ))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl DefaultPostProcessor<TestProvider, [f32]> for Flaky {
+    default_post_processor!(CopyIds);
 }
 
 impl FillSet for FlakyAccessor<'_> {}

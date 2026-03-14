@@ -142,13 +142,23 @@ where
             beta: self.beta,
         })
     }
+}
 
-    /// Forward the post-processing error from the inner strategy.
-    type PostProcessor = glue::Pipeline<Unwrap, Strategy::PostProcessor>;
+/// [`DefaultPostProcessor`] delegation for [`BetaFilter`]. The processor is composed by
+/// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
+impl<Provider, Strategy, T, I, O> glue::DefaultPostProcessor<Provider, T, O>
+    for BetaFilter<Strategy, I>
+where
+    T: ?Sized,
+    I: VectorId,
+    O: Send,
+    Provider: DataProvider<InternalId = I>,
+    Strategy: glue::DefaultPostProcessor<Provider, T, O>,
+{
+    type Processor = glue::Pipeline<Unwrap, Strategy::Processor>;
 
-    /// Delegate post-processing to the inner strategy's post-processing routine.
-    fn post_processor(&self) -> Self::PostProcessor {
-        glue::Pipeline::new(Unwrap, self.strategy.post_processor())
+    fn default_post_processor(&self) -> Self::Processor {
+        glue::Pipeline::new(Unwrap, self.strategy.default_post_processor())
     }
 }
 
@@ -538,7 +548,6 @@ mod tests {
     impl SearchStrategy<SimpleProvider, u64> for SimpleStrategy {
         type SearchAccessor<'a> = Doubler;
         type QueryComputer = AddingComputer;
-        type PostProcessor = CopyIds;
         type SearchAccessorError = ANNError;
 
         fn search_accessor<'a>(
@@ -548,10 +557,10 @@ mod tests {
         ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
             Ok(Doubler::default())
         }
+    }
 
-        fn post_processor(&self) -> Self::PostProcessor {
-            Default::default()
-        }
+    impl glue::DefaultPostProcessor<SimpleProvider, u64> for SimpleStrategy {
+        diskann::default_post_processor!(CopyIds);
     }
 
     /// A simple `QueryLabelProvider` that matches multiples of 3.

@@ -5,13 +5,13 @@
 
 use dashmap::DashMap;
 use diskann::{
-    ANNError, ANNErrorKind, ANNResult,
+    ANNError, ANNErrorKind, ANNResult, default_post_processor,
     graph::{
         AdjacencyList, SearchOutputBuffer,
         config::defaults::MAX_OCCLUSION_SIZE,
         glue::{
-            self, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
-            SearchExt, SearchPostProcess, SearchStrategy,
+            self, DefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy,
+            PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -24,7 +24,7 @@ use diskann::{
         object_pool::{AsPooled, ObjectPool, PooledRef, Undef},
     },
 };
-use diskann_providers::model::graph::provider::async_::common::{FullPrecision, Internal};
+use diskann_providers::model::graph::provider::async_::common::FullPrecision;
 use diskann_vector::{PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric};
 use std::{
     collections::{HashMap, hash_map::Entry},
@@ -724,25 +724,6 @@ impl<T: VectorRepr> NeighborAccessorMut for DelegateNeighborAccessor<'_, '_, T> 
     }
 }
 
-impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T]> for Internal<FullPrecision> {
-    type SearchAccessor<'a> = FullAccessor<'a, T>;
-    type SearchAccessorError = GarnetProviderError;
-    type QueryComputer = T::QueryDistance;
-    type PostProcessor = glue::CopyIds;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a GarnetProvider<T>,
-        context: &'a <GarnetProvider<T> as DataProvider>::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider, context, true))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
-}
-
 /// A [`SearchPostProcess`] base object that copies each `Neighbor` to a `(ExternalId, f32)` pair
 /// and writes as many as possible to the output buffer.
 #[derive(Debug, Default, Clone, Copy)]
@@ -783,7 +764,6 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], GarnetId> for FullPre
     type SearchAccessor<'a> = FullAccessor<'a, T>;
     type SearchAccessorError = GarnetProviderError;
     type QueryComputer = T::QueryDistance;
-    type PostProcessor = glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -792,16 +772,16 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], GarnetId> for FullPre
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider, context, true))
     }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
 }
+
+impl<T: VectorRepr> DefaultPostProcessor<GarnetProvider<T>, [T], GarnetId> for FullPrecision {
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>);
+}
+
 impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecision {
     type SearchAccessor<'a> = FullAccessor<'a, T>;
     type SearchAccessorError = GarnetProviderError;
     type QueryComputer = T::QueryDistance;
-    type PostProcessor = glue::CopyIds;
 
     fn search_accessor<'a>(
         &'a self,
@@ -809,10 +789,6 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecisio
         context: &'a <GarnetProvider<T> as DataProvider>::Context,
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider, context, true))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
     }
 }
 
@@ -864,14 +840,20 @@ impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for FullPrecision {
     type DeleteElementError = GarnetProviderError;
 
     type PruneStrategy = Self;
-    type SearchStrategy = Internal<Self>;
+    type DeleteSearchAccessor<'a> = FullAccessor<'a, T>;
+    type SearchPostProcessor = glue::CopyIds;
+    type SearchStrategy = Self;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Self
     }
 
     fn search_strategy(&self) -> Self::SearchStrategy {
-        Internal(Self)
+        Self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        glue::CopyIds
     }
 
     fn get_delete_element<'a>(

@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 
 use super::{
-    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod,
+    AdjacencyList, Config, ConsolidateKind, InplaceDeleteMethod, Search,
     glue::{
         self, AsElement, ExpandBeam, FillSet, IdIterator, InplaceDeleteStrategy, InsertStrategy,
         PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy, aliases,
@@ -1296,8 +1296,8 @@ where
             // NOTE: We rely on `post_process` to remove deleted items from the results
             // placed into the output.
             let proxy = v.async_lower();
-            let num_results = search_strategy
-                .post_processor()
+            let post_processor = strategy.search_post_processor();
+            let num_results = post_processor
                 .post_process(
                     &mut search_accessor,
                     &*proxy,
@@ -1305,7 +1305,6 @@ where
                     scratch.best.iter(),
                     &mut neighbor::BackInserter::new(output.as_mut_slice()),
                 )
-                .send()
                 .await
                 .into_ann_result()?;
 
@@ -2139,10 +2138,9 @@ where
     /// let params = Knn::new(10, 100, None)?;
     /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     ///
-    /// // Range search (note: uses () as output buffer, results in Output type)
+    /// // Range search (results written to output buffer)
     /// let params = Range::new(100, 0.5)?;
-    /// let result = index.search(params, &strategy, &context, &query, &mut ()).await?;
-    /// // result.ids and result.distances contain the matches
+    /// let stats = index.search(params, &strategy, &context, &query, &mut output).await?;
     /// ```
     pub fn search<S, T, O, OB, P>(
         &self,
@@ -2153,11 +2151,35 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: super::search::Search<DP, S, T, O, OB>,
+        P: Search<DP, S, T, O>,
+        S: glue::DefaultPostProcessor<DP, T, O>,
+        O: Send,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
         T: ?Sized,
-        OB: ?Sized,
     {
-        search_params.search(self, strategy, context, query, output)
+        let processor = strategy.default_post_processor();
+        self.search_with(search_params, strategy, processor, context, query, output)
+    }
+
+    /// Execute a search with an explicit post-processor parameter.
+    pub fn search_with<S, T, O, OB, P, PP>(
+        &self,
+        search_params: P,
+        strategy: &S,
+        processor: PP,
+        context: &DP::Context,
+        query: &T,
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<P::Output>>
+    where
+        P: Search<DP, S, T, O>,
+        S: glue::SearchStrategy<DP, T, O>,
+        PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        O: Send,
+        OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
+        T: ?Sized,
+    {
+        search_params.search(self, strategy, processor, context, query, output)
     }
 
     /// Performs a brute-force flat search over the points matching a provided filter function.
@@ -2198,7 +2220,7 @@ where
     ) -> ANNResult<SearchStats>
     where
         T: ?Sized,
-        S: SearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>,
+        S: glue::DefaultSearchStrategy<DP, T, O, SearchAccessor<'a>: IdIterator<I>>,
         I: Iterator<Item = <DP as DataProvider>::InternalId>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send,
@@ -2233,7 +2255,7 @@ where
         }
 
         let result_count = strategy
-            .post_processor()
+            .default_post_processor()
             .post_process(
                 &mut accessor,
                 query,

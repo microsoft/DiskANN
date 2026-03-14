@@ -16,7 +16,7 @@ use diskann_vector::distance::Metric;
 use thiserror::Error;
 
 use crate::{
-    ANNError, ANNResult,
+    ANNError, ANNResult, default_post_processor,
     error::{Infallible, message},
     graph::{AdjacencyList, glue, test::synthetic},
     internal::counter::{Counter, LocalCounter},
@@ -952,7 +952,6 @@ impl Strategy {
 
 impl glue::SearchStrategy<Provider, [f32]> for Strategy {
     type QueryComputer = <f32 as VectorRepr>::QueryDistance;
-    type PostProcessor = glue::CopyIds;
     type SearchAccessorError = Infallible;
     type SearchAccessor<'a> = Accessor<'a>;
 
@@ -963,10 +962,10 @@ impl glue::SearchStrategy<Provider, [f32]> for Strategy {
     ) -> Result<Accessor<'a>, Infallible> {
         Ok(Accessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl glue::DefaultPostProcessor<Provider, [f32]> for Strategy {
+    default_post_processor!(glue::CopyIds);
 }
 
 impl glue::PruneStrategy<Provider> for Strategy {
@@ -1015,7 +1014,9 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type DeleteElementGuard = Box<[f32]>;
     type DeleteElementError = AccessedInvalidId;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = Accessor<'a>;
     type SearchStrategy = Self;
+    type SearchPostProcessor = glue::CopyIds;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
@@ -1023,6 +1024,10 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
 
     fn search_strategy(&self) -> Self::SearchStrategy {
         *self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        Default::default()
     }
 
     async fn get_delete_element<'a>(

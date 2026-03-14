@@ -6,7 +6,7 @@
 //! Label-filtered search using multi-hop expansion.
 
 use diskann_utils::Reborrow;
-use diskann_utils::future::{AssertSend, SendFuture};
+use diskann_utils::future::SendFuture;
 use diskann_vector::PreprocessedDistanceFunction;
 use hashbrown::HashSet;
 
@@ -17,7 +17,7 @@ use crate::{
     graph::{
         glue::{
             self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
-            SearchPostProcess, SearchStrategy,
+            SearchPostProcess,
         },
         index::{
             DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
@@ -53,24 +53,28 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
     }
 }
 
-impl<'q, DP, S, T, O, OB> Search<DP, S, T, O, OB> for MultihopSearch<'q, DP::InternalId>
+impl<'q, DP, S, T, O> Search<DP, S, T, O> for MultihopSearch<'q, DP::InternalId>
 where
     DP: DataProvider,
+    S: glue::SearchStrategy<DP, T, O>,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
     O: Send,
-    OB: SearchOutputBuffer<O> + Send,
 {
     type Output = SearchStats;
 
-    fn search(
+    fn search<PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        processor: PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -92,8 +96,7 @@ where
             )
             .await?;
 
-            let result_count = strategy
-                .post_processor()
+            let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
@@ -101,7 +104,6 @@ where
                     scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )
-                .send()
                 .await
                 .into_ann_result()?;
 
