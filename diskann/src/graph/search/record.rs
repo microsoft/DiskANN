@@ -84,10 +84,6 @@ where
     pub fn push(&mut self, neighbor: Neighbor<T>) {
         self.visited.push(neighbor);
     }
-
-    pub fn ids(&self) -> impl ExactSizeIterator<Item = T> + Clone + Send + Sync {
-        self.visited.iter().map(|n| n.id.clone())
-    }
 }
 
 impl<T> SearchRecord<T> for VisitedSearchRecord<T>
