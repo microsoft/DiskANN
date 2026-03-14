@@ -3,6 +3,17 @@
  * Licensed under the MIT license.
  */
 
+// Guard the entire module against compilation on non-x86_64 targets.
+//
+// This is necessary because `rustdoc` may attempt to compile platform-specific modules even on
+// architectures where they would not normally be included (i.e., where the outer `#[cfg]` guard
+// in `arch/mod.rs` would prevent inclusion). Without this inner guard, `cargo doc` on
+// non-x86_64 architectures (e.g., macOS/aarch64) fails because this module uses
+// `std::arch::x86_64` intrinsics that don't exist on other platforms.
+//
+// See: https://github.com/rust-lang/rust/issues/1998
+#![cfg(target_arch = "x86_64")]
+
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{Scalar, Target, Target1, Target2, Target3};

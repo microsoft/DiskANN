@@ -3,6 +3,17 @@
  * Licensed under the MIT license.
  */
 
+// Guard the entire module against compilation on non-aarch64 targets.
+//
+// This is necessary because `rustdoc` may attempt to compile platform-specific modules even on
+// architectures where they would not normally be included (i.e., where the outer `#[cfg]` guard
+// in `arch/mod.rs` would prevent inclusion). Without this inner guard, `cargo doc` on
+// non-aarch64 architectures would fail because this module uses `std::arch::aarch64` intrinsics
+// that don't exist on other platforms.
+//
+// See: https://github.com/rust-lang/rust/issues/1998
+#![cfg(target_arch = "aarch64")]
+
 use crate::{
     Architecture, SIMDVector,
     arch::{
