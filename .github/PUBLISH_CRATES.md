@@ -70,7 +70,7 @@ cargo publish --locked --workspace --dry-run
 
    Member crates inherit `workspace.package.version` via `version.workspace = true`,
    but `[workspace.dependencies]` versions must be set explicitly (they're baked into
-   published manifests for crates.io consumers). The publish workflow verifies these match.
+   published manifests for crates.io consumers). 
 
 3. **Update CHANGELOG** (if applicable).
 

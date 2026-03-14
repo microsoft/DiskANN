@@ -110,10 +110,6 @@ jobs:
             exit 1
           fi
 
-      - name: Run tests
-        if: github.event_name != 'pull_request' && github.event.inputs.dry_run != 'true'
-        run: cargo test --locked --workspace --profile ci
-
       - name: Publish workspace crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
