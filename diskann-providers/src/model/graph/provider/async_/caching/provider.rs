@@ -1069,20 +1069,46 @@ where
     }
 }
 
-/// More surprisingly - the `where` clause for this implementation is **also** straightforward.
-impl<DP, C, S> InplaceDeleteStrategy<CachingProvider<DP, C>> for Cached<S>
+/// The `where` clause requires that:
+///
+/// 1. The inner strategy's [`DeleteSearchAccessor`] is cacheable.
+/// 2. The cache `C` can produce a cache-accessor for the inner strategy's accessor.
+/// 3. The wrapped search strategy `Cached<S::SearchStrategy>` remains a valid
+///    `SearchStrategy` for `CachingProvider` (needed for the equality constraint on
+///    [`InplaceDeleteStrategy::SearchStrategy`]).
+impl<DP, C, S, E> InplaceDeleteStrategy<CachingProvider<DP, C>> for Cached<S>
 where
     DP: DataProvider,
     S: InplaceDeleteStrategy<DP>,
+    for<'a> S::DeleteSearchAccessor<'a>: CacheableAccessor,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
-    for<'a> Cached<S::SearchStrategy>: SearchStrategy<CachingProvider<DP, C>, S::DeleteElement<'a>>,
-    C: AsyncFriendly,
+    for<'a> Cached<S::SearchStrategy>: SearchStrategy<
+            CachingProvider<DP, C>,
+            S::DeleteElement<'a>,
+            SearchAccessor<'a> = CachingAccessor<
+                S::DeleteSearchAccessor<'a>,
+                <C as AsCacheAccessorFor<'a, S::DeleteSearchAccessor<'a>>>::Accessor,
+            >,
+        >,
+    C: for<'a> AsCacheAccessorFor<
+            'a,
+            S::DeleteSearchAccessor<'a>,
+            Accessor: NeighborCache<DP::InternalId>,
+            Error = E,
+        > + AsyncFriendly,
+    E: StandardError,
 {
     type DeleteElement<'a> = S::DeleteElement<'a>;
     type DeleteElementGuard = S::DeleteElementGuard;
     type DeleteElementError = S::DeleteElementError;
 
     type PruneStrategy = Cached<S::PruneStrategy>;
+
+    type DeleteSearchAccessor<'a> = CachingAccessor<
+        S::DeleteSearchAccessor<'a>,
+        <C as AsCacheAccessorFor<'a, S::DeleteSearchAccessor<'a>>>::Accessor,
+    >;
+
     type SearchStrategy = Cached<S::SearchStrategy>;
     type SearchPostProcessor = Pipeline<Unwrap, S::SearchPostProcessor>;
 

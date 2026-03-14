@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use bf_tree::{BfTree, Config};
 use diskann::{
     ANNError, ANNResult, default_post_processor,
-    error::IntoANNResult,
     graph::{
         AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
@@ -1681,6 +1680,7 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = FullAccessor<'a, T, Q, D>;
     type SearchPostProcessor = RemoveDeletedIdsAndCopy;
     type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
@@ -1720,6 +1720,7 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = QuantAccessor<'a, T, D>;
     type SearchPostProcessor = Rerank;
     type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {

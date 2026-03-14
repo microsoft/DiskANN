@@ -554,6 +554,7 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = QuantAccessor<'a, FullPrecisionStore<T>, D, Ctx>;
     type SearchPostProcessor = Rerank;
     type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {

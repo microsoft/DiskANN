@@ -792,15 +792,28 @@ where
     /// The pruning strategy to use after the initial search is complete.
     type PruneStrategy: PruneStrategy<Provider>;
 
+    /// The accessor used during the delete-search phase.
+    ///
+    /// This is technically redundant information as in theory, we could project trhough
+    /// [`Self::SearchStrategy`]. However, when trying to write generic wrappers (read,
+    /// the "caching" provider), rustc is unable to project all the way through the layers
+    /// of associated types.
+    ///
+    /// Lifting the accessor all the way to the trait level makes the caching provider possible.
+    type DeleteSearchAccessor<'a>: ExpandBeam<Self::DeleteElement<'a>, Id = Provider::InternalId>
+        + SearchExt;
+
     /// The processor used during the delete-search phase.
-    type SearchPostProcessor: for<'a> SearchPostProcess<
-            <Self::SearchStrategy as SearchStrategy<Provider, Self::DeleteElement<'a>>>::SearchAccessor<'a>,
-            Self::DeleteElement<'a>,
-        > + Send
+    type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>, Self::DeleteElement<'a>>
+        + Send
         + Sync;
 
     /// The type of the search strategy to use for graph traversal.
-    type SearchStrategy: for<'a> SearchStrategy<Provider, Self::DeleteElement<'a>>;
+    type SearchStrategy: for<'a> SearchStrategy<
+            Provider,
+            Self::DeleteElement<'a>,
+            SearchAccessor<'a> = Self::DeleteSearchAccessor<'a>,
+        >;
 
     /// Construct the prune strategy object.
     fn prune_strategy(&self) -> Self::PruneStrategy;

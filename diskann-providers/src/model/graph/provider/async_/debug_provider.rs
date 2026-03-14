@@ -1012,6 +1012,7 @@ impl InplaceDeleteStrategy<DebugProvider> for FullPrecision {
     type DeleteElementGuard = Vec<f32>;
     type DeleteElementError = Panics;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = FullAccessor<'a>;
     type SearchPostProcessor = postprocess::RemoveDeletedIdsAndCopy;
     type SearchStrategy = Self;
 
@@ -1043,6 +1044,7 @@ impl InplaceDeleteStrategy<DebugProvider> for Quantized {
     type DeleteElementGuard = Vec<f32>;
     type DeleteElementError = Panics;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = QuantAccessor<'a>;
     type SearchPostProcessor = postprocess::RemoveDeletedIdsAndCopy;
     type SearchStrategy = Self;
 

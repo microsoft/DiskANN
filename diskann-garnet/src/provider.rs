@@ -834,6 +834,7 @@ impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for FullPrecision {
     type DeleteElementError = GarnetProviderError;
 
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = FullAccessor<'a, T>;
     type SearchPostProcessor = glue::CopyIds;
     type SearchStrategy = Self;
 

@@ -1014,6 +1014,7 @@ impl glue::InplaceDeleteStrategy<Provider> for Strategy {
     type DeleteElementGuard = Box<[f32]>;
     type DeleteElementError = AccessedInvalidId;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = Accessor<'a>;
     type SearchStrategy = Self;
     type SearchPostProcessor = glue::CopyIds;
 

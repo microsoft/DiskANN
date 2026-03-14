@@ -527,6 +527,7 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
+    type DeleteSearchAccessor<'a> = FullAccessor<'a, T, Q, D, Ctx>;
     type SearchPostProcessor = RemoveDeletedIdsAndCopy;
     type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
