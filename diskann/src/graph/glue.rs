@@ -794,7 +794,7 @@ where
 
     /// The accessor used during the delete-search phase.
     ///
-    /// This is technically redundant information as in theory, we could project trhough
+    /// This is technically redundant information as in theory, we could project through
     /// [`Self::SearchStrategy`]. However, when trying to write generic wrappers (read,
     /// the "caching" provider), rustc is unable to project all the way through the layers
     /// of associated types.
