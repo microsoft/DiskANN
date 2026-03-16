@@ -186,12 +186,15 @@ mod pq_generation_tests {
     use diskann::ANNError;
     use diskann_providers::model::pq::generate_pq_pivots;
     use diskann_providers::model::GeneratePivotArguments;
-    use diskann_providers::storage::{PQStorage, StorageWriteProvider, VirtualStorageProvider};
-    use diskann_providers::utils::{
-        create_thread_pool_for_test, file_util::load_bin, save_bin_f32, AsThreadPool,
+    use diskann_providers::storage::{
+        PQStorage, StorageReadProvider, StorageWriteProvider, VirtualStorageProvider,
     };
-    use diskann_utils::test_data_root;
-    use diskann_utils::views::{MatrixView, MutMatrixView};
+    use diskann_providers::utils::{create_thread_pool_for_test, AsThreadPool};
+    use diskann_utils::{
+        io::{read_bin, write_bin},
+        test_data_root,
+        views::{MatrixView, MutMatrixView},
+    };
     use diskann_vector::distance::Metric;
     use rstest::rstest;
     use vfs::FileSystem;
@@ -257,13 +260,11 @@ mod pq_generation_tests {
         let (ndata, dim, num_centers, num_chunks, max_k_means_reps) = (5, 8, 2, 2, 5);
         let mut train_data: Vec<f32> = VALIDATION_DATA.to_vec();
 
-        let _ = save_bin_f32(
+        write_bin(
+            MatrixView::try_from(train_data.as_slice(), ndata, dim).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
-            &train_data,
-            ndata,
-            dim,
-            0,
-        );
+        )
+        .unwrap();
 
         let pool = create_thread_pool_for_test();
         generate_pq_pivots(
@@ -309,12 +310,14 @@ mod pq_generation_tests {
         assert_eq!(compressor.table.nchunks(), num_chunks);
 
         assert!(&storage_provider.exists(pivot_file_name_compressor));
-        let (compressor_pivots, cn, cd) =
-            load_bin::<u8, _>(&storage_provider, pivot_file_name_compressor, 0).unwrap();
-        let (true_pivots, n, d) = load_bin::<u8, _>(&storage_provider, pivot_file_name, 0).unwrap();
-
-        assert_eq!(cn, n);
-        assert_eq!(cd, d);
+        let compressor_pivots = read_bin::<u8>(
+            &mut storage_provider
+                .open_reader(pivot_file_name_compressor)
+                .unwrap(),
+        )
+        .unwrap();
+        let true_pivots =
+            read_bin::<u8>(&mut storage_provider.open_reader(pivot_file_name).unwrap()).unwrap();
         assert_eq!(compressor_pivots, true_pivots);
     }
 
@@ -332,13 +335,11 @@ mod pq_generation_tests {
 
         let (ndata, dim, num_centers, num_chunks, max_k_means_reps) = (5, 8, 2, 2, 5);
 
-        let _ = save_bin_f32(
+        write_bin(
+            MatrixView::try_from(VALIDATION_DATA.as_slice(), ndata, dim).unwrap(),
             &mut storage_provider.create_for_write(data_path).unwrap(),
-            &VALIDATION_DATA,
-            ndata,
-            dim,
-            0,
-        );
+        )
+        .unwrap();
         let pool = create_thread_pool_for_test();
 
         let compressor = create_new_compressor(
@@ -387,18 +388,23 @@ mod pq_generation_tests {
 
         assert!(compressor.is_ok());
 
-        let (data, npts, dim) =
-            load_bin::<f32, _>(&storage_provider, TEST_PQ_DATA_PATH, 0).unwrap();
+        let data_matrix =
+            read_bin::<f32>(&mut storage_provider.open_reader(TEST_PQ_DATA_PATH).unwrap()).unwrap();
+        let npts = data_matrix.nrows();
         let mut compressed_mat = vec![0_u8; num_chunks * npts];
         let result = compressor.unwrap().compress(
-            MatrixView::try_from(&data, npts, dim).unwrap(),
+            data_matrix.as_view(),
             MutMatrixView::try_from(&mut compressed_mat, npts, num_chunks).unwrap(),
         );
         assert!(result.is_ok());
 
-        let (compressed_gt, _, _) =
-            load_bin::<u8, _>(&storage_provider, TEST_PQ_COMPRESSED_PATH, 0).unwrap();
-        assert_eq!(compressed_gt, compressed_mat);
+        let compressed_gt = read_bin::<u8>(
+            &mut storage_provider
+                .open_reader(TEST_PQ_COMPRESSED_PATH)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(compressed_gt.as_slice(), &compressed_mat);
     }
 
     #[rstest]

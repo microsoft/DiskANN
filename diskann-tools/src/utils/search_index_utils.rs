@@ -8,7 +8,7 @@ use bytemuck::cast_slice;
 use diskann::{ANNError, ANNResult};
 use diskann_providers::model::graph::traits::GraphDataType;
 use diskann_providers::storage::StorageReadProvider;
-use diskann_providers::utils::read_metadata;
+use diskann_utils::io::Metadata;
 use tracing::{error, info};
 
 use crate::utils::CMDToolError;
@@ -366,8 +366,8 @@ pub fn load_truthset(
     let actual_file_size = storage_provider.get_length(bin_file)? as usize;
     let mut file = storage_provider.open_reader(bin_file)?;
 
-    let metadata = read_metadata(&mut file)?;
-    let (npts, dim) = (metadata.npoints, metadata.ndims);
+    let metadata = Metadata::read(&mut file)?;
+    let (npts, dim) = metadata.into_dims();
 
     info!("Metadata: #pts = {npts}, #dims = {dim}... ");
 
@@ -420,8 +420,8 @@ pub fn load_truthset_with_associated_data<Data: GraphDataType>(
 ) -> ANNResult<TruthSetWithAssociatedData<Data>> {
     let mut file = storage_provider.open_reader(bin_file)?;
 
-    let metadata = read_metadata(&mut file)?;
-    let (npts, dim) = (metadata.npoints, metadata.ndims);
+    let metadata = Metadata::read(&mut file)?;
+    let (npts, dim) = metadata.into_dims();
 
     info!("Metadata: #pts = {}, #dims = {}...", npts, dim);
 
@@ -469,8 +469,8 @@ pub fn load_range_truthset(
 ) -> ANNResult<RangeSearchTruthSet> {
     let mut file = storage_provider.open_reader(bin_file)?;
 
-    let metadata = read_metadata(&mut file)?;
-    let (npts, total_ids) = (metadata.npoints, metadata.ndims);
+    let metadata = Metadata::read(&mut file)?;
+    let (npts, total_ids) = metadata.into_dims();
     let mut buffer = [0; size_of::<i32>()];
 
     info!("Metadata: #pts = {}, #totalIds = {}", npts, total_ids);
@@ -897,5 +897,46 @@ mod test_search_index_utils {
             100.0,
             "Empty ground truth should result in 100% recall"
         );
+    }
+
+    #[test]
+    fn test_recall_bounds_error_display() {
+        let error = RecallBoundsError::KGreaterThanN { k: 10, n: 5 };
+        let message = format!("{}", error);
+        assert!(message.contains("recall value k"));
+        assert!(message.contains("must be less than or equal to n"));
+
+        let error = RecallBoundsError::ArgumentIsZero { k: 0, n: 0 };
+        let message = format!("{}", error);
+        assert_eq!(message, "recall values k and n must both be non-zero");
+
+        let error = RecallBoundsError::ArgumentIsZero { k: 0, n: 5 };
+        let message = format!("{}", error);
+        assert_eq!(message, "recall values k must be non-zero");
+
+        let error = RecallBoundsError::ArgumentIsZero { k: 5, n: 0 };
+        let message = format!("{}", error);
+        assert_eq!(message, "recall values n must be non-zero");
+    }
+
+    #[test]
+    fn test_recall_bounds_error_conversion() {
+        let error = RecallBoundsError::KGreaterThanN { k: 10, n: 5 };
+        let cmd_error: CMDToolError = error.into();
+        assert!(!cmd_error.details.is_empty());
+    }
+
+    #[test]
+    fn test_k_recall_at_n_getters() {
+        let recall = KRecallAtN::new(5, 10).unwrap();
+        assert_eq!(recall.get_k(), 5);
+        assert_eq!(recall.get_n(), 10);
+    }
+
+    #[test]
+    fn test_k_recall_at_n_equal_values() {
+        let recall = KRecallAtN::new(5, 5).unwrap();
+        assert_eq!(recall.get_k(), 5);
+        assert_eq!(recall.get_n(), 5);
     }
 }

@@ -137,6 +137,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     vector_provider_config: Config::default(),
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
+///     graph_params: None,
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
@@ -186,6 +187,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     vector_provider_config: Config::default(),
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
+///     graph_params: None,
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
@@ -234,6 +236,7 @@ use crate::storage::{StorageReadProvider, StorageWriteProvider};
 ///     vector_provider_config: Config::default(),
 ///     quant_vector_provider_config: Config::default(),
 ///     neighbor_list_provider_config: Config::default(),
+///     graph_params: None,
 /// };
 ///
 /// // Create a table that supports 5 points and 1 start point.
@@ -271,6 +274,10 @@ where
     // The metric to use for distances
     //
     pub(super) metric: Metric,
+
+    // Graph configuration parameters for persistence
+    //
+    pub(crate) graph_params: Option<GraphParams>,
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +309,9 @@ pub struct BfTreeProviderParameters {
 
     // bf-tree config for neighbor list provider
     pub neighbor_list_provider_config: Config,
+
+    // Optional graph configuration parameters for persistence
+    pub graph_params: Option<GraphParams>,
 }
 
 pub type Index<T, D = NoDeletes> = Arc<DiskANNIndex<BfTreeProvider<T, NoStore, D>>>;
@@ -351,6 +361,7 @@ where
             deleted: delete_precursor.create(params.max_points + num_start_points),
             max_fp_vecs_per_fill: params.max_fp_vecs_per_fill.unwrap_or(usize::MAX),
             metric: params.metric,
+            graph_params: params.graph_params,
         })
     }
 
@@ -1787,11 +1798,17 @@ pub struct BfTreeParams {
 
 impl BfTreeParams {
     /// Build a BfTree Config from the saved parameters and a file path.
-    pub fn to_config(&self, path: &std::path::Path) -> Config {
+    /// When `is_memory` is true, the config uses an in-memory storage backend,
+    /// ensuring the circular buffer is at least as large as the bf-tree default.
+    pub fn to_config(&self, path: &std::path::Path, is_memory: bool) -> Config {
         let mut config = Config::new(path, self.bytes);
         config.cb_max_record_size(self.max_record_size);
         config.leaf_page_size(self.leaf_page_size);
-        config.storage_backend(bf_tree::StorageBackend::Std);
+        if is_memory {
+            config.storage_backend(bf_tree::StorageBackend::Memory);
+        } else {
+            config.storage_backend(bf_tree::StorageBackend::Std);
+        }
         config
     }
 }
@@ -1814,6 +1831,62 @@ pub struct SavedParams {
     pub params_vector: BfTreeParams,
     pub params_neighbor: BfTreeParams,
     pub quant_params: Option<QuantParams>,
+    pub graph_params: Option<GraphParams>,
+    /// Whether the original model was in-memory (`true`) or on-disk (`false`).
+    pub is_memory: bool,
+}
+
+/// The element type of the full-precision vectors stored in the index.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorDtype {
+    F32,
+    F16,
+    U8,
+    I8,
+}
+
+/// A trait for mapping concrete vector element types to their [`VectorDtype`]
+/// discriminant at compile time.
+pub trait AsVectorDtype {
+    const DATA_TYPE: VectorDtype;
+}
+
+impl AsVectorDtype for f32 {
+    const DATA_TYPE: VectorDtype = VectorDtype::F32;
+}
+
+impl AsVectorDtype for half::f16 {
+    const DATA_TYPE: VectorDtype = VectorDtype::F16;
+}
+
+impl AsVectorDtype for i8 {
+    const DATA_TYPE: VectorDtype = VectorDtype::I8;
+}
+
+impl AsVectorDtype for u8 {
+    const DATA_TYPE: VectorDtype = VectorDtype::U8;
+}
+
+/// Graph configuration parameters persisted alongside the index.
+/// These are needed to reconstruct the `DiskANNIndex` config on load.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GraphParams {
+    /// l_build is the search list size used during index construction.
+    /// When inserting a new vector into the DiskANN graph, the algorithm
+    /// performs a greedy search to find the best neighbors to connect to.
+    /// l_build controls how many candidate nodes are tracked during that search.
+    pub l_build: usize,
+    /// alpha is the pruning aggressiveness parameter used during graph
+    /// construction. During pruning, when deciding whether to keep a candidate
+    /// neighbor k for node i, the algorithm checks if there's already a
+    /// closer neighbor j that "occludes" k. The occlusion test is is governed by alpha.
+    pub alpha: f32,
+    /// backedge_ratio controls how many reverse (back) edges are added after
+    /// pruning during graph construction.
+    pub backedge_ratio: f32,
+    /// vector_dtype indicates the data type of the vectors stored in the index, which is necessary for correctly interpreting the raw bytes of the vectors when loading the index from disk.
+    pub vector_dtype: VectorDtype,
 }
 
 /// Helper struct for generating consistent file paths for BfTreeProvider persistence.
@@ -1852,6 +1925,57 @@ impl BfTreePaths {
     }
 }
 
+/// Copy a snapshot file to the target path if they differ.
+/// This handles the case where the index was built with a different prefix
+/// than the one being saved to.
+async fn copy_snapshot_if_needed(
+    snapshot_path: std::path::PathBuf,
+    target_path: std::path::PathBuf,
+) -> ANNResult<()> {
+    if snapshot_path != target_path {
+        tokio::task::spawn_blocking(move || {
+            std::fs::copy(&snapshot_path, &target_path).map_err(|e| {
+                ANNError::log_index_error(format!(
+                    "Failed to copy snapshot from {:?} to {:?}: {}",
+                    snapshot_path, target_path, e
+                ))
+            })
+        })
+        .await
+        .map_err(|e| ANNError::log_index_error(format!("Blocking copy task failed: {}", e)))??;
+    }
+    Ok(())
+}
+
+/// Save a BfTree to disk, handling both in-memory and on-disk cases.
+/// For in-memory trees, uses `snapshot_memory_to_disk` to serialize all records.
+/// For on-disk trees, snapshots in place and copies if the target path differs.
+async fn save_bftree(tree: &BfTree, target_path: std::path::PathBuf) -> ANNResult<()> {
+    if tree.config().is_memory_backend() {
+        tree.snapshot_memory_to_disk(&target_path);
+    } else {
+        let snapshot_path = tree.snapshot();
+        copy_snapshot_if_needed(snapshot_path, target_path).await?;
+    }
+    Ok(())
+}
+
+/// Load a BfTree from a snapshot file, restoring it as in-memory or on-disk
+/// depending on `is_memory`. Builds the Config from `params` internally.
+fn load_bftree(
+    params: &BfTreeParams,
+    snapshot_path: std::path::PathBuf,
+    is_memory: bool,
+) -> Result<BfTree, ANNError> {
+    let config = params.to_config(&snapshot_path, is_memory);
+    if is_memory {
+        BfTree::new_from_snapshot_disk_to_memory(snapshot_path, config)
+            .map_err(|e| ANNError::from(super::ConfigError(e)))
+    } else {
+        BfTree::new_from_snapshot(config, None).map_err(|e| ANNError::from(super::ConfigError(e)))
+    }
+}
+
 // SaveWith/LoadWith for BfTreeProvider with TableDeleteProviderAsync
 
 impl<T> SaveWith<String> for BfTreeProvider<T, NoStore, TableDeleteProviderAsync>
@@ -1884,7 +2008,16 @@ where
                 leaf_page_size: self.neighbor_provider.config().get_leaf_page_size(),
             },
             quant_params: None, // No quantization parameters
+            graph_params: self.graph_params.clone(),
+            is_memory: self.full_vectors.config().is_memory_backend(),
         };
+
+        // All stores must use the same storage backend.
+        debug_assert_eq!(
+            self.full_vectors.config().is_memory_backend(),
+            self.neighbor_provider.config().is_memory_backend(),
+            "Vector and neighbor stores have mismatched storage backends"
+        );
 
         // Save only essential parameters as JSON
         {
@@ -1897,8 +2030,16 @@ where
         }
 
         // Save vectors and neighbors
-        self.full_vectors.snapshot();
-        self.neighbor_provider.snapshot();
+        save_bftree(
+            self.full_vectors.bftree(),
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+        )
+        .await?;
+        save_bftree(
+            self.neighbor_provider.bftree(),
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+        )
+        .await?;
 
         // Save delete bitmap
         {
@@ -1937,15 +2078,11 @@ where
         let metric = Metric::from_str(&saved_params.metric)
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
-        let vector_config = saved_params
-            .params_vector
-            .to_config(&BfTreePaths::vectors_bftree(&saved_params.prefix));
-        let neighbor_config = saved_params
-            .params_neighbor
-            .to_config(&BfTreePaths::neighbors_bftree(&saved_params.prefix));
-
-        let vector_index =
-            BfTree::new_from_snapshot(vector_config.clone(), None).map_err(super::ConfigError)?;
+        let vector_index = load_bftree(
+            &saved_params.params_vector,
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        )?;
         let full_vectors = VectorProvider::<T>::new_from_bftree(
             saved_params.max_points,
             saved_params.dim,
@@ -1953,8 +2090,11 @@ where
             vector_index,
         );
 
-        let adjacency_list_index =
-            BfTree::new_from_snapshot(neighbor_config.clone(), None).map_err(super::ConfigError)?;
+        let adjacency_list_index = load_bftree(
+            &saved_params.params_neighbor,
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        )?;
         let neighbor_provider =
             NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
 
@@ -1980,6 +2120,7 @@ where
             deleted,
             max_fp_vecs_per_fill: 0,
             metric,
+            graph_params: saved_params.graph_params,
         })
     }
 }
@@ -2022,7 +2163,21 @@ where
                     leaf_page_size: self.quant_vectors.config().get_leaf_page_size(),
                 },
             }),
+            graph_params: self.graph_params.clone(),
+            is_memory: self.full_vectors.config().is_memory_backend(),
         };
+
+        // All stores must use the same storage backend.
+        debug_assert_eq!(
+            self.full_vectors.config().is_memory_backend(),
+            self.neighbor_provider.config().is_memory_backend(),
+            "Vector and neighbor stores have mismatched storage backends"
+        );
+        debug_assert_eq!(
+            self.full_vectors.config().is_memory_backend(),
+            self.quant_vectors.config().is_memory_backend(),
+            "Vector and quant stores have mismatched storage backends"
+        );
 
         // Save only essential parameters as JSON
         {
@@ -2035,9 +2190,21 @@ where
         }
 
         // Save vectors, neighbors, and quant vectors
-        self.full_vectors.snapshot();
-        self.neighbor_provider.snapshot();
-        self.quant_vectors.snapshot();
+        save_bftree(
+            self.full_vectors.bftree(),
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+        )
+        .await?;
+        save_bftree(
+            self.neighbor_provider.bftree(),
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+        )
+        .await?;
+        save_bftree(
+            self.quant_vectors.bftree(),
+            BfTreePaths::quant_bftree(&saved_params.prefix),
+        )
+        .await?;
 
         // Save PQ table metadata and data using PQStorage format
         let filename = BfTreePaths::pq_pivots_bin(&saved_params.prefix);
@@ -2094,18 +2261,11 @@ where
         let metric = Metric::from_str(&saved_params.metric)
             .map_err(|e| ANNError::log_index_error(format!("Failed to parse metric: {}", e)))?;
 
-        let vector_config = saved_params
-            .params_vector
-            .to_config(&BfTreePaths::vectors_bftree(&saved_params.prefix));
-        let neighbor_config = saved_params
-            .params_neighbor
-            .to_config(&BfTreePaths::neighbors_bftree(&saved_params.prefix));
-        let quant_config = quant_params
-            .params_quant
-            .to_config(&BfTreePaths::quant_bftree(&saved_params.prefix));
-
-        let vector_index =
-            BfTree::new_from_snapshot(vector_config.clone(), None).map_err(super::ConfigError)?;
+        let vector_index = load_bftree(
+            &saved_params.params_vector,
+            BfTreePaths::vectors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        )?;
         let full_vectors = VectorProvider::<T>::new_from_bftree(
             saved_params.max_points,
             saved_params.dim,
@@ -2113,8 +2273,11 @@ where
             vector_index,
         );
 
-        let adjacency_list_index =
-            BfTree::new_from_snapshot(neighbor_config.clone(), None).map_err(super::ConfigError)?;
+        let adjacency_list_index = load_bftree(
+            &saved_params.params_neighbor,
+            BfTreePaths::neighbors_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        )?;
         let neighbor_provider =
             NeighborProvider::<u32>::new_from_bftree(saved_params.max_degree, adjacency_list_index);
 
@@ -2124,8 +2287,11 @@ where
         let pq_table =
             pq_storage.load_pq_pivots_bin(&filename, quant_params.num_pq_bytes, storage)?;
 
-        let quant_vector_index =
-            BfTree::new_from_snapshot(quant_config.clone(), None).map_err(super::ConfigError)?;
+        let quant_vector_index = load_bftree(
+            &quant_params.params_quant,
+            BfTreePaths::quant_bftree(&saved_params.prefix),
+            saved_params.is_memory,
+        )?;
         let quant_vectors = QuantVectorProvider::new_from_bftree(
             metric,
             saved_params.max_points,
@@ -2156,6 +2322,7 @@ where
             deleted,
             max_fp_vecs_per_fill: quant_params.max_fp_vecs_per_fill,
             metric,
+            graph_params: saved_params.graph_params,
         })
     }
 }
@@ -2192,6 +2359,7 @@ mod tests {
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
+                graph_params: None,
             },
             NoStore,
             TableBasedDeletes,
@@ -2300,6 +2468,7 @@ mod tests {
                 vector_provider_config: Config::default(),
                 quant_vector_provider_config: Config::default(),
                 neighbor_list_provider_config: Config::default(),
+                graph_params: None,
             },
             NoStore,
             TableBasedDeletes,
@@ -2409,6 +2578,7 @@ mod tests {
             vector_provider_config: vector_config.clone(),
             quant_vector_provider_config: Config::default(),
             neighbor_list_provider_config: neighbor_config.clone(),
+            graph_params: None,
         };
 
         // Create provider
@@ -2455,12 +2625,19 @@ mod tests {
 
         let storage = FileStorageProvider;
 
-        provider.save_with(&storage, &prefix).await.unwrap();
+        // Save to a different prefix to exercise the snapshot copy logic
+        let save_dir = tempdir().unwrap();
+        let save_prefix = save_dir
+            .path()
+            .join("saved_bf_tree_provider")
+            .to_string_lossy()
+            .to_string();
+        provider.save_with(&storage, &save_prefix).await.unwrap();
 
         // Load using trait method (includes delete bitmap)
         let loaded_provider = BfTreeProvider::<f32, NoStore, TableDeleteProviderAsync>::load_with(
             &storage,
-            &prefix.clone(),
+            &save_prefix,
         )
         .await
         .unwrap();
@@ -2579,6 +2756,7 @@ mod tests {
             vector_provider_config: vector_config.clone(),
             quant_vector_provider_config: quant_config.clone(),
             neighbor_list_provider_config: neighbor_config.clone(),
+            graph_params: None,
         };
 
         // Create provider with quantization
@@ -2623,13 +2801,20 @@ mod tests {
 
         let storage = FileStorageProvider;
 
-        provider.save_with(&storage, &prefix).await.unwrap();
+        // Save to a different prefix to exercise the snapshot copy logic
+        let save_dir = tempdir().unwrap();
+        let save_prefix = save_dir
+            .path()
+            .join("saved_bf_tree_provider_quant")
+            .to_string_lossy()
+            .to_string();
+        provider.save_with(&storage, &save_prefix).await.unwrap();
 
         // Load using trait method (includes delete bitmap and quantization)
         let loaded_provider =
             BfTreeProvider::<f32, QuantVectorProvider, TableDeleteProviderAsync>::load_with(
                 &storage,
-                &prefix.clone(),
+                &save_prefix,
             )
             .await
             .unwrap();
@@ -2735,5 +2920,237 @@ mod tests {
         }
 
         // Cleanup is automatic when temp_dir goes out of scope
+    }
+
+    /// Test saving an in-memory (no disk) BfTreeProvider without quantization and loading it back.
+    #[tokio::test]
+    async fn test_bf_tree_provider_memory_save_load_no_quant() {
+        let num_points = 20usize;
+        let dim = 4usize;
+        let max_degree = 16u32;
+        let num_start_points = NonZeroUsize::new(1).unwrap();
+        let ctx = &DefaultContext;
+
+        // In-memory config (no file path needed)
+        let provider = BfTreeProvider::<f32, NoStore, TableDeleteProviderAsync>::new_empty(
+            BfTreeProviderParameters {
+                max_points: num_points,
+                num_start_points,
+                dim,
+                metric: Metric::L2,
+                max_fp_vecs_per_fill: None,
+                max_degree,
+                vector_provider_config: Config::default(),
+                quant_vector_provider_config: Config::default(),
+                neighbor_list_provider_config: Config::default(),
+                graph_params: None,
+            },
+            NoStore,
+            TableBasedDeletes,
+        )
+        .unwrap();
+
+        // Populate vectors and neighbors
+        for i in 0..num_points {
+            let vector: Vec<f32> = (0..dim).map(|j| (i * dim + j) as f32 * 0.1).collect();
+            provider
+                .set_element(ctx, &(i as u32), &vector)
+                .await
+                .unwrap();
+        }
+        let neighbor_accessor = &mut provider.neighbors();
+        for i in 0..num_points as u32 {
+            let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
+                .map(|j| (i + j) % num_points as u32)
+                .collect();
+            neighbor_accessor
+                .set_neighbors(i, &neighbors)
+                .await
+                .unwrap();
+        }
+
+        // Delete a couple of vectors
+        provider.delete(ctx, &3u32).await.unwrap();
+        provider.delete(ctx, &7u32).await.unwrap();
+
+        // Save to disk from in-memory
+        let save_dir = tempdir().unwrap();
+        let save_prefix = save_dir
+            .path()
+            .join("mem_no_quant")
+            .to_string_lossy()
+            .to_string();
+        let storage = FileStorageProvider;
+        provider.save_with(&storage, &save_prefix).await.unwrap();
+
+        // Load back
+        let loaded = BfTreeProvider::<f32, NoStore, TableDeleteProviderAsync>::load_with(
+            &storage,
+            &save_prefix,
+        )
+        .await
+        .unwrap();
+
+        // Verify vectors
+        for i in 0..num_points as u32 {
+            assert_eq!(
+                provider.full_vectors.get_vector_sync(i as usize).unwrap(),
+                loaded.full_vectors.get_vector_sync(i as usize).unwrap(),
+                "Vector mismatch at {}",
+                i
+            );
+        }
+
+        // Verify neighbors
+        for i in 0..num_points as u32 {
+            let mut orig = AdjacencyList::new();
+            let mut load = AdjacencyList::new();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut orig)
+                .unwrap();
+            loaded
+                .neighbor_provider
+                .get_neighbors(i, &mut load)
+                .unwrap();
+            assert_eq!(&*orig, &*load, "Neighbor mismatch at {}", i);
+        }
+
+        // Verify deletes
+        assert_eq!(
+            loaded.status_by_internal_id(ctx, 3).await.unwrap(),
+            ElementStatus::Deleted
+        );
+        assert_eq!(
+            loaded.status_by_internal_id(ctx, 7).await.unwrap(),
+            ElementStatus::Deleted
+        );
+        assert_eq!(
+            loaded.status_by_internal_id(ctx, 0).await.unwrap(),
+            ElementStatus::Valid
+        );
+    }
+
+    /// Test saving an in-memory BfTreeProvider with PQ quantization and loading it back.
+    #[tokio::test]
+    async fn test_bf_tree_provider_memory_save_load_quant() {
+        let num_points = 20usize;
+        let dim = 8usize;
+        let max_degree = 16u32;
+        let num_start_points = NonZeroUsize::new(1).unwrap();
+        let ctx = &DefaultContext;
+
+        let pq_table = FixedChunkPQTable::new(
+            dim,
+            vec![0.0; dim * 256].into_boxed_slice(),
+            vec![0.0; dim].into_boxed_slice(),
+            Box::new([0, 4, dim]),
+            None,
+        )
+        .unwrap();
+
+        let provider =
+            BfTreeProvider::<f32, QuantVectorProvider, TableDeleteProviderAsync>::new_empty(
+                BfTreeProviderParameters {
+                    max_points: num_points,
+                    num_start_points,
+                    dim,
+                    metric: Metric::L2,
+                    max_fp_vecs_per_fill: Some(5),
+                    max_degree,
+                    vector_provider_config: Config::default(),
+                    quant_vector_provider_config: Config::default(),
+                    neighbor_list_provider_config: Config::default(),
+                    graph_params: None,
+                },
+                pq_table,
+                TableBasedDeletes,
+            )
+            .unwrap();
+
+        // Populate vectors and neighbors
+        for i in 0..num_points {
+            let vector: Vec<f32> = (0..dim).map(|j| (i * dim + j) as f32 * 0.1).collect();
+            provider
+                .set_element(ctx, &(i as u32), &vector)
+                .await
+                .unwrap();
+        }
+        let neighbor_accessor = &mut provider.neighbors();
+        for i in 0..num_points as u32 {
+            let neighbors: Vec<u32> = (0..std::cmp::min(i, max_degree))
+                .map(|j| (i + j) % num_points as u32)
+                .collect();
+            neighbor_accessor
+                .set_neighbors(i, &neighbors)
+                .await
+                .unwrap();
+        }
+
+        provider.delete(ctx, &2u32).await.unwrap();
+
+        // Save to disk from in-memory
+        let save_dir = tempdir().unwrap();
+        let save_prefix = save_dir
+            .path()
+            .join("mem_quant")
+            .to_string_lossy()
+            .to_string();
+        let storage = FileStorageProvider;
+        provider.save_with(&storage, &save_prefix).await.unwrap();
+
+        // Load back
+        let loaded =
+            BfTreeProvider::<f32, QuantVectorProvider, TableDeleteProviderAsync>::load_with(
+                &storage,
+                &save_prefix,
+            )
+            .await
+            .unwrap();
+
+        // Verify full vectors
+        for i in 0..num_points as u32 {
+            assert_eq!(
+                provider.full_vectors.get_vector_sync(i as usize).unwrap(),
+                loaded.full_vectors.get_vector_sync(i as usize).unwrap(),
+                "Vector mismatch at {}",
+                i
+            );
+        }
+
+        // Verify quant vectors
+        for i in 0..num_points as u32 {
+            assert_eq!(
+                provider.quant_vectors.get_vector_sync(i as usize).unwrap(),
+                loaded.quant_vectors.get_vector_sync(i as usize).unwrap(),
+                "Quant vector mismatch at {}",
+                i
+            );
+        }
+
+        // Verify neighbors
+        for i in 0..num_points as u32 {
+            let mut orig = AdjacencyList::new();
+            let mut load = AdjacencyList::new();
+            provider
+                .neighbor_provider
+                .get_neighbors(i, &mut orig)
+                .unwrap();
+            loaded
+                .neighbor_provider
+                .get_neighbors(i, &mut load)
+                .unwrap();
+            assert_eq!(&*orig, &*load, "Neighbor mismatch at {}", i);
+        }
+
+        // Verify delete
+        assert_eq!(
+            loaded.status_by_internal_id(ctx, 2).await.unwrap(),
+            ElementStatus::Deleted
+        );
+        assert_eq!(
+            loaded.status_by_internal_id(ctx, 0).await.unwrap(),
+            ElementStatus::Valid
+        );
     }
 }

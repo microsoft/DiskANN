@@ -65,3 +65,15 @@ impl AlignedFileReaderFactory {
         Self { file_path }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_aligned_file_reader_factory_new() {
+        let path = "/tmp/test.bin".to_string();
+        let factory = AlignedFileReaderFactory::new(path.clone());
+        assert_eq!(factory.file_path, path);
+    }
+}

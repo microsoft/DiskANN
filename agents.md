@@ -152,6 +152,20 @@ CI workflow is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
 
 ---
 
+## Pre-commit Checklist
+
+Before committing changes, always run:
+
+```bash
+# Format all code
+cargo fmt --all
+
+# Run clippy with warnings as errors
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+---
+
 **End of Agent Onboarding Guide**
 
 *This guide should be updated when major changes occur to the repository structure or development workflows.*

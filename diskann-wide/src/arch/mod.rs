@@ -340,7 +340,7 @@ use half::f16;
 
 use crate::{
     Const, SIMDCast, SIMDDotProduct, SIMDFloat, SIMDMask, SIMDSelect, SIMDSigned, SIMDSumTree,
-    SIMDUnsigned, SIMDVector, SplitJoin, lifetime::AddLifetime,
+    SIMDUnsigned, SIMDVector, SplitJoin, ZipUnzip, lifetime::AddLifetime,
 };
 
 pub(crate) mod emulated;
@@ -381,7 +381,7 @@ impl Level {
 }
 
 cfg_if::cfg_if! {
-    if #[cfg(any(target_arch = "x86_64", doc))] {
+    if #[cfg(target_arch = "x86_64")] {
         // Delegate to the architecture selection within the `x86_64` module.
         pub mod x86_64;
 
@@ -407,6 +407,30 @@ cfg_if::cfg_if! {
 
             const fn v4() -> Self {
                 Self(LevelInner::V4)
+            }
+        }
+    } else if #[cfg(target_arch = "aarch64")] {
+        // Delegate to the architecture selection within the `aarch64` module.
+        pub mod aarch64;
+
+        use aarch64::LevelInner;
+
+        pub use aarch64::current;
+        pub use aarch64::Current;
+
+        pub use aarch64::dispatch;
+        pub use aarch64::dispatch1;
+        pub use aarch64::dispatch2;
+        pub use aarch64::dispatch3;
+
+        pub use aarch64::dispatch_no_features;
+        pub use aarch64::dispatch1_no_features;
+        pub use aarch64::dispatch2_no_features;
+        pub use aarch64::dispatch3_no_features;
+
+        impl Level {
+            const fn neon() -> Self {
+                Self(LevelInner::Neon)
             }
         }
     } else {
@@ -544,6 +568,7 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         f16x16: <Self, f16, 16, mask_f16x16>
         + SplitJoin<Halved = Self::f16x8>
+        + ZipUnzip<Halved = Self::f16x8>
         + SIMDCast<f32, Cast = Self::f32x16>
     );
 
@@ -576,6 +601,8 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         i8x32: <Self, i8, 32, mask_i8x32>
         + SIMDSigned
+        + SplitJoin<Halved = Self::i8x16>
+        + ZipUnzip<Halved = Self::i8x16>
     );
     vector!(
         i8x64: <Self, i8, 64, mask_i8x64>
@@ -590,6 +617,7 @@ pub trait Architecture: sealed::Sealed {
         i16x16: <Self, i16, 16, mask_i16x16>
         + SIMDSigned
         + SplitJoin<Halved = Self::i16x8>
+        + ZipUnzip<Halved = Self::i16x8>
         + From<Self::i8x16>
         + From<Self::u8x16>
     );
@@ -610,6 +638,7 @@ pub trait Architecture: sealed::Sealed {
         + SIMDSigned
         + SIMDSumTree
         + SplitJoin<Halved = Self::i32x4>
+        + ZipUnzip<Halved = Self::i32x4>
         + SIMDDotProduct<Self::i16x16>
         + SIMDDotProduct<Self::u8x32, Self::i8x32>
         + SIMDDotProduct<Self::i8x32, Self::u8x32>
@@ -632,6 +661,8 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         u8x32: <Self, u8, 32, mask_u8x32>
         + SIMDUnsigned
+        + SplitJoin<Halved = Self::u8x16>
+        + ZipUnzip<Halved = Self::u8x16>
     );
 
     vector!(
@@ -646,6 +677,7 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         u32x8: <Self, u32, 8, mask_u32x8>
         + SplitJoin<Halved = Self::u32x4>
+        + ZipUnzip<Halved = Self::u32x4>
         + SIMDUnsigned
         + SIMDSumTree
     );
@@ -1326,6 +1358,12 @@ mod tests {
             assert_eq!(arch.run(TestOp), expected);
             assert_eq!(arch.run_inline(TestOp), expected);
         }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
+            assert_eq!(arch.run(TestOp), expected);
+            assert_eq!(arch.run_inline(TestOp), expected);
+        }
     }
 
     #[test]
@@ -1344,6 +1382,12 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            assert_eq!(arch.run1(TestOp, &src), sum);
+            assert_eq!(arch.run1_inline(TestOp, &src), sum);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             assert_eq!(arch.run1(TestOp, &src), sum);
             assert_eq!(arch.run1_inline(TestOp, &src), sum);
         }
@@ -1377,6 +1421,11 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            gen_test!(arch);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             gen_test!(arch);
         }
     }
@@ -1413,6 +1462,11 @@ mod tests {
         if let Some(arch) = x86_64::V4::new_checked_miri() {
             gen_test!(arch);
         }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
+            gen_test!(arch);
+        }
     }
 
     //----------------------------//
@@ -1445,6 +1499,12 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            let f: FnPtr = arch.dispatch1::<TestOp, f32, Ref<[f32]>>();
+            assert_eq!(f.call(&src), sum);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             let f: FnPtr = arch.dispatch1::<TestOp, f32, Ref<[f32]>>();
             assert_eq!(f.call(&src), sum);
         }
@@ -1485,6 +1545,14 @@ mod tests {
             assert_eq!(f.call(&mut dst, &src), sum);
             assert_eq!(dst, src);
         }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
+            let mut dst = [0.0f32; 3];
+            let f: FnPtr = arch.dispatch2::<TestOp, f32, Mut<[f32]>, Ref<[f32]>>();
+            assert_eq!(f.call(&mut dst, &src), sum);
+            assert_eq!(dst, src);
+        }
     }
 
     #[test]
@@ -1519,6 +1587,14 @@ mod tests {
 
         #[cfg(target_arch = "x86_64")]
         if let Some(arch) = x86_64::V4::new_checked_miri() {
+            let mut dst = [0.0f32; 3];
+            let f: FnPtr = arch.dispatch3::<TestOp, f32, Mut<[f32]>, Ref<[f32]>, f32>();
+            assert_eq!(f.call(&mut dst, &src, offset), sum);
+            assert_eq!(dst, expected);
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        if let Some(arch) = aarch64::Neon::new_checked() {
             let mut dst = [0.0f32; 3];
             let f: FnPtr = arch.dispatch3::<TestOp, f32, Mut<[f32]>, Ref<[f32]>, f32>();
             assert_eq!(f.call(&mut dst, &src, offset), sum);

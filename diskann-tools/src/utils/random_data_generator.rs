@@ -6,10 +6,8 @@
 use std::io::{BufWriter, Write};
 
 use byteorder::{LittleEndian, WriteBytesExt};
-use diskann_providers::{
-    storage::StorageWriteProvider,
-    utils::{math_util, write_metadata},
-};
+use diskann_providers::{storage::StorageWriteProvider, utils::math_util};
+use diskann_utils::io::Metadata;
 use diskann_vector::Half;
 
 use crate::utils::{CMDResult, CMDToolError, DataType};
@@ -31,8 +29,7 @@ pub fn write_random_data<StorageProvider: StorageWriteProvider>(
     radius: f32,
 ) -> CMDResult<()> {
     if (data_type == DataType::Int8 || data_type == DataType::Uint8)
-        && radius > 127.0
-        && radius <= 0.0
+        && (radius > 127.0 || radius <= 0.0)
     {
         return Err(CMDToolError {
             details:
@@ -67,8 +64,7 @@ pub fn write_random_data_writer<T: Sized + Write>(
     radius: f32,
 ) -> CMDResult<()> {
     if (data_type == DataType::Int8 || data_type == DataType::Uint8)
-        && radius > 127.0
-        && radius <= 0.0
+        && (radius > 127.0 || radius <= 0.0)
     {
         return Err(CMDToolError {
             details:
@@ -77,7 +73,7 @@ pub fn write_random_data_writer<T: Sized + Write>(
         });
     }
 
-    write_metadata(&mut writer, number_of_vectors, number_of_dimensions)?;
+    Metadata::new(number_of_vectors, number_of_dimensions)?.write(&mut writer)?;
 
     let block_size = 131072;
     let nblks = u64::div_ceil(number_of_vectors, block_size);
@@ -246,12 +242,22 @@ mod tests {
         let random_data_path = "/mydatafile.bin";
         let num_dimensions = TEST_NUM_DIMENSIONS_RECOMMENDED;
 
-        let expected = Err(CMDToolError {
-            details: format!(
-                "Generated all-zero vectors with radius {}. Try increasing radius",
-                radius
-            ),
-        });
+        let expected = if (data_type == DataType::Int8 || data_type == DataType::Uint8)
+            && radius <= 0.0
+        {
+            Err(CMDToolError {
+                details:
+                    "Error: for int8/uint8 datatypes, radius (L2 norm) cannot be greater than 127 and less than or equal to 0"
+                        .to_string(),
+            })
+        } else {
+            Err(CMDToolError {
+                details: format!(
+                    "Generated all-zero vectors with radius {}. Try increasing radius",
+                    radius
+                ),
+            })
+        };
 
         let storage_provider = VirtualStorageProvider::new_overlay(".");
         let result = write_random_data(
@@ -264,5 +270,106 @@ mod tests {
         );
 
         assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_fp16_data_type() {
+        let random_data_path = "/fp16_data.bin";
+        let num_dimensions = TEST_NUM_DIMENSIONS_RECOMMENDED;
+
+        let storage_provider = VirtualStorageProvider::new_overlay(".");
+        let result = write_random_data(
+            &storage_provider,
+            random_data_path,
+            DataType::Fp16,
+            num_dimensions,
+            100,
+            50.0,
+        );
+
+        assert!(result.is_ok(), "write_random_data with Fp16 should succeed");
+        assert!(storage_provider.exists(random_data_path));
+    }
+
+    #[test]
+    fn test_invalid_radius_for_int8() {
+        let random_data_path = "/invalid_int8.bin";
+        let storage_provider = VirtualStorageProvider::new_overlay(".");
+
+        let expected = Err(CMDToolError {
+            details:
+                "Error: for int8/uint8 datatypes, radius (L2 norm) cannot be greater than 127 and less than or equal to 0"
+                    .to_string(),
+        });
+        let result = write_random_data(
+            &storage_provider,
+            random_data_path,
+            DataType::Int8,
+            10,
+            100,
+            128.0,
+        );
+
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_invalid_radius_for_uint8() {
+        let random_data_path = "/invalid_uint8.bin";
+        let storage_provider = VirtualStorageProvider::new_overlay(".");
+
+        let expected = Err(CMDToolError {
+            details:
+                "Error: for int8/uint8 datatypes, radius (L2 norm) cannot be greater than 127 and less than or equal to 0"
+                    .to_string(),
+        });
+        let result = write_random_data(
+            &storage_provider,
+            random_data_path,
+            DataType::Uint8,
+            10,
+            100,
+            150.0,
+        );
+
+        assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_small_dataset() {
+        let random_data_path = "/small_data.bin";
+        let storage_provider = VirtualStorageProvider::new_overlay(".");
+
+        // Test with very small dataset
+        let result = write_random_data(
+            &storage_provider,
+            random_data_path,
+            DataType::Float,
+            5,
+            10,
+            100.0,
+        );
+
+        assert!(result.is_ok());
+        assert!(storage_provider.exists(random_data_path));
+    }
+
+    #[test]
+    fn test_large_block_size() {
+        let random_data_path = "/large_blocks.bin";
+        let storage_provider = VirtualStorageProvider::new_overlay(".");
+
+        // Test with more than one block
+        let result = write_random_data(
+            &storage_provider,
+            random_data_path,
+            DataType::Float,
+            10,
+            200000, // More than block_size (131072)
+            100.0,
+        );
+
+        assert!(result.is_ok());
+        assert!(storage_provider.exists(random_data_path));
     }
 }

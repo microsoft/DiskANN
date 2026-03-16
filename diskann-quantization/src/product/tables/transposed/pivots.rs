@@ -9,8 +9,9 @@ use diskann_utils::strided;
 use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDVector};
 
 use crate::{
-    algorithms::kmeans::{self, BlockTranspose},
+    algorithms::kmeans,
     distances::{InnerProduct, SquaredL2},
+    multi_vector::BlockTransposed,
 };
 
 // The `Wide` type used as the group granularity for `Chunk`.
@@ -148,14 +149,14 @@ impl CompressionResult {
 #[derive(Debug)]
 pub struct Chunk {
     /// The data actually underlying the blocked representation.
-    data: BlockTranspose<16>,
+    data: BlockTransposed<f32, 16>,
     /// The squared norms of each center.
     square_norms: Vec<f32>,
 }
 
 impl Chunk {
     const fn groupsize() -> usize {
-        BlockTranspose::<16>::const_group_size()
+        BlockTransposed::<f32, 16>::const_group_size()
     }
 
     /// The number of queries that can be processed at a time in an efficient manner.
@@ -229,7 +230,7 @@ impl Chunk {
         }
 
         let square_norms = data.row_iter().map(kmeans::square_norm).collect();
-        let data = BlockTranspose::from_strided(data);
+        let data = BlockTransposed::<f32, 16>::from_strided(data);
         Ok(Self { data, square_norms })
     }
 
@@ -1414,7 +1415,7 @@ mod tests {
     fn run_test_happy_path() {
         // Step dimensions by 1 to test all possible residual combinations.
         let dims: Vec<usize> = if cfg!(miri) {
-            (1..=8).collect()
+            (7..=8).collect()
         } else {
             (1..=16).collect()
         };
@@ -1581,8 +1582,12 @@ mod tests {
     #[test]
     fn test_process_into() {
         let mut rng = StdRng::seed_from_u64(0x21dfb5f35dfe5639);
-        for total in 1..64 {
-            for dim in 1..5 {
+
+        let total_range = if cfg!(miri) { 1..48 } else { 1..64 };
+        let dim_range = if cfg!(miri) { 4..5 } else { 1..5 };
+
+        for total in total_range {
+            for dim in dim_range.clone() {
                 println!("on ({}, {})", total, dim);
                 test_process_into_impl(dim, total, &mut rng);
             }

@@ -52,10 +52,9 @@ impl<I: VectorId> NeighborProvider<I> {
         self.adjacency_list_index.config()
     }
 
-    /// Create a snapshot of the adjacency list index
-    ///
-    pub fn snapshot(&self) {
-        self.adjacency_list_index.snapshot();
+    /// Access the underlying BfTree
+    pub(crate) fn bftree(&self) -> &BfTree {
+        &self.adjacency_list_index
     }
 
     /// Return the maximum degree (number of neighbors per vector)
@@ -360,7 +359,7 @@ mod tests {
         neighbor_provider.set_neighbors(2, &[1, 3, 5]).unwrap();
 
         // Call snapshot - should not panic
-        neighbor_provider.snapshot();
+        neighbor_provider.adjacency_list_index.snapshot();
 
         // Verify data is still accessible after snapshot
         let mut result = AdjacencyList::with_capacity(10);

@@ -31,3 +31,51 @@ impl CheckpointManager for NaiveCheckpointRecordManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::Progress;
+    use super::*;
+
+    #[test]
+    fn test_naive_checkpoint_record_manager_default() {
+        let manager = NaiveCheckpointRecordManager;
+        // Test get_resumption_point always returns Some(0)
+        let result = manager.get_resumption_point(WorkStage::Start);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(0));
+    }
+
+    #[test]
+    fn test_naive_checkpoint_record_manager_get_resumption_point() {
+        let manager = NaiveCheckpointRecordManager;
+
+        // Test with various stages
+        for stage in [WorkStage::Start, WorkStage::End, WorkStage::QuantizeFPV] {
+            let result = manager.get_resumption_point(stage);
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), Some(0));
+        }
+    }
+
+    #[test]
+    fn test_naive_checkpoint_record_manager_update() {
+        let mut manager = NaiveCheckpointRecordManager;
+
+        // Update should always succeed
+        let result = manager.update(Progress::Completed, WorkStage::End);
+        assert!(result.is_ok());
+
+        let result = manager.update(Progress::Processed(100), WorkStage::InMemIndexBuild);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_naive_checkpoint_record_manager_mark_as_invalid() {
+        let mut manager = NaiveCheckpointRecordManager;
+
+        // mark_as_invalid should always succeed
+        let result = manager.mark_as_invalid();
+        assert!(result.is_ok());
+    }
+}
