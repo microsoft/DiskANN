@@ -203,16 +203,16 @@ pub type FullQueryMut<'a> = slice::SliceMut<'a, f32, FullQueryMeta>;
 // Compensated Distances //
 ///////////////////////////
 #[inline(always)]
-fn kernel<const N: usize, const M: usize, F>(
-    x: DataRef<'_, N>,
-    y: DataRef<'_, M>,
+fn kernel<const NBITS: usize, const MBITS: usize, F>(
+    x: DataRef<'_, NBITS>,
+    y: DataRef<'_, MBITS>,
     f: F,
 ) -> distances::MathematicalResult<f32>
 where
-    Unsigned: Representation<N> + Representation<M>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, N, Unsigned>,
-            BitSlice<'b, M, Unsigned>,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
     F: Fn(f32, &MinMaxCompensation, &MinMaxCompensation) -> f32,
@@ -230,33 +230,37 @@ where
 
 pub struct MinMaxIP;
 
-impl<const N: usize, const M: usize>
-    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::MathematicalResult<f32>>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::MathematicalResult<f32>>
     for MinMaxIP
 where
-    Unsigned: Representation<N> + Representation<M>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, N, Unsigned>,
-            BitSlice<'b, M, Unsigned>,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::MathematicalResult<f32> {
+    fn evaluate(
+        x: DataRef<'_, NBITS>,
+        y: DataRef<'_, MBITS>,
+    ) -> distances::MathematicalResult<f32> {
         kernel(x, y, |v, _, _| v)
     }
 }
 
-impl<const N: usize, const M: usize>
-    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::Result<f32>> for MinMaxIP
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::Result<f32>>
+    for MinMaxIP
 where
-    Unsigned: Representation<N> + Representation<M>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, N, Unsigned>,
-            BitSlice<'b, M, Unsigned>,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(-v?.into_inner())
     }
@@ -299,35 +303,39 @@ where
 
 pub struct MinMaxL2Squared;
 
-impl<const N: usize, const M: usize>
-    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::MathematicalResult<f32>>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::MathematicalResult<f32>>
     for MinMaxL2Squared
 where
-    Unsigned: Representation<N> + Representation<M>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, N, Unsigned>,
-            BitSlice<'b, M, Unsigned>,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::MathematicalResult<f32> {
+    fn evaluate(
+        x: DataRef<'_, NBITS>,
+        y: DataRef<'_, MBITS>,
+    ) -> distances::MathematicalResult<f32> {
         kernel(x, y, |v, xm, ym| {
             -2.0 * v + xm.norm_squared + ym.norm_squared
         })
     }
 }
 
-impl<const N: usize, const M: usize>
-    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::Result<f32>> for MinMaxL2Squared
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::Result<f32>>
+    for MinMaxL2Squared
 where
-    Unsigned: Representation<N> + Representation<M>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, N, Unsigned>,
-            BitSlice<'b, M, Unsigned>,
+            BitSlice<'a, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(v?.into_inner())
     }
@@ -378,18 +386,19 @@ where
 
 pub struct MinMaxCosine;
 
-impl<const N: usize, const M: usize>
-    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::Result<f32>> for MinMaxCosine
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::Result<f32>>
+    for MinMaxCosine
 where
-    Unsigned: Representation<N> + Representation<M>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-            DataRef<'a, N>,
-            DataRef<'b, M>,
+            DataRef<'a, NBITS>,
+            DataRef<'b, MBITS>,
             distances::MathematicalResult<f32>,
         >,
 {
     // 1 - <X, Y> / (|X| * |Y|)
-    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let ip: MV<f32> = MinMaxIP::evaluate(x, y)?;
         let (xm, ym) = (x.meta(), y.meta());
         Ok(1.0 - ip.into_inner() / (xm.norm_squared.sqrt() * ym.norm_squared.sqrt()))
@@ -417,18 +426,18 @@ where
 
 pub struct MinMaxCosineNormalized;
 
-impl<const N: usize, const M: usize>
-    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::Result<f32>>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::Result<f32>>
     for MinMaxCosineNormalized
 where
-    Unsigned: Representation<N> + Representation<M>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-            DataRef<'a, N>,
-            DataRef<'b, M>,
+            DataRef<'a, NBITS>,
+            DataRef<'b, MBITS>,
             distances::MathematicalResult<f32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
         Ok(1.0 - ip.into_inner()) // 1 - <X, Y>
     }
@@ -723,18 +732,20 @@ mod minmax_vector_tests {
     /// Verifies that `kernel::<N, M, _>` produces inner-product and squared-L2
     /// results matching the full-precision reference, for random codes and
     /// random compensation coefficients.
-    fn test_minmax_heterogeneous_kernel<const N: usize, const M: usize, R>(dim: usize, rng: &mut R)
-    where
-        Unsigned: Representation<N> + Representation<M>,
+    fn test_minmax_heterogeneous_kernel<const NBITS: usize, const MBITS: usize, R>(
+        dim: usize,
+        rng: &mut R,
+    ) where
+        Unsigned: Representation<NBITS> + Representation<MBITS>,
         InnerProduct: for<'a, 'b> PureDistanceFunction<
-                BitSlice<'a, N, Unsigned>,
-                BitSlice<'b, M, Unsigned>,
+                BitSlice<'a, NBITS, Unsigned>,
+                BitSlice<'b, MBITS, Unsigned>,
                 distances::MathematicalResult<u32>,
             >,
         R: Rng,
     {
-        let (v_query, original1) = random_minmax_vector::<N>(dim, rng);
-        let (v_data, original2) = random_minmax_vector::<M>(dim, rng);
+        let (v_query, original1) = random_minmax_vector::<NBITS>(dim, rng);
+        let (v_data, original2) = random_minmax_vector::<MBITS>(dim, rng);
 
         // ── Inner Product ──
         let expected_ip: f32 = original1.iter().zip(&original2).map(|(x, y)| x * y).sum();
@@ -744,8 +755,8 @@ mod minmax_vector_tests {
         assert!(
             (expected_ip - computed_ip).abs() / expected_ip.abs().max(1e-10) < 1e-6,
             "Heterogeneous IP ({},{}) failed: expected {}, got {} on dim: {}",
-            N,
-            M,
+            NBITS,
+            MBITS,
             expected_ip,
             computed_ip,
             dim,
