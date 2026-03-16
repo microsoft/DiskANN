@@ -1022,7 +1022,9 @@ where
             // `All` or a `Max(n)` that resolves to >= batch size), since every item already
             // had full visibility of the batch during pruning.
             let resolved_ibc = self.config.intra_batch_candidates().get(work.len());
-            if resolved_ibc < work.len() && backedges.len().div_ceil(8) <= work.len()
+            if work.len() > 1
+                && resolved_ibc < work.len()
+                && backedges.len().div_ceil(8) <= work.len()
             /* NB: update docs if 8 changes */
             {
                 edges = boxit(self.clone().multi_insert_bootstrap(
