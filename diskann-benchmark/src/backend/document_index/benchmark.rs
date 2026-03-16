@@ -22,9 +22,7 @@ use diskann::{
 };
 use diskann_benchmark_core::{
     build::{self, AsProgress, Build, Parallelism, Progress},
-    recall,
-    search as search_api,
-    tokio,
+    recall, search as search_api, tokio,
 };
 use diskann_benchmark_runner::{
     dispatcher::{DispatchRule, FailureScore, MatchScore},
@@ -48,11 +46,11 @@ use diskann_providers::model::graph::provider::async_::{
     common::{self, NoStore, TableBasedDeletes},
     inmem::{CreateFullPrecision, DefaultProvider, DefaultProviderParameters, SetStartPoints},
 };
-use diskann_utils::{future::AsyncFriendly, sampling::medoid::ComputeMedoid};
-use diskann_utils::views::MatrixView;
 use diskann_utils::views::Matrix;
-use diskann_vector::PureDistanceFunction;
+use diskann_utils::views::MatrixView;
+use diskann_utils::{future::AsyncFriendly, sampling::medoid::ComputeMedoid};
 use diskann_vector::distance::SquaredL2;
+use diskann_vector::PureDistanceFunction;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
@@ -148,7 +146,7 @@ fn hashmap_to_attributes(map: std::collections::HashMap<String, AttributeValue>)
         .collect()
 }
 
-fn find_medoid_index<T>(x: MatrixView<'_, T>, y: &[T]) -> Option<usize> 
+fn find_medoid_index<T>(x: MatrixView<'_, T>, y: &[T]) -> Option<usize>
 where
     for<'a> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'a [T], &'a [T], f32>,
 {
@@ -195,7 +193,7 @@ impl<'a, T> DocumentIndexJob<'a, T> {
             + diskann::graph::SampleableForStart
             + diskann_utils::sampling::WithApproximateNorm
             + 'static,
-        for<'b> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'b [T], &'b [T]>
+        for<'b> diskann_vector::distance::SquaredL2: PureDistanceFunction<&'b [T], &'b [T]>,
     {
         let build = &self.input.build;
 
@@ -316,8 +314,7 @@ impl<'a, T> DocumentIndexJob<'a, T> {
             );
             bar
         });
-        let build_results =
-            build::build_tracked(builder, parallelism, &rt, Some(&progress))?;
+        let build_results = build::build_tracked(builder, parallelism, &rt, Some(&progress))?;
         let insert_latencies: Vec<MicroSeconds> = build_results
             .take_output()
             .into_iter()
@@ -455,11 +452,15 @@ where
 
 impl<DP, T> search_api::Search for FilteredSearcher<DP, T>
 where
-    DP: diskann::provider::DataProvider<Context = DefaultContext, ExternalId = u32, InternalId = u32>
-        + Send
+    DP: diskann::provider::DataProvider<
+            Context = DefaultContext,
+            ExternalId = u32,
+            InternalId = u32,
+        > + Send
         + Sync
         + 'static,
-    InlineBetaStrategy<common::FullPrecision>: diskann::graph::glue::SearchStrategy<DP, FilteredQuery<Vec<T>>, u32>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>:
+        diskann::graph::glue::SearchStrategy<DP, FilteredQuery<'a, [T]>, u32>,
     T: bytemuck::Pod + Copy + Send + Sync + 'static,
 {
     type Id = DP::ExternalId;
@@ -486,7 +487,7 @@ where
         O: diskann::graph::SearchOutputBuffer<DP::ExternalId> + Send,
     {
         let ctx = DefaultContext;
-        let query_vec = self.queries.row(index).to_vec();
+        let query_vec = self.queries.row(index);
         let (_, ref ast_expr) = self.predicates[index];
         let strategy = InlineBetaStrategy::new(self.beta, common::FullPrecision);
         let filtered_query = FilteredQuery::new(query_vec, ast_expr.clone());
@@ -671,8 +672,8 @@ where
         > + Send
         + Sync
         + 'static,
-    InlineBetaStrategy<common::FullPrecision>:
-        diskann::graph::glue::SearchStrategy<DP, FilteredQuery<Vec<T>>>,
+    for<'a> InlineBetaStrategy<common::FullPrecision>:
+        diskann::graph::glue::SearchStrategy<DP, FilteredQuery<'a, [T]>>,
 {
     let searcher = Arc::new(FilteredSearcher {
         index: index.clone(),
@@ -698,7 +699,9 @@ where
         },
     )?;
 
-    results.pop().ok_or_else(|| anyhow::anyhow!("no search results"))
+    results
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("no search results"))
 }
 #[derive(Debug, Serialize)]
 pub struct BuildParamsStats {

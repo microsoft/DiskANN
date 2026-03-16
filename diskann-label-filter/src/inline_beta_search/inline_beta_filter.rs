@@ -9,7 +9,6 @@ use diskann::neighbor::Neighbor;
 use diskann::provider::{Accessor, BuildQueryComputer, DataProvider};
 
 use diskann::ANNError;
-use diskann_utils::future::AsyncFriendly;
 use diskann_vector::PreprocessedDistanceFunction;
 use roaring::RoaringTreemap;
 
@@ -36,12 +35,12 @@ impl<Strategy> InlineBetaStrategy<Strategy> {
 }
 
 impl<DP, Strategy, Q>
-    SearchStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, FilteredQuery<Q>>
+    SearchStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, FilteredQuery<'_, Q>>
     for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
     Strategy: SearchStrategy<DP, Q>,
-    Q: AsyncFriendly + Clone,
+    Q: Send + Sync + ?Sized,
 {
     type QueryComputer = InlineBetaComputer<Strategy::QueryComputer>;
     type PostProcessor = FilterResults<Strategy::PostProcessor>;
@@ -130,19 +129,19 @@ pub struct FilterResults<IPP> {
     inner_post_processor: IPP,
 }
 
-impl<Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, FilteredQuery<Q>>
+impl<'a, Q, IA, IPP> SearchPostProcess<EncodedDocumentAccessor<IA>, FilteredQuery<'a, Q>>
     for FilterResults<IPP>
 where
     IA: BuildQueryComputer<Q>,
-    Q: Clone + AsyncFriendly,
     IPP: SearchPostProcess<IA, Q> + Send + Sync,
+    Q: Send + Sync + ?Sized,
 {
     type Error = ANNError;
 
     async fn post_process<I, B>(
         &self,
         accessor: &mut EncodedDocumentAccessor<IA>,
-        query: &FilteredQuery<Q>,
+        query: &FilteredQuery<'a, Q>,
         computer: &InlineBetaComputer<<IA as BuildQueryComputer<Q>>::QueryComputer>,
         candidates: I,
         output: &mut B,

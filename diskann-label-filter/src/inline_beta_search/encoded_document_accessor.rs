@@ -11,7 +11,7 @@ use diskann::{
     provider::{Accessor, AsNeighbor, BuildQueryComputer, DelegateNeighbor, HasId},
     ANNError, ANNErrorKind,
 };
-use diskann_utils::{future::AsyncFriendly, Reborrow};
+use diskann_utils::Reborrow;
 use roaring::RoaringTreemap;
 
 use crate::traits::attribute_accessor::AttributeAccessor;
@@ -204,17 +204,17 @@ where
     }
 }
 
-impl<IA, Q> BuildQueryComputer<FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
+impl<'a, IA, Q> BuildQueryComputer<FilteredQuery<'a, Q>> for EncodedDocumentAccessor<IA>
 where
     IA: BuildQueryComputer<Q>,
-    Q: AsyncFriendly + Clone,
+    Q: Send + Sync + ?Sized,
 {
     type QueryComputerError = ANNError;
     type QueryComputer = InlineBetaComputer<IA::QueryComputer>;
 
     fn build_query_computer(
         &self,
-        from: &FilteredQuery<Q>,
+        from: &FilteredQuery<'a, Q>,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         let inner_computer = self
             .inner_accessor
@@ -234,7 +234,7 @@ impl<IA, Q> ExpandBeam<Q> for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
     EncodedDocumentAccessor<IA>: BuildQueryComputer<Q> + AsNeighbor,
-    Q: Clone + AsyncFriendly,
+    Q: Send + Sync + ?Sized,
 {
 }
 
