@@ -321,7 +321,6 @@ where
 {
 }
 
-
 impl<T, Q, D, Ctx> FillSet for FullAccessor<'_, T, Q, D, Ctx>
 where
     T: VectorRepr,
@@ -496,7 +495,6 @@ where
         Default::default()
     }
 }
-
 
 // Pruning
 impl<T, Q, D, Ctx> PruneStrategy<FullPrecisionProvider<T, Q, D, Ctx>> for FullPrecision
