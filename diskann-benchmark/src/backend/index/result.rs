@@ -116,7 +116,7 @@ pub(super) struct SearchResults {
     pub(super) mean_latencies: Vec<f64>,
     pub(super) p90_latencies: Vec<MicroSeconds>,
     pub(super) p99_latencies: Vec<MicroSeconds>,
-    pub(super) recall: utils::recall::SerializableRecallMetrics,
+    pub(super) recall: utils::recall::RecallMetrics,
     pub(super) mean_cmps: f32,
     pub(super) mean_hops: f32,
 }

@@ -58,7 +58,7 @@ use crate::{
     inputs::document_index::DocumentIndexBuild,
     utils::{
         datafiles::{self, BinFile},
-        recall::SerializableRecallMetrics,
+        recall::RecallMetrics,
     },
 };
 
@@ -538,7 +538,7 @@ impl search_api::Aggregate<Knn, u32, FilteredSearchOutput> for FilteredSearchAgg
         let num_queries = results.first().map(|r| r.len()).unwrap_or(0);
 
         // Recall from first rep only.
-        let recall_metrics: SerializableRecallMetrics = match results.first() {
+        let recall_metrics: RecallMetrics = match results.first() {
             Some(first) => (&recall::knn(
                 self.groundtruth,
                 None,
@@ -751,7 +751,7 @@ pub struct SearchRunStats {
     pub num_queries: usize,
     pub search_n: usize,
     pub search_l: usize,
-    pub recall: SerializableRecallMetrics,
+    pub recall: RecallMetrics,
     pub qps: Vec<f64>,
     pub wall_clock_time: Vec<MicroSeconds>,
     pub mean_latency: f64,

@@ -8,7 +8,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
-pub(crate) struct SerializableRecallMetrics {
+pub(crate) struct RecallMetrics {
     /// The `k` value for `k-recall-at-n`.
     pub(crate) recall_k: usize,
     /// The `n` value for `k-recall-at-n`.
@@ -23,7 +23,7 @@ pub(crate) struct SerializableRecallMetrics {
     pub(crate) maximum: usize,
 }
 
-impl From<&benchmark_core::recall::RecallMetrics> for SerializableRecallMetrics {
+impl From<&benchmark_core::recall::RecallMetrics> for RecallMetrics {
     fn from(m: &benchmark_core::recall::RecallMetrics) -> Self {
         Self {
             recall_k: m.recall_k,
