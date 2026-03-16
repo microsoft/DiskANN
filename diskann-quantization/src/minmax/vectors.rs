@@ -230,37 +230,33 @@ where
 
 pub struct MinMaxIP;
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::MathematicalResult<f32>>
+impl<const N: usize, const M: usize>
+    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::MathematicalResult<f32>>
     for MinMaxIP
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<N> + Representation<M>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'a, N, Unsigned>,
+            BitSlice<'b, M, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(
-        x: DataRef<'_, NBITS>,
-        y: DataRef<'_, NBITS>,
-    ) -> distances::MathematicalResult<f32> {
+    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::MathematicalResult<f32> {
         kernel(x, y, |v, _, _| v)
     }
 }
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::Result<f32>>
-    for MinMaxIP
+impl<const N: usize, const M: usize>
+    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::Result<f32>> for MinMaxIP
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<N> + Representation<M>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'a, N, Unsigned>,
+            BitSlice<'b, M, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(-v?.into_inner())
     }
@@ -303,39 +299,35 @@ where
 
 pub struct MinMaxL2Squared;
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::MathematicalResult<f32>>
+impl<const N: usize, const M: usize>
+    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::MathematicalResult<f32>>
     for MinMaxL2Squared
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<N> + Representation<M>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'a, N, Unsigned>,
+            BitSlice<'b, M, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(
-        x: DataRef<'_, NBITS>,
-        y: DataRef<'_, NBITS>,
-    ) -> distances::MathematicalResult<f32> {
+    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::MathematicalResult<f32> {
         kernel(x, y, |v, xm, ym| {
             -2.0 * v + xm.norm_squared + ym.norm_squared
         })
     }
 }
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::Result<f32>>
-    for MinMaxL2Squared
+impl<const N: usize, const M: usize>
+    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::Result<f32>> for MinMaxL2Squared
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<N> + Representation<M>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
-            BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'a, N, Unsigned>,
+            BitSlice<'b, M, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(v?.into_inner())
     }
@@ -386,19 +378,18 @@ where
 
 pub struct MinMaxCosine;
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::Result<f32>>
-    for MinMaxCosine
+impl<const N: usize, const M: usize>
+    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::Result<f32>> for MinMaxCosine
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<N> + Representation<M>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-            DataRef<'a, NBITS>,
-            DataRef<'b, NBITS>,
+            DataRef<'a, N>,
+            DataRef<'b, M>,
             distances::MathematicalResult<f32>,
         >,
 {
     // 1 - <X, Y> / (|X| * |Y|)
-    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::Result<f32> {
         let ip: MV<f32> = MinMaxIP::evaluate(x, y)?;
         let (xm, ym) = (x.meta(), y.meta());
         Ok(1.0 - ip.into_inner() / (xm.norm_squared.sqrt() * ym.norm_squared.sqrt()))
@@ -426,18 +417,18 @@ where
 
 pub struct MinMaxCosineNormalized;
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::Result<f32>>
+impl<const N: usize, const M: usize>
+    PureDistanceFunction<DataRef<'_, N>, DataRef<'_, M>, distances::Result<f32>>
     for MinMaxCosineNormalized
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<N> + Representation<M>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
-            DataRef<'a, NBITS>,
-            DataRef<'b, NBITS>,
+            DataRef<'a, N>,
+            DataRef<'b, M>,
             distances::MathematicalResult<f32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, N>, y: DataRef<'_, M>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
         Ok(1.0 - ip.into_inner()) // 1 - <X, Y>
     }
