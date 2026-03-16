@@ -38,6 +38,7 @@ jobs:
       - clippy
       - fmt
       - clippy-no-default-features
+      - clippy-disk-index
       # TODO: Re-enable docs check later
       # - docs
     steps:
@@ -123,6 +124,29 @@ jobs:
             --no-default-features \
             --profile ci \
             --no-deps \
+            --config "$RUST_CONFIG"
+
+  clippy-disk-index:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+      fail-fast: false
+    name: clippy disk-index (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: "clippy --workspace --all-targets --features disk-index"
+        run: |
+          cargo clippy --locked --workspace --all-targets --no-deps \
+            --features disk-index \
             --config "$RUST_CONFIG"
 
   codeql:
