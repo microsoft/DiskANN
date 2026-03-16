@@ -3,6 +3,7 @@
   "nbits": 4,
   "metric": "squared_l2",
   "transform": "double_hadamard",
+  "pre_scale": "none",
   "dim": 8,
   "full_dim": 8,
   "training_seed": 9030650843244786071,

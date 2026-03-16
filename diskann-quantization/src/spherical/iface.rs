@@ -3024,14 +3024,140 @@ mod tests {
             data_distances: Vec<f32>,
             /// Query-to-data distances for each supported query layout.
             query_distances: Vec<LayoutDistances>,
+            /// Query-to-data distances with `allow_rescale=true`, present only
+            /// for `InnerProduct` (where rescaling changes the result).
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            rescaled_query_distances: Option<Vec<LayoutDistances>>,
         }
 
         /// Distances between every (query, data) pair for a single query layout.
-        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
         struct LayoutDistances {
             layout: Layout,
             /// `distances[query_index][data_index]`
             distances: Vec<Vec<f32>>,
+        }
+
+        ///////////////
+        // Helpers   //
+        ///////////////
+
+        fn compress_dataset(
+            quantizer: &dyn Quantizer,
+            dataset: MatrixView<f32>,
+        ) -> Vec<Vec<u8>> {
+            let scoped_global = ScopedAllocator::global();
+            let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
+            dataset
+                .row_iter()
+                .map(|row| {
+                    let mut buf = Poly::broadcast(
+                        u8::default(),
+                        quantizer.bytes(),
+                        alloc,
+                    )
+                    .unwrap();
+                    quantizer
+                        .compress(row, OpaqueMut::new(&mut buf), scoped_global)
+                        .unwrap();
+                    buf.to_vec()
+                })
+                .collect()
+        }
+
+        fn compute_layout_distances(
+            quantizer: &dyn Quantizer,
+            dataset: MatrixView<f32>,
+            compressed: &[Vec<u8>],
+            allow_rescale: bool,
+        ) -> Vec<LayoutDistances> {
+            let scoped_global = ScopedAllocator::global();
+            QueryLayout::all()
+                .into_iter()
+                .filter(|&layout| quantizer.is_supported(layout))
+                .map(|layout| {
+                    let distances = dataset
+                        .row_iter()
+                        .map(|query_row| {
+                            let computer = quantizer
+                                .fused_query_computer(
+                                    query_row,
+                                    layout,
+                                    allow_rescale,
+                                    GlobalAllocator,
+                                    scoped_global,
+                                )
+                                .unwrap();
+                            compressed
+                                .iter()
+                                .map(|d| {
+                                    computer
+                                        .evaluate_similarity(Opaque::new(d))
+                                        .unwrap()
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    LayoutDistances {
+                        layout: layout.into(),
+                        distances,
+                    }
+                })
+                .collect()
+        }
+
+        /// Assert that the deserialized quantizer produces the expected
+        /// per-layout query distances.
+        fn assert_layout_distances(
+            quantizer: &dyn Quantizer,
+            dataset: MatrixView<f32>,
+            compressed: &[Vec<u8>],
+            expected: &[LayoutDistances],
+            allow_rescale: bool,
+            label: &str,
+        ) {
+            let scoped_global = ScopedAllocator::global();
+            for layout_distances in expected {
+                let layout: QueryLayout = layout_distances.layout.into();
+                assert!(
+                    quantizer.is_supported(layout),
+                    "{label}: unsupported layout {layout:?}"
+                );
+
+                for (qi, (query_row, expected_distances)) in
+                    std::iter::zip(
+                        dataset.row_iter(),
+                        layout_distances.distances.iter(),
+                    )
+                    .enumerate()
+                {
+                    let computer = quantizer
+                        .fused_query_computer(
+                            query_row,
+                            layout,
+                            allow_rescale,
+                            GlobalAllocator,
+                            scoped_global,
+                        )
+                        .unwrap();
+
+                    for (di, (compressed, expected)) in std::iter::zip(
+                        compressed.iter(),
+                        expected_distances.iter(),
+                    )
+                    .enumerate()
+                    {
+                        let distance = computer
+                            .evaluate_similarity(Opaque::new(compressed))
+                            .unwrap();
+                        assert_eq!(
+                            distance, *expected,
+                            "{label}: layout={layout:?}, \
+                             query={qi}, data={di}"
+                        );
+                    }
+                }
+            }
         }
 
         ////////////////
@@ -3044,19 +3170,7 @@ mod tests {
             pre_scale: ScaleConfig,
             dataset: MatrixView<f32>,
         ) -> Baseline {
-            let scoped_global = ScopedAllocator::global();
-            let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
-
-            // Compress all vectors.
-            let mut compressed_vectors = Vec::new();
-            for row in dataset.row_iter() {
-                let mut buf =
-                    Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
-                quantizer
-                    .compress(row, OpaqueMut::new(&mut buf), scoped_global)
-                    .unwrap();
-                compressed_vectors.push(buf.to_vec());
-            }
+            let compressed_vectors = compress_dataset(quantizer, dataset);
 
             // Pairwise data distances (upper triangle including diagonal).
             let f = quantizer.distance_computer(GlobalAllocator).unwrap();
@@ -3070,40 +3184,33 @@ mod tests {
                 }
             }
 
-            // Query distances for every supported layout.
-            let mut query_distances = Vec::new();
-            for layout in QueryLayout::all() {
-                if !quantizer.is_supported(layout) {
-                    continue;
-                }
+            let query_distances = compute_layout_distances(
+                quantizer,
+                dataset,
+                &compressed_vectors,
+                false,
+            );
 
-                let mut distances = Vec::new();
-                for query_row in dataset.row_iter() {
-                    let computer = quantizer
-                        .fused_query_computer(
-                            query_row,
-                            layout,
-                            false,
-                            GlobalAllocator,
-                            scoped_global,
-                        )
-                        .unwrap();
+            let is_ip =
+                quantizer.metric() == SupportedMetric::InnerProduct;
+            let rescaled = compute_layout_distances(
+                quantizer,
+                dataset,
+                &compressed_vectors,
+                true,
+            );
 
-                    let row_distances: Vec<f32> = compressed_vectors
-                        .iter()
-                        .map(|d| {
-                            computer
-                                .evaluate_similarity(Opaque::new(d))
-                                .unwrap()
-                        })
-                        .collect();
-                    distances.push(row_distances);
-                }
-                query_distances.push(LayoutDistances {
-                    layout: layout.into(),
-                    distances,
-                });
+            if !is_ip {
+                // For non-IP metrics, allow_rescale must be a no-op.
+                assert_eq!(
+                    query_distances, rescaled,
+                    "allow_rescale should not affect {:?} distances",
+                    quantizer.metric(),
+                );
             }
+
+            let rescaled_query_distances =
+                if is_ip { Some(rescaled) } else { None };
 
             let serialized = quantizer.serialize(GlobalAllocator).unwrap();
 
@@ -3120,6 +3227,7 @@ mod tests {
                 compressed_vectors,
                 data_distances,
                 query_distances,
+                rescaled_query_distances,
             }
         }
 
@@ -3207,9 +3315,6 @@ mod tests {
             expected_transform: DataTransform,
             expected_pre_scale: ScaleConfig,
         ) {
-            let scoped_global = ScopedAllocator::global();
-            let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
-
             // Verify baseline-level metadata that isn't part of the
             // deserialized quantizer but must stay consistent with the
             // golden file.
@@ -3237,7 +3342,7 @@ mod tests {
             )
             .unwrap();
 
-            // Verify metadata.
+            // Verify quantizer metadata.
             assert_eq!(quantizer.nbits(), baseline.nbits, "nbits mismatch");
             assert_eq!(quantizer.dim(), baseline.dim, "dim mismatch");
             assert_eq!(
@@ -3252,18 +3357,12 @@ mod tests {
             );
 
             // Verify compressed vectors.
-            assert_eq!(dataset.nrows(), baseline.compressed_vectors.len());
-            for (i, row) in dataset.row_iter().enumerate() {
-                let mut buf =
-                    Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
-                quantizer
-                    .compress(row, OpaqueMut::new(&mut buf), scoped_global)
-                    .unwrap();
-                assert_eq!(
-                    &*buf, &baseline.compressed_vectors[i][..],
-                    "compressed vector {i} does not match baseline"
-                );
-            }
+            let compressed =
+                compress_dataset(&*quantizer, dataset);
+            assert_eq!(
+                compressed, baseline.compressed_vectors,
+                "compressed vectors do not match baseline"
+            );
 
             // Verify pairwise data distances.
             //
@@ -3289,48 +3388,42 @@ mod tests {
                 }
             }
 
-            // Verify query distances for each layout.
-            for layout_distances in &baseline.query_distances {
-                let layout: QueryLayout = layout_distances.layout.into();
-                assert!(
-                    quantizer.is_supported(layout),
-                    "baseline contains distances for unsupported layout \
-                     {layout:?}"
+            // Verify query distances (allow_rescale=false).
+            assert_layout_distances(
+                &*quantizer,
+                dataset,
+                &baseline.compressed_vectors,
+                &baseline.query_distances,
+                false,
+                "query distance mismatch",
+            );
+
+            // Verify rescaled query distances for InnerProduct, or
+            // assert that allow_rescale is a no-op for other metrics.
+            if let Some(rescaled) = &baseline.rescaled_query_distances {
+                assert_eq!(
+                    SupportedMetric::from(baseline.metric),
+                    SupportedMetric::InnerProduct,
+                    "rescaled_query_distances should only be present \
+                     for InnerProduct"
                 );
-
-                for (qi, (query_row, expected_distances)) in
-                    std::iter::zip(
-                        dataset.row_iter(),
-                        layout_distances.distances.iter(),
-                    )
-                    .enumerate()
-                {
-                    let computer = quantizer
-                        .fused_query_computer(
-                            query_row,
-                            layout,
-                            false,
-                            GlobalAllocator,
-                            scoped_global,
-                        )
-                        .unwrap();
-
-                    for (di, (compressed, expected)) in std::iter::zip(
-                        baseline.compressed_vectors.iter(),
-                        expected_distances.iter(),
-                    )
-                    .enumerate()
-                    {
-                        let distance = computer
-                            .evaluate_similarity(Opaque::new(compressed))
-                            .unwrap();
-                        assert_eq!(
-                            distance, *expected,
-                            "query distance mismatch: \
-                             layout={layout:?}, query={qi}, data={di}"
-                        );
-                    }
-                }
+                assert_layout_distances(
+                    &*quantizer,
+                    dataset,
+                    &baseline.compressed_vectors,
+                    rescaled,
+                    true,
+                    "rescaled query distance mismatch",
+                );
+            } else {
+                assert_layout_distances(
+                    &*quantizer,
+                    dataset,
+                    &baseline.compressed_vectors,
+                    &baseline.query_distances,
+                    true,
+                    "allow_rescale should not affect non-IP distances",
+                );
             }
         }
 
@@ -3365,19 +3458,6 @@ mod tests {
         fn run_compatibility_test<const NBITS: usize>(
             metric: SupportedMetric,
             transform: DataTransform,
-        ) where
-            Impl<NBITS>: Constructible + Quantizer,
-        {
-            run_compatibility_test_with_prescale::<NBITS>(
-                metric,
-                transform,
-                ScaleConfig::None,
-            );
-        }
-
-        fn run_compatibility_test_with_prescale<const NBITS: usize>(
-            metric: SupportedMetric,
-            transform: DataTransform,
             pre_scale: ScaleConfig,
         ) where
             Impl<NBITS>: Constructible + Quantizer,
@@ -3406,6 +3486,7 @@ mod tests {
             run_compatibility_test::<1>(
                 SupportedMetric::SquaredL2,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3414,6 +3495,7 @@ mod tests {
             run_compatibility_test::<1>(
                 SupportedMetric::InnerProduct,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3422,6 +3504,7 @@ mod tests {
             run_compatibility_test::<1>(
                 SupportedMetric::Cosine,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3430,6 +3513,7 @@ mod tests {
             run_compatibility_test::<2>(
                 SupportedMetric::SquaredL2,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3438,6 +3522,7 @@ mod tests {
             run_compatibility_test::<2>(
                 SupportedMetric::InnerProduct,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3446,6 +3531,7 @@ mod tests {
             run_compatibility_test::<2>(
                 SupportedMetric::Cosine,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3454,6 +3540,7 @@ mod tests {
             run_compatibility_test::<4>(
                 SupportedMetric::SquaredL2,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3462,6 +3549,7 @@ mod tests {
             run_compatibility_test::<4>(
                 SupportedMetric::InnerProduct,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3470,6 +3558,7 @@ mod tests {
             run_compatibility_test::<4>(
                 SupportedMetric::Cosine,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3478,6 +3567,7 @@ mod tests {
             run_compatibility_test::<8>(
                 SupportedMetric::SquaredL2,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3486,6 +3576,7 @@ mod tests {
             run_compatibility_test::<8>(
                 SupportedMetric::InnerProduct,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3494,6 +3585,7 @@ mod tests {
             run_compatibility_test::<8>(
                 SupportedMetric::Cosine,
                 DataTransform::PaddingHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3506,6 +3598,7 @@ mod tests {
             run_compatibility_test::<4>(
                 SupportedMetric::SquaredL2,
                 DataTransform::Null,
+                ScaleConfig::None,
             );
         }
 
@@ -3514,6 +3607,7 @@ mod tests {
             run_compatibility_test::<4>(
                 SupportedMetric::SquaredL2,
                 DataTransform::DoubleHadamard,
+                ScaleConfig::None,
             );
         }
 
@@ -3523,104 +3617,11 @@ mod tests {
 
         #[test]
         fn compat_4bit_l2_prescale_rmn() {
-            run_compatibility_test_with_prescale::<4>(
+            run_compatibility_test::<4>(
                 SupportedMetric::SquaredL2,
                 DataTransform::PaddingHadamard,
                 ScaleConfig::ReciprocalMeanNorm,
             );
-        }
-
-        ////////////////////////////////
-        // allow_rescale roundtrip     //
-        ////////////////////////////////
-
-        /// Verify that the `allow_rescale=true` query codepath produces
-        /// identical results before and after serialization roundtripping.
-        /// This is a non-golden-file test that catches regressions where
-        /// serialization loses the state needed for InnerProduct rescaling.
-        #[test]
-        fn roundtrip_allow_rescale() {
-            let (original, data) = make_impl_with_config::<4>(
-                SupportedMetric::InnerProduct,
-                DataTransform::PaddingHadamard,
-                ScaleConfig::None,
-            );
-            let dataset = data.as_view();
-            let scoped_global = ScopedAllocator::global();
-            let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
-
-            // Serialize and deserialize.
-            let buf = original.serialize(GlobalAllocator).unwrap();
-            let deserialized = try_deserialize::<GlobalAllocator, _>(
-                &buf,
-                GlobalAllocator,
-            )
-            .unwrap();
-
-            // Use trait-object references so method resolution uses the
-            // Quantizer trait (not the inherent method on Impl).
-            let original: &dyn Quantizer = &original;
-            let deserialized: &dyn Quantizer = &*deserialized;
-
-            // Compress vectors with the original quantizer.
-            let mut compressed_vectors = Vec::new();
-            for row in dataset.row_iter() {
-                let mut cv = Poly::broadcast(
-                    u8::default(),
-                    original.bytes(),
-                    alloc,
-                )
-                .unwrap();
-                original
-                    .compress(row, OpaqueMut::new(&mut cv), scoped_global)
-                    .unwrap();
-                compressed_vectors.push(cv.to_vec());
-            }
-
-            // For each supported layout, compare allow_rescale=true distances.
-            for layout in QueryLayout::all() {
-                if !original.is_supported(layout) {
-                    continue;
-                }
-
-                for (qi, query_row) in dataset.row_iter().enumerate() {
-                    let orig_computer = original
-                        .fused_query_computer(
-                            query_row,
-                            layout,
-                            true,
-                            GlobalAllocator,
-                            scoped_global,
-                        )
-                        .unwrap();
-                    let deser_computer = deserialized
-                        .fused_query_computer(
-                            query_row,
-                            layout,
-                            true,
-                            GlobalAllocator,
-                            scoped_global,
-                        )
-                        .unwrap();
-
-                    for (di, compressed) in
-                        compressed_vectors.iter().enumerate()
-                    {
-                        let orig_dist = orig_computer
-                            .evaluate_similarity(Opaque::new(compressed))
-                            .unwrap();
-                        let deser_dist = deser_computer
-                            .evaluate_similarity(Opaque::new(compressed))
-                            .unwrap();
-                        assert_eq!(
-                            orig_dist, deser_dist,
-                            "allow_rescale=true distance mismatch after \
-                             roundtrip: layout={layout:?}, query={qi}, \
-                             data={di}"
-                        );
-                    }
-                }
-            }
         }
     }
 }
