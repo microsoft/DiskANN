@@ -1080,7 +1080,9 @@ where
 
                             // Sort backedges so that add_edge_and_prune produces
                             // deterministic results regardless of HashMap iteration order.
-                            adj_list.sorted_into(&mut sorted_buf);
+                            sorted_buf.clear();
+                            sorted_buf.extend_from_slice(adj_list);
+                            sorted_buf.sort_unstable();
 
                             self_clone
                                 .add_edge_and_prune(
