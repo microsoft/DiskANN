@@ -2807,6 +2807,34 @@ mod tests {
         }
 
         #[test]
+        fn test_plan_1bit_cosine() {
+            let (plan, data) = make_impl::<1>(SupportedMetric::Cosine);
+            test_plan_panic_boundary(&plan);
+            test_plan_serialization(&plan, 1, data.as_view());
+        }
+
+        #[test]
+        fn test_plan_2bit_cosine() {
+            let (plan, data) = make_impl::<2>(SupportedMetric::Cosine);
+            test_plan_panic_boundary(&plan);
+            test_plan_serialization(&plan, 2, data.as_view());
+        }
+
+        #[test]
+        fn test_plan_4bit_cosine() {
+            let (plan, data) = make_impl::<4>(SupportedMetric::Cosine);
+            test_plan_panic_boundary(&plan);
+            test_plan_serialization(&plan, 4, data.as_view());
+        }
+
+        #[test]
+        fn test_plan_8bit_cosine() {
+            let (plan, data) = make_impl::<8>(SupportedMetric::Cosine);
+            test_plan_panic_boundary(&plan);
+            test_plan_serialization(&plan, 8, data.as_view());
+        }
+
+        #[test]
         fn test_allocation_order() {
             let (plan, _) = make_impl::<1>(SupportedMetric::SquaredL2);
             let buf = plan.serialize(GlobalAllocator).unwrap();
@@ -2819,6 +2847,780 @@ mod tests {
                 allocator.as_ptr(),
                 "expected the returned box to be allocated first",
             );
+        }
+
+    }
+
+    /// Backwards-compatibility baseline tests.
+    ///
+    /// These tests persist serialized quantizers, compressed vectors, and pre-computed
+    /// distances as JSON golden files. On subsequent runs, the stored serialized bytes
+    /// are deserialized and the resulting quantizer is verified to produce identical
+    /// compression and distance results.
+    ///
+    /// To generate or regenerate baseline files:
+    /// ```sh
+    /// DISKANN_TEST=overwrite cargo test -p diskann-quantization --features flatbuffers
+    /// ```
+    #[cfg(feature = "flatbuffers")]
+    mod compatibility {
+        use std::path::PathBuf;
+
+        use serde::{Deserialize, Serialize};
+
+        use super::*;
+
+        const TRAINING_SEED: u64 = 0x7d535118722ff197;
+
+        ///////////////////////
+        // Serde Mirror Types //
+        ///////////////////////
+
+        #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Metric {
+            SquaredL2,
+            InnerProduct,
+            Cosine,
+        }
+
+        impl From<SupportedMetric> for Metric {
+            fn from(m: SupportedMetric) -> Self {
+                match m {
+                    SupportedMetric::SquaredL2 => Self::SquaredL2,
+                    SupportedMetric::InnerProduct => Self::InnerProduct,
+                    SupportedMetric::Cosine => Self::Cosine,
+                }
+            }
+        }
+
+        impl From<Metric> for SupportedMetric {
+            fn from(m: Metric) -> Self {
+                match m {
+                    Metric::SquaredL2 => Self::SquaredL2,
+                    Metric::InnerProduct => Self::InnerProduct,
+                    Metric::Cosine => Self::Cosine,
+                }
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum DataTransform {
+            PaddingHadamard,
+            DoubleHadamard,
+            Null,
+        }
+
+        impl DataTransform {
+            fn slug(self) -> &'static str {
+                match self {
+                    Self::PaddingHadamard => "padding_hadamard",
+                    Self::DoubleHadamard => "double_hadamard",
+                    Self::Null => "null",
+                }
+            }
+
+            fn to_transform_kind(self) -> TransformKind {
+                match self {
+                    Self::PaddingHadamard => TransformKind::PaddingHadamard {
+                        target_dim: TargetDim::Natural,
+                    },
+                    Self::DoubleHadamard => TransformKind::DoubleHadamard {
+                        target_dim: TargetDim::Natural,
+                    },
+                    Self::Null => TransformKind::Null,
+                }
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Layout {
+            SameAsData,
+            FourBitTransposed,
+            ScalarQuantized,
+            FullPrecision,
+        }
+
+        impl From<QueryLayout> for Layout {
+            fn from(l: QueryLayout) -> Self {
+                match l {
+                    QueryLayout::SameAsData => Self::SameAsData,
+                    QueryLayout::FourBitTransposed => Self::FourBitTransposed,
+                    QueryLayout::ScalarQuantized => Self::ScalarQuantized,
+                    QueryLayout::FullPrecision => Self::FullPrecision,
+                }
+            }
+        }
+
+        impl From<Layout> for QueryLayout {
+            fn from(l: Layout) -> Self {
+                match l {
+                    Layout::SameAsData => Self::SameAsData,
+                    Layout::FourBitTransposed => Self::FourBitTransposed,
+                    Layout::ScalarQuantized => Self::ScalarQuantized,
+                    Layout::FullPrecision => Self::FullPrecision,
+                }
+            }
+        }
+
+        #[derive(
+            Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize,
+        )]
+        #[serde(rename_all = "snake_case")]
+        enum ScaleConfig {
+            #[default]
+            None,
+            ReciprocalMeanNorm,
+        }
+
+        impl ScaleConfig {
+            fn slug(self) -> Option<&'static str> {
+                match self {
+                    Self::None => Option::None,
+                    Self::ReciprocalMeanNorm => Some("rmn"),
+                }
+            }
+
+            fn to_prescale(self) -> PreScale {
+                match self {
+                    Self::None => PreScale::None,
+                    Self::ReciprocalMeanNorm => PreScale::ReciprocalMeanNorm,
+                }
+            }
+        }
+
+        ////////////////
+        // Baseline   //
+        ////////////////
+
+        /// A complete snapshot of a quantizer's serialized form and expected behavior.
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        struct Baseline {
+            /// Schema version for the baseline format itself.
+            version: u32,
+            /// Number of bits per quantized dimension.
+            nbits: usize,
+            /// The distance metric.
+            metric: Metric,
+            /// The data transform used for pre-conditioning.
+            transform: DataTransform,
+            /// Pre-scaling configuration.
+            #[serde(default)]
+            pre_scale: ScaleConfig,
+            /// Effective dimensionality of compressed vectors.
+            dim: usize,
+            /// Dimensionality of full-precision input vectors.
+            full_dim: usize,
+            /// Seed used to train the quantizer.
+            training_seed: u64,
+            /// The raw flatbuffer bytes from `Quantizer::serialize`.
+            serialized_quantizer: Vec<u8>,
+            /// One compressed vector per row of the test dataset.
+            compressed_vectors: Vec<Vec<u8>>,
+            /// Upper-triangle pairwise data distances:
+            /// (0,0), (0,1), …, (0,N-1), (1,1), (1,2), …
+            data_distances: Vec<f32>,
+            /// Query-to-data distances for each supported query layout.
+            query_distances: Vec<LayoutDistances>,
+        }
+
+        /// Distances between every (query, data) pair for a single query layout.
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        struct LayoutDistances {
+            layout: Layout,
+            /// `distances[query_index][data_index]`
+            distances: Vec<Vec<f32>>,
+        }
+
+        ////////////////
+        // Generation //
+        ////////////////
+
+        fn generate_baseline(
+            quantizer: &dyn Quantizer,
+            transform: DataTransform,
+            pre_scale: ScaleConfig,
+            dataset: MatrixView<f32>,
+        ) -> Baseline {
+            let scoped_global = ScopedAllocator::global();
+            let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
+
+            // Compress all vectors.
+            let mut compressed_vectors = Vec::new();
+            for row in dataset.row_iter() {
+                let mut buf =
+                    Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
+                quantizer
+                    .compress(row, OpaqueMut::new(&mut buf), scoped_global)
+                    .unwrap();
+                compressed_vectors.push(buf.to_vec());
+            }
+
+            // Pairwise data distances (upper triangle including diagonal).
+            let f = quantizer.distance_computer(GlobalAllocator).unwrap();
+            let mut data_distances = Vec::new();
+            for (i, a) in compressed_vectors.iter().enumerate() {
+                for b in compressed_vectors.iter().skip(i) {
+                    data_distances.push(
+                        f.evaluate_similarity(Opaque::new(a), Opaque::new(b))
+                            .unwrap(),
+                    );
+                }
+            }
+
+            // Query distances for every supported layout.
+            let mut query_distances = Vec::new();
+            for layout in QueryLayout::all() {
+                if !quantizer.is_supported(layout) {
+                    continue;
+                }
+
+                let mut distances = Vec::new();
+                for query_row in dataset.row_iter() {
+                    let computer = quantizer
+                        .fused_query_computer(
+                            query_row,
+                            layout,
+                            false,
+                            GlobalAllocator,
+                            scoped_global,
+                        )
+                        .unwrap();
+
+                    let row_distances: Vec<f32> = compressed_vectors
+                        .iter()
+                        .map(|d| {
+                            computer
+                                .evaluate_similarity(Opaque::new(d))
+                                .unwrap()
+                        })
+                        .collect();
+                    distances.push(row_distances);
+                }
+                query_distances.push(LayoutDistances {
+                    layout: layout.into(),
+                    distances,
+                });
+            }
+
+            let serialized = quantizer.serialize(GlobalAllocator).unwrap();
+
+            Baseline {
+                version: 1,
+                nbits: quantizer.nbits(),
+                metric: quantizer.metric().into(),
+                transform,
+                pre_scale,
+                dim: quantizer.dim(),
+                full_dim: quantizer.full_dim(),
+                training_seed: TRAINING_SEED,
+                serialized_quantizer: serialized.to_vec(),
+                compressed_vectors,
+                data_distances,
+                query_distances,
+            }
+        }
+
+        //////////////////
+        // Save / Load  //
+        //////////////////
+
+        fn metric_slug(metric: Metric) -> &'static str {
+            match metric {
+                Metric::SquaredL2 => "squared_l2",
+                Metric::InnerProduct => "inner_product",
+                Metric::Cosine => "cosine",
+            }
+        }
+
+        fn baseline_path(
+            nbits: usize,
+            metric: Metric,
+            transform: DataTransform,
+            pre_scale: ScaleConfig,
+        ) -> PathBuf {
+            let manifest_dir = env!("CARGO_MANIFEST_DIR");
+            let mut name = format!(
+                "{}bit_{}_{}",
+                nbits,
+                metric_slug(metric),
+                transform.slug()
+            );
+            if let Some(slug) = pre_scale.slug() {
+                name.push('_');
+                name.push_str(slug);
+            }
+            name.push_str(".json");
+            PathBuf::from(manifest_dir)
+                .join("test")
+                .join("generated")
+                .join("spherical")
+                .join(name)
+        }
+
+        fn should_overwrite() -> bool {
+            std::env::var("DISKANN_TEST")
+                .map(|v| v == "overwrite")
+                .unwrap_or(false)
+        }
+
+        fn save_baseline(baseline: &Baseline) {
+            let path = baseline_path(
+                baseline.nbits,
+                baseline.metric,
+                baseline.transform,
+                baseline.pre_scale,
+            );
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            let json = serde_json::to_string_pretty(baseline).unwrap();
+            std::fs::write(&path, json).unwrap();
+        }
+
+        fn load_baseline(
+            nbits: usize,
+            metric: Metric,
+            transform: DataTransform,
+            pre_scale: ScaleConfig,
+        ) -> Baseline {
+            let path = baseline_path(nbits, metric, transform, pre_scale);
+            let json = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to load baseline from {}: {e}\n\
+                     Run with DISKANN_TEST=overwrite to generate baseline files.",
+                    path.display()
+                );
+            });
+            serde_json::from_str(&json).unwrap()
+        }
+
+        //////////////
+        // Checking //
+        //////////////
+
+        fn check_baseline(
+            baseline: &Baseline,
+            dataset: MatrixView<f32>,
+            expected_transform: DataTransform,
+            expected_pre_scale: ScaleConfig,
+        ) {
+            let scoped_global = ScopedAllocator::global();
+            let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
+
+            // Verify baseline-level metadata that isn't part of the
+            // deserialized quantizer but must stay consistent with the
+            // golden file.
+            assert_eq!(
+                baseline.version, 1,
+                "unsupported baseline version"
+            );
+            assert_eq!(
+                baseline.training_seed, TRAINING_SEED,
+                "baseline was generated with a different training seed"
+            );
+            assert_eq!(
+                baseline.transform, expected_transform,
+                "baseline transform does not match expected transform"
+            );
+            assert_eq!(
+                baseline.pre_scale, expected_pre_scale,
+                "baseline pre_scale does not match expected pre_scale"
+            );
+
+            // Deserialize the quantizer from the stored bytes.
+            let quantizer = try_deserialize::<GlobalAllocator, _>(
+                &baseline.serialized_quantizer,
+                GlobalAllocator,
+            )
+            .unwrap();
+
+            // Verify metadata.
+            assert_eq!(quantizer.nbits(), baseline.nbits, "nbits mismatch");
+            assert_eq!(quantizer.dim(), baseline.dim, "dim mismatch");
+            assert_eq!(
+                quantizer.full_dim(),
+                baseline.full_dim,
+                "full_dim mismatch"
+            );
+            assert_eq!(
+                quantizer.metric(),
+                SupportedMetric::from(baseline.metric),
+                "metric mismatch"
+            );
+
+            // Verify compressed vectors.
+            assert_eq!(dataset.nrows(), baseline.compressed_vectors.len());
+            for (i, row) in dataset.row_iter().enumerate() {
+                let mut buf =
+                    Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
+                quantizer
+                    .compress(row, OpaqueMut::new(&mut buf), scoped_global)
+                    .unwrap();
+                assert_eq!(
+                    &*buf, &baseline.compressed_vectors[i][..],
+                    "compressed vector {i} does not match baseline"
+                );
+            }
+
+            // Verify pairwise data distances.
+            //
+            // NOTE: These use exact `assert_eq!` on f32 intentionally. The
+            // codepaths are deterministic, so baseline values must be
+            // bit-identical. This can be relaxed to approximate comparison
+            // in the future with sufficient motivation (e.g.,
+            // platform-specific floating-point behavior).
+            let f = quantizer.distance_computer(GlobalAllocator).unwrap();
+            let mut k = 0;
+            for (i, a) in baseline.compressed_vectors.iter().enumerate() {
+                for (j, b) in
+                    baseline.compressed_vectors.iter().enumerate().skip(i)
+                {
+                    let distance = f
+                        .evaluate_similarity(Opaque::new(a), Opaque::new(b))
+                        .unwrap();
+                    assert_eq!(
+                        distance, baseline.data_distances[k],
+                        "data distance mismatch at pair ({i}, {j})"
+                    );
+                    k += 1;
+                }
+            }
+
+            // Verify query distances for each layout.
+            for layout_distances in &baseline.query_distances {
+                let layout: QueryLayout = layout_distances.layout.into();
+                assert!(
+                    quantizer.is_supported(layout),
+                    "baseline contains distances for unsupported layout \
+                     {layout:?}"
+                );
+
+                for (qi, (query_row, expected_distances)) in
+                    std::iter::zip(
+                        dataset.row_iter(),
+                        layout_distances.distances.iter(),
+                    )
+                    .enumerate()
+                {
+                    let computer = quantizer
+                        .fused_query_computer(
+                            query_row,
+                            layout,
+                            false,
+                            GlobalAllocator,
+                            scoped_global,
+                        )
+                        .unwrap();
+
+                    for (di, (compressed, expected)) in std::iter::zip(
+                        baseline.compressed_vectors.iter(),
+                        expected_distances.iter(),
+                    )
+                    .enumerate()
+                    {
+                        let distance = computer
+                            .evaluate_similarity(Opaque::new(compressed))
+                            .unwrap();
+                        assert_eq!(
+                            distance, *expected,
+                            "query distance mismatch: \
+                             layout={layout:?}, query={qi}, data={di}"
+                        );
+                    }
+                }
+            }
+        }
+
+        ////////////////////
+        // Test Entrypoint //
+        ////////////////////
+
+        fn make_impl_with_config<const NBITS: usize>(
+            metric: SupportedMetric,
+            transform: DataTransform,
+            pre_scale: ScaleConfig,
+        ) -> (Impl<NBITS>, Matrix<f32>)
+        where
+            Impl<NBITS>: Constructible,
+        {
+            let data = test_dataset();
+            let mut rng = StdRng::seed_from_u64(TRAINING_SEED);
+
+            let quantizer = SphericalQuantizer::train(
+                data.as_view(),
+                transform.to_transform_kind(),
+                metric,
+                pre_scale.to_prescale(),
+                &mut rng,
+                GlobalAllocator,
+            )
+            .unwrap();
+
+            (Impl::<NBITS>::new(quantizer).unwrap(), data)
+        }
+
+        fn run_compatibility_test<const NBITS: usize>(
+            metric: SupportedMetric,
+            transform: DataTransform,
+        ) where
+            Impl<NBITS>: Constructible + Quantizer,
+        {
+            run_compatibility_test_with_prescale::<NBITS>(
+                metric,
+                transform,
+                ScaleConfig::None,
+            );
+        }
+
+        fn run_compatibility_test_with_prescale<const NBITS: usize>(
+            metric: SupportedMetric,
+            transform: DataTransform,
+            pre_scale: ScaleConfig,
+        ) where
+            Impl<NBITS>: Constructible + Quantizer,
+        {
+            let (quantizer, data) =
+                make_impl_with_config::<NBITS>(metric, transform, pre_scale);
+            let dataset = data.as_view();
+
+            if should_overwrite() {
+                let baseline =
+                    generate_baseline(&quantizer, transform, pre_scale, dataset);
+                save_baseline(&baseline);
+            } else {
+                let baseline =
+                    load_baseline(NBITS, metric.into(), transform, pre_scale);
+                check_baseline(&baseline, dataset, transform, pre_scale);
+            }
+        }
+
+        //////////////////////////////////////////
+        // PaddingHadamard × all bits × metrics //
+        //////////////////////////////////////////
+
+        #[test]
+        fn compat_1bit_l2() {
+            run_compatibility_test::<1>(
+                SupportedMetric::SquaredL2,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_1bit_ip() {
+            run_compatibility_test::<1>(
+                SupportedMetric::InnerProduct,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_1bit_cosine() {
+            run_compatibility_test::<1>(
+                SupportedMetric::Cosine,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_2bit_l2() {
+            run_compatibility_test::<2>(
+                SupportedMetric::SquaredL2,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_2bit_ip() {
+            run_compatibility_test::<2>(
+                SupportedMetric::InnerProduct,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_2bit_cosine() {
+            run_compatibility_test::<2>(
+                SupportedMetric::Cosine,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_4bit_l2() {
+            run_compatibility_test::<4>(
+                SupportedMetric::SquaredL2,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_4bit_ip() {
+            run_compatibility_test::<4>(
+                SupportedMetric::InnerProduct,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_4bit_cosine() {
+            run_compatibility_test::<4>(
+                SupportedMetric::Cosine,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_8bit_l2() {
+            run_compatibility_test::<8>(
+                SupportedMetric::SquaredL2,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_8bit_ip() {
+            run_compatibility_test::<8>(
+                SupportedMetric::InnerProduct,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        #[test]
+        fn compat_8bit_cosine() {
+            run_compatibility_test::<8>(
+                SupportedMetric::Cosine,
+                DataTransform::PaddingHadamard,
+            );
+        }
+
+        ///////////////////////////////////////////
+        // Additional transform union arm coverage //
+        ///////////////////////////////////////////
+
+        #[test]
+        fn compat_4bit_l2_null() {
+            run_compatibility_test::<4>(
+                SupportedMetric::SquaredL2,
+                DataTransform::Null,
+            );
+        }
+
+        #[test]
+        fn compat_4bit_l2_double_hadamard() {
+            run_compatibility_test::<4>(
+                SupportedMetric::SquaredL2,
+                DataTransform::DoubleHadamard,
+            );
+        }
+
+        //////////////////////////
+        // PreScale coverage    //
+        //////////////////////////
+
+        #[test]
+        fn compat_4bit_l2_prescale_rmn() {
+            run_compatibility_test_with_prescale::<4>(
+                SupportedMetric::SquaredL2,
+                DataTransform::PaddingHadamard,
+                ScaleConfig::ReciprocalMeanNorm,
+            );
+        }
+
+        ////////////////////////////////
+        // allow_rescale roundtrip     //
+        ////////////////////////////////
+
+        /// Verify that the `allow_rescale=true` query codepath produces
+        /// identical results before and after serialization roundtripping.
+        /// This is a non-golden-file test that catches regressions where
+        /// serialization loses the state needed for InnerProduct rescaling.
+        #[test]
+        fn roundtrip_allow_rescale() {
+            let (original, data) = make_impl_with_config::<4>(
+                SupportedMetric::InnerProduct,
+                DataTransform::PaddingHadamard,
+                ScaleConfig::None,
+            );
+            let dataset = data.as_view();
+            let scoped_global = ScopedAllocator::global();
+            let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
+
+            // Serialize and deserialize.
+            let buf = original.serialize(GlobalAllocator).unwrap();
+            let deserialized = try_deserialize::<GlobalAllocator, _>(
+                &buf,
+                GlobalAllocator,
+            )
+            .unwrap();
+
+            // Use trait-object references so method resolution uses the
+            // Quantizer trait (not the inherent method on Impl).
+            let original: &dyn Quantizer = &original;
+            let deserialized: &dyn Quantizer = &*deserialized;
+
+            // Compress vectors with the original quantizer.
+            let mut compressed_vectors = Vec::new();
+            for row in dataset.row_iter() {
+                let mut cv = Poly::broadcast(
+                    u8::default(),
+                    original.bytes(),
+                    alloc,
+                )
+                .unwrap();
+                original
+                    .compress(row, OpaqueMut::new(&mut cv), scoped_global)
+                    .unwrap();
+                compressed_vectors.push(cv.to_vec());
+            }
+
+            // For each supported layout, compare allow_rescale=true distances.
+            for layout in QueryLayout::all() {
+                if !original.is_supported(layout) {
+                    continue;
+                }
+
+                for (qi, query_row) in dataset.row_iter().enumerate() {
+                    let orig_computer = original
+                        .fused_query_computer(
+                            query_row,
+                            layout,
+                            true,
+                            GlobalAllocator,
+                            scoped_global,
+                        )
+                        .unwrap();
+                    let deser_computer = deserialized
+                        .fused_query_computer(
+                            query_row,
+                            layout,
+                            true,
+                            GlobalAllocator,
+                            scoped_global,
+                        )
+                        .unwrap();
+
+                    for (di, compressed) in
+                        compressed_vectors.iter().enumerate()
+                    {
+                        let orig_dist = orig_computer
+                            .evaluate_similarity(Opaque::new(compressed))
+                            .unwrap();
+                        let deser_dist = deser_computer
+                            .evaluate_similarity(Opaque::new(compressed))
+                            .unwrap();
+                        assert_eq!(
+                            orig_dist, deser_dist,
+                            "allow_rescale=true distance mismatch after \
+                             roundtrip: layout={layout:?}, query={qi}, \
+                             data={di}"
+                        );
+                    }
+                }
+            }
         }
     }
 }
