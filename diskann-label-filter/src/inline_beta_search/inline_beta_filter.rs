@@ -35,8 +35,10 @@ impl<Strategy> InlineBetaStrategy<Strategy> {
 }
 
 impl<DP, Strategy, Q>
-    SearchStrategy<DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>, FilteredQuery<'_, Q>>
-    for InlineBetaStrategy<Strategy>
+    SearchStrategy<
+        DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
+        FilteredQuery<'_, Q>,
+    > for InlineBetaStrategy<Strategy>
 where
     DP: DataProvider,
     Strategy: SearchStrategy<DP, Q>,

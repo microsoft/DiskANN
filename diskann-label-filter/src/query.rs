@@ -9,7 +9,7 @@ use crate::ASTExpr;
 /// The Readme.md file in the label-filter folder describes the format
 /// of the query expression.
 #[derive(Clone)]
-pub struct FilteredQuery<'a, V : ?Sized> {
+pub struct FilteredQuery<'a, V: ?Sized> {
     query: &'a V,
     filter_expr: ASTExpr,
 }
