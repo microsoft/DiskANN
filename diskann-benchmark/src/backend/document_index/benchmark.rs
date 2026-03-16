@@ -15,8 +15,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use diskann::{
     graph::{
-        config::Builder as ConfigBuilder, config::MaxDegree, config::PruneKind,
-        search_output_buffer, DiskANNIndex, SearchOutputBuffer, SearchParams, StartPointStrategy,
+        config::Builder as ConfigBuilder, config::MaxDegree, config::PruneKind, search::Knn,
+        search_output_buffer, DiskANNIndex, SearchOutputBuffer, StartPointStrategy,
     },
     provider::DefaultContext,
 };
@@ -428,6 +428,7 @@ impl<'a, T> DocumentIndexJob<'a, T> {
         Ok(stats)
     }
 }
+
 /// Per-query output from [`FilteredSearcher::search`].
 struct FilteredSearchOutput {
     distances: Vec<f32>,
@@ -464,22 +465,20 @@ where
     T: bytemuck::Pod + Copy + Send + Sync + 'static,
 {
     type Id = DP::ExternalId;
-    type Parameters = SearchParams;
+    type Parameters = Knn;
     type Output = FilteredSearchOutput;
 
     fn num_queries(&self) -> usize {
         self.queries.nrows()
     }
 
-    fn id_count(&self, parameters: &SearchParams) -> search_api::IdCount {
-        search_api::IdCount::Fixed(
-            NonZeroUsize::new(parameters.k_value).unwrap_or(diskann::utils::ONE),
-        )
+    fn id_count(&self, parameters: &Knn) -> search_api::IdCount {
+        search_api::IdCount::Fixed(parameters.k_value())
     }
 
     async fn search<O>(
         &self,
-        parameters: &SearchParams,
+        parameters: &Knn,
         buffer: &mut O,
         index: usize,
     ) -> diskann::ANNResult<FilteredSearchOutput>
@@ -494,14 +493,14 @@ where
 
         // Use a concrete IdDistance scratch buffer so that both the IDs and distances
         // are captured. Afterwards, the valid IDs are forwarded into the framework buffer.
-        let k = parameters.k_value;
+        let k = parameters.k_value().get();
         let mut ids = vec![0u32; k];
         let mut distances = vec![0.0f32; k];
         let mut scratch = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
 
-        let stats = self
+        let stats = &self
             .index
-            .search(&strategy, &ctx, &filtered_query, parameters, &mut scratch)
+            .search(*parameters, &strategy, &ctx, &filtered_query, &mut scratch)
             .await?;
 
         let count = scratch.current_len();
@@ -526,18 +525,16 @@ struct FilteredSearchAggregator<'a> {
     recall_k: usize,
 }
 
-impl search_api::Aggregate<SearchParams, u32, FilteredSearchOutput>
-    for FilteredSearchAggregator<'_>
-{
+impl search_api::Aggregate<Knn, u32, FilteredSearchOutput> for FilteredSearchAggregator<'_> {
     type Output = SearchRunStats;
 
     fn aggregate(
         &mut self,
-        run: search_api::Run<SearchParams>,
+        run: search_api::Run<Knn>,
         results: Vec<search_api::SearchResults<u32, FilteredSearchOutput>>,
     ) -> anyhow::Result<SearchRunStats> {
         let parameters = run.parameters();
-        let search_n = parameters.k_value;
+        let search_n = parameters.k_value().get();
         let num_queries = results.first().map(|r| r.len()).unwrap_or(0);
 
         // Recall from first rep only.
@@ -635,7 +632,7 @@ impl search_api::Aggregate<SearchParams, u32, FilteredSearchOutput>
             num_threads: run.setup().threads.get(),
             num_queries,
             search_n,
-            search_l: parameters.l_value,
+            search_l: parameters.l_value().get(),
             recall: recall_metrics,
             qps,
             wall_clock_time: rep_latencies,
@@ -682,7 +679,7 @@ where
         beta,
     });
 
-    let parameters = SearchParams::new_default(search_n, search_l)?;
+    let parameters = Knn::new_default(search_n, search_l)?;
     let setup = search_api::Setup {
         threads: num_threads,
         tasks: num_threads,
