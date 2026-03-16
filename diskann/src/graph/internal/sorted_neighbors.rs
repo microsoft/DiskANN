@@ -33,11 +33,12 @@ where
         // If the checked subtraction fails, it's because either `max == 0` or
         // `neighbors.len() == 0`. In either case, the resulting slice will be empty
         // and there's no actual work to be done.
-        if let Some(position) = max.min(neighbors.len()).checked_sub(1) {
-            let (prefix, _, _) = neighbors.select_nth_unstable(position);
-            prefix.sort_unstable()
-        }
+        // if let Some(position) = max.min(neighbors.len()).checked_sub(1) {
+        //     let (prefix, _, _) = neighbors.select_nth_unstable(position);
+        //     prefix.sort_unstable()
+        // }
 
+        neighbors.sort_unstable();
         neighbors.truncate(max);
         Self(&*neighbors)
     }

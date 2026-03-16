@@ -75,39 +75,24 @@ where
 
 impl<VectorIdType> Eq for Neighbor<VectorIdType> where VectorIdType: Default + Eq {}
 
-/// PERF SENSITIVE: does not do well with comparing item with self.
-/// Not doing so, allows for a 1% gain. So use it with care.
+/// NOTE: This implementation of `Ord` is incorrect due to NANs.
 impl<VectorIdType> Ord for Neighbor<VectorIdType>
 where
     VectorIdType: Default + Eq + Debug,
 {
     fn cmp(&self, other: &Self) -> Ordering {
-        debug_assert!(
-            self.id.ne(&other.id),
-            "Neighbor id should not be equal: {:?}, {:?}",
-            self.id,
-            other.id
-        );
         self.distance
             .partial_cmp(&other.distance)
             .unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 
-/// PERF SENSITIVE: does not do well with comparing item with self.
-/// Not doing so, allows for a 1% gain. So use it with care.
 impl<VectorIdType> PartialOrd for Neighbor<VectorIdType>
 where
     VectorIdType: Default + Eq + Debug,
 {
     #[inline]
     fn lt(&self, other: &Self) -> bool {
-        debug_assert!(
-            self.id.ne(&other.id),
-            "Neighbor id should not be equal: {:?}, {:?}",
-            self.id,
-            other.id
-        );
         self.distance < other.distance
     }
 
@@ -208,17 +193,6 @@ mod neighbor_test {
         assert!(n1 != n2);
         assert!(n1 < n2);
         assert!(n1 == n3);
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    #[should_panic]
-    fn cmp_same_id_panics() {
-        let n1 = Neighbor::new(1, 1.1);
-        let n2 = Neighbor::new(1, 1.1);
-
-        // This should panic - since the ids are the same.
-        let _: bool = n1 < n2;
     }
 
     #[test]
