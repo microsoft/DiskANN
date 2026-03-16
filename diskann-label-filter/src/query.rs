@@ -20,7 +20,7 @@ impl<'a, V: ?Sized> FilteredQuery<'a, V> {
     }
 
     pub(crate) fn query(&self) -> &'a V {
-        &self.query
+        self.query
     }
 
     pub(crate) fn filter_expr(&self) -> &ASTExpr {
