@@ -19,6 +19,11 @@ env:
   # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
+  # The features we want to explicitly test. For example, the `flatbuffers` features
+  # of `diskann-quantization` requires additional setup and so must not be included by
+  # default.
+  DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index"
+
   # Use the Rust version specified in rust-toolchain.toml
   rust_stable: "1.92"
 
@@ -35,8 +40,9 @@ jobs:
     name: basic checks
     runs-on: ubuntu-latest
     needs:
-      - clippy
       - fmt
+      - clippy
+      - clippy-features
       - clippy-no-default-features
       # TODO: Re-enable docs check later
       # - docs
@@ -79,8 +85,39 @@ jobs:
           toolchain: ${{ env.rust_stable }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
       - name: "clippy --workspace --all-targets"
         run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG"
+
+  clippy-features:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+      fail-fast: false
+    name: clippy-features (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy
+      - name: "clippy --workspace --all-targets"
+        run: |
+          set -euxo pipefail
+          cargo clippy --locked --workspace \
+            --all-targets \
+            --no-deps \
+            --features ${{ env.DISKANN_FEATURES }} \
+            --config "$RUST_CONFIG"
+
 
   clippy-no-default-features:
     name: clippy ${{ matrix.crate }} (no default features)
@@ -114,8 +151,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # Cache per-crate to avoid conflicts
-          key: ${{ matrix.crate }}
+          shared-key: clippy-ndf
 
       - name: Clippy ${{ matrix.crate }} (no default features)
         run: |
@@ -253,6 +289,8 @@ jobs:
           tool: cargo-nextest
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-workspace
 
       - name: test workspace with nextest
         run: |
@@ -287,6 +325,8 @@ jobs:
           tool: cargo-nextest
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-workspace
 
       - name: test workspace with nextest
         run: |
@@ -294,8 +334,7 @@ jobs:
           cargo nextest run --locked --workspace \
             --cargo-profile ci \
             --config "$RUST_CONFIG" \
-            --features \
-              virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search
+            --features ${{ env.DISKANN_FEATURES }}
 
           cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
