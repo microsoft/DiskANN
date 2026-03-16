@@ -189,6 +189,7 @@ fn run_searches(
     let mut results = Vec::new();
     for (query, desc) in queries {
         let params = Knn::new(10, 10, None).unwrap();
+        let beam_width = params.beam_width().get();
         let search_ctx = test_provider::Context::new();
 
         let mut neighbors = vec![Neighbor::<u32>::default(); params.k_value().get()];
@@ -223,7 +224,7 @@ fn run_searches(
             num_results: result_count.into_usize(),
             grid_dims: grid.dim().into(),
             grid_size: size,
-            beam_width: 1,
+            beam_width,
             metrics,
         });
     }
