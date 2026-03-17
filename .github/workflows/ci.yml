@@ -19,9 +19,9 @@ env:
   # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
-  # The features we want to explicitly test. For example, the `flatbuffers` feature
+  # The features we want to explicitly test. For example, the `flatbuffers-build` feature
   # of `diskann-quantization` requires additional setup and so must not be included by default.
-  DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index"
+  DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
 
   # Use the Rust version specified in rust-toolchain.toml
   rust_stable: "1.92"
