@@ -256,6 +256,7 @@ pub fn partition(
 }
 
 /// Partition using parallelism at the top level.
+/// Prints timing breakdown for the top-level operations.
 pub fn parallel_partition(
     data: &[f32],
     ndims: usize,
@@ -289,14 +290,21 @@ pub fn parallel_partition(
     let leaders: Vec<usize> = sampled_indices[..num_leaders].to_vec();
 
     // Fused GEMM + assignment.
+    let t0 = std::time::Instant::now();
     let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout);
+    let assign_time = t0.elapsed();
 
+    let t1 = std::time::Instant::now();
     let mut clusters: Vec<Vec<usize>> = clusters_local
         .into_iter()
         .map(|local_cluster| {
             local_cluster.into_iter().map(|li| indices[li]).collect()
         })
         .collect();
+    let map_time = t1.elapsed();
+
+    eprintln!("    top-level: assign {:.3}s, map {:.3}s, {} leaders, fanout {}",
+        assign_time.as_secs_f64(), map_time.as_secs_f64(), num_leaders, fanout);
 
     // Merge undersized clusters.
     let mut merged_clusters: Vec<Vec<usize>> = Vec::new();
@@ -324,12 +332,18 @@ pub fn parallel_partition(
         merged_clusters = small_clusters;
     }
 
+    let need_recurse = merged_clusters.iter().filter(|c| c.len() > config.c_max).count();
+    let total_in_recurse: usize = merged_clusters.iter().filter(|c| c.len() > config.c_max).map(|c| c.len()).sum();
+    eprintln!("    merge: {} clusters, {} need recursion ({} pts)",
+        merged_clusters.len(), need_recurse, total_in_recurse);
+
     // Generate sub-seeds for parallel recursion.
     let sub_seeds: Vec<u64> = (0..merged_clusters.len())
         .map(|_| rng.random())
         .collect();
 
     // Recurse in parallel.
+    let t2 = std::time::Instant::now();
     let results: Vec<Vec<Leaf>> = merged_clusters
         .par_iter()
         .zip(sub_seeds.par_iter())
@@ -345,6 +359,7 @@ pub fn parallel_partition(
         })
         .collect();
 
+    eprintln!("    recursion: {:.3}s", t2.elapsed().as_secs_f64());
     results.into_iter().flatten().collect()
 }
 

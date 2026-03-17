@@ -13,21 +13,27 @@ The output is a standard DiskANN graph file that can be loaded and searched by t
 
 ## Results
 
-### SIFT-1M (128d, L2, R=64)
+### SIFT-1M (128d, L2, R=64, 1M vectors)
 
 | Builder | Build Time | Speedup | Recall@10 (L=100) |
 |---------|-----------|---------|-------------------|
 | DiskANN Vamana | 81.7s | 1.0x | 0.997 |
-| **PiPNN** | **7.3s** | **11.2x** | **0.985** |
+| **PiPNN** | **8.0s** | **10.2x** | **0.985** |
 
 ### Enron (384d, fp16, cosine_normalized, R=59, 1.09M vectors)
 
 | Builder | Build Time | Speedup | Recall@1000 (L=2000) |
 |---------|-----------|---------|---------------------|
 | DiskANN Vamana | 78.1s | 1.0x | 0.950 |
-| **PiPNN** | **25.3s** | **3.1x** | **0.947** |
+| **PiPNN** | **15.2s** | **5.1x** | **0.949** |
 
-Speedup scales with dataset size and is highest on lower-dimensional data where GEMM throughput dominates.
+Speedup scales with dataset size and is highest on lower-dimensional data where GEMM throughput dominates. Hardware: AMD EPYC 7763, 16 cores.
+
+### Prerequisites
+
+```bash
+sudo apt install libopenblas-dev  # Required for GEMM acceleration
+```
 
 ## Build
 
