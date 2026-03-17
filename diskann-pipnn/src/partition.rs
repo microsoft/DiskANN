@@ -175,7 +175,9 @@ pub fn partition(
         }];
     }
 
-    if level >= MAX_DEPTH {
+    // For clusters at deep recursion levels or only marginally over c_max,
+    // force-split is cheaper than doing another full GEMM + assignment.
+    if level >= MAX_DEPTH || (level >= 2 && n <= config.c_max * 3) {
         return force_split(indices, config.c_max);
     }
 
