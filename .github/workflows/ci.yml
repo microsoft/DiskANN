@@ -119,23 +119,8 @@ jobs:
 
 
   clippy-no-default-features:
-    name: clippy ${{ matrix.crate }} (no default features)
+    name: clippy (no default features)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        crate:
-          # Core crates
-          - diskann
-          - diskann-providers
-          - diskann-disk
-          - diskann-quantization
-          - diskann-utils
-          # Benchmark/tools crates
-          - diskann-benchmark-core
-          - diskann-benchmark-runner
-          - diskann-benchmark
-          - diskann-tools
 
     steps:
       - uses: actions/checkout@v4
@@ -150,14 +135,30 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Clippy ${{ matrix.crate }} (no default features)
+      - name: Clippy all crates (no default features)
         run: |
-          cargo clippy --locked --package ${{ matrix.crate }} \
-            --no-default-features \
-            --profile ci \
-            --no-deps \
-            --config "$RUST_CONFIG" \
-            -- -Dwarnings
+          set -euxo pipefail
+          crates=(
+            # Core crates
+            diskann
+            diskann-providers
+            diskann-disk
+            diskann-quantization
+            diskann-utils
+            # Benchmark/tools crates
+            diskann-benchmark-core
+            diskann-benchmark-runner
+            diskann-benchmark
+            diskann-tools
+          )
+          for crate in "${crates[@]}"; do
+            cargo clippy --locked --package "$crate" \
+              --no-default-features \
+              --profile ci \
+              --no-deps \
+              --config "$RUST_CONFIG" \
+              -- -Dwarnings
+          done
 
   codeql:
     name: CodeQL security analysis
