@@ -1,0 +1,27 @@
+[package]
+name = "diskann-pipnn"
+version.workspace = true
+description = "PiPNN (Pick-in-Partitions Nearest Neighbors) index builder for DiskANN"
+authors.workspace = true
+documentation.workspace = true
+license.workspace = true
+edition = "2021"
+
+[dependencies]
+diskann-vector = { workspace = true }
+diskann-utils = { workspace = true, default-features = false, features = ["rayon"] }
+rayon = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+bytemuck = { workspace = true, features = ["must_cast"] }
+clap = { workspace = true, features = ["derive"] }
+num-traits = { workspace = true }
+matrixmultiply = "0.3"
+half = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "pipnn-bench"
+path = "src/bin/pipnn_bench.rs"
