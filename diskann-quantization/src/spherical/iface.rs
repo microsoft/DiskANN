@@ -3431,9 +3431,9 @@ mod tests {
             check_baseline(&baseline, dataset, transform, pre_scale);
         }
 
-        //////////////////////////////////////////
-        // PaddingHadamard × all bits × metrics //
-        //////////////////////////////////////////
+        ///////////////////////////////////////////
+        // DoubleHadamard × all bits × metrics //
+        ///////////////////////////////////////////
 
         #[test]
         fn compat_1bit_l2() {
