@@ -6,6 +6,12 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      run_macos:
+        description: "Run macOS CI jobs (slow runners, opt-in)"
+        type: boolean
+        default: false
 
 name: CI
 
@@ -229,6 +235,7 @@ jobs:
     needs: basics
     name: test workspace
     runs-on: ${{ matrix.os }}
+    if: ${{ !contains(matrix.os, 'macos') || inputs.run_macos == true }}
     strategy:
       matrix:
         os:
@@ -264,6 +271,7 @@ jobs:
     needs: basics
     name: test workspace (all features)
     runs-on: ${{ matrix.os }}
+    if: ${{ !contains(matrix.os, 'macos') || inputs.run_macos == true }}
     strategy:
       matrix:
         os:
