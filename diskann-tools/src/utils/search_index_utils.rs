@@ -170,9 +170,18 @@ pub fn calculate_recall<T: Eq + Hash + Copy>(
 
 /// Calculates the filtered search recall for a set of queries.
 ///
-/// This function computes the recall percentage for a filtered search scenario, where the recall
-/// is calculated as the percentage of ground truth elements that are present in the retrieved
-/// results, normalized by the maximum of min(k_recall, ground truth size) and retrieved results length.
+/// This function computes the recall percentage for a filtered search scenario, where each
+/// query has an associated set of ground truth IDs and a set of retrieved IDs produced by a
+/// filtered search (for example, a search constrained by metadata or predicates).
+///
+/// For each query, the recall is defined as the number of ground truth elements that appear
+/// in the retrieved results divided by:
+///
+/// * `min(k_recall, ground truth size)` if `k_recall` is less than or equal to the size of the
+///   ground truth set, or
+/// * the length of the retrieved results, whichever is larger.
+///
+/// The function returns the average of this per-query recall value, expressed as a percentage.
 ///
 /// # Arguments
 ///
@@ -180,16 +189,17 @@ pub fn calculate_recall<T: Eq + Hash + Copy>(
 /// * `gt_dist` - An optional vector of distances for the ground truth elements.
 /// * `groundtruth` - A slice of vectors, where each vector contains the ground truth IDs for a query.
 /// * `our_results` - A slice of vectors, where each vector contains the retrieved IDs for a query.
-/// * `k_recall` - number of top results to consider from ground_truth for recall calculation. Must be greater than 0.
+/// * `k_recall` - Number of top results to consider from `groundtruth` for recall calculation. Must be greater than 0.
 ///
 /// # Returns
 ///
-/// Returns an `ANNResult<f64>` containing the average recall percentage across all queries.
+/// Returns an `ANNResult<f64>` containing the average filtered-search recall percentage across all queries.
 ///
 /// # Assumptions
 ///
 /// * The `groundtruth` and `our_results` slices must have the same length as `num_queries`.
-/// * Each vector in 'groundtruth' must be the same length of the corresponding vector in 'gt_dist', if 'gt_dist' is provided.
+/// * Each vector in `groundtruth` must be the same length as the corresponding vector in `gt_dist`,
+///   if `gt_dist` is provided.
 ///
 /// # Behavior
 ///
