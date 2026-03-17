@@ -17,6 +17,7 @@ bytemuck = { workspace = true, features = ["must_cast"] }
 clap = { workspace = true, features = ["derive"] }
 num-traits = { workspace = true }
 matrixmultiply = "0.3"
+cblas-sys = "0.1"
 half = { workspace = true }
 tikv-jemallocator = "0.6"
 

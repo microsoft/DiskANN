@@ -78,6 +78,7 @@ fn partition_assign(
     let mut assignments = vec![0u32; np * num_assign];
 
     // Fused parallel stripes: GEMM + distance + top-k in one pass.
+    // Larger stripes = better GEMM efficiency but more memory per stripe.
     const STRIPE: usize = 16_384;
     assignments
         .par_chunks_mut(STRIPE * num_assign)
@@ -104,16 +105,9 @@ fn partition_assign(
                 p_norms[i] = norm;
             }
 
-            // GEMM: dots = stripe_data * leaders^T (sn x nl)
+            // GEMM: dots = stripe_data * leaders^T (sn x nl) using OpenBLAS
             let mut dots = vec![0.0f32; sn * nl];
-            unsafe {
-                matrixmultiply::sgemm(
-                    sn, ndims, nl, 1.0,
-                    p_data.as_ptr(), ndims as isize, 1,
-                    l_data.as_ptr(), 1, ndims as isize,
-                    0.0, dots.as_mut_ptr(), nl as isize, 1,
-                );
-            }
+            crate::gemm::sgemm_abt(&p_data, sn, ndims, &l_data, nl, &mut dots);
 
             // Fused distance + top-k assignment.
             let mut buf: Vec<(u32, f32)> = Vec::with_capacity(nl);

@@ -262,17 +262,9 @@ fn build_leaf_with_buffers(
         norms_sq[i] = norm;
     }
 
-    // GEMM: dots = local_data * local_data^T
+    // GEMM: dots = local_data * local_data^T (using OpenBLAS)
     let dot_matrix = &mut bufs.dot_matrix[..n * n];
-    dot_matrix.fill(0.0);
-    unsafe {
-        matrixmultiply::sgemm(
-            n, ndims, n, 1.0,
-            local_data.as_ptr(), ndims as isize, 1,
-            local_data.as_ptr(), 1, ndims as isize,
-            0.0, dot_matrix.as_mut_ptr(), n as isize, 1,
-        );
-    }
+    crate::gemm::sgemm_aat(local_data, n, ndims, dot_matrix);
 
     // Compute distance matrix into reused buffer.
     let dist_matrix = &mut bufs.dist_matrix[..n * n];
