@@ -135,7 +135,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Clippy all crates (no default features)
+      - name: Clippy - select crates (no default features)
         run: |
           set -euxo pipefail
           crates=(
