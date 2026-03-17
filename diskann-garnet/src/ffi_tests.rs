@@ -6,6 +6,8 @@
 mod tests {
     use std::{ffi::c_void, mem, ptr};
 
+    use diskann_vector::distance::Metric;
+
     use crate::{
         VectorQuantType, VectorValueType, card, check_external_id_valid, create_index, drop_index,
         garnet::Context, insert, remove, search_vector, set_attribute, test_utils::Store,
@@ -14,6 +16,17 @@ mod tests {
     /// Creates an index with default test values and returns (index_ptr, Context).
     /// The caller is responsible for calling drop_index when done.
     fn create_test_index(store: &Store) -> (*const c_void, Context) {
+        let (index_ptr, ctx) = create_test_index_with_metric(store, Metric::L2 as i32);
+        assert!(
+            !index_ptr.is_null(),
+            "create_test_index failed to create index"
+        );
+        (index_ptr, ctx)
+    }
+
+    /// Creates an index with specified metric type and returns (index_ptr, Context).
+    /// The caller is responsible for calling drop_index when done.
+    fn create_test_index_with_metric(store: &Store, metric_type: i32) -> (*const c_void, Context) {
         store.clear();
 
         let callbacks = store.callbacks();
@@ -31,6 +44,7 @@ mod tests {
                 dim,
                 reduce_dim,
                 quant_type,
+                metric_type,
                 l_build,
                 max_degree,
                 callbacks.read_callback(),
@@ -40,8 +54,6 @@ mod tests {
             )
         };
 
-        assert!(!index_ptr.is_null());
-
         (index_ptr, ctx)
     }
 
@@ -49,9 +61,52 @@ mod tests {
     fn basic_create_index() {
         let store = Store;
         let (index_ptr, ctx) = create_test_index(&store);
+        assert!(!index_ptr.is_null());
 
         unsafe {
             drop_index(ctx.0, index_ptr);
+        }
+    }
+
+    #[test]
+    fn create_index_with_invalid_metric_returns_null() {
+        let store = Store;
+
+        // Test with invalid metric type values — passed as raw i32
+        let invalid_metrics = [-1, -2, 99, i32::MAX, i32::MIN];
+
+        for invalid_metric in invalid_metrics {
+            let (index_ptr, _ctx) = create_test_index_with_metric(&store, invalid_metric);
+            assert!(
+                index_ptr.is_null(),
+                "Expected null for invalid metric_type={}",
+                invalid_metric
+            );
+        }
+    }
+
+    #[test]
+    fn create_index_with_valid_metrics() {
+        let store = Store;
+
+        // Test all valid metric types
+        let valid_metrics = [
+            Metric::Cosine as i32,
+            Metric::L2 as i32,
+            Metric::InnerProduct as i32,
+            Metric::CosineNormalized as i32,
+        ];
+
+        for valid_metric in valid_metrics {
+            let (index_ptr, ctx) = create_test_index_with_metric(&store, valid_metric);
+            assert!(
+                !index_ptr.is_null(),
+                "Expected non-null for valid metric_type_raw={}",
+                valid_metric
+            );
+            unsafe {
+                drop_index(ctx.0, index_ptr);
+            }
         }
     }
 
@@ -290,9 +345,9 @@ mod tests {
         let (index_ptr, ctx) = create_test_index(&store);
 
         let id1 = 1234u64;
-        let v1 = &[1u8, 1u8];
+        let v1 = &[1u8, 0u8];
         let id2 = 5678u64;
-        let v2 = &[2u8, 2u8];
+        let v2 = &[0u8, 1u8];
 
         let id1_bytes = bytemuck::bytes_of(&id1);
         let id2_bytes = bytemuck::bytes_of(&id2);
@@ -392,7 +447,7 @@ mod tests {
     }
 
     /// Helper to insert a vector with u32 external ID and FP32 data.
-    unsafe fn insert_f32_vector(
+    fn insert_f32_vector(
         ctx: &Context,
         index_ptr: *const c_void,
         eid: u32,
@@ -416,7 +471,7 @@ mod tests {
     }
 
     /// Helper to run search_vector and parse the output IDs (u32) and distances.
-    unsafe fn do_search(
+    fn do_search(
         ctx: &Context,
         index_ptr: *const c_void,
         query: &[f32],
@@ -440,7 +495,7 @@ mod tests {
                 query_bytes.as_ptr(),
                 query.len(),
                 0.0,
-                (k * 2) as u32, // search exploration factor
+                (k * 2) as u32,
                 bitmap_ptr,
                 bitmap_len,
                 0,

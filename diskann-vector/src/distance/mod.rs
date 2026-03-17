@@ -15,4 +15,4 @@ pub mod distance_provider;
 pub use distance_provider::{Distance, DistanceProvider};
 
 mod metric;
-pub use metric::Metric;
+pub use metric::{Metric, TryFromMetricError};
