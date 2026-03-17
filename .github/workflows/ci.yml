@@ -73,6 +73,8 @@ jobs:
         runner:
           - ubuntu-latest
           - ubuntu-24.04-arm
+          - windows-latest
+
       fail-fast: false
     name: clippy-default-features (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
@@ -84,10 +86,8 @@ jobs:
           toolchain: ${{ env.rust_stable }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: clippy
       - name: "clippy --workspace --all-targets"
-        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG"
+        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
 
   clippy-features:
     strategy:
@@ -107,8 +107,6 @@ jobs:
           toolchain: ${{ env.rust_stable }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: clippy
       - name: "clippy --workspace --all-targets"
         run: |
           set -euxo pipefail
@@ -116,7 +114,8 @@ jobs:
             --all-targets \
             --no-deps \
             --features ${{ env.DISKANN_FEATURES }} \
-            --config "$RUST_CONFIG"
+            --config "$RUST_CONFIG" \
+            -- -Dwarnings
 
 
   clippy-no-default-features:
@@ -150,8 +149,6 @@ jobs:
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: clippy-ndf
 
       - name: Clippy ${{ matrix.crate }} (no default features)
         run: |
@@ -159,7 +156,8 @@ jobs:
             --no-default-features \
             --profile ci \
             --no-deps \
-            --config "$RUST_CONFIG"
+            --config "$RUST_CONFIG" \
+            -- -Dwarnings
 
   codeql:
     name: CodeQL security analysis
@@ -289,8 +287,6 @@ jobs:
           tool: cargo-nextest
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-workspace
 
       - name: test workspace with nextest
         run: |
@@ -325,8 +321,6 @@ jobs:
           tool: cargo-nextest
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: test-workspace
 
       - name: test workspace with nextest
         run: |
