@@ -367,7 +367,7 @@ mod tests {
             0.0, 1.0, // point 2
         ];
         let indices = vec![0, 1, 2];
-        let dist = compute_distance_matrix(&data, 2, &indices);
+        let dist = compute_distance_matrix(&data, 2, &indices, false);
 
         // Self-distances should be MAX (for k-NN).
         assert_eq!(dist[0], f32::MAX);
@@ -389,7 +389,7 @@ mod tests {
         ];
         let indices = vec![0, 1, 2, 3];
 
-        let edges = build_leaf(&data, 2, &indices, 2);
+        let edges = build_leaf(&data, 2, &indices, 2, false);
 
         assert!(!edges.is_empty());
 
