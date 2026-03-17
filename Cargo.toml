@@ -24,6 +24,8 @@ members = [
     "diskann-benchmark",
     "diskann-tools",
     "vectorset",
+    # PiPNN
+    "diskann-pipnn",
 ]
 
 default-members = [
