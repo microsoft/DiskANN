@@ -293,7 +293,7 @@ jobs:
             --cargo-profile ci \
             --config "$RUST_CONFIG" \
             --features \
-              virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search
+              virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,flatbuffers,linalg,codegen
 
           cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 

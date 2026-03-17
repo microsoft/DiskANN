@@ -3548,7 +3548,7 @@ mod tests {
         }
 
         #[test]
-        fn compat_4bit_l2_double_hadamard() {
+        fn compat_4bit_l2_padding_hadamard() {
             run_compatibility_test::<4>(
                 SupportedMetric::SquaredL2,
                 DataTransform::PaddingHadamard,
