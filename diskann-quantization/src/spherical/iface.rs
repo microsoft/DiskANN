@@ -3330,6 +3330,16 @@ mod tests {
             // in the future with sufficient motivation (e.g.,
             // platform-specific floating-point behavior).
             let f = quantizer.distance_computer(GlobalAllocator).unwrap();
+            let n = baseline.compressed_vectors.len();
+            let expected_len = n * (n + 1) / 2;
+            assert_eq!(
+                baseline.data_distances.len(),
+                expected_len,
+                "baseline.data_distances has length {}, expected {} for {} compressed vectors",
+                baseline.data_distances.len(),
+                expected_len,
+                n,
+            );
             let mut k = 0;
             for (i, a) in baseline.compressed_vectors.iter().enumerate() {
                 for (j, b) in baseline.compressed_vectors.iter().enumerate().skip(i) {
