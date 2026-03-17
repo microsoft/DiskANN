@@ -2883,6 +2883,17 @@ mod tests {
             Cosine,
         }
 
+        impl std::fmt::Display for Metric {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let s = match self {
+                    Self::SquaredL2 => "squared_l2",
+                    Self::InnerProduct => "inner_product",
+                    Self::Cosine => "cosine",
+                };
+                write!(f, "{}", s)
+            }
+        }
+
         impl From<SupportedMetric> for Metric {
             fn from(m: SupportedMetric) -> Self {
                 match m {
@@ -2911,15 +2922,18 @@ mod tests {
             Null,
         }
 
-        impl DataTransform {
-            fn as_str(self) -> &'static str {
-                match self {
+        impl std::fmt::Display for DataTransform {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let s = match self {
                     Self::PaddingHadamard => "padding_hadamard",
                     Self::DoubleHadamard => "double_hadamard",
                     Self::Null => "null",
-                }
+                };
+                write!(f, "{}", s)
             }
+        }
 
+        impl DataTransform {
             fn to_transform_kind(self) -> TransformKind {
                 match self {
                     Self::PaddingHadamard => TransformKind::PaddingHadamard {
@@ -3201,14 +3215,6 @@ mod tests {
         // Save / Load  //
         //////////////////
 
-        fn metric_str(metric: Metric) -> &'static str {
-            match metric {
-                Metric::SquaredL2 => "squared_l2",
-                Metric::InnerProduct => "inner_product",
-                Metric::Cosine => "cosine",
-            }
-        }
-
         fn baseline_path(
             nbits: usize,
             metric: Metric,
@@ -3216,7 +3222,7 @@ mod tests {
             pre_scale: ScaleConfig,
         ) -> PathBuf {
             let manifest_dir = env!("CARGO_MANIFEST_DIR");
-            let mut name = format!("{}bit_{}_{}", nbits, metric_str(metric), transform.as_str());
+            let mut name = format!("{}bit_{}_{}", nbits, metric, transform);
             if let Some(mangled) = pre_scale.try_as_str() {
                 name.push('_');
                 name.push_str(mangled);
