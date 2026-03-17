@@ -12,8 +12,47 @@
 //! 2. Extract k nearest neighbors per point using partial sort
 //! 3. Create bi-directed edges (both forward and reverse k-NN)
 
+use std::cell::RefCell;
+
 use diskann_vector::PureDistanceFunction;
 use diskann_vector::distance::SquaredL2;
+
+/// Thread-local reusable buffers for leaf building.
+/// Avoids repeated allocation/deallocation of large matrices.
+pub struct LeafBuffers {
+    pub local_data: Vec<f32>,
+    pub norms_sq: Vec<f32>,
+    pub dot_matrix: Vec<f32>,
+    pub dist_matrix: Vec<f32>,
+    pub seen: Vec<bool>,
+}
+
+impl LeafBuffers {
+    pub fn new() -> Self {
+        Self {
+            local_data: Vec::new(),
+            norms_sq: Vec::new(),
+            dot_matrix: Vec::new(),
+            dist_matrix: Vec::new(),
+            seen: Vec::new(),
+        }
+    }
+
+    /// Ensure all buffers are large enough for a leaf of size n x ndims.
+    fn ensure_capacity(&mut self, n: usize, ndims: usize) {
+        let nd = n * ndims;
+        let nn = n * n;
+        if self.local_data.len() < nd { self.local_data.resize(nd, 0.0); }
+        if self.norms_sq.len() < n { self.norms_sq.resize(n, 0.0); }
+        if self.dot_matrix.len() < nn { self.dot_matrix.resize(nn, 0.0); }
+        if self.dist_matrix.len() < nn { self.dist_matrix.resize(nn, 0.0); }
+        if self.seen.len() < nn { self.seen.resize(nn, false); }
+    }
+}
+
+thread_local! {
+    static LEAF_BUFFERS: RefCell<LeafBuffers> = RefCell::new(LeafBuffers::new());
+}
 
 /// An edge produced by leaf building: (source, destination, distance).
 #[derive(Debug, Clone, Copy)]
@@ -190,43 +229,87 @@ pub fn build_leaf(
         return Vec::new();
     }
 
-    // For tiny leaves (< 32 points), skip GEMM and use direct pairwise distance.
-    // GEMM overhead dominates for very small matrices.
-    let dist_matrix = if n < 32 {
-        compute_distance_matrix_direct(data, ndims, indices, use_cosine)
+    LEAF_BUFFERS.with(|cell| {
+        let mut bufs = cell.borrow_mut();
+        build_leaf_with_buffers(data, ndims, indices, k, use_cosine, &mut bufs)
+    })
+}
+
+fn build_leaf_with_buffers(
+    data: &[f32],
+    ndims: usize,
+    indices: &[usize],
+    k: usize,
+    use_cosine: bool,
+    bufs: &mut LeafBuffers,
+) -> Vec<Edge> {
+    let n = indices.len();
+    bufs.ensure_capacity(n, ndims);
+
+    // Extract local data into reused buffer.
+    let local_data = &mut bufs.local_data[..n * ndims];
+    for (i, &idx) in indices.iter().enumerate() {
+        local_data[i * ndims..(i + 1) * ndims]
+            .copy_from_slice(&data[idx * ndims..(idx + 1) * ndims]);
+    }
+
+    // Compute norms into reused buffer.
+    let norms_sq = &mut bufs.norms_sq[..n];
+    for i in 0..n {
+        let row = &local_data[i * ndims..(i + 1) * ndims];
+        let mut norm = 0.0f32;
+        for &v in row.iter() { norm += v * v; }
+        norms_sq[i] = norm;
+    }
+
+    // GEMM: dots = local_data * local_data^T
+    let dot_matrix = &mut bufs.dot_matrix[..n * n];
+    dot_matrix.fill(0.0);
+    unsafe {
+        matrixmultiply::sgemm(
+            n, ndims, n, 1.0,
+            local_data.as_ptr(), ndims as isize, 1,
+            local_data.as_ptr(), 1, ndims as isize,
+            0.0, dot_matrix.as_mut_ptr(), n as isize, 1,
+        );
+    }
+
+    // Compute distance matrix into reused buffer.
+    let dist_matrix = &mut bufs.dist_matrix[..n * n];
+    if use_cosine {
+        for i in 0..n {
+            let dr = &mut dist_matrix[i * n..(i + 1) * n];
+            let dotr = &dot_matrix[i * n..(i + 1) * n];
+            for j in 0..n { dr[j] = (1.0 - dotr[j]).max(0.0); }
+            dr[i] = f32::MAX;
+        }
     } else {
-        compute_distance_matrix(data, ndims, indices, use_cosine)
-    };
+        for i in 0..n {
+            let ni = norms_sq[i];
+            let dr = &mut dist_matrix[i * n..(i + 1) * n];
+            let dotr = &dot_matrix[i * n..(i + 1) * n];
+            for j in 0..n { dr[j] = (ni + norms_sq[j] - 2.0 * dotr[j]).max(0.0); }
+            dr[i] = f32::MAX;
+        }
+    }
 
-    // Extract k-NN edges (local indices).
-    let local_edges = extract_knn(&dist_matrix, n, k);
+    // Extract k-NN edges.
+    let local_edges = extract_knn(dist_matrix, n, k);
 
-    // Create bi-directed edges without HashSet overhead.
-    // Pre-allocate for worst case (2x edges).
+    // Create bi-directed edges using reused seen buffer.
+    let seen = &mut bufs.seen[..n * n];
+    for v in seen.iter_mut() { *v = false; }
+
     let mut global_edges = Vec::with_capacity(local_edges.len() * 2);
 
-    // Use a simple boolean matrix for dedup (n is small, bounded by c_max).
-    let mut seen = vec![false; n * n];
-
     for &(src, dst, dist) in &local_edges {
-        // Forward edge.
         if !seen[src * n + dst] {
             seen[src * n + dst] = true;
-            global_edges.push(Edge {
-                src: indices[src],
-                dst: indices[dst],
-                distance: dist,
-            });
+            global_edges.push(Edge { src: indices[src], dst: indices[dst], distance: dist });
         }
-        // Reverse edge (bi-directed).
         if !seen[dst * n + src] {
             seen[dst * n + src] = true;
-            let rev_dist = dist_matrix[dst * n + src];
-            global_edges.push(Edge {
-                src: indices[dst],
-                dst: indices[src],
-                distance: rev_dist,
-            });
+            global_edges.push(Edge { src: indices[dst], dst: indices[src], distance: dist_matrix[dst * n + src] });
         }
     }
 

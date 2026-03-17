@@ -18,6 +18,7 @@ clap = { workspace = true, features = ["derive"] }
 num-traits = { workspace = true }
 matrixmultiply = "0.3"
 half = { workspace = true }
+tikv-jemallocator = "0.6"
 
 [lints]
 workspace = true
