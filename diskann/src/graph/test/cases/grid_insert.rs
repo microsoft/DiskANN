@@ -38,7 +38,7 @@ use crate::{
     utils::{IntoUsize, async_tools::VectorIdBoxSlice},
 };
 
-use super::DUMP_GRAPH_STATE;
+use super::{DUMP_GRAPH_STATE, grid_search::GridSearch};
 
 fn root() -> TestRoot {
     TestRoot::new("graph/test/cases/grid_insert")
@@ -74,6 +74,12 @@ fn build_index(
 ) -> Arc<DiskANNIndex<test_provider::Provider>> {
     let provider_degree = provider.max_degree();
 
+    // We need to be a little careful with our `target_degree` handling. When the grid
+    // dimension is 1, we set the `max_degree` equal to 2. Setting the `target_degree`
+    // any lower results in a degenerate graph.
+    //
+    // For these tests, we set the absolute minimum 2 (or potentially 1 is
+    // `provider_degree` is 1).
     let target_degree = match provider_degree.checked_sub(2) {
         Some(degree) => degree.max(2).min(provider_degree),
         None => provider_degree,
@@ -85,8 +91,8 @@ fn build_index(
         100,
         (Metric::L2).into(),
         |b| {
-            b.intra_batch_candidates(intra_batch_candidates);
-            b.max_minibatch_par(max_minibatch_par);
+            b.intra_batch_candidates(intra_batch_candidates)
+                .max_minibatch_par(max_minibatch_par);
         },
     )
     .build()
@@ -100,6 +106,9 @@ fn build_index(
 /// If `batchsize` is `None`, points are inserted one-by-one via [`DiskANNIndex::insert`].
 /// Otherwise, data is partitioned into chunks of `batchsize` and fed to
 /// [`DiskANNIndex::multi_insert`].
+///
+/// Importantly, `batchsize` is distinct from any index configuration and just controls
+/// the chunking of `data`.
 fn run_build(
     index: &Arc<DiskANNIndex<test_provider::Provider>>,
     data: MatrixView<'_, f32>,
@@ -118,12 +127,14 @@ fn run_build(
             }
         }
         Some(batchsize) => {
-            let mut start = 0;
-            while start < data.nrows() {
-                let stop = (start + batchsize.get()).min(data.nrows());
-                let vectors: Box<[VectorIdBoxSlice<u32, f32>]> = (start..stop)
-                    .map(|i| VectorIdBoxSlice::new(i as u32, data.row(i).into()))
+            for (batch, batch_data) in data.window_iter(batchsize.get()).enumerate() {
+                let start = batch * batchsize.get();
+                let vectors: Box<[VectorIdBoxSlice<u32, f32>]> = batch_data
+                    .row_iter()
+                    .enumerate()
+                    .map(|(i, row)| VectorIdBoxSlice::new((start + i) as u32, row.into()))
                     .collect();
+
                 runtime
                     .block_on(
                         index.multi_insert::<test_provider::Strategy, _>(
@@ -131,8 +142,6 @@ fn run_build(
                         ),
                     )
                     .unwrap();
-
-                start = stop;
             }
         }
     }
@@ -143,22 +152,17 @@ fn run_build(
 /// Capture the graph state as sorted adjacency lists, if [`DUMP_GRAPH_STATE`] is enabled.
 fn maybe_dump_graph(index: &DiskANNIndex<test_provider::Provider>) -> Option<Vec<(u32, Vec<u32>)>> {
     if !DUMP_GRAPH_STATE {
-        return None;
+        None
+    } else {
+        Some(
+            index
+                .provider()
+                .dump_neighbors(true)
+                .into_iter()
+                .map(|(id, list)| (id, list.into()))
+                .collect(),
+        )
     }
-
-    let mut neighbors: Vec<(u32, Vec<u32>)> = index
-        .provider()
-        .dump_neighbors()
-        .into_iter()
-        .map(|(id, adj)| {
-            let mut n: Vec<u32> = adj.into();
-            n.sort();
-            (id, n)
-        })
-        .collect();
-
-    neighbors.sort_by_key(|(id, _)| *id);
-    Some(neighbors)
 }
 
 /// Search the index with standard query vectors and return results.
@@ -168,7 +172,7 @@ fn run_searches(
     size: usize,
     description_prefix: &str,
     runtime: &tokio::runtime::Runtime,
-) -> Vec<InsertSearchResult> {
+) -> Vec<GridSearch> {
     let desc_0 = format!(
         "{} Search with query of all -1s. \
          The nearest neighbor should be coordinate 0 (all zeros).",
@@ -189,7 +193,6 @@ fn run_searches(
     let mut results = Vec::new();
     for (query, desc) in queries {
         let params = Knn::new(10, 10, None).unwrap();
-        let beam_width = params.beam_width().get();
         let search_ctx = test_provider::Context::new();
 
         let mut neighbors = vec![Neighbor::<u32>::default(); params.k_value().get()];
@@ -203,7 +206,7 @@ fn run_searches(
                 params,
                 &test_provider::Strategy::new(),
                 &search_ctx,
-                query.as_slice(),
+                &*query,
                 &mut crate::neighbor::BackInserter::new(neighbors.as_mut_slice()),
             ))
             .unwrap();
@@ -215,7 +218,7 @@ fn run_searches(
 
         let metrics = index.provider().metrics();
 
-        results.push(InsertSearchResult {
+        results.push(GridSearch {
             query: query.clone(),
             description: desc,
             results: neighbors.into_iter().map(|i| i.as_tuple()).collect(),
@@ -224,7 +227,7 @@ fn run_searches(
             num_results: result_count.into_usize(),
             grid_dims: grid.dim().into(),
             grid_size: size,
-            beam_width,
+            beam_width: params.beam_width().get(),
             metrics,
         });
     }
@@ -235,52 +238,6 @@ fn run_searches(
 /////////////
 // Results //
 /////////////
-
-/// A single post-insert search result for baseline comparison.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct InsertSearchResult {
-    description: String,
-
-    /// The query vector given to search.
-    query: Vec<f32>,
-
-    /// The k-NN results from search (id, distance).
-    results: Vec<(u32, f32)>,
-
-    /// The number of comparisons recorded during search.
-    comparisons: usize,
-
-    /// The number of hops recorded during search.
-    hops: usize,
-
-    /// The number of results returned from search.
-    num_results: usize,
-
-    /// Grid dimensionality.
-    grid_dims: usize,
-
-    /// Grid edge size.
-    grid_size: usize,
-
-    /// Beam width used for search.
-    beam_width: usize,
-
-    /// Provider-level metrics at the time of the search (cumulative from insert + search).
-    metrics: test_provider::Metrics,
-}
-
-verbose_eq!(InsertSearchResult {
-    description,
-    query,
-    results,
-    comparisons,
-    hops,
-    num_results,
-    grid_dims,
-    grid_size,
-    beam_width,
-    metrics,
-});
 
 /// Full baseline for a grid insert test: insert-phase metrics + search results.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -304,7 +261,7 @@ struct GridInsertBaseline {
     context_metrics: test_provider::ContextMetrics,
 
     /// Search results collected after all inserts.
-    searches: Vec<InsertSearchResult>,
+    searches: Vec<GridSearch>,
 
     /// Optional: sorted adjacency lists for every point. Only populated when
     /// `DUMP_GRAPH_STATE` is `true`.

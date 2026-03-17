@@ -1021,10 +1021,11 @@ where
             // Bootstrap is skipped when intra-batch candidates cover the full batch (i.e.
             // `All` or a `Max(n)` that resolves to >= batch size), since every item already
             // had full visibility of the batch during pruning.
-            let resolved_ibc = self.config.intra_batch_candidates().get(work.len());
-            if work.len() > 1
-                && resolved_ibc < work.len()
-                && backedges.len().div_ceil(8) <= work.len()
+            //
+            // Setting the max to 1 ensures that if `work.len() == 1` (i.e., there is only
+            // one item in the batch) that we don't trigger bootstrap. It wouldn't do anything.
+            let resolved_candidates = self.config.intra_batch_candidates().get(work.len()).max(1);
+            if resolved_candidates < work.len() && backedges.len().div_ceil(8) <= work.len()
             /* NB: update docs if 8 changes */
             {
                 edges = boxit(self.clone().multi_insert_bootstrap(
