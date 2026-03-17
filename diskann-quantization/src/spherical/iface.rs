@@ -2848,7 +2848,6 @@ mod tests {
                 "expected the returned box to be allocated first",
             );
         }
-
     }
 
     /// Backwards-compatibility baseline tests.
@@ -2913,7 +2912,7 @@ mod tests {
         }
 
         impl DataTransform {
-            fn slug(self) -> &'static str {
+            fn as_str(self) -> &'static str {
                 match self {
                     Self::PaddingHadamard => "padding_hadamard",
                     Self::DoubleHadamard => "double_hadamard",
@@ -2965,9 +2964,7 @@ mod tests {
             }
         }
 
-        #[derive(
-            Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize,
-        )]
+        #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
         #[serde(rename_all = "snake_case")]
         enum ScaleConfig {
             #[default]
@@ -2976,7 +2973,7 @@ mod tests {
         }
 
         impl ScaleConfig {
-            fn slug(self) -> Option<&'static str> {
+            fn try_as_str(self) -> Option<&'static str> {
                 match self {
                     Self::None => Option::None,
                     Self::ReciprocalMeanNorm => Some("rmn"),
@@ -2991,15 +2988,13 @@ mod tests {
             }
         }
 
-        ////////////////
-        // Baseline   //
-        ////////////////
+        //////////////
+        // Baseline //
+        //////////////
 
         /// A complete snapshot of a quantizer's serialized form and expected behavior.
         #[derive(Debug, Clone, Serialize, Deserialize)]
         struct Baseline {
-            /// Schema version for the baseline format itself.
-            version: u32,
             /// Number of bits per quantized dimension.
             nbits: usize,
             /// The distance metric.
@@ -3038,25 +3033,17 @@ mod tests {
             distances: Vec<Vec<f32>>,
         }
 
-        ///////////////
-        // Helpers   //
-        ///////////////
+        /////////////
+        // Helpers //
+        /////////////
 
-        fn compress_dataset(
-            quantizer: &dyn Quantizer,
-            dataset: MatrixView<f32>,
-        ) -> Vec<Vec<u8>> {
+        fn compress_dataset(quantizer: &dyn Quantizer, dataset: MatrixView<f32>) -> Vec<Vec<u8>> {
             let scoped_global = ScopedAllocator::global();
             let alloc = AlignedAllocator::new(PowerOfTwo::new(4).unwrap());
             dataset
                 .row_iter()
                 .map(|row| {
-                    let mut buf = Poly::broadcast(
-                        u8::default(),
-                        quantizer.bytes(),
-                        alloc,
-                    )
-                    .unwrap();
+                    let mut buf = Poly::broadcast(u8::default(), quantizer.bytes(), alloc).unwrap();
                     quantizer
                         .compress(row, OpaqueMut::new(&mut buf), scoped_global)
                         .unwrap();
@@ -3090,11 +3077,7 @@ mod tests {
                                 .unwrap();
                             compressed
                                 .iter()
-                                .map(|d| {
-                                    computer
-                                        .evaluate_similarity(Opaque::new(d))
-                                        .unwrap()
-                                })
+                                .map(|d| computer.evaluate_similarity(Opaque::new(d)).unwrap())
                                 .collect()
                         })
                         .collect();
@@ -3125,11 +3108,8 @@ mod tests {
                 );
 
                 for (qi, (query_row, expected_distances)) in
-                    std::iter::zip(
-                        dataset.row_iter(),
-                        layout_distances.distances.iter(),
-                    )
-                    .enumerate()
+                    std::iter::zip(dataset.row_iter(), layout_distances.distances.iter())
+                        .enumerate()
                 {
                     let computer = quantizer
                         .fused_query_computer(
@@ -3141,11 +3121,8 @@ mod tests {
                         )
                         .unwrap();
 
-                    for (di, (compressed, expected)) in std::iter::zip(
-                        compressed.iter(),
-                        expected_distances.iter(),
-                    )
-                    .enumerate()
+                    for (di, (compressed, expected)) in
+                        std::iter::zip(compressed.iter(), expected_distances.iter()).enumerate()
                     {
                         let distance = computer
                             .evaluate_similarity(Opaque::new(compressed))
@@ -3184,38 +3161,27 @@ mod tests {
                 }
             }
 
-            let query_distances = compute_layout_distances(
-                quantizer,
-                dataset,
-                &compressed_vectors,
-                false,
-            );
+            let query_distances =
+                compute_layout_distances(quantizer, dataset, &compressed_vectors, false);
 
-            let is_ip =
-                quantizer.metric() == SupportedMetric::InnerProduct;
-            let rescaled = compute_layout_distances(
-                quantizer,
-                dataset,
-                &compressed_vectors,
-                true,
-            );
+            let is_ip = quantizer.metric() == SupportedMetric::InnerProduct;
+            let rescaled = compute_layout_distances(quantizer, dataset, &compressed_vectors, true);
 
             if !is_ip {
                 // For non-IP metrics, allow_rescale must be a no-op.
                 assert_eq!(
-                    query_distances, rescaled,
+                    query_distances,
+                    rescaled,
                     "allow_rescale should not affect {:?} distances",
                     quantizer.metric(),
                 );
             }
 
-            let rescaled_query_distances =
-                if is_ip { Some(rescaled) } else { None };
+            let rescaled_query_distances = if is_ip { Some(rescaled) } else { None };
 
             let serialized = quantizer.serialize(GlobalAllocator).unwrap();
 
             Baseline {
-                version: 1,
                 nbits: quantizer.nbits(),
                 metric: quantizer.metric().into(),
                 transform,
@@ -3235,7 +3201,7 @@ mod tests {
         // Save / Load  //
         //////////////////
 
-        fn metric_slug(metric: Metric) -> &'static str {
+        fn metric_str(metric: Metric) -> &'static str {
             match metric {
                 Metric::SquaredL2 => "squared_l2",
                 Metric::InnerProduct => "inner_product",
@@ -3250,15 +3216,10 @@ mod tests {
             pre_scale: ScaleConfig,
         ) -> PathBuf {
             let manifest_dir = env!("CARGO_MANIFEST_DIR");
-            let mut name = format!(
-                "{}bit_{}_{}",
-                nbits,
-                metric_slug(metric),
-                transform.slug()
-            );
-            if let Some(slug) = pre_scale.slug() {
+            let mut name = format!("{}bit_{}_{}", nbits, metric_str(metric), transform.as_str());
+            if let Some(mangled) = pre_scale.try_as_str() {
                 name.push('_');
-                name.push_str(slug);
+                name.push_str(mangled);
             }
             name.push_str(".json");
             PathBuf::from(manifest_dir)
@@ -3319,10 +3280,6 @@ mod tests {
             // deserialized quantizer but must stay consistent with the
             // golden file.
             assert_eq!(
-                baseline.version, 1,
-                "unsupported baseline version"
-            );
-            assert_eq!(
                 baseline.training_seed, TRAINING_SEED,
                 "baseline was generated with a different training seed"
             );
@@ -3345,11 +3302,7 @@ mod tests {
             // Verify quantizer metadata.
             assert_eq!(quantizer.nbits(), baseline.nbits, "nbits mismatch");
             assert_eq!(quantizer.dim(), baseline.dim, "dim mismatch");
-            assert_eq!(
-                quantizer.full_dim(),
-                baseline.full_dim,
-                "full_dim mismatch"
-            );
+            assert_eq!(quantizer.full_dim(), baseline.full_dim, "full_dim mismatch");
             assert_eq!(
                 quantizer.metric(),
                 SupportedMetric::from(baseline.metric),
@@ -3357,8 +3310,7 @@ mod tests {
             );
 
             // Verify compressed vectors.
-            let compressed =
-                compress_dataset(&*quantizer, dataset);
+            let compressed = compress_dataset(&*quantizer, dataset);
             assert_eq!(
                 compressed, baseline.compressed_vectors,
                 "compressed vectors do not match baseline"
@@ -3374,9 +3326,7 @@ mod tests {
             let f = quantizer.distance_computer(GlobalAllocator).unwrap();
             let mut k = 0;
             for (i, a) in baseline.compressed_vectors.iter().enumerate() {
-                for (j, b) in
-                    baseline.compressed_vectors.iter().enumerate().skip(i)
-                {
+                for (j, b) in baseline.compressed_vectors.iter().enumerate().skip(i) {
                     let distance = f
                         .evaluate_similarity(Opaque::new(a), Opaque::new(b))
                         .unwrap();
@@ -3427,11 +3377,11 @@ mod tests {
             }
         }
 
-        ////////////////////
+        /////////////////////
         // Test Entrypoint //
-        ////////////////////
+        /////////////////////
 
-        fn make_impl_with_config<const NBITS: usize>(
+        fn make_impl_with<const NBITS: usize>(
             metric: SupportedMetric,
             transform: DataTransform,
             pre_scale: ScaleConfig,
@@ -3462,19 +3412,17 @@ mod tests {
         ) where
             Impl<NBITS>: Constructible + Quantizer,
         {
-            let (quantizer, data) =
-                make_impl_with_config::<NBITS>(metric, transform, pre_scale);
+            let (quantizer, data) = make_impl_with::<NBITS>(metric, transform, pre_scale);
             let dataset = data.as_view();
 
-            if should_overwrite() {
-                let baseline =
-                    generate_baseline(&quantizer, transform, pre_scale, dataset);
+            let baseline = if should_overwrite() {
+                let baseline = generate_baseline(&quantizer, transform, pre_scale, dataset);
                 save_baseline(&baseline);
+                baseline
             } else {
-                let baseline =
-                    load_baseline(NBITS, metric.into(), transform, pre_scale);
-                check_baseline(&baseline, dataset, transform, pre_scale);
-            }
+                load_baseline(NBITS, metric.into(), transform, pre_scale)
+            };
+            check_baseline(&baseline, dataset, transform, pre_scale);
         }
 
         //////////////////////////////////////////
@@ -3485,7 +3433,7 @@ mod tests {
         fn compat_1bit_l2() {
             run_compatibility_test::<1>(
                 SupportedMetric::SquaredL2,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3494,7 +3442,7 @@ mod tests {
         fn compat_1bit_ip() {
             run_compatibility_test::<1>(
                 SupportedMetric::InnerProduct,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3503,7 +3451,7 @@ mod tests {
         fn compat_1bit_cosine() {
             run_compatibility_test::<1>(
                 SupportedMetric::Cosine,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3512,7 +3460,7 @@ mod tests {
         fn compat_2bit_l2() {
             run_compatibility_test::<2>(
                 SupportedMetric::SquaredL2,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3521,7 +3469,7 @@ mod tests {
         fn compat_2bit_ip() {
             run_compatibility_test::<2>(
                 SupportedMetric::InnerProduct,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3530,7 +3478,7 @@ mod tests {
         fn compat_2bit_cosine() {
             run_compatibility_test::<2>(
                 SupportedMetric::Cosine,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3539,7 +3487,7 @@ mod tests {
         fn compat_4bit_l2() {
             run_compatibility_test::<4>(
                 SupportedMetric::SquaredL2,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3548,7 +3496,7 @@ mod tests {
         fn compat_4bit_ip() {
             run_compatibility_test::<4>(
                 SupportedMetric::InnerProduct,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3557,7 +3505,7 @@ mod tests {
         fn compat_4bit_cosine() {
             run_compatibility_test::<4>(
                 SupportedMetric::Cosine,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3566,7 +3514,7 @@ mod tests {
         fn compat_8bit_l2() {
             run_compatibility_test::<8>(
                 SupportedMetric::SquaredL2,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3575,7 +3523,7 @@ mod tests {
         fn compat_8bit_ip() {
             run_compatibility_test::<8>(
                 SupportedMetric::InnerProduct,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
@@ -3584,15 +3532,12 @@ mod tests {
         fn compat_8bit_cosine() {
             run_compatibility_test::<8>(
                 SupportedMetric::Cosine,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::None,
             );
         }
 
-        ///////////////////////////////////////////
-        // Additional transform union arm coverage //
-        ///////////////////////////////////////////
-
+        // Different transforms
         #[test]
         fn compat_4bit_l2_null() {
             run_compatibility_test::<4>(
@@ -3606,20 +3551,17 @@ mod tests {
         fn compat_4bit_l2_double_hadamard() {
             run_compatibility_test::<4>(
                 SupportedMetric::SquaredL2,
-                DataTransform::DoubleHadamard,
+                DataTransform::PaddingHadamard,
                 ScaleConfig::None,
             );
         }
 
-        //////////////////////////
-        // PreScale coverage    //
-        //////////////////////////
-
+        // PreScale
         #[test]
         fn compat_4bit_l2_prescale_rmn() {
             run_compatibility_test::<4>(
                 SupportedMetric::SquaredL2,
-                DataTransform::PaddingHadamard,
+                DataTransform::DoubleHadamard,
                 ScaleConfig::ReciprocalMeanNorm,
             );
         }

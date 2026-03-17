@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "nbits": 4,
   "metric": "squared_l2",
   "transform": "padding_hadamard",
