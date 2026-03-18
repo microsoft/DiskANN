@@ -114,6 +114,7 @@ where
 /// It's currently possible for retrieval of the id being pruned to fail due to a transient
 /// error. We do not always want to escalate this as a hard error, and thus provide an
 /// option for transient error handling.
+#[derive(Debug)]
 pub(crate) enum ListError<I>
 where
     I: VectorId,

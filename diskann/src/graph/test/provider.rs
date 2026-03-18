@@ -414,6 +414,33 @@ impl Provider {
     pub fn neighbors(&self) -> NeighborAccessor<'_> {
         NeighborAccessor::new(self)
     }
+
+    /// Return the adjacency lists in `self` as `source -> { destinations ... }` pairs.
+    ///
+    /// If `sort == true` then:
+    ///
+    /// * The returned vector will be ordered with the `source` entry increasing.
+    /// * Each `destination` adjacency list will be sorted by increasing ID.
+    pub fn dump_neighbors(&self, sort: bool) -> Vec<(u32, AdjacencyList<u32>)> {
+        let mut neighbors: Vec<_> = self
+            .terms
+            .iter()
+            .map(|ref_multi| {
+                let mut neighbors = ref_multi.value().neighbors.clone();
+                if sort {
+                    neighbors.sort();
+                }
+                (*ref_multi.key(), neighbors)
+            })
+            .collect();
+
+        if sort {
+            // Unstable sort is fine: `DashMap` ensures the keys are unique.
+            neighbors.sort_unstable_by_key(|(id, _)| *id);
+        }
+
+        neighbors
+    }
 }
 
 /// Provider level metrics.

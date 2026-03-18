@@ -1,0 +1,151 @@
+{
+  "file": "diskann/src/graph/test/cases/grid_insert.rs",
+  "test": "graph/test/cases/grid_insert/insert_4_4_single/ibc_none",
+  "payload": {
+    "context_metrics": {
+      "clones": 0,
+      "spawns": 0
+    },
+    "description": "After inserting 256 points (one-by-one, ibc=none) into a 4D grid of size 4.",
+    "grid_dims": 4,
+    "grid_size": 4,
+    "insert_metrics": {
+      "append_neighbors": 1096,
+      "get_neighbors": 22321,
+      "get_vector": 49800,
+      "set_neighbors": 503,
+      "set_vector": 256
+    },
+    "num_inserted": 256,
+    "searches": [
+      {
+        "beam_width": 1,
+        "comparisons": 74,
+        "description": "After inserting 256 points (one-by-one, ibc=none) into a 4D grid of size 4. Search with query of all -1s. The nearest neighbor should be coordinate 0 (all zeros).",
+        "grid_dims": 4,
+        "grid_size": 4,
+        "hops": 19,
+        "metrics": {
+          "append_neighbors": 1096,
+          "get_neighbors": 22340,
+          "get_vector": 49874,
+          "set_neighbors": 503,
+          "set_vector": 256
+        },
+        "num_results": 10,
+        "query": [
+          -1.0,
+          -1.0,
+          -1.0,
+          -1.0
+        ],
+        "results": [
+          [
+            0,
+            4.0
+          ],
+          [
+            64,
+            7.0
+          ],
+          [
+            1,
+            7.0
+          ],
+          [
+            4,
+            7.0
+          ],
+          [
+            16,
+            7.0
+          ],
+          [
+            17,
+            10.0
+          ],
+          [
+            65,
+            10.0
+          ],
+          [
+            5,
+            10.0
+          ],
+          [
+            20,
+            10.0
+          ],
+          [
+            68,
+            10.0
+          ]
+        ]
+      },
+      {
+        "beam_width": 1,
+        "comparisons": 33,
+        "description": "After inserting 256 points (one-by-one, ibc=none) into a 4D grid of size 4. Search with query of all `size`. The start point should appear as it is not filtered by default.",
+        "grid_dims": 4,
+        "grid_size": 4,
+        "hops": 11,
+        "metrics": {
+          "append_neighbors": 1096,
+          "get_neighbors": 22351,
+          "get_vector": 49907,
+          "set_neighbors": 503,
+          "set_vector": 256
+        },
+        "num_results": 10,
+        "query": [
+          4.0,
+          4.0,
+          4.0,
+          4.0
+        ],
+        "results": [
+          [
+            4294967295,
+            0.0
+          ],
+          [
+            255,
+            4.0
+          ],
+          [
+            239,
+            7.0
+          ],
+          [
+            254,
+            7.0
+          ],
+          [
+            251,
+            7.0
+          ],
+          [
+            191,
+            7.0
+          ],
+          [
+            187,
+            10.0
+          ],
+          [
+            190,
+            10.0
+          ],
+          [
+            238,
+            10.0
+          ],
+          [
+            175,
+            10.0
+          ]
+        ]
+      }
+    ]
+  }
+}

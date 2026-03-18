@@ -25,7 +25,7 @@ use crate::{
 
 // The root directory for tests located in this module.
 fn root() -> TestRoot {
-    TestRoot::new("graph/test/cases/grid")
+    TestRoot::new("graph/test/cases/grid_search")
 }
 
 ////////////
@@ -34,38 +34,38 @@ fn root() -> TestRoot {
 
 /// Metrics and results for a single search of the grid synthetic workload.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct GridSearch {
+pub(super) struct GridSearch {
     /// A description of what to expect, what trends to observe, and anything else
     /// a reviewer may need to either understand why this test is checked in or to validate
     /// any changes that occur in the checked-in file.
-    description: String,
+    pub(super) description: String,
 
     /// The query given to search.
-    query: Vec<f32>,
+    pub(super) query: Vec<f32>,
 
     /// The results returned from search.
-    results: Vec<(u32, f32)>,
+    pub(super) results: Vec<(u32, f32)>,
 
-    /// The number of comparisions returned by search.
-    comparisons: usize,
+    /// The number of comparisons returned by search.
+    pub(super) comparisons: usize,
 
     /// The number of hops returned by search.
-    hops: usize,
+    pub(super) hops: usize,
 
     /// The number of results returned by search.
-    num_results: usize,
+    pub(super) num_results: usize,
 
     /// The dimesionality of the underlying grid.
-    grid_dims: usize,
+    pub(super) grid_dims: usize,
 
     /// The size of the underlying grid.
-    grid_size: usize,
+    pub(super) grid_size: usize,
 
     /// The beam width used for search.
-    beam_width: usize,
+    pub(super) beam_width: usize,
 
     /// Index level metrics recorded during search.
-    metrics: test_provider::Metrics,
+    pub(super) metrics: test_provider::Metrics,
 }
 
 verbose_eq!(GridSearch {
