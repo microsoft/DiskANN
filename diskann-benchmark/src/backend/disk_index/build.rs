@@ -91,10 +91,11 @@ where
 
     let metadata = load_metadata_from_file(storage_provider, &data_path)?;
 
-    let build_parameters = DiskIndexBuildParameters::new(
+    let build_parameters = DiskIndexBuildParameters::new_with_algorithm(
         MemoryBudget::try_from_gb(params.build_ram_limit_gb)?,
         params.quantization_type,
         NumPQChunks::new_with(params.num_pq_chunks.get(), metadata.ndims())?,
+        params.build_algorithm.clone(),
     );
 
     let index_configuration = IndexConfiguration::new(

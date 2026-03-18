@@ -10,6 +10,8 @@ use diskann_benchmark_runner::{
     files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
 };
 #[cfg(feature = "disk-index")]
+use diskann_disk::BuildAlgorithm;
+#[cfg(feature = "disk-index")]
 use diskann_disk::QuantizationType;
 use diskann_providers::storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file};
 use serde::{Deserialize, Serialize};
@@ -68,6 +70,10 @@ pub(crate) struct DiskIndexBuild {
     pub(crate) num_pq_chunks: NonZeroUsize,
     #[cfg(feature = "disk-index")]
     pub(crate) quantization_type: QuantizationType,
+    /// Build algorithm: "Vamana" (default) or "PiPNN" with config params.
+    #[cfg(feature = "disk-index")]
+    #[serde(default)]
+    pub(crate) build_algorithm: BuildAlgorithm,
     pub(crate) save_path: String,
 }
 
@@ -257,6 +263,8 @@ impl Example for DiskIndexOperation {
             num_pq_chunks: NonZeroUsize::new(16).unwrap(),
             #[cfg(feature = "disk-index")]
             quantization_type: QuantizationType::PQ { num_chunks: 16 },
+            #[cfg(feature = "disk-index")]
+            build_algorithm: BuildAlgorithm::default(),
             save_path: "sample_index_l50_r32".to_string(),
         };
 
@@ -351,6 +359,8 @@ impl DiskIndexBuild {
                 }
             }
         }
+        #[cfg(feature = "disk-index")]
+        write_field!(f, "Build Algorithm", self.build_algorithm)?;
         write_field!(f, "Save Path", self.save_path)?;
         Ok(())
     }

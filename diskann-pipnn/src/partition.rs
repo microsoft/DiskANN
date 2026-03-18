@@ -11,7 +11,7 @@
 //! - Merge undersized clusters
 //! - Recurse on oversized clusters
 
-use rand::seq::SliceRandom;
+use rand::prelude::IndexedRandom;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 
@@ -35,6 +35,7 @@ pub struct PartitionConfig {
 
 /// Compute squared L2 distance between two f32 slices using manual loop
 /// (auto-vectorized by the compiler).
+#[allow(dead_code)] // Alternative implementation kept for benchmarking/debugging.
 #[inline]
 fn l2_distance_inline(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
@@ -145,7 +146,7 @@ fn partition_assign_impl(
     points: &[usize],
     leaders: &[usize],
     fanout: usize,
-    use_rayon_stripes: bool,
+    _use_rayon_stripes: bool,
 ) -> Vec<Vec<usize>> {
     let np = points.len();
     let nl = leaders.len();
@@ -279,9 +280,7 @@ pub fn partition(
         .min(1000)
         .min(n);
 
-    let mut sampled_indices: Vec<usize> = indices.to_vec();
-    sampled_indices.shuffle(rng);
-    let leaders: Vec<usize> = sampled_indices[..num_leaders].to_vec();
+    let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
     // Fused GEMM + assignment (avoids materializing full distance matrix).
     let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout);
@@ -371,9 +370,7 @@ pub fn parallel_partition(
         .min(1000)
         .min(n);
 
-    let mut sampled_indices: Vec<usize> = indices.to_vec();
-    sampled_indices.shuffle(&mut rng);
-    let leaders: Vec<usize> = sampled_indices[..num_leaders].to_vec();
+    let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
 
     // Fused GEMM + assignment.
     let t0 = std::time::Instant::now();
@@ -389,8 +386,13 @@ pub fn parallel_partition(
         .collect();
     let map_time = t1.elapsed();
 
-    eprintln!("    top-level: assign {:.3}s, map {:.3}s, {} leaders, fanout {}",
-        assign_time.as_secs_f64(), map_time.as_secs_f64(), num_leaders, fanout);
+    tracing::debug!(
+        assign_secs = assign_time.as_secs_f64(),
+        map_secs = map_time.as_secs_f64(),
+        num_leaders = num_leaders,
+        fanout = fanout,
+        "top-level partition assign"
+    );
 
     // Merge undersized clusters.
     let mut merged_clusters: Vec<Vec<usize>> = Vec::new();
@@ -420,8 +422,12 @@ pub fn parallel_partition(
 
     let need_recurse = merged_clusters.iter().filter(|c| c.len() > config.c_max).count();
     let total_in_recurse: usize = merged_clusters.iter().filter(|c| c.len() > config.c_max).map(|c| c.len()).sum();
-    eprintln!("    merge: {} clusters, {} need recursion ({} pts)",
-        merged_clusters.len(), need_recurse, total_in_recurse);
+    tracing::debug!(
+        num_clusters = merged_clusters.len(),
+        need_recurse = need_recurse,
+        total_in_recurse = total_in_recurse,
+        "partition merge"
+    );
 
     // Generate sub-seeds for parallel recursion.
     let sub_seeds: Vec<u64> = (0..merged_clusters.len())
@@ -445,7 +451,7 @@ pub fn parallel_partition(
         })
         .collect();
 
-    eprintln!("    recursion: {:.3}s", t2.elapsed().as_secs_f64());
+    tracing::debug!(recursion_secs = t2.elapsed().as_secs_f64(), "partition recursion complete");
     results.into_iter().flatten().collect()
 }
 
@@ -467,9 +473,7 @@ pub fn parallel_partition_quantized(
     let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
         .max(2).min(1000).min(n);
 
-    let mut sampled_indices: Vec<usize> = indices.to_vec();
-    sampled_indices.shuffle(&mut rng);
-    let leaders: Vec<usize> = sampled_indices[..num_leaders].to_vec();
+    let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
 
     let t0 = std::time::Instant::now();
     let clusters_local = partition_assign_quantized(qdata, indices, &leaders, fanout);
@@ -482,8 +486,13 @@ pub fn parallel_partition_quantized(
         .collect();
     let map_time = t1.elapsed();
 
-    eprintln!("    top-level (quantized): assign {:.3}s, map {:.3}s, {} leaders, fanout {}",
-        assign_time.as_secs_f64(), map_time.as_secs_f64(), num_leaders, fanout);
+    tracing::debug!(
+        assign_secs = assign_time.as_secs_f64(),
+        map_secs = map_time.as_secs_f64(),
+        num_leaders = num_leaders,
+        fanout = fanout,
+        "top-level partition assign (quantized)"
+    );
 
     // Merge undersized clusters.
     let mut merged_clusters: Vec<Vec<usize>> = Vec::new();
@@ -506,7 +515,11 @@ pub fn parallel_partition_quantized(
     }
 
     let need_recurse = merged_clusters.iter().filter(|c| c.len() > config.c_max).count();
-    eprintln!("    merge: {} clusters, {} need recursion", merged_clusters.len(), need_recurse);
+    tracing::debug!(
+        num_clusters = merged_clusters.len(),
+        need_recurse = need_recurse,
+        "partition merge (quantized)"
+    );
 
     let sub_seeds: Vec<u64> = (0..merged_clusters.len()).map(|_| rng.random()).collect();
 
@@ -527,7 +540,7 @@ pub fn parallel_partition_quantized(
         })
         .collect();
 
-    eprintln!("    recursion: {:.3}s", t2.elapsed().as_secs_f64());
+    tracing::debug!(recursion_secs = t2.elapsed().as_secs_f64(), "partition recursion complete (quantized)");
     results.into_iter().flatten().collect()
 }
 
@@ -547,9 +560,7 @@ fn partition_quantized_recursive(
     let fanout = if level < config.fanout.len() { config.fanout[level] } else { 1 };
     let num_leaders = ((n as f64 * config.p_samp).ceil() as usize).max(2).min(1000).min(n);
 
-    let mut sampled: Vec<usize> = indices.to_vec();
-    sampled.shuffle(rng);
-    let leaders: Vec<usize> = sampled[..num_leaders].to_vec();
+    let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
     let clusters_local = partition_assign_quantized(qdata, indices, &leaders, fanout);
     let mut clusters: Vec<Vec<usize>> = clusters_local
@@ -669,6 +680,280 @@ mod tests {
                 "leaf too large: {}",
                 leaf.indices.len()
             );
+        }
+    }
+
+    #[test]
+    fn test_partition_overlap() {
+        // With fanout > 1, each point is assigned to multiple leaders,
+        // so the total assignments across all leaves should exceed the
+        // original point count (overlap).
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let npoints = 500;
+        let ndims = 4;
+        let data: Vec<f32> = (0..npoints * ndims)
+            .map(|_| rand::Rng::random_range(&mut rng, -5.0..5.0))
+            .collect();
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 100,
+            c_min: 20,
+            p_samp: 0.05,
+            fanout: vec![3, 2], // fanout > 1 creates overlap
+        };
+
+        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
+
+        let total_in_leaves: usize = leaves.iter().map(|l| l.indices.len()).sum();
+        assert!(
+            total_in_leaves >= npoints,
+            "total in leaves ({}) should be >= npoints ({})",
+            total_in_leaves,
+            npoints
+        );
+    }
+
+    #[test]
+    fn test_partition_respects_c_max() {
+        // All leaves must have at most c_max elements.
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let npoints = 300;
+        let ndims = 4;
+        let data: Vec<f32> = (0..npoints * ndims)
+            .map(|_| rand::Rng::random_range(&mut rng, -5.0..5.0))
+            .collect();
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 40,
+            c_min: 10,
+            p_samp: 0.1,
+            fanout: vec![5, 2],
+        };
+
+        let leaves = parallel_partition(&data, ndims, &indices, &config, 99);
+        for (i, leaf) in leaves.iter().enumerate() {
+            assert!(
+                leaf.indices.len() <= config.c_max,
+                "leaf {} has size {} > c_max {}",
+                i,
+                leaf.indices.len(),
+                config.c_max
+            );
+        }
+    }
+
+    #[test]
+    fn test_partition_single_point() {
+        let data = vec![1.0f32, 2.0];
+        let indices = vec![0usize];
+        let config = PartitionConfig {
+            c_max: 10,
+            c_min: 1,
+            p_samp: 0.5,
+            fanout: vec![3],
+        };
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
+        assert_eq!(leaves.len(), 1, "single point should produce 1 leaf");
+        assert_eq!(leaves[0].indices.len(), 1, "leaf should contain exactly 1 point");
+        assert_eq!(leaves[0].indices[0], 0, "leaf should contain index 0");
+    }
+
+    #[test]
+    fn test_partition_two_points() {
+        let data = vec![0.0f32, 0.0, 10.0, 10.0];
+        let indices = vec![0, 1];
+        let config = PartitionConfig {
+            c_max: 5,
+            c_min: 1,
+            p_samp: 0.5,
+            fanout: vec![3],
+        };
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
+        assert_eq!(leaves.len(), 1, "two points with c_max=5 should produce 1 leaf");
+        assert_eq!(leaves[0].indices.len(), 2, "leaf should contain both points");
+    }
+
+    #[test]
+    fn test_partition_all_identical() {
+        // All identical vectors should still partition without crashing.
+        let npoints = 100;
+        let ndims = 4;
+        let data = vec![42.0f32; npoints * ndims];
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 20,
+            c_min: 5,
+            p_samp: 0.1,
+            fanout: vec![3],
+        };
+        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
+        assert!(!leaves.is_empty(), "should produce at least one leaf");
+        let total: usize = leaves.iter().map(|l| l.indices.len()).sum();
+        assert!(
+            total >= npoints,
+            "total in leaves ({}) should be >= npoints ({})",
+            total, npoints
+        );
+        for (i, leaf) in leaves.iter().enumerate() {
+            assert!(
+                leaf.indices.len() <= config.c_max,
+                "leaf {} has {} elements > c_max={}",
+                i, leaf.indices.len(), config.c_max
+            );
+        }
+    }
+
+    #[test]
+    fn test_partition_high_fanout() {
+        // fanout > npoints should still work (clamped to num_leaders).
+        let npoints = 20;
+        let ndims = 4;
+        let mut rng_data = rand::rngs::StdRng::seed_from_u64(42);
+        let data: Vec<f32> = (0..npoints * ndims)
+            .map(|_| rand::Rng::random_range(&mut rng_data, -10.0..10.0))
+            .collect();
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 5,
+            c_min: 2,
+            p_samp: 0.5,
+            fanout: vec![100], // much larger than npoints
+        };
+        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
+        assert!(!leaves.is_empty(), "high fanout should still produce leaves");
+        for (i, leaf) in leaves.iter().enumerate() {
+            assert!(
+                leaf.indices.len() <= config.c_max,
+                "leaf {} has {} elements > c_max={}",
+                i, leaf.indices.len(), config.c_max
+            );
+        }
+    }
+
+    #[test]
+    fn test_partition_multi_level_fanout() {
+        // Multi-level fanout vec![4,2] should work and produce valid leaves.
+        let npoints = 200;
+        let ndims = 4;
+        let mut rng_data = rand::rngs::StdRng::seed_from_u64(42);
+        let data: Vec<f32> = (0..npoints * ndims)
+            .map(|_| rand::Rng::random_range(&mut rng_data, -10.0..10.0))
+            .collect();
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 30,
+            c_min: 8,
+            p_samp: 0.1,
+            fanout: vec![4, 2],
+        };
+        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
+        assert!(leaves.len() > 1, "multi-level fanout should produce multiple leaves");
+        for (i, leaf) in leaves.iter().enumerate() {
+            assert!(
+                leaf.indices.len() <= config.c_max,
+                "leaf {} has {} elements > c_max={}",
+                i, leaf.indices.len(), config.c_max
+            );
+        }
+    }
+
+    #[test]
+    fn test_partition_c_min_equals_c_max() {
+        // c_min == c_max is a valid (if unusual) configuration.
+        let npoints = 100;
+        let ndims = 4;
+        let mut rng_data = rand::rngs::StdRng::seed_from_u64(42);
+        let data: Vec<f32> = (0..npoints * ndims)
+            .map(|_| rand::Rng::random_range(&mut rng_data, -10.0..10.0))
+            .collect();
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 30,
+            c_min: 30,
+            p_samp: 0.1,
+            fanout: vec![3],
+        };
+        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
+        assert!(!leaves.is_empty(), "c_min == c_max should produce leaves");
+        for (i, leaf) in leaves.iter().enumerate() {
+            assert!(
+                leaf.indices.len() <= config.c_max,
+                "leaf {} has {} elements > c_max={}",
+                i, leaf.indices.len(), config.c_max
+            );
+        }
+    }
+
+    #[test]
+    fn test_partition_large_p_samp() {
+        // p_samp=1.0 means sample all points as leaders.
+        let npoints = 50;
+        let ndims = 4;
+        let mut rng_data = rand::rngs::StdRng::seed_from_u64(42);
+        let data: Vec<f32> = (0..npoints * ndims)
+            .map(|_| rand::Rng::random_range(&mut rng_data, -10.0..10.0))
+            .collect();
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 10,
+            c_min: 3,
+            p_samp: 1.0,
+            fanout: vec![3],
+        };
+        let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
+        assert!(!leaves.is_empty(), "p_samp=1.0 should produce leaves");
+        for (i, leaf) in leaves.iter().enumerate() {
+            assert!(
+                leaf.indices.len() <= config.c_max,
+                "leaf {} has {} elements > c_max={}",
+                i, leaf.indices.len(), config.c_max
+            );
+        }
+    }
+
+    #[test]
+    fn test_partition_quantized() {
+        // Quantized partition should produce valid leaves with same constraints.
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let npoints = 300;
+        let ndims = 64; // must be multiple of 64 for u64 alignment
+        let data: Vec<f32> = (0..npoints * ndims)
+            .map(|_| rand::Rng::random_range(&mut rng, -5.0..5.0))
+            .collect();
+        let indices: Vec<usize> = (0..npoints).collect();
+        let config = PartitionConfig {
+            c_max: 80,
+            c_min: 20,
+            p_samp: 0.05,
+            fanout: vec![3, 2],
+        };
+
+        let (shift, inverse_scale) = {
+            use diskann_quantization::scalar::train::ScalarQuantizationParameters;
+            use diskann_utils::views::MatrixView;
+            let dm = MatrixView::try_from(data.as_slice(), npoints, ndims).unwrap();
+            let q = ScalarQuantizationParameters::default().train(dm);
+            let s = q.scale();
+            (q.shift().to_vec(), if s == 0.0 { 1.0 } else { 1.0 / s })
+        };
+        let qdata = crate::quantize::quantize_1bit(&data, npoints, ndims, &shift, inverse_scale);
+        let leaves = parallel_partition_quantized(&qdata, &indices, &config, 42);
+
+        assert!(!leaves.is_empty(), "no leaves produced");
+        for (i, leaf) in leaves.iter().enumerate() {
+            assert!(
+                leaf.indices.len() <= config.c_max,
+                "quantized leaf {} has size {} > c_max {}",
+                i,
+                leaf.indices.len(),
+                config.c_max
+            );
+            // All indices should be valid.
+            for &idx in &leaf.indices {
+                assert!(idx < npoints, "index {} out of range", idx);
+            }
         }
     }
 }

@@ -10,6 +10,7 @@ use std::num::NonZeroUsize;
 use diskann::ANNError;
 use thiserror::Error;
 
+use super::build_algorithm::BuildAlgorithm;
 use super::QuantizationType;
 
 /// GB to bytes ratio.
@@ -103,7 +104,7 @@ impl NumPQChunks {
 }
 
 /// Parameters specific for disk index construction.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct DiskIndexBuildParameters {
     /// Limit on the memory allowed for building the index.
     build_memory_limit: MemoryBudget,
@@ -113,10 +114,14 @@ pub struct DiskIndexBuildParameters {
 
     /// QuantizationType used to instantiate quantized DataProvider for DiskANN Index during build.
     build_quantization: QuantizationType,
+
+    /// Which graph construction algorithm to use (Vamana or PiPNN).
+    build_algorithm: BuildAlgorithm,
 }
 
 impl DiskIndexBuildParameters {
     /// Create new build parameters from already validated components.
+    /// Uses the default Vamana build algorithm.
     pub fn new(
         build_memory_limit: MemoryBudget,
         build_quantization: QuantizationType,
@@ -126,6 +131,22 @@ impl DiskIndexBuildParameters {
             build_memory_limit,
             search_pq_chunks,
             build_quantization,
+            build_algorithm: BuildAlgorithm::default(),
+        }
+    }
+
+    /// Create new build parameters with a specific build algorithm.
+    pub fn new_with_algorithm(
+        build_memory_limit: MemoryBudget,
+        build_quantization: QuantizationType,
+        search_pq_chunks: NumPQChunks,
+        build_algorithm: BuildAlgorithm,
+    ) -> Self {
+        Self {
+            build_memory_limit,
+            search_pq_chunks,
+            build_quantization,
+            build_algorithm,
         }
     }
 
@@ -142,6 +163,11 @@ impl DiskIndexBuildParameters {
     /// Get user specified PQ chunks count for in-memory search data.
     pub fn search_pq_chunks(&self) -> NumPQChunks {
         self.search_pq_chunks
+    }
+
+    /// Get the build algorithm to use for graph construction.
+    pub fn build_algorithm(&self) -> &BuildAlgorithm {
+        &self.build_algorithm
     }
 }
 

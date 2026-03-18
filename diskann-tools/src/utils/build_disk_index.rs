@@ -79,6 +79,7 @@ pub struct BuildDiskIndexParameters<'a> {
     pub build_quantization_type: QuantizationType,
     pub chunking_parameters: Option<ChunkingParameters>,
     pub dim_values: DimensionValues,
+    pub build_algorithm: diskann_disk::BuildAlgorithm,
 }
 
 /// The main function to build a disk index
@@ -91,13 +92,14 @@ where
     StorageProviderType: StorageReadProvider + StorageWriteProvider + 'static,
     <StorageProviderType as StorageReadProvider>::Reader: std::marker::Send,
 {
-    let build_parameters = DiskIndexBuildParameters::new(
+    let build_parameters = DiskIndexBuildParameters::new_with_algorithm(
         MemoryBudget::try_from_gb(parameters.index_build_ram_limit_gb)?,
         parameters.build_quantization_type,
         NumPQChunks::new_with(
             parameters.num_of_pq_chunks,
             parameters.dim_values.full_dim(),
         )?,
+        parameters.build_algorithm.clone(),
     );
 
     let config = config::Builder::new_with(
@@ -208,6 +210,7 @@ mod tests {
             build_quantization_type: QuantizationType::FP,
             chunking_parameters: None,
             dim_values: DimensionValues::new(128, 128),
+            build_algorithm: diskann_disk::BuildAlgorithm::default(),
         };
 
         let result = build_disk_index::<GraphDataInt8Vector, VirtualStorageProvider<MemoryFS>>(
@@ -233,6 +236,7 @@ mod tests {
             build_quantization_type: QuantizationType::FP,
             chunking_parameters: None,
             dim_values: DimensionValues::new(128, 128),
+            build_algorithm: diskann_disk::BuildAlgorithm::default(),
         };
 
         let result = build_disk_index::<GraphDataInt8Vector, VirtualStorageProvider<MemoryFS>>(
