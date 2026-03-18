@@ -109,20 +109,10 @@ where
         let (vec, attrs) = changing.destructure();
         let sim = self.inner_computer.evaluate_similarity(vec);
         let pred_eval = PredicateEvaluator::new(attrs);
-        match self.filter_expr.encoded_filter_expr().accept(&pred_eval) {
-            Ok(matched) => {
-                if matched {
-                    sim * self.beta_value
-                } else {
-                    sim
-                }
-            }
-            Err(_) => {
-                //If predicate evaluation fails for any reason, we simply revert
-                //to unfiltered search.
-                tracing::warn!("Predicate evaluation failed");
-                sim
-            }
+        if self.filter_expr.encoded_filter_expr().accept(&pred_eval).expect("Expected predicate evaluation to not error out!") {
+            sim * self.beta_value
+        } else {
+            sim
         }
     }
 }
