@@ -48,3 +48,16 @@ pub fn sgemm_abt(
 pub fn sgemm_aat(a: &[f32], m: usize, k: usize, c: &mut [f32]) {
     sgemm_abt(a, m, k, a, m, c);
 }
+
+extern "C" {
+    fn openblas_set_num_threads(num_threads: i32);
+}
+
+/// Set OpenBLAS thread count at runtime.
+/// Use num_threads > 1 for large single GEMM calls (e.g., top-level partition).
+/// Use num_threads = 1 when outer parallelism (rayon) handles concurrency.
+pub fn set_blas_threads(num_threads: usize) {
+    unsafe {
+        openblas_set_num_threads(num_threads as i32);
+    }
+}

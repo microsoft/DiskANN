@@ -256,8 +256,8 @@ fn save_diskann_graph(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Force OpenBLAS to single-threaded mode since rayon handles outer parallelism.
-    std::env::set_var("OPENBLAS_NUM_THREADS", "1");
+    // Start with single-threaded BLAS (builder switches dynamically for large GEMMs).
+    diskann_pipnn::gemm::set_blas_threads(1);
 
     let args = Args::parse();
 

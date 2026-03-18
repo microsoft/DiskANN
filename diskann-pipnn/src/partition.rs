@@ -56,6 +56,20 @@ fn partition_assign(
     leaders: &[usize],
     fanout: usize,
 ) -> Vec<Vec<usize>> {
+    partition_assign_impl(data, ndims, points, leaders, fanout, true)
+}
+
+/// Core implementation with control over parallelism strategy.
+/// `use_rayon_stripes`: true = many parallel stripes (for top-level with many points),
+///                      false = fewer stripes with multi-threaded BLAS (not used currently).
+fn partition_assign_impl(
+    data: &[f32],
+    ndims: usize,
+    points: &[usize],
+    leaders: &[usize],
+    fanout: usize,
+    use_rayon_stripes: bool,
+) -> Vec<Vec<usize>> {
     let np = points.len();
     let nl = leaders.len();
     let num_assign = fanout.min(nl);
@@ -78,7 +92,6 @@ fn partition_assign(
     let mut assignments = vec![0u32; np * num_assign];
 
     // Fused parallel stripes: GEMM + distance + top-k in one pass.
-    // Larger stripes = better GEMM efficiency but more memory per stripe.
     const STRIPE: usize = 16_384;
     assignments
         .par_chunks_mut(STRIPE * num_assign)
@@ -89,14 +102,12 @@ fn partition_assign(
             let sn = end - start;
             let stripe_points = &points[start..end];
 
-            // Extract stripe data into contiguous memory.
             let mut p_data = vec![0.0f32; sn * ndims];
             for (i, &idx) in stripe_points.iter().enumerate() {
                 p_data[i * ndims..(i + 1) * ndims]
                     .copy_from_slice(&data[idx * ndims..(idx + 1) * ndims]);
             }
 
-            // Point norms.
             let mut p_norms = vec![0.0f32; sn];
             for i in 0..sn {
                 let row = &p_data[i * ndims..(i + 1) * ndims];
@@ -105,11 +116,9 @@ fn partition_assign(
                 p_norms[i] = norm;
             }
 
-            // GEMM: dots = stripe_data * leaders^T (sn x nl) using OpenBLAS
             let mut dots = vec![0.0f32; sn * nl];
             crate::gemm::sgemm_abt(&p_data, sn, ndims, &l_data, nl, &mut dots);
 
-            // Fused distance + top-k assignment.
             let mut buf: Vec<(u32, f32)> = Vec::with_capacity(nl);
             for i in 0..sn {
                 let pi = p_norms[i];

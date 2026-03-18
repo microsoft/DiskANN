@@ -328,6 +328,31 @@ impl HashPrune {
         });
     }
 
+    /// Add edges from a leaf build result, batching by source point.
+    /// Sorts edges by source to acquire each lock once per unique source.
+    pub fn add_edges_batched(&self, edges: &[crate::leaf_build::Edge]) {
+        if edges.is_empty() {
+            return;
+        }
+
+        // Sort by source for batched lock acquisition.
+        let mut sorted: Vec<&crate::leaf_build::Edge> = edges.iter().collect();
+        sorted.sort_unstable_by_key(|e| e.src);
+
+        let mut i = 0;
+        while i < sorted.len() {
+            let src = sorted[i].src;
+            let mut reservoir = self.reservoirs[src].lock().unwrap();
+
+            while i < sorted.len() && sorted[i].src == src {
+                let edge = sorted[i];
+                let hash = self.sketches.relative_hash(src, edge.dst);
+                reservoir.insert(hash, edge.dst as u32, edge.distance);
+                i += 1;
+            }
+        }
+    }
+
     /// Extract the final graph as adjacency lists.
     ///
     /// Returns a vector of neighbor lists (one per point), each truncated to max_degree.
