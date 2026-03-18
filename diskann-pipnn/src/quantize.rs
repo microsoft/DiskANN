@@ -157,7 +157,7 @@ impl QuantizedData {
 
     /// Compute all-pairs Hamming distance matrix for a set of points.
     /// Returns flat n x n matrix (row-major) with f32::MAX on diagonal.
-    /// Uses cache-friendly blocking and u64 fast path.
+    /// Inlines the Hamming computation and uses unchecked indexing for speed.
     pub fn compute_distance_matrix(&self, indices: &[usize]) -> Vec<f32> {
         let n = indices.len();
         let u64s = self.u64s_per_vec();
@@ -170,22 +170,27 @@ impl QuantizedData {
         }
 
         let mut dist = vec![f32::MAX; n * n];
+        let local_ptr = local.as_ptr();
+        let dist_ptr = dist.as_mut_ptr();
 
-        // Blocked computation for L1 cache friendliness.
-        const BLOCK: usize = 64;
-        for ib in (0..n).step_by(BLOCK) {
-            let ie = (ib + BLOCK).min(n);
-            for jb in (ib..n).step_by(BLOCK) {
-                let je = (jb + BLOCK).min(n);
-                for i in ib..ie {
-                    let a = &local[i * u64s..(i + 1) * u64s];
-                    let j_start = if jb == ib { i + 1 } else { jb };
-                    for j in j_start..je {
-                        let b = &local[j * u64s..(j + 1) * u64s];
-                        let d = Self::hamming_u64(a, b) as f32;
-                        dist[i * n + j] = d;
-                        dist[j * n + i] = d;
+        // Flat loop with inlined Hamming — avoids function call + slice bounds overhead.
+        for i in 0..n {
+            let a_base = unsafe { local_ptr.add(i * u64s) };
+            for j in (i + 1)..n {
+                let b_base = unsafe { local_ptr.add(j * u64s) };
+
+                // Inline Hamming: XOR + popcount over u64s.
+                let mut h = 0u32;
+                for k in 0..u64s {
+                    unsafe {
+                        h += (*a_base.add(k) ^ *b_base.add(k)).count_ones();
                     }
+                }
+
+                let d = h as f32;
+                unsafe {
+                    *dist_ptr.add(i * n + j) = d;
+                    *dist_ptr.add(j * n + i) = d;
                 }
             }
         }

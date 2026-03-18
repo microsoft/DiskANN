@@ -315,7 +315,6 @@ fn build_leaf_with_buffers(
 }
 
 /// Build a leaf using 1-bit quantized vectors with Hamming distance.
-/// Uses cache-friendly blocked distance matrix and u64 fast path.
 pub fn build_leaf_quantized(
     qdata: &crate::quantize::QuantizedData,
     indices: &[usize],
@@ -326,10 +325,7 @@ pub fn build_leaf_quantized(
         return Vec::new();
     }
 
-    // Compute all-pairs Hamming distance matrix (blocked, u64 fast path).
     let dist_matrix = qdata.compute_distance_matrix(indices);
-
-    // Extract k-NN and create bi-directed edges.
     let local_edges = extract_knn(&dist_matrix, n, k);
 
     let mut seen = vec![false; n * n];
