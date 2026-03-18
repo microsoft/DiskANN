@@ -52,6 +52,7 @@ impl LeafBuffers {
 
 thread_local! {
     static LEAF_BUFFERS: RefCell<LeafBuffers> = RefCell::new(LeafBuffers::new());
+    static QUANT_SEEN: RefCell<Vec<bool>> = RefCell::new(Vec::new());
 }
 
 /// An edge produced by leaf building: (source, destination, distance).
@@ -69,6 +70,7 @@ pub struct Edge {
 /// `use_cosine`: if true, distance = 1 - dot(a,b) (for normalized vectors).
 ///
 /// Returns a flat distance matrix of size n x n (row-major).
+#[allow(dead_code)] // Alternative implementation kept for benchmarking/debugging.
 fn compute_distance_matrix(data: &[f32], ndims: usize, indices: &[usize], use_cosine: bool) -> Vec<f32> {
     let n = indices.len();
 
@@ -125,6 +127,7 @@ fn compute_distance_matrix(data: &[f32], ndims: usize, indices: &[usize], use_co
 }
 
 /// Direct pairwise distance computation for small leaves (avoids GEMM overhead).
+#[allow(dead_code)] // Alternative implementation kept for benchmarking/debugging.
 fn compute_distance_matrix_direct(data: &[f32], ndims: usize, indices: &[usize], use_cosine: bool) -> Vec<f32> {
     let n = indices.len();
     let mut dist_matrix = vec![f32::MAX; n * n];
@@ -157,6 +160,7 @@ fn compute_distance_matrix_direct(data: &[f32], ndims: usize, indices: &[usize],
 /// Compute A * A^T using matrixmultiply for near-BLAS performance.
 ///
 /// A is n x d (row-major), result is n x n (row-major).
+#[allow(dead_code)] // Alternative implementation kept for benchmarking/debugging.
 fn gemm_aat(a: &[f32], n: usize, d: usize, result: &mut [f32]) {
     debug_assert_eq!(a.len(), n * d);
     debug_assert_eq!(result.len(), n * n);
@@ -330,21 +334,26 @@ pub fn build_leaf_quantized(
     let dist_matrix = qdata.compute_distance_matrix(indices);
     let local_edges = extract_knn(&dist_matrix, n, k);
 
-    let mut seen = vec![false; n * n];
-    let mut global_edges = Vec::with_capacity(local_edges.len() * 2);
+    QUANT_SEEN.with(|cell| {
+        let mut seen = cell.borrow_mut();
+        seen.resize(n * n, false);
+        seen.fill(false);
 
-    for &(src, dst, dist) in &local_edges {
-        if !seen[src * n + dst] {
-            seen[src * n + dst] = true;
-            global_edges.push(Edge { src: indices[src], dst: indices[dst], distance: dist });
-        }
-        if !seen[dst * n + src] {
-            seen[dst * n + src] = true;
-            global_edges.push(Edge { src: indices[dst], dst: indices[src], distance: dist_matrix[dst * n + src] });
-        }
-    }
+        let mut global_edges = Vec::with_capacity(local_edges.len() * 2);
 
-    global_edges
+        for &(src, dst, dist) in &local_edges {
+            if !seen[src * n + dst] {
+                seen[src * n + dst] = true;
+                global_edges.push(Edge { src: indices[src], dst: indices[dst], distance: dist });
+            }
+            if !seen[dst * n + src] {
+                seen[dst * n + src] = true;
+                global_edges.push(Edge { src: indices[dst], dst: indices[src], distance: dist_matrix[dst * n + src] });
+            }
+        }
+
+        global_edges
+    })
 }
 
 /// Brute-force search the dataset using L2 distance.
@@ -473,5 +482,230 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, 0);
+    }
+
+    #[test]
+    fn test_build_leaf_cosine() {
+        // Verify that cosine distance path works correctly with normalized vectors.
+        let mut data = vec![
+            1.0, 0.0,   // point 0: along x
+            0.0, 1.0,   // point 1: along y
+            0.707, 0.707, // point 2: 45 degrees
+            -1.0, 0.0,  // point 3: negative x
+        ];
+        // Normalize all vectors.
+        for i in 0..4 {
+            let row = &mut data[i * 2..(i + 1) * 2];
+            let norm: f32 = row.iter().map(|v| v * v).sum::<f32>().sqrt();
+            if norm > 0.0 {
+                for v in row.iter_mut() { *v /= norm; }
+            }
+        }
+
+        let indices = vec![0, 1, 2, 3];
+        let edges = build_leaf(&data, 2, &indices, 2, true);
+
+        assert!(!edges.is_empty(), "cosine leaf should produce edges");
+
+        for edge in &edges {
+            assert!(edge.src < 4);
+            assert!(edge.dst < 4);
+            assert_ne!(edge.src, edge.dst);
+            // Cosine distance for normalized vectors is in [0, 2].
+            assert!(edge.distance >= 0.0, "negative cosine distance");
+        }
+    }
+
+    #[test]
+    fn test_build_leaf_quantized() {
+        // Build a leaf using quantized data and verify basic correctness.
+        let ndims = 64;
+        let npoints = 10;
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let data: Vec<f32> = (0..npoints * ndims)
+            .map(|_| rng.random_range(-1.0..1.0))
+            .collect();
+
+        let (shift, inverse_scale) = {
+            use diskann_quantization::scalar::train::ScalarQuantizationParameters;
+            use diskann_utils::views::MatrixView;
+            let dm = MatrixView::try_from(data.as_slice(), npoints, ndims).unwrap();
+            let q = ScalarQuantizationParameters::default().train(dm);
+            let s = q.scale();
+            (q.shift().to_vec(), if s == 0.0 { 1.0 } else { 1.0 / s })
+        };
+        let qdata = crate::quantize::quantize_1bit(&data, npoints, ndims, &shift, inverse_scale);
+        let indices: Vec<usize> = (0..npoints).collect();
+        let edges = build_leaf_quantized(&qdata, &indices, 3);
+
+        assert!(!edges.is_empty(), "quantized leaf should produce edges");
+
+        for edge in &edges {
+            assert!(edge.src < npoints, "src {} out of range", edge.src);
+            assert!(edge.dst < npoints, "dst {} out of range", edge.dst);
+            assert_ne!(edge.src, edge.dst);
+            assert!(edge.distance >= 0.0);
+        }
+    }
+
+    #[test]
+    fn test_build_leaf_single_point() {
+        // A leaf with 1 point should produce no edges.
+        let data = vec![1.0f32, 2.0, 3.0, 4.0];
+        let indices = vec![0];
+        let edges = build_leaf(&data, 4, &indices, 3, false);
+        assert!(
+            edges.is_empty(),
+            "single point leaf should produce 0 edges, got {}",
+            edges.len()
+        );
+    }
+
+    #[test]
+    fn test_build_leaf_two_points() {
+        // A leaf with 2 points should produce bidirectional edges.
+        let data = vec![0.0f32, 0.0, 1.0, 0.0];
+        let indices = vec![0, 1];
+        let edges = build_leaf(&data, 2, &indices, 3, false);
+        assert!(!edges.is_empty(), "two point leaf should produce edges");
+
+        // Should have both directions: 0->1 and 1->0.
+        let has_0_to_1 = edges.iter().any(|e| e.src == 0 && e.dst == 1);
+        let has_1_to_0 = edges.iter().any(|e| e.src == 1 && e.dst == 0);
+        assert!(has_0_to_1, "should have edge 0 -> 1");
+        assert!(has_1_to_0, "should have edge 1 -> 0");
+    }
+
+    #[test]
+    fn test_build_leaf_k_equals_n() {
+        // k >= n, every point should connect to every other.
+        let data = vec![
+            0.0, 0.0,
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 1.0,
+        ];
+        let indices = vec![0, 1, 2, 3];
+        let n = indices.len();
+        // k = n means each point gets n-1 nearest neighbors = all others.
+        let edges = build_leaf(&data, 2, &indices, n, false);
+
+        // Collect directed edges.
+        let edge_set: std::collections::HashSet<(usize, usize)> =
+            edges.iter().map(|e| (e.src, e.dst)).collect();
+
+        // Every pair (i, j) with i != j should be present.
+        for i in 0..n {
+            for j in 0..n {
+                if i != j {
+                    assert!(
+                        edge_set.contains(&(i, j)),
+                        "k >= n: edge ({} -> {}) should exist",
+                        i, j
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_leaf_with_buffers_reuse() {
+        // Call build_leaf_with_buffers twice and verify buffers are reused.
+        let data = vec![
+            0.0, 0.0,
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 1.0,
+        ];
+        let indices = vec![0, 1, 2, 3];
+        let mut bufs = LeafBuffers::new();
+
+        let edges1 = build_leaf_with_buffers(&data, 2, &indices, 2, false, &mut bufs);
+        assert!(!edges1.is_empty(), "first call should produce edges");
+
+        // Verify buffers are allocated.
+        assert!(!bufs.local_data.is_empty(), "buffers should be allocated after first call");
+
+        // Second call with same data should still work.
+        let edges2 = build_leaf_with_buffers(&data, 2, &indices, 2, false, &mut bufs);
+        assert_eq!(
+            edges1.len(), edges2.len(),
+            "same input should produce same number of edges with reused buffers"
+        );
+    }
+
+    #[test]
+    fn test_extract_knn_k_larger_than_n() {
+        // k > n-1 should be clamped.
+        let dist = vec![
+            f32::MAX, 1.0,
+            1.0, f32::MAX,
+        ];
+        let edges = extract_knn(&dist, 2, 100); // k=100 but only 2 points
+        assert_eq!(
+            edges.len(), 2,
+            "k > n-1 should be clamped, each point gets 1 neighbor, total 2 edges"
+        );
+    }
+
+    #[test]
+    fn test_brute_force_knn_single_point() {
+        let data = vec![5.0f32, 10.0];
+        let query = vec![5.0, 10.0];
+        let results = brute_force_knn(&data, 2, 1, &query, 5);
+        assert_eq!(results.len(), 1, "brute force on 1 point should return 1 result");
+        assert_eq!(results[0].0, 0, "should return the only point (index 0)");
+        assert!(
+            results[0].1 < 1e-6,
+            "distance to identical query should be near zero"
+        );
+    }
+
+    #[test]
+    fn test_brute_force_knn_identity() {
+        // query = data point, first result should be self with distance 0.
+        let data = vec![
+            0.0, 0.0,
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 1.0,
+        ];
+        let query = vec![1.0, 0.0]; // same as point 1
+        let results = brute_force_knn(&data, 2, 4, &query, 3);
+        assert_eq!(results[0].0, 1, "query identical to point 1 should find it first");
+        assert!(
+            results[0].1 < 1e-6,
+            "self-distance should be 0, got {}",
+            results[0].1
+        );
+    }
+
+    #[test]
+    fn test_edge_symmetry() {
+        // Verify that build_leaf produces bi-directed edges:
+        // if (a -> b) exists, then (b -> a) should also exist.
+        let data = vec![
+            0.0, 0.0,
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 1.0,
+            0.5, 0.5,
+        ];
+        let indices = vec![0, 1, 2, 3, 4];
+        let edges = build_leaf(&data, 2, &indices, 2, false);
+
+        // Collect directed edges as a set.
+        let edge_set: std::collections::HashSet<(usize, usize)> =
+            edges.iter().map(|e| (e.src, e.dst)).collect();
+
+        // For every edge (a, b), (b, a) should also exist.
+        for edge in &edges {
+            assert!(
+                edge_set.contains(&(edge.dst, edge.src)),
+                "edge ({} -> {}) exists but reverse ({} -> {}) does not",
+                edge.src, edge.dst, edge.dst, edge.src
+            );
+        }
     }
 }

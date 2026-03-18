@@ -10,7 +10,8 @@
 
 pub mod build;
 pub use build::{
-    disk_index_build_parameter, filter_parameter, DiskIndexBuildParameters, QuantizationType,
+    disk_index_build_parameter, filter_parameter, BuildAlgorithm, DiskIndexBuildParameters,
+    QuantizationType,
 };
 
 pub mod data_model;

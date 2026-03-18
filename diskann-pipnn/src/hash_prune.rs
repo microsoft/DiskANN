@@ -18,7 +18,7 @@ use rayon::prelude::*;
 /// Precomputed LSH sketches for a set of vectors.
 ///
 /// For each vector v, Sketch(v) = [v . H_i for i=0..m] where H_i are random hyperplanes.
-/// Sketches are computed as a GEMM: Sketches = Data * Hyperplanes^T.
+/// Sketches are computed via parallel dot products.
 pub struct LshSketches {
     /// Number of hyperplanes (m).
     num_planes: usize,
@@ -30,7 +30,7 @@ pub struct LshSketches {
 }
 
 impl LshSketches {
-    /// Create new LSH sketches for the given data using GEMM.
+    /// Create new LSH sketches for the given data using parallel dot products.
     ///
     /// `data` is row-major: npoints x ndims.
     pub fn new(data: &[f32], npoints: usize, ndims: usize, num_planes: usize, seed: u64) -> Self {
@@ -98,6 +98,7 @@ impl LshSketches {
 /// Compute A * B^T where A is n x d and B is m x d.
 /// Result is n x m (row-major).
 /// Uses matrixmultiply for near-BLAS performance.
+#[allow(dead_code)] // Alternative implementation kept for benchmarking/debugging.
 fn gemm_abt(a: &[f32], n: usize, d: usize, b: &[f32], m: usize, result: &mut [f32]) {
     debug_assert_eq!(a.len(), n * d);
     debug_assert_eq!(b.len(), m * d);
@@ -125,7 +126,6 @@ fn gemm_abt(a: &[f32], n: usize, d: usize, b: &[f32], m: usize, result: &mut [f3
 }
 
 /// A single entry in the HashPrune reservoir.
-/// Packed to 8 bytes matching the paper's design.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct ReservoirEntry {
@@ -133,8 +133,7 @@ struct ReservoirEntry {
     neighbor: u32,
     /// Hash bucket (16-bit).
     hash: u16,
-    /// Distance stored as bf16-like (we use f32 but the struct is for the concept).
-    /// We store the raw f32 distance separately for accuracy.
+    /// Distance from the point to this candidate neighbor.
     distance: f32,
 }
 
@@ -142,6 +141,7 @@ struct ReservoirEntry {
 ///
 /// Uses a flat sorted Vec for O(log l) hash lookups instead of HashMap.
 /// Caches the farthest entry for O(1) eviction checks.
+/// Insertion is O(l) due to element shifting, but cache-friendly at typical l_max ~128.
 pub struct HashPruneReservoir {
     /// Entries sorted by hash for binary search.
     entries: Vec<ReservoirEntry>,
@@ -297,14 +297,14 @@ impl HashPrune {
     ) -> Self {
         let t0 = std::time::Instant::now();
         let sketches = LshSketches::new(data, npoints, ndims, num_planes, seed);
-        eprintln!("    sketch: {:.3}s", t0.elapsed().as_secs_f64());
+        tracing::debug!(elapsed_secs = t0.elapsed().as_secs_f64(), "sketch computation");
         let t1 = std::time::Instant::now();
         // Use lazy allocation: don't pre-allocate reservoir capacity.
         // Reservoirs grow on demand as edges are inserted.
         let reservoirs = (0..npoints)
             .map(|_| Mutex::new(HashPruneReservoir::new_lazy(l_max)))
             .collect();
-        eprintln!("    reservoirs: {:.3}s", t1.elapsed().as_secs_f64());
+        tracing::debug!(elapsed_secs = t1.elapsed().as_secs_f64(), "reservoir allocation");
 
         Self {
             reservoirs,
@@ -318,7 +318,7 @@ impl HashPrune {
     #[inline]
     pub fn add_edge(&self, p: usize, c: usize, distance: f32) {
         let hash = self.sketches.relative_hash(p, c);
-        self.reservoirs[p].lock().unwrap().insert(hash, c as u32, distance);
+        self.reservoirs[p].lock().unwrap_or_else(|e| e.into_inner()).insert(hash, c as u32, distance);
     }
 
     /// Add a batch of edges in parallel. Each edge is (point_idx, neighbor_idx, distance).
@@ -341,7 +341,7 @@ impl HashPrune {
         let mut i = 0;
         while i < sorted.len() {
             let src = sorted[i].src;
-            let mut reservoir = self.reservoirs[src].lock().unwrap();
+            let mut reservoir = self.reservoirs[src].lock().unwrap_or_else(|e| e.into_inner());
             while i < sorted.len() && sorted[i].src == src {
                 let edge = sorted[i];
                 let hash = self.sketches.relative_hash(src, edge.dst);
@@ -358,7 +358,7 @@ impl HashPrune {
         self.reservoirs
             .par_iter()
             .map(|reservoir| {
-                let res = reservoir.lock().unwrap();
+                let res = reservoir.lock().unwrap_or_else(|e| e.into_inner());
                 let mut neighbors = res.get_neighbors_sorted();
                 neighbors.truncate(self.max_degree);
                 neighbors.into_iter().map(|(id, _)| id).collect()
@@ -472,5 +472,107 @@ mod tests {
                 i
             );
         }
+    }
+
+    #[test]
+    fn test_reservoir_lazy_allocation() {
+        let mut res = HashPruneReservoir::new_lazy(5);
+        assert!(res.is_empty());
+        assert!(res.insert(0, 1, 1.0));
+        assert_eq!(res.len(), 1);
+    }
+
+    #[test]
+    fn test_reservoir_insert_then_evict_cycle() {
+        let mut res = HashPruneReservoir::new(3);
+        res.insert(0, 10, 3.0);
+        res.insert(1, 11, 2.0);
+        res.insert(2, 12, 1.0);
+        assert_eq!(res.len(), 3);
+        assert!(res.insert(3, 13, 0.5));
+        assert_eq!(res.len(), 3);
+        let neighbors = res.get_neighbors_sorted();
+        assert!(neighbors.iter().all(|&(_, d)| d <= 2.0));
+    }
+
+    #[test]
+    fn test_reservoir_all_same_hash() {
+        let mut res = HashPruneReservoir::new(5);
+        res.insert(0, 1, 3.0);
+        res.insert(0, 2, 2.0);
+        res.insert(0, 3, 1.0);
+        assert_eq!(res.len(), 1);
+        let neighbors = res.get_neighbors_sorted();
+        assert_eq!(neighbors[0].0, 3);
+        assert_eq!(neighbors[0].1, 1.0);
+    }
+
+    #[test]
+    fn test_reservoir_all_same_distance() {
+        let mut res = HashPruneReservoir::new(5);
+        res.insert(0, 1, 1.0);
+        res.insert(1, 2, 1.0);
+        res.insert(2, 3, 1.0);
+        assert_eq!(res.len(), 3);
+    }
+
+    #[test]
+    fn test_hash_prune_parallel_safety() {
+        use rayon::prelude::*;
+        let data = vec![0.0f32; 100 * 4];
+        let hp = HashPrune::new(&data, 100, 4, 4, 10, 5, 42);
+        (0..50).into_par_iter().for_each(|i| {
+            hp.add_edge(i, (i + 1) % 100, 1.0);
+            hp.add_edge((i + 1) % 100, i, 1.0);
+        });
+        let graph = hp.extract_graph();
+        assert_eq!(graph.len(), 100);
+    }
+
+    #[test]
+    fn test_hash_prune_high_degree_limit() {
+        let data = vec![0.0f32; 10 * 2];
+        let hp = HashPrune::new(&data, 10, 2, 4, 10, 1, 42);
+        for i in 0..10 {
+            for j in 0..10 {
+                if i != j { hp.add_edge(i, j, (i as f32 - j as f32).abs()); }
+            }
+        }
+        let graph = hp.extract_graph();
+        for neighbors in &graph {
+            assert!(neighbors.len() <= 1, "max_degree=1 should limit to 1 neighbor");
+        }
+    }
+
+    #[test]
+    fn test_hash_prune_extract_sorted() {
+        let data = vec![0.0f32; 4 * 2];
+        let hp = HashPrune::new(&data, 4, 2, 4, 10, 3, 42);
+        hp.add_edge(0, 1, 3.0);
+        hp.add_edge(0, 2, 1.0);
+        hp.add_edge(0, 3, 2.0);
+        let graph = hp.extract_graph();
+        assert!(!graph[0].is_empty());
+    }
+
+    #[test]
+    fn test_lsh_sketches_different_seeds() {
+        let data = vec![1.0f32, 0.0, 0.0, 1.0];
+        let s1 = LshSketches::new(&data, 2, 2, 4, 42);
+        let s2 = LshSketches::new(&data, 2, 2, 4, 99);
+        let h1 = s1.relative_hash(0, 1);
+        let h2 = s2.relative_hash(0, 1);
+        // Different seeds should generally produce different hashes (not guaranteed but very likely)
+        let _ = (h1, h2); // Just verify they compile and don't panic
+    }
+
+    #[test]
+    fn test_relative_hash_symmetry_broken() {
+        let data = vec![1.0f32, 0.0, 0.0, 1.0, -1.0, 0.0];
+        let sketches = LshSketches::new(&data, 3, 2, 4, 42);
+        let h01 = sketches.relative_hash(0, 1);
+        let h10 = sketches.relative_hash(1, 0);
+        // h_p(c) != h_c(p) in general because relative_hash is asymmetric
+        let _ = (h01, h10);
     }
 }

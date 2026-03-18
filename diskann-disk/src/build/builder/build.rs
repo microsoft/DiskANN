@@ -53,6 +53,7 @@ use crate::{
             },
             continuation::{process_while_resource_is_available_async, ChunkingConfig},
         },
+        configuration::build_algorithm::BuildAlgorithm,
     },
     storage::{
         quant::{GeneratorContext, PQGeneration, PQGenerationContext, QuantDataGenerator},
@@ -313,6 +314,22 @@ where
     }
 
     async fn build_inmem_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
+        // Check for PiPNN algorithm
+        #[cfg(feature = "pipnn")]
+        if let BuildAlgorithm::PiPNN { .. } = self.disk_build_param.build_algorithm() {
+            return self.build_pipnn_index().await;
+        }
+
+        #[cfg(not(feature = "pipnn"))]
+        if !matches!(
+            self.disk_build_param.build_algorithm(),
+            BuildAlgorithm::Vamana
+        ) {
+            return Err(ANNError::log_index_error(
+                "PiPNN build algorithm requires the 'pipnn' feature to be enabled",
+            ));
+        }
+
         match determine_build_strategy::<Data>(
             &self.index_configuration,
             self.disk_build_param.build_memory_limit().in_bytes() as f64,
@@ -324,6 +341,84 @@ where
                     .await
             }
         }
+    }
+
+    #[cfg(feature = "pipnn")]
+    async fn build_pipnn_index(&mut self) -> ANNResult<()> {
+        use diskann_pipnn::builder;
+
+        let config = self.disk_build_param.build_algorithm()
+            .to_pipnn_config(
+                self.index_configuration.config.pruned_degree().get(),
+                self.index_configuration.dist_metric,
+                self.index_configuration.config.alpha(),
+            )
+            .ok_or_else(|| ANNError::log_index_error(
+                "build_pipnn_index called but build algorithm is not PiPNN"
+            ))?;
+
+        config.validate().map_err(|e| {
+            ANNError::log_index_error(format!("PiPNN config error: {}", e))
+        })?;
+
+        info!(
+            "Building PiPNN index: max_degree={}",
+            config.max_degree
+        );
+
+        // Load all data as f32
+        let data_path = self.index_writer.get_dataset_file();
+        let (npoints, ndims, data) = load_data_as_f32::<Data::VectorDataType, _>(
+            &data_path,
+            self.storage_provider,
+        )?;
+
+        // Set BLAS to single-threaded (PiPNN uses rayon for outer parallelism)
+        diskann_pipnn::gemm::set_blas_threads(1);
+
+        // Build the PiPNN graph, using pre-trained SQ if available.
+        let graph = match &self.build_quantizer {
+            BuildQuantizer::Scalar1Bit(with_bits) => {
+                // Use the DiskANN-trained ScalarQuantizer for 1-bit quantization.
+                // This ensures identical quantization between Vamana and PiPNN builds.
+                let sq = with_bits.quantizer();
+                let scale = sq.scale();
+                let inverse_scale = if scale == 0.0 { 1.0 } else { 1.0 / scale };
+                let sq_params = builder::SQParams {
+                    shift: sq.shift().to_vec(),
+                    inverse_scale,
+                };
+                info!("Using pre-trained SQ quantizer for PiPNN 1-bit build");
+                builder::build_with_sq(&data, npoints, ndims, &config, &sq_params)
+                    .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
+            }
+            _ => {
+                // Full precision or PQ build quantization — use PiPNN's default path.
+                builder::build(&data, npoints, ndims, &config)
+                    .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
+            }
+        };
+
+        let save_path = self.index_writer.get_mem_index_file();
+        graph.save_graph(std::path::Path::new(&save_path))
+            .map_err(|e| ANNError::log_index_error(format!("PiPNN graph save failed: {}", e)))?;
+
+        info!(
+            "PiPNN build complete: avg_degree={:.1}, max_degree={}, isolated={}",
+            graph.avg_degree(),
+            graph.max_degree(),
+            graph.num_isolated()
+        );
+
+        // Mark checkpoint stages as complete so the checkpoint system is consistent.
+        self.checkpoint_record_manager.execute_stage(
+            WorkStage::InMemIndexBuild,
+            WorkStage::WriteDiskLayout,
+            || Ok(()),
+            || Ok(()),
+        )?;
+
+        Ok(())
     }
 
     async fn build_merged_vamana_index(&mut self, pool: &RayonThreadPool) -> ANNResult<()> {
@@ -478,6 +573,31 @@ where
             Progress::Completed => Ok(()),
         }
     }
+}
+
+#[cfg(feature = "pipnn")]
+fn load_data_as_f32<T, SP>(
+    data_path: &str,
+    storage_provider: &SP,
+) -> ANNResult<(usize, usize, Vec<f32>)>
+where
+    T: VectorRepr,
+    SP: StorageReadProvider,
+{
+    let matrix = read_bin::<T>(&mut storage_provider.open_reader(data_path)?)?;
+    let npoints = matrix.nrows();
+    let ndims = matrix.ncols();
+
+    // Convert to f32
+    let mut f32_data = vec![0.0f32; npoints * ndims];
+    for i in 0..npoints {
+        let src = matrix.row(i);
+        let dst = &mut f32_data[i * ndims..(i + 1) * ndims];
+        T::as_f32_into(src, dst)
+            .map_err(|e| ANNError::log_index_error(format!("Data conversion error: {}", e)))?;
+    }
+
+    Ok((npoints, ndims, f32_data))
 }
 
 #[allow(clippy::too_many_arguments)]

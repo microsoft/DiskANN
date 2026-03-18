@@ -8,23 +8,29 @@ license.workspace = true
 edition = "2021"
 
 [dependencies]
+diskann = { workspace = true }
 diskann-vector = { workspace = true }
 diskann-utils = { workspace = true, default-features = false, features = ["rayon"] }
 rayon = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }
 bytemuck = { workspace = true, features = ["must_cast"] }
-clap = { workspace = true, features = ["derive"] }
 num-traits = { workspace = true }
 matrixmultiply = "0.3"
 cblas-sys = "0.1"
 half = { workspace = true }
 diskann-quantization = { workspace = true }
-tikv-jemallocator = "0.6"
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+rand = { workspace = true }
 
 [lints]
 workspace = true
 
-[[bin]]
-name = "pipnn-bench"
-path = "src/bin/pipnn_bench.rs"
+[[bench]]
+name = "pipnn_bench"
+harness = false

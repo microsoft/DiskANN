@@ -45,6 +45,7 @@ vfs = { workspace = true }
 
 # Optional dependencies
 opentelemetry = { workspace = true, optional = true }
+diskann-pipnn = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.6.4"
@@ -54,6 +55,7 @@ libc = "0.2.148"
 rstest.workspace = true
 tempfile.workspace = true
 vfs.workspace = true
+serde_json.workspace = true
 diskann-providers = { workspace = true, default-features = false, features = [
     "testing",
     "virtual_storage",
@@ -66,6 +68,7 @@ diskann = { workspace = true }
 [features]
 default = []
 perf_test = ["dep:opentelemetry"]
+pipnn = ["dep:diskann-pipnn"]
 virtual_storage = ["diskann-providers/virtual_storage"]
 experimental_diversity_search = [
     "diskann/experimental_diversity_search",
@@ -82,4 +85,4 @@ harness = false
 
 # Some 'cfg's in the source tree will be flagged by `cargo clippy -j 2 --workspace --no-deps --all-targets -- -D warnings`
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(feature, values("pipnn"))'] }
