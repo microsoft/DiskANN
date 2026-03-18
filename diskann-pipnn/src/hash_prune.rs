@@ -335,7 +335,6 @@ impl HashPrune {
             return;
         }
 
-        // Sort by source for batched lock acquisition.
         let mut sorted: Vec<&crate::leaf_build::Edge> = edges.iter().collect();
         sorted.sort_unstable_by_key(|e| e.src);
 
@@ -343,7 +342,6 @@ impl HashPrune {
         while i < sorted.len() {
             let src = sorted[i].src;
             let mut reservoir = self.reservoirs[src].lock().unwrap();
-
             while i < sorted.len() && sorted[i].src == src {
                 let edge = sorted[i];
                 let hash = self.sketches.relative_hash(src, edge.dst);

@@ -83,22 +83,22 @@ fn partition_assign_quantized(
                 point_data[i * u64s..(i + 1) * u64s].copy_from_slice(src);
             }
 
-            let mut dists = vec![0f32; nl];
             let mut buf: Vec<(u32, f32)> = Vec::with_capacity(nl);
+            let ld_ptr = leader_data.as_ptr();
+            let pd_ptr = point_data.as_ptr();
 
             for i in 0..sn {
-                let pt = &point_data[i * u64s..(i + 1) * u64s];
+                let pt_base = unsafe { pd_ptr.add(i * u64s) };
 
-                // Compute Hamming distance to all leaders.
-                for j in 0..nl {
-                    let ld = &leader_data[j * u64s..(j + 1) * u64s];
-                    dists[j] = crate::quantize::QuantizedData::hamming_u64(pt, ld) as f32;
-                }
-
-                // Find top-k nearest leaders.
+                // Compute Hamming distance to all leaders + build buf in one pass.
                 buf.clear();
                 for j in 0..nl {
-                    buf.push((j as u32, dists[j]));
+                    let ld_base = unsafe { ld_ptr.add(j * u64s) };
+                    let mut h = 0u32;
+                    for k in 0..u64s {
+                        unsafe { h += (*pt_base.add(k) ^ *ld_base.add(k)).count_ones(); }
+                    }
+                    buf.push((j as u32, h as f32));
                 }
                 if num_assign < buf.len() {
                     buf.select_nth_unstable_by(num_assign, |a, b| {
