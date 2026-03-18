@@ -208,6 +208,17 @@ pub fn build(data: &[f32], npoints: usize, ndims: usize, config: &PiPNNConfig) -
     let use_cosine = config.metric == diskann_vector::distance::Metric::CosineNormalized
         || config.metric == diskann_vector::distance::Metric::Cosine;
 
+    // Optionally quantize data to 1-bit for faster build.
+    let qdata = if config.quantize_bits == Some(1) {
+        eprintln!("  Quantizing to 1-bit...");
+        let t = Instant::now();
+        let q = crate::quantize::quantize_1bit(data, npoints, ndims);
+        eprintln!("  Quantization: {:.3}s ({} bytes/vec)", t.elapsed().as_secs_f64(), q.bytes_per_vec);
+        Some(q)
+    } else {
+        None
+    };
+
     // Compute medoid once upfront.
     let medoid = find_medoid(data, npoints, ndims, use_cosine);
 
@@ -237,7 +248,11 @@ pub fn build(data: &[f32], npoints: usize, ndims: usize, config: &PiPNNConfig) -
         };
 
         let indices: Vec<usize> = (0..npoints).collect();
-        let leaves = partition::parallel_partition(data, ndims, &indices, &partition_config, seed);
+        let leaves = if let Some(ref q) = qdata {
+            partition::parallel_partition_quantized(q, &indices, &partition_config, seed)
+        } else {
+            partition::parallel_partition(data, ndims, &indices, &partition_config, seed)
+        };
         let partition_time = t1.elapsed();
 
         let total_pts: usize = leaves.iter().map(|l| l.indices.len()).sum();
@@ -261,7 +276,6 @@ pub fn build(data: &[f32], npoints: usize, ndims: usize, config: &PiPNNConfig) -
         );
 
         // Build leaves in parallel, streaming edges to HashPrune per-leaf.
-        // Group edges by source point within each leaf for batched lock acquisition.
         let t2 = Instant::now();
         let use_cosine = config.metric == diskann_vector::distance::Metric::CosineNormalized
             || config.metric == diskann_vector::distance::Metric::Cosine;
@@ -270,10 +284,12 @@ pub fn build(data: &[f32], npoints: usize, ndims: usize, config: &PiPNNConfig) -
         let total_edges = AtomicUsize::new(0);
 
         leaves.par_iter().for_each(|leaf| {
-            let edges = leaf_build::build_leaf(data, ndims, &leaf.indices, config.k, use_cosine);
+            let edges = if let Some(ref q) = qdata {
+                leaf_build::build_leaf_quantized(q, &leaf.indices, config.k)
+            } else {
+                leaf_build::build_leaf(data, ndims, &leaf.indices, config.k, use_cosine)
+            };
             total_edges.fetch_add(edges.len(), Ordering::Relaxed);
-
-            // Batch insert: group edges by source, insert all at once per source.
             hash_prune.add_edges_batched(&edges);
         });
 

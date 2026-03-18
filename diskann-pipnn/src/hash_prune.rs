@@ -329,13 +329,13 @@ impl HashPrune {
     }
 
     /// Add edges from a leaf build result, batching by source point.
-    /// Sorts edges by source to acquire each lock once per unique source,
-    /// reducing lock overhead by ~10x compared to per-edge locking.
+    /// Sorts edges by source to acquire each lock once per unique source.
     pub fn add_edges_batched(&self, edges: &[crate::leaf_build::Edge]) {
         if edges.is_empty() {
             return;
         }
 
+        // Sort by source for batched lock acquisition.
         let mut sorted: Vec<&crate::leaf_build::Edge> = edges.iter().collect();
         sorted.sort_unstable_by_key(|e| e.src);
 

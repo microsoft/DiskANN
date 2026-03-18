@@ -112,6 +112,11 @@ struct Args {
     #[arg(long)]
     cosine: bool,
 
+    /// Quantize vectors to N bits before building (only 1 supported).
+    /// Uses same scalar quantization as DiskANN's --num-bits.
+    #[arg(long)]
+    quantize_bits: Option<usize>,
+
     /// Save the built index in DiskANN format at this path prefix.
     /// Creates <prefix> (graph) and <prefix>.data (vectors).
     /// Can then be loaded by diskann-benchmark with index-source=Load.
@@ -300,6 +305,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         l_max: args.l_max,
         final_prune: args.final_prune,
         metric,
+        quantize_bits: args.quantize_bits,
     };
 
     println!("\n=== PiPNN Build ===");

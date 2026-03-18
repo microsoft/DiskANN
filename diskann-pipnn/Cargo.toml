@@ -19,6 +19,7 @@ num-traits = { workspace = true }
 matrixmultiply = "0.3"
 cblas-sys = "0.1"
 half = { workspace = true }
+diskann-quantization = { workspace = true }
 tikv-jemallocator = "0.6"
 
 [lints]
