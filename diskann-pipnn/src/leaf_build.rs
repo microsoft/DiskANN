@@ -190,24 +190,26 @@ fn extract_knn(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f3
     let actual_k = k.min(n - 1);
     let mut edges = Vec::with_capacity(n * actual_k);
 
+    // Reuse buffer across all points to avoid n allocations.
+    let mut dists: Vec<(u32, f32)> = Vec::with_capacity(n);
+
     for i in 0..n {
         let row = &dist_matrix[i * n..(i + 1) * n];
 
-        // Collect (index, distance) pairs.
-        let mut dists: Vec<(usize, f32)> = (0..n)
-            .map(|j| (j, row[j]))
-            .collect();
+        dists.clear();
+        for j in 0..n {
+            dists.push((j as u32, unsafe { *row.get_unchecked(j) }));
+        }
 
-        // Partial sort to get the k nearest.
         if actual_k < dists.len() {
             dists.select_nth_unstable_by(actual_k, |a, b| {
                 a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
             });
-            dists.truncate(actual_k);
         }
 
-        for (j, dist) in dists {
-            edges.push((i, j, dist));
+        for idx in 0..actual_k {
+            let (j, dist) = unsafe { *dists.get_unchecked(idx) };
+            edges.push((i, j as usize, dist));
         }
     }
 
