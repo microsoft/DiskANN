@@ -263,34 +263,40 @@ fn build_leaf_with_buffers(
     }
 
     // GEMM: dots = local_data * local_data^T (using OpenBLAS)
+    // sgemm with beta=0.0 zeroes the output — no explicit fill needed.
     let dot_matrix = &mut bufs.dot_matrix[..n * n];
     crate::gemm::sgemm_aat(local_data, n, ndims, dot_matrix);
 
-    // Compute distance matrix into reused buffer.
-    let dist_matrix = &mut bufs.dist_matrix[..n * n];
-    if use_cosine {
+    // Convert to distance matrix.
+    // For cosine: convert in-place (each element only depends on itself).
+    // For L2: need separate buffer since dist[i][j] depends on norms + dot[i][j].
+    let dist_matrix = if use_cosine {
+        // In-place: dist = 1 - dot
         for i in 0..n {
-            let dr = &mut dist_matrix[i * n..(i + 1) * n];
-            let dotr = &dot_matrix[i * n..(i + 1) * n];
-            for j in 0..n { dr[j] = (1.0 - dotr[j]).max(0.0); }
-            dr[i] = f32::MAX;
+            let row = &mut dot_matrix[i * n..(i + 1) * n];
+            for j in 0..n { row[j] = (1.0 - row[j]).max(0.0); }
+            row[i] = f32::MAX;
         }
+        &mut bufs.dot_matrix[..n * n] // dot_matrix IS now the dist_matrix
     } else {
+        // L2: dist[i][j] = norms_sq[i] + norms_sq[j] - 2*dot[i][j]
+        let dist = &mut bufs.dist_matrix[..n * n];
         for i in 0..n {
             let ni = norms_sq[i];
-            let dr = &mut dist_matrix[i * n..(i + 1) * n];
-            let dotr = &dot_matrix[i * n..(i + 1) * n];
-            for j in 0..n { dr[j] = (ni + norms_sq[j] - 2.0 * dotr[j]).max(0.0); }
-            dr[i] = f32::MAX;
+            for j in 0..n {
+                dist[i * n + j] = (ni + norms_sq[j] - 2.0 * dot_matrix[i * n + j]).max(0.0);
+            }
+            dist[i * n + i] = f32::MAX;
         }
-    }
+        dist
+    };
 
     // Extract k-NN edges.
     let local_edges = extract_knn(dist_matrix, n, k);
 
     // Create bi-directed edges using reused seen buffer.
     let seen = &mut bufs.seen[..n * n];
-    for v in seen.iter_mut() { *v = false; }
+    seen.fill(false);
 
     let mut global_edges = Vec::with_capacity(local_edges.len() * 2);
 
