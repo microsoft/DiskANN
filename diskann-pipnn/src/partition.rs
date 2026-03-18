@@ -47,6 +47,7 @@ fn l2_distance_inline(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// Quantized version of partition_assign using Hamming distance on 1-bit data.
+/// Pre-extracts leader u64 data for cache locality.
 fn partition_assign_quantized(
     qdata: &crate::quantize::QuantizedData,
     points: &[usize],
@@ -56,11 +57,17 @@ fn partition_assign_quantized(
     let np = points.len();
     let nl = leaders.len();
     let num_assign = fanout.min(nl);
+    let u64s = qdata.u64s_per_vec();
 
-    // Flat assignments.
+    // Pre-extract leader data into contiguous cache-friendly array.
+    let mut leader_data: Vec<u64> = vec![0u64; nl * u64s];
+    for (i, &idx) in leaders.iter().enumerate() {
+        leader_data[i * u64s..(i + 1) * u64s].copy_from_slice(qdata.get_u64(idx));
+    }
+
     let mut assignments = vec![0u32; np * num_assign];
 
-    const STRIPE: usize = 16_384;
+    const STRIPE: usize = 32_768;
     assignments
         .par_chunks_mut(STRIPE * num_assign)
         .enumerate()
@@ -69,16 +76,30 @@ fn partition_assign_quantized(
             let end = (start + STRIPE).min(np);
             let sn = end - start;
 
-            let mut buf: Vec<(u32, f32)> = Vec::with_capacity(nl);
+            // Pre-extract point data for this stripe.
+            let mut point_data: Vec<u64> = vec![0u64; sn * u64s];
             for i in 0..sn {
-                let pt = qdata.get(points[start + i]);
-                buf.clear();
-                for (j, &leader_idx) in leaders.iter().enumerate() {
-                    let ld = qdata.get(leader_idx);
-                    let d = crate::quantize::QuantizedData::hamming(pt, ld) as f32;
-                    buf.push((j as u32, d));
+                let src = qdata.get_u64(points[start + i]);
+                point_data[i * u64s..(i + 1) * u64s].copy_from_slice(src);
+            }
+
+            let mut dists = vec![0f32; nl];
+            let mut buf: Vec<(u32, f32)> = Vec::with_capacity(nl);
+
+            for i in 0..sn {
+                let pt = &point_data[i * u64s..(i + 1) * u64s];
+
+                // Compute Hamming distance to all leaders.
+                for j in 0..nl {
+                    let ld = &leader_data[j * u64s..(j + 1) * u64s];
+                    dists[j] = crate::quantize::QuantizedData::hamming_u64(pt, ld) as f32;
                 }
 
+                // Find top-k nearest leaders.
+                buf.clear();
+                for j in 0..nl {
+                    buf.push((j as u32, dists[j]));
+                }
                 if num_assign < buf.len() {
                     buf.select_nth_unstable_by(num_assign, |a, b| {
                         a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
@@ -92,7 +113,6 @@ fn partition_assign_quantized(
             }
         });
 
-    // Aggregate.
     let mut clusters: Vec<Vec<usize>> = vec![Vec::new(); nl];
     for i in 0..np {
         let row = &assignments[i * num_assign..(i + 1) * num_assign];
