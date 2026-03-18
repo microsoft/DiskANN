@@ -260,40 +260,28 @@ pub fn build(data: &[f32], npoints: usize, ndims: usize, config: &PiPNNConfig) -
             total_pts as f64 / npoints as f64,
         );
 
-        // Build leaves in parallel and stream edges directly to HashPrune.
+        // Build leaves in parallel, streaming edges to HashPrune per-leaf.
+        // Group edges by source point within each leaf for batched lock acquisition.
         let t2 = Instant::now();
+        let use_cosine = config.metric == diskann_vector::distance::Metric::CosineNormalized
+            || config.metric == diskann_vector::distance::Metric::Cosine;
+
         use std::sync::atomic::{AtomicUsize, Ordering};
         let total_edges = AtomicUsize::new(0);
-        let gemm_time_ns = AtomicUsize::new(0);
-        let edge_time_ns = AtomicUsize::new(0);
 
         leaves.par_iter().for_each(|leaf| {
-            let tg = Instant::now();
-            let use_cosine = config.metric == diskann_vector::distance::Metric::CosineNormalized
-                || config.metric == diskann_vector::distance::Metric::Cosine;
             let edges = leaf_build::build_leaf(data, ndims, &leaf.indices, config.k, use_cosine);
-            let g_elapsed = tg.elapsed().as_nanos() as usize;
-            gemm_time_ns.fetch_add(g_elapsed, Ordering::Relaxed);
-
-            let te = Instant::now();
-            for edge in &edges {
-                hash_prune.add_edge(edge.src, edge.dst, edge.distance);
-            }
-            let e_elapsed = te.elapsed().as_nanos() as usize;
-            edge_time_ns.fetch_add(e_elapsed, Ordering::Relaxed);
             total_edges.fetch_add(edges.len(), Ordering::Relaxed);
+
+            // Batch insert: group edges by source, insert all at once per source.
+            hash_prune.add_edges_batched(&edges);
         });
 
-        let wall = t2.elapsed();
-        let gemm_total_ms = gemm_time_ns.load(Ordering::Relaxed) as f64 / 1e6;
-        let edge_total_ms = edge_time_ns.load(Ordering::Relaxed) as f64 / 1e6;
         eprintln!(
-            "  Replica {}: leaf+merge wall {:.3}s, {} edges, thread-time: gemm {:.1}ms, hashprune {:.1}ms",
+            "  Replica {}: leaf+merge wall {:.3}s, {} edges",
             replica,
-            wall.as_secs_f64(),
+            t2.elapsed().as_secs_f64(),
             total_edges.load(Ordering::Relaxed),
-            gemm_total_ms,
-            edge_total_ms,
         );
     }
 
