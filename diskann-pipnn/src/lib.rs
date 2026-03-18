@@ -16,6 +16,7 @@ pub mod hash_prune;
 pub mod leaf_build;
 pub mod partition;
 pub mod builder;
+pub mod quantize;
 
 use diskann_vector::distance::Metric;
 
@@ -44,6 +45,9 @@ pub struct PiPNNConfig {
     pub metric: Metric,
     /// Whether to apply a final RobustPrune pass.
     pub final_prune: bool,
+    /// If set, quantize vectors to this many bits before building.
+    /// Only 1-bit is currently supported.
+    pub quantize_bits: Option<usize>,
 }
 
 impl Default for PiPNNConfig {
@@ -60,6 +64,7 @@ impl Default for PiPNNConfig {
             l_max: 128,
             metric: Metric::L2,
             final_prune: false,
+            quantize_bits: None,
         }
     }
 }

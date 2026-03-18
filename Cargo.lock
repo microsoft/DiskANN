@@ -832,6 +832,7 @@ dependencies = [
  "bytemuck",
  "cblas-sys",
  "clap",
+ "diskann-quantization",
  "diskann-utils",
  "diskann-vector",
  "half",

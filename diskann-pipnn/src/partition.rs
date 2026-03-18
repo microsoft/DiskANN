@@ -46,6 +46,63 @@ fn l2_distance_inline(a: &[f32], b: &[f32]) -> f32 {
     sum
 }
 
+/// Quantized version of partition_assign using Hamming distance on 1-bit data.
+fn partition_assign_quantized(
+    qdata: &crate::quantize::QuantizedData,
+    points: &[usize],
+    leaders: &[usize],
+    fanout: usize,
+) -> Vec<Vec<usize>> {
+    let np = points.len();
+    let nl = leaders.len();
+    let num_assign = fanout.min(nl);
+
+    // Flat assignments.
+    let mut assignments = vec![0u32; np * num_assign];
+
+    const STRIPE: usize = 16_384;
+    assignments
+        .par_chunks_mut(STRIPE * num_assign)
+        .enumerate()
+        .for_each(|(stripe_idx, assign_chunk)| {
+            let start = stripe_idx * STRIPE;
+            let end = (start + STRIPE).min(np);
+            let sn = end - start;
+
+            let mut buf: Vec<(u32, f32)> = Vec::with_capacity(nl);
+            for i in 0..sn {
+                let pt = qdata.get(points[start + i]);
+                buf.clear();
+                for (j, &leader_idx) in leaders.iter().enumerate() {
+                    let ld = qdata.get(leader_idx);
+                    let d = crate::quantize::QuantizedData::hamming(pt, ld) as f32;
+                    buf.push((j as u32, d));
+                }
+
+                if num_assign < buf.len() {
+                    buf.select_nth_unstable_by(num_assign, |a, b| {
+                        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+
+                let out = &mut assign_chunk[i * num_assign..(i + 1) * num_assign];
+                for k in 0..num_assign {
+                    out[k] = buf[k].0;
+                }
+            }
+        });
+
+    // Aggregate.
+    let mut clusters: Vec<Vec<usize>> = vec![Vec::new(); nl];
+    for i in 0..np {
+        let row = &assignments[i * num_assign..(i + 1) * num_assign];
+        for &li in row {
+            clusters[li as usize].push(i);
+        }
+    }
+    clusters
+}
+
 /// Fused GEMM + assignment: compute distances to leaders in stripes and immediately
 /// extract top-k assignments without materializing the full N x L distance matrix.
 /// Peak memory: STRIPE * L * 4 bytes (~64MB) instead of N * L * 4 bytes (~4GB for 1M x 1000).
@@ -351,7 +408,7 @@ pub fn parallel_partition(
         .map(|_| rng.random())
         .collect();
 
-    // Recurse in parallel.
+    // Recurse in parallel. Each cluster is either a leaf or needs further splitting.
     let t2 = std::time::Instant::now();
     let results: Vec<Vec<Leaf>> = merged_clusters
         .par_iter()
@@ -370,6 +427,145 @@ pub fn parallel_partition(
 
     eprintln!("    recursion: {:.3}s", t2.elapsed().as_secs_f64());
     results.into_iter().flatten().collect()
+}
+
+/// Quantized version of parallel_partition using Hamming distance on 1-bit data.
+pub fn parallel_partition_quantized(
+    qdata: &crate::quantize::QuantizedData,
+    indices: &[usize],
+    config: &PartitionConfig,
+    seed: u64,
+) -> Vec<Leaf> {
+    let n = indices.len();
+    if n <= config.c_max {
+        return vec![Leaf { indices: indices.to_vec() }];
+    }
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let fanout = if !config.fanout.is_empty() { config.fanout[0] } else { 3 };
+
+    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
+        .max(2).min(1000).min(n);
+
+    let mut sampled_indices: Vec<usize> = indices.to_vec();
+    sampled_indices.shuffle(&mut rng);
+    let leaders: Vec<usize> = sampled_indices[..num_leaders].to_vec();
+
+    let t0 = std::time::Instant::now();
+    let clusters_local = partition_assign_quantized(qdata, indices, &leaders, fanout);
+    let assign_time = t0.elapsed();
+
+    let t1 = std::time::Instant::now();
+    let mut clusters: Vec<Vec<usize>> = clusters_local
+        .into_iter()
+        .map(|local_cluster| local_cluster.into_iter().map(|li| indices[li]).collect())
+        .collect();
+    let map_time = t1.elapsed();
+
+    eprintln!("    top-level (quantized): assign {:.3}s, map {:.3}s, {} leaders, fanout {}",
+        assign_time.as_secs_f64(), map_time.as_secs_f64(), num_leaders, fanout);
+
+    // Merge undersized clusters.
+    let mut merged_clusters: Vec<Vec<usize>> = Vec::new();
+    let mut small_clusters: Vec<Vec<usize>> = Vec::new();
+    for cluster in clusters.drain(..) {
+        if cluster.len() < config.c_min && !cluster.is_empty() {
+            small_clusters.push(cluster);
+        } else if !cluster.is_empty() {
+            merged_clusters.push(cluster);
+        }
+    }
+    if !small_clusters.is_empty() && !merged_clusters.is_empty() {
+        for small in small_clusters {
+            let min_idx = merged_clusters.iter().enumerate()
+                .min_by_key(|(_, c)| c.len()).map(|(i, _)| i).unwrap_or(0);
+            merged_clusters[min_idx].extend(small);
+        }
+    } else if merged_clusters.is_empty() {
+        merged_clusters = small_clusters;
+    }
+
+    let need_recurse = merged_clusters.iter().filter(|c| c.len() > config.c_max).count();
+    eprintln!("    merge: {} clusters, {} need recursion", merged_clusters.len(), need_recurse);
+
+    let sub_seeds: Vec<u64> = (0..merged_clusters.len()).map(|_| rng.random()).collect();
+
+    let t2 = std::time::Instant::now();
+    let results: Vec<Vec<Leaf>> = merged_clusters
+        .par_iter()
+        .zip(sub_seeds.par_iter())
+        .map(|(cluster, sub_seed)| {
+            if cluster.len() <= config.c_max {
+                vec![Leaf { indices: cluster.clone() }]
+            } else if cluster.len() <= config.c_max * 3 {
+                force_split(cluster, config.c_max)
+            } else {
+                // Recursive quantized partition.
+                let mut sub_rng = rand::rngs::StdRng::seed_from_u64(*sub_seed);
+                partition_quantized_recursive(qdata, cluster, config, 1, &mut sub_rng)
+            }
+        })
+        .collect();
+
+    eprintln!("    recursion: {:.3}s", t2.elapsed().as_secs_f64());
+    results.into_iter().flatten().collect()
+}
+
+fn partition_quantized_recursive(
+    qdata: &crate::quantize::QuantizedData,
+    indices: &[usize],
+    config: &PartitionConfig,
+    level: usize,
+    rng: &mut impl Rng,
+) -> Vec<Leaf> {
+    let n = indices.len();
+    if n <= config.c_max { return vec![Leaf { indices: indices.to_vec() }]; }
+    if level >= MAX_DEPTH || (level >= 2 && n <= config.c_max * 3) {
+        return force_split(indices, config.c_max);
+    }
+
+    let fanout = if level < config.fanout.len() { config.fanout[level] } else { 1 };
+    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize).max(2).min(1000).min(n);
+
+    let mut sampled: Vec<usize> = indices.to_vec();
+    sampled.shuffle(rng);
+    let leaders: Vec<usize> = sampled[..num_leaders].to_vec();
+
+    let clusters_local = partition_assign_quantized(qdata, indices, &leaders, fanout);
+    let mut clusters: Vec<Vec<usize>> = clusters_local
+        .into_iter()
+        .map(|lc| lc.into_iter().map(|li| indices[li]).collect())
+        .collect();
+
+    // Merge small clusters.
+    let mut merged: Vec<Vec<usize>> = Vec::new();
+    let mut smalls: Vec<Vec<usize>> = Vec::new();
+    for c in clusters.drain(..) {
+        if c.len() < config.c_min && !c.is_empty() { smalls.push(c); }
+        else if !c.is_empty() { merged.push(c); }
+    }
+    if !smalls.is_empty() && !merged.is_empty() {
+        for s in smalls {
+            let mi = merged.iter().enumerate().min_by_key(|(_, c)| c.len()).map(|(i,_)| i).unwrap_or(0);
+            merged[mi].extend(s);
+        }
+    } else if merged.is_empty() { merged = smalls; }
+
+    if merged.len() == 1 && merged[0].len() > config.c_max {
+        return force_split(&merged[0], config.c_max);
+    }
+
+    let mut leaves = Vec::new();
+    for cluster in merged {
+        if cluster.len() <= config.c_max {
+            leaves.push(Leaf { indices: cluster });
+        } else {
+            let sub_seed: u64 = rng.random();
+            let mut sub_rng = rand::rngs::StdRng::seed_from_u64(sub_seed);
+            leaves.extend(partition_quantized_recursive(qdata, &cluster, config, level + 1, &mut sub_rng));
+        }
+    }
+    leaves
 }
 
 #[cfg(test)]

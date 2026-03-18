@@ -314,6 +314,50 @@ fn build_leaf_with_buffers(
     global_edges
 }
 
+/// Build a leaf using 1-bit quantized vectors with Hamming distance.
+/// Much faster than GEMM-based build for high-dimensional data.
+pub fn build_leaf_quantized(
+    qdata: &crate::quantize::QuantizedData,
+    indices: &[usize],
+    k: usize,
+) -> Vec<Edge> {
+    let n = indices.len();
+    if n <= 1 {
+        return Vec::new();
+    }
+
+    // Compute all-pairs Hamming distance matrix directly (no GEMM needed).
+    let mut dist_matrix = vec![f32::MAX; n * n];
+    for i in 0..n {
+        let a = qdata.get(indices[i]);
+        for j in (i + 1)..n {
+            let b = qdata.get(indices[j]);
+            let d = crate::quantize::QuantizedData::hamming(a, b) as f32;
+            dist_matrix[i * n + j] = d;
+            dist_matrix[j * n + i] = d;
+        }
+    }
+
+    // Extract k-NN and create bi-directed edges.
+    let local_edges = extract_knn(&dist_matrix, n, k);
+
+    let mut seen = vec![false; n * n];
+    let mut global_edges = Vec::with_capacity(local_edges.len() * 2);
+
+    for &(src, dst, dist) in &local_edges {
+        if !seen[src * n + dst] {
+            seen[src * n + dst] = true;
+            global_edges.push(Edge { src: indices[src], dst: indices[dst], distance: dist });
+        }
+        if !seen[dst * n + src] {
+            seen[dst * n + src] = true;
+            global_edges.push(Edge { src: indices[dst], dst: indices[src], distance: dist_matrix[dst * n + src] });
+        }
+    }
+
+    global_edges
+}
+
 /// Brute-force search the dataset using L2 distance.
 ///
 /// Returns the `k` nearest neighbor indices and distances for the query.
