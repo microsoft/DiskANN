@@ -102,30 +102,109 @@ fn train_1bit(data: &[f32], npoints: usize, ndims: usize) -> (Vec<f32>, f32) {
 
 impl QuantizedData {
     /// Get the packed bit vector for point i.
-    #[inline]
+    #[inline(always)]
     pub fn get(&self, i: usize) -> &[u8] {
         let start = i * self.bytes_per_vec;
-        &self.bits[start..start + self.bytes_per_vec]
+        unsafe { self.bits.get_unchecked(start..start + self.bytes_per_vec) }
     }
 
-    /// Compute Hamming distance between two quantized vectors.
+    /// Get the packed bit vector as u64 slice for point i (fast path).
+    #[inline(always)]
+    pub fn get_u64(&self, i: usize) -> &[u64] {
+        let start = i * self.bytes_per_vec;
+        let u64s = self.bytes_per_vec / 8;
+        unsafe {
+            let ptr = self.bits.as_ptr().add(start) as *const u64;
+            std::slice::from_raw_parts(ptr, u64s)
+        }
+    }
+
+    /// Number of u64s per vector.
+    #[inline]
+    pub fn u64s_per_vec(&self) -> usize {
+        self.bytes_per_vec / 8
+    }
+
+    /// Compute Hamming distance between two quantized vectors (u64 fast path).
+    #[inline(always)]
+    pub fn hamming_u64(a: &[u64], b: &[u64]) -> u32 {
+        let mut dist = 0u32;
+        for i in 0..a.len() {
+            unsafe {
+                dist += (*a.get_unchecked(i) ^ *b.get_unchecked(i)).count_ones();
+            }
+        }
+        dist
+    }
+
+    /// Compute Hamming distance between two byte slices.
     #[inline]
     pub fn hamming(a: &[u8], b: &[u8]) -> u32 {
-        let mut dist = 0u32;
-        // Process 8 bytes at a time for efficiency.
         let chunks = a.len() / 8;
         let a64 = a.as_ptr() as *const u64;
         let b64 = b.as_ptr() as *const u64;
+        let mut dist = 0u32;
         for i in 0..chunks {
             unsafe {
-                let xor = *a64.add(i) ^ *b64.add(i);
-                dist += xor.count_ones();
+                dist += (*a64.add(i) ^ *b64.add(i)).count_ones();
             }
         }
-        // Handle remaining bytes.
         for i in (chunks * 8)..a.len() {
             dist += (a[i] ^ b[i]).count_ones();
         }
         dist
+    }
+
+    /// Compute all-pairs Hamming distance matrix for a set of points.
+    /// Returns flat n x n matrix (row-major) with f32::MAX on diagonal.
+    /// Uses cache-friendly blocking and u64 fast path.
+    pub fn compute_distance_matrix(&self, indices: &[usize]) -> Vec<f32> {
+        let n = indices.len();
+        let u64s = self.u64s_per_vec();
+
+        // Extract contiguous u64 data for cache locality.
+        let mut local: Vec<u64> = vec![0u64; n * u64s];
+        for (i, &idx) in indices.iter().enumerate() {
+            let src = self.get_u64(idx);
+            local[i * u64s..(i + 1) * u64s].copy_from_slice(src);
+        }
+
+        let mut dist = vec![f32::MAX; n * n];
+
+        // Blocked computation for L1 cache friendliness.
+        const BLOCK: usize = 64;
+        for ib in (0..n).step_by(BLOCK) {
+            let ie = (ib + BLOCK).min(n);
+            for jb in (ib..n).step_by(BLOCK) {
+                let je = (jb + BLOCK).min(n);
+                for i in ib..ie {
+                    let a = &local[i * u64s..(i + 1) * u64s];
+                    let j_start = if jb == ib { i + 1 } else { jb };
+                    for j in j_start..je {
+                        let b = &local[j * u64s..(j + 1) * u64s];
+                        let d = Self::hamming_u64(a, b) as f32;
+                        dist[i * n + j] = d;
+                        dist[j * n + i] = d;
+                    }
+                }
+            }
+        }
+        dist
+    }
+
+    /// Compute Hamming distances from one point to many leaders.
+    /// Returns distances as f32 slice.
+    pub fn distances_to_leaders(
+        &self,
+        point_idx: usize,
+        leader_indices: &[usize],
+        out: &mut [f32],
+    ) {
+        let u64s = self.u64s_per_vec();
+        let pt = self.get_u64(point_idx);
+        for (j, &leader_idx) in leader_indices.iter().enumerate() {
+            let ld = self.get_u64(leader_idx);
+            out[j] = Self::hamming_u64(pt, ld) as f32;
+        }
     }
 }
