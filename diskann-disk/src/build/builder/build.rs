@@ -242,6 +242,15 @@ where
         self.build_inmem_index(&pool).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
 
+        // Return freed memory (f32 data, graph, PiPNN internals) to the OS
+        // before disk layout starts. Without this, ~1.7 GB of freed-but-retained
+        // memory inflates peak RSS during the disk layout phase.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            extern "C" { fn malloc_trim(pad: usize) -> i32; }
+            malloc_trim(0);
+        }
+
         // Use physical file to pass the memory index to the disk writer
         self.create_disk_layout()?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
