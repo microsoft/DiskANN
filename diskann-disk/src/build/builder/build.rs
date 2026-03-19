@@ -416,11 +416,15 @@ where
             .map_err(|e| ANNError::log_index_error(format!("PiPNN graph save failed: {}", e)))?;
 
         info!(
-            "PiPNN build complete: avg_degree={:.1}, max_degree={}, isolated={}",
+            "PiPNN build complete: avg_degree={:.1}, max_degree={}, isolated={}, total={:.3}s",
             graph.avg_degree(),
             graph.max_degree(),
-            graph.num_isolated()
+            graph.num_isolated(),
+            graph.build_stats.total_secs
         );
+        // Print timing breakdown to stdout (tracing goes to OpenTelemetry spans,
+        // not stdout, so use print! for user-visible output like Vamana does).
+        print!("{}", graph.build_stats);
 
         // Mark checkpoint stages as complete so the checkpoint system is consistent.
         self.checkpoint_record_manager.execute_stage(
