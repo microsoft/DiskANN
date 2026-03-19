@@ -43,7 +43,7 @@ struct GridRangeSearch {
     /// Description of the test scenario for reviewers.
     description: String,
 
-    /// The query given to search.
+    /// The query vector used for range search.
     query: Vec<f32>,
 
     /// The search radius.

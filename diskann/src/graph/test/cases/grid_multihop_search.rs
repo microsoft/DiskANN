@@ -132,7 +132,7 @@ struct GridMultihopSearch {
     /// Description of the test scenario for reviewers.
     description: String,
 
-    /// The query given to search.
+    /// The query vector used for multihop search.
     query: Vec<f32>,
 
     /// The results returned from search as (id, distance) pairs.
