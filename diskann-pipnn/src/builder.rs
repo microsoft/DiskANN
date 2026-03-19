@@ -16,6 +16,7 @@
 
 use std::time::Instant;
 
+use diskann::utils::VectorRepr;
 use rayon::prelude::*;
 
 use crate::hash_prune::HashPrune;
@@ -236,15 +237,16 @@ impl PiPNNGraph {
 /// matching DiskANN's `find_medoid_with_sampling` behavior. The centroid
 /// is a geometric center, so L2 is the natural metric regardless of the
 /// build distance metric.
-fn find_medoid(data: &[f32], npoints: usize, ndims: usize) -> usize {
+fn find_medoid<T: VectorRepr>(data: &[T], npoints: usize, ndims: usize) -> usize {
     let dist_fn = make_dist_fn(Metric::L2);
 
     // Compute centroid.
     let mut centroid = vec![0.0f32; ndims];
+    let mut point_buf = vec![0.0f32; ndims];
     for i in 0..npoints {
-        let point = &data[i * ndims..(i + 1) * ndims];
+        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut point_buf).expect("f32 conversion");
         for d in 0..ndims {
-            centroid[d] += point[d];
+            centroid[d] += point_buf[d];
         }
     }
     let inv_n = 1.0 / npoints as f32;
@@ -255,8 +257,8 @@ fn find_medoid(data: &[f32], npoints: usize, ndims: usize) -> usize {
     let mut best_idx = 0;
     let mut best_dist = f32::MAX;
     for i in 0..npoints {
-        let point = &data[i * ndims..(i + 1) * ndims];
-        let dist = dist_fn.call(point, &centroid);
+        T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut point_buf).expect("f32 conversion");
+        let dist = dist_fn.call(&point_buf, &centroid);
         if dist < best_dist {
             best_dist = dist;
             best_idx = i;
@@ -268,14 +270,17 @@ fn find_medoid(data: &[f32], npoints: usize, ndims: usize) -> usize {
 
 /// Build a PiPNN index from typed vector data.
 ///
-/// Converts input data to f32 before building (GEMM requires f32).
+/// Keeps data in its native type T and converts to f32 on-the-fly at each access point.
+/// For f16 data this saves ~793 MB peak RSS compared to upfront conversion.
 /// `data` is a flat slice of `T` in row-major order: npoints x ndims.
-pub fn build_typed<T: diskann::utils::VectorRepr>(
+pub fn build_typed<T: VectorRepr + Send + Sync>(
     data: &[T],
     npoints: usize,
     ndims: usize,
     config: &PiPNNConfig,
 ) -> PiPNNResult<PiPNNGraph> {
+    config.validate()?;
+
     let expected_len = npoints * ndims;
     if data.len() != expected_len {
         return Err(PiPNNError::DataLengthMismatch {
@@ -286,15 +291,23 @@ pub fn build_typed<T: diskann::utils::VectorRepr>(
         });
     }
 
-    // Convert to f32 using VectorRepr::as_f32_into
-    let mut f32_data = vec![0.0f32; expected_len];
-    for i in 0..npoints {
-        let src = &data[i * ndims..(i + 1) * ndims];
-        let dst = &mut f32_data[i * ndims..(i + 1) * ndims];
-        T::as_f32_into(src, dst).map_err(|e| PiPNNError::Config(format!("{}", e)))?;
+    if npoints == 0 || ndims == 0 {
+        return Err(PiPNNError::Config(
+            "npoints and ndims must be > 0".into(),
+        ));
     }
 
-    build(&f32_data, npoints, ndims, config)
+    tracing::info!(
+        npoints = npoints,
+        ndims = ndims,
+        k = config.k,
+        max_degree = config.max_degree,
+        c_max = config.c_max,
+        replicas = config.replicas,
+        "PiPNN build started (typed)"
+    );
+
+    build_internal(data, npoints, ndims, config, None)
 }
 
 /// Build a PiPNN index.
@@ -328,9 +341,9 @@ pub fn build(data: &[f32], npoints: usize, ndims: usize, config: &PiPNNConfig) -
         "PiPNN build started"
     );
 
-    // The build() path always builds at full precision.
+    // The build() path always builds at full precision with f32 data.
     // For quantized builds, use build_with_sq() which accepts pre-trained SQ params.
-    build_internal(data, npoints, ndims, config, None)
+    build_internal::<f32>(data, npoints, ndims, config, None)
 }
 
 /// Pre-trained scalar quantizer parameters for 1-bit quantization.
@@ -405,12 +418,12 @@ pub fn build_with_sq(
     );
 
     // Build using the internal build loop with pre-quantized data.
-    build_internal(data, npoints, ndims, config, Some(qdata))
+    build_internal::<f32>(data, npoints, ndims, config, Some(qdata))
 }
 
-/// Internal build logic shared between `build()` and `build_with_sq()`.
-fn build_internal(
-    data: &[f32],
+/// Internal build logic shared between `build()`, `build_typed()`, and `build_with_sq()`.
+fn build_internal<T: VectorRepr + Send + Sync>(
+    data: &[T],
     npoints: usize,
     ndims: usize,
     config: &PiPNNConfig,
@@ -547,8 +560,8 @@ fn build_internal(
 
 /// RobustPrune-like final pass: diversity-aware pruning via alpha-pruning.
 /// Uses the same occlusion factor (alpha) as DiskANN's RobustPrune.
-fn final_prune(
-    data: &[f32],
+fn final_prune<T: VectorRepr + Send + Sync>(
+    data: &[T],
     ndims: usize,
     adjacency: &[Vec<u32>],
     max_degree: usize,
@@ -565,14 +578,16 @@ fn final_prune(
                 return neighbors.clone();
             }
 
-            let point_i = &data[i * ndims..(i + 1) * ndims];
+            let mut point_i = vec![0.0f32; ndims];
+            T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut point_i).expect("f32 conversion");
 
             // Compute distances from i to all its current neighbors.
+            let mut point_buf = vec![0.0f32; ndims];
             let mut candidates: Vec<(u32, f32)> = neighbors
                 .iter()
                 .map(|&j| {
-                    let point_j = &data[j as usize * ndims..(j as usize + 1) * ndims];
-                    let dist = dist_fn.call(point_i, point_j);
+                    T::as_f32_into(&data[j as usize * ndims..(j as usize + 1) * ndims], &mut point_buf).expect("f32 conversion");
+                    let dist = dist_fn.call(&point_i, &point_buf);
                     (j, dist)
                 })
                 .collect();
@@ -584,17 +599,17 @@ fn final_prune(
             // Greedy diversity-aware selection.
             let mut selected: Vec<u32> = Vec::with_capacity(max_degree);
 
+            let mut point_sel = vec![0.0f32; ndims];
+            let mut point_cand = vec![0.0f32; ndims];
             for &(cand_id, cand_dist) in &candidates {
                 if selected.len() >= max_degree {
                     break;
                 }
 
+                T::as_f32_into(&data[cand_id as usize * ndims..(cand_id as usize + 1) * ndims], &mut point_cand).expect("f32 conversion");
                 let is_pruned = selected.iter().any(|&sel_id| {
-                    let point_sel =
-                        &data[sel_id as usize * ndims..(sel_id as usize + 1) * ndims];
-                    let point_cand =
-                        &data[cand_id as usize * ndims..(cand_id as usize + 1) * ndims];
-                    let dist_sel_cand = dist_fn.call(point_sel, point_cand);
+                    T::as_f32_into(&data[sel_id as usize * ndims..(sel_id as usize + 1) * ndims], &mut point_sel).expect("f32 conversion");
+                    let dist_sel_cand = dist_fn.call(&point_sel, &point_cand);
                     dist_sel_cand * alpha < cand_dist
                 });
 

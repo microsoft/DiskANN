@@ -375,18 +375,16 @@ where
             config.max_degree
         );
 
-        // Load all data as f32
         let data_path = self.index_writer.get_dataset_file();
-        let (npoints, ndims, data) = load_data_as_f32::<Data::VectorDataType, _>(
-            &data_path,
-            self.storage_provider,
-        )?;
-
-
 
         // Build the PiPNN graph, using pre-trained SQ if available.
         let graph = match &self.build_quantizer {
             BuildQuantizer::Scalar1Bit(with_bits) => {
+                // SQ path needs f32 data for quantize_1bit.
+                let (npoints, ndims, data) = load_data_as_f32::<Data::VectorDataType, _>(
+                    &data_path,
+                    self.storage_provider,
+                )?;
                 // Use the DiskANN-trained ScalarQuantizer for 1-bit quantization.
                 // This ensures identical quantization between Vamana and PiPNN builds.
                 let sq = with_bits.quantizer();
@@ -401,8 +399,14 @@ where
                     .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
             }
             _ => {
-                // Full precision or PQ build quantization — use PiPNN's default path.
-                builder::build(&data, npoints, ndims, &config)
+                // Full precision or PQ build quantization — load data in native type
+                // and use build_typed to avoid upfront f32 conversion (saves ~793 MB
+                // peak RSS for f16 data).
+                let (npoints, ndims, data) = load_data_typed::<Data::VectorDataType, _>(
+                    &data_path,
+                    self.storage_provider,
+                )?;
+                builder::build_typed(&data, npoints, ndims, &config)
                     .map_err(|e| ANNError::log_index_error(format!("PiPNN build failed: {}", e)))?
             }
         };
@@ -606,6 +610,26 @@ where
     }
 
     Ok((npoints, ndims, f32_data))
+}
+
+/// Load data in its native type T without converting to f32.
+/// This avoids doubling memory for f16 data by keeping it as f16 in memory
+/// and converting to f32 on-the-fly at each access point inside PiPNN.
+#[cfg(feature = "pipnn")]
+fn load_data_typed<T, SP>(
+    data_path: &str,
+    storage_provider: &SP,
+) -> ANNResult<(usize, usize, Vec<T>)>
+where
+    T: VectorRepr,
+    SP: StorageReadProvider,
+{
+    let matrix = read_bin::<T>(&mut storage_provider.open_reader(data_path)?)?;
+    let npoints = matrix.nrows();
+    let ndims = matrix.ncols();
+    let data: Vec<T> = matrix.into_inner().into_vec();
+
+    Ok((npoints, ndims, data))
 }
 
 #[allow(clippy::too_many_arguments)]
