@@ -63,101 +63,6 @@ pub struct Edge {
     pub distance: f32,
 }
 
-/// Compute the all-pairs distance matrix for a set of points within a leaf.
-///
-/// `data` is the global data array (row-major, npoints_global x ndims).
-/// `indices` are the global indices of points in this leaf.
-/// `use_cosine`: if true, distance = 1 - dot(a,b) (for normalized vectors).
-///
-/// Returns a flat distance matrix of size n x n (row-major).
-#[allow(dead_code)] // Alternative implementation kept for benchmarking/debugging.
-fn compute_distance_matrix(data: &[f32], ndims: usize, indices: &[usize], use_cosine: bool) -> Vec<f32> {
-    let n = indices.len();
-
-    // Extract the local data for this leaf into contiguous memory.
-    let mut local_data = vec![0.0f32; n * ndims];
-    for (i, &idx) in indices.iter().enumerate() {
-        local_data[i * ndims..(i + 1) * ndims]
-            .copy_from_slice(&data[idx * ndims..(idx + 1) * ndims]);
-    }
-
-    // Compute squared norms.
-    let mut norms_sq = vec![0.0f32; n];
-    for i in 0..n {
-        let row = &local_data[i * ndims..(i + 1) * ndims];
-        let mut norm = 0.0f32;
-        for &v in row {
-            norm += v * v;
-        }
-        norms_sq[i] = norm;
-    }
-
-    // Compute dot product matrix: dot[i][j] = local_data[i] . local_data[j]
-    // This is the GEMM: A * A^T where A is n x ndims.
-    let mut dot_matrix = vec![0.0f32; n * n];
-    crate::gemm::sgemm_aat(&local_data, n, ndims, &mut dot_matrix);
-
-    // Compute distance matrix from dot products.
-    let mut dist_matrix = vec![0.0f32; n * n];
-    if use_cosine {
-        // For normalized vectors: distance = 1 - dot(a,b)
-        for i in 0..n {
-            let dist_row = &mut dist_matrix[i * n..(i + 1) * n];
-            let dot_row = &dot_matrix[i * n..(i + 1) * n];
-            for j in 0..n {
-                dist_row[j] = (1.0 - dot_row[j]).max(0.0);
-            }
-            dist_row[i] = f32::MAX;
-        }
-    } else {
-        // L2: dist[i][j] = norms_sq[i] + norms_sq[j] - 2 * dot[i][j]
-        for i in 0..n {
-            let ni = norms_sq[i];
-            let dist_row = &mut dist_matrix[i * n..(i + 1) * n];
-            let dot_row = &dot_matrix[i * n..(i + 1) * n];
-            for j in 0..n {
-                let d = ni + norms_sq[j] - 2.0 * dot_row[j];
-                dist_row[j] = d.max(0.0);
-            }
-            dist_row[i] = f32::MAX;
-        }
-    }
-
-    dist_matrix
-}
-
-/// Direct pairwise distance computation for small leaves (avoids GEMM overhead).
-#[allow(dead_code)] // Alternative implementation kept for benchmarking/debugging.
-fn compute_distance_matrix_direct(data: &[f32], ndims: usize, indices: &[usize], use_cosine: bool) -> Vec<f32> {
-    let n = indices.len();
-    let mut dist_matrix = vec![f32::MAX; n * n];
-
-    for i in 0..n {
-        let a = &data[indices[i] * ndims..(indices[i] + 1) * ndims];
-        for j in (i + 1)..n {
-            let b = &data[indices[j] * ndims..(indices[j] + 1) * ndims];
-            let d = if use_cosine {
-                let mut dot = 0.0f32;
-                for k in 0..ndims {
-                    unsafe { dot += *a.get_unchecked(k) * *b.get_unchecked(k); }
-                }
-                (1.0 - dot).max(0.0)
-            } else {
-                let mut sum = 0.0f32;
-                for k in 0..ndims {
-                    let diff = unsafe { *a.get_unchecked(k) - *b.get_unchecked(k) };
-                    sum += diff * diff;
-                }
-                sum
-            };
-            dist_matrix[i * n + j] = d;
-            dist_matrix[j * n + i] = d;
-        }
-    }
-    dist_matrix
-}
-
-// gemm_aat removed — now using crate::gemm::sgemm_aat (backed by diskann-linalg/faer).
 
 /// Extract k nearest neighbors for each point from the distance matrix.
 ///
@@ -204,7 +109,7 @@ pub fn build_leaf(
     ndims: usize,
     indices: &[usize],
     k: usize,
-    use_cosine: bool,
+    metric: diskann_vector::distance::Metric,
 ) -> Vec<Edge> {
     let n = indices.len();
     if n <= 1 {
@@ -213,7 +118,7 @@ pub fn build_leaf(
 
     LEAF_BUFFERS.with(|cell| {
         let mut bufs = cell.borrow_mut();
-        build_leaf_with_buffers(data, ndims, indices, k, use_cosine, &mut bufs)
+        build_leaf_with_buffers(data, ndims, indices, k, metric, &mut bufs)
     })
 }
 
@@ -222,7 +127,7 @@ fn build_leaf_with_buffers(
     ndims: usize,
     indices: &[usize],
     k: usize,
-    use_cosine: bool,
+    metric: diskann_vector::distance::Metric,
     bufs: &mut LeafBuffers,
 ) -> Vec<Edge> {
     let n = indices.len();
@@ -244,33 +149,57 @@ fn build_leaf_with_buffers(
         norms_sq[i] = norm;
     }
 
-    // GEMM: dots = local_data * local_data^T (using OpenBLAS)
-    // sgemm with beta=0.0 zeroes the output — no explicit fill needed.
+    // GEMM: dots = local_data * local_data^T
+    // Computes all n² dot products at once via BLAS — much faster than n² individual
+    // distance calls. The dot-to-distance conversion below is O(n²) scalar ops.
     let dot_matrix = &mut bufs.dot_matrix[..n * n];
     crate::gemm::sgemm_aat(local_data, n, ndims, dot_matrix);
 
-    // Convert to distance matrix.
-    // For cosine: convert in-place (each element only depends on itself).
-    // For L2: need separate buffer since dist[i][j] depends on norms + dot[i][j].
-    let dist_matrix = if use_cosine {
-        // In-place: dist = 1 - dot
-        for i in 0..n {
-            let row = &mut dot_matrix[i * n..(i + 1) * n];
-            for j in 0..n { row[j] = (1.0 - row[j]).max(0.0); }
-            row[i] = f32::MAX;
-        }
-        &mut bufs.dot_matrix[..n * n] // dot_matrix IS now the dist_matrix
-    } else {
-        // L2: dist[i][j] = norms_sq[i] + norms_sq[j] - 2*dot[i][j]
-        let dist = &mut bufs.dist_matrix[..n * n];
-        for i in 0..n {
-            let ni = norms_sq[i];
-            for j in 0..n {
-                dist[i * n + j] = (ni + norms_sq[j] - 2.0 * dot_matrix[i * n + j]).max(0.0);
+    // Convert to distance matrix using the target metric.
+    use diskann_vector::distance::Metric;
+    let dist_matrix = match metric {
+        Metric::CosineNormalized => {
+            // Pre-normalized: dist = 1 - dot(a, b)
+            for i in 0..n {
+                let row = &mut dot_matrix[i * n..(i + 1) * n];
+                for j in 0..n { row[j] = (1.0 - row[j]).max(0.0); }
+                row[i] = f32::MAX;
             }
-            dist[i * n + i] = f32::MAX;
+            &mut bufs.dot_matrix[..n * n]
         }
-        dist
+        Metric::Cosine => {
+            // Unnormalized: dist = 1 - dot(a,b)/(||a||*||b||)
+            let dist = &mut bufs.dist_matrix[..n * n];
+            for i in 0..n {
+                let ni_sqrt = norms_sq[i].sqrt();
+                for j in 0..n {
+                    let denom = ni_sqrt * norms_sq[j].sqrt();
+                    let cos_sim = if denom > 0.0 { dot_matrix[i * n + j] / denom } else { 0.0 };
+                    dist[i * n + j] = (1.0 - cos_sim).max(0.0);
+                }
+                dist[i * n + i] = f32::MAX;
+            }
+            dist
+        }
+        Metric::L2 => {
+            let dist = &mut bufs.dist_matrix[..n * n];
+            for i in 0..n {
+                let ni = norms_sq[i];
+                for j in 0..n {
+                    dist[i * n + j] = (ni + norms_sq[j] - 2.0 * dot_matrix[i * n + j]).max(0.0);
+                }
+                dist[i * n + i] = f32::MAX;
+            }
+            dist
+        }
+        Metric::InnerProduct => {
+            for i in 0..n {
+                let row = &mut dot_matrix[i * n..(i + 1) * n];
+                for j in 0..n { row[j] = -row[j]; }
+                row[i] = f32::MAX;
+            }
+            &mut bufs.dot_matrix[..n * n]
+        }
     };
 
     // Extract k-NN edges.
@@ -364,6 +293,7 @@ pub fn brute_force_knn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use diskann_vector::distance::{DistanceProvider, Metric};
 
     #[test]
     fn test_gemm_aat() {
@@ -384,23 +314,17 @@ mod tests {
     }
 
     #[test]
-    fn test_distance_matrix() {
-        let data = vec![
-            0.0, 0.0, // point 0
-            1.0, 0.0, // point 1
-            0.0, 1.0, // point 2
-        ];
-        let indices = vec![0, 1, 2];
-        let dist = compute_distance_matrix(&data, 2, &indices, false);
-
-        // Self-distances should be MAX (for k-NN).
-        assert_eq!(dist[0], f32::MAX);
+    fn test_distance_l2() {
+        let dist_fn = <f32 as DistanceProvider<f32>>::distance_comparer(Metric::L2, Some(2));
+        let p0 = [0.0f32, 0.0];
+        let p1 = [1.0f32, 0.0];
+        let p2 = [0.0f32, 1.0];
         // dist(0,1) = 1
-        assert!((dist[1] - 1.0).abs() < 1e-6);
+        assert!((dist_fn.call(&p0, &p1) - 1.0).abs() < 1e-6);
         // dist(0,2) = 1
-        assert!((dist[2] - 1.0).abs() < 1e-6);
+        assert!((dist_fn.call(&p0, &p2) - 1.0).abs() < 1e-6);
         // dist(1,2) = 2
-        assert!((dist[1 * 3 + 2] - 2.0).abs() < 1e-6);
+        assert!((dist_fn.call(&p1, &p2) - 2.0).abs() < 1e-6);
     }
 
     #[test]
@@ -413,7 +337,7 @@ mod tests {
         ];
         let indices = vec![0, 1, 2, 3];
 
-        let edges = build_leaf(&data, 2, &indices, 2, false);
+        let edges = build_leaf(&data, 2, &indices, 2, Metric::L2);
 
         assert!(!edges.is_empty());
 
@@ -479,7 +403,7 @@ mod tests {
         }
 
         let indices = vec![0, 1, 2, 3];
-        let edges = build_leaf(&data, 2, &indices, 2, true);
+        let edges = build_leaf(&data, 2, &indices, 2, Metric::CosineNormalized);
 
         assert!(!edges.is_empty(), "cosine leaf should produce edges");
 
@@ -530,7 +454,7 @@ mod tests {
         // A leaf with 1 point should produce no edges.
         let data = vec![1.0f32, 2.0, 3.0, 4.0];
         let indices = vec![0];
-        let edges = build_leaf(&data, 4, &indices, 3, false);
+        let edges = build_leaf(&data, 4, &indices, 3, Metric::L2);
         assert!(
             edges.is_empty(),
             "single point leaf should produce 0 edges, got {}",
@@ -543,7 +467,7 @@ mod tests {
         // A leaf with 2 points should produce bidirectional edges.
         let data = vec![0.0f32, 0.0, 1.0, 0.0];
         let indices = vec![0, 1];
-        let edges = build_leaf(&data, 2, &indices, 3, false);
+        let edges = build_leaf(&data, 2, &indices, 3, Metric::L2);
         assert!(!edges.is_empty(), "two point leaf should produce edges");
 
         // Should have both directions: 0->1 and 1->0.
@@ -565,7 +489,7 @@ mod tests {
         let indices = vec![0, 1, 2, 3];
         let n = indices.len();
         // k = n means each point gets n-1 nearest neighbors = all others.
-        let edges = build_leaf(&data, 2, &indices, n, false);
+        let edges = build_leaf(&data, 2, &indices, n, Metric::L2);
 
         // Collect directed edges.
         let edge_set: std::collections::HashSet<(usize, usize)> =
@@ -597,14 +521,14 @@ mod tests {
         let indices = vec![0, 1, 2, 3];
         let mut bufs = LeafBuffers::new();
 
-        let edges1 = build_leaf_with_buffers(&data, 2, &indices, 2, false, &mut bufs);
+        let edges1 = build_leaf_with_buffers(&data, 2, &indices, 2, Metric::L2, &mut bufs);
         assert!(!edges1.is_empty(), "first call should produce edges");
 
         // Verify buffers are allocated.
         assert!(!bufs.local_data.is_empty(), "buffers should be allocated after first call");
 
         // Second call with same data should still work.
-        let edges2 = build_leaf_with_buffers(&data, 2, &indices, 2, false, &mut bufs);
+        let edges2 = build_leaf_with_buffers(&data, 2, &indices, 2, Metric::L2, &mut bufs);
         assert_eq!(
             edges1.len(), edges2.len(),
             "same input should produce same number of edges with reused buffers"
@@ -669,7 +593,7 @@ mod tests {
             0.5, 0.5,
         ];
         let indices = vec![0, 1, 2, 3, 4];
-        let edges = build_leaf(&data, 2, &indices, 2, false);
+        let edges = build_leaf(&data, 2, &indices, 2, Metric::L2);
 
         // Collect directed edges as a set.
         let edge_set: std::collections::HashSet<(usize, usize)> =

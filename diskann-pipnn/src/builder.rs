@@ -427,6 +427,7 @@ fn build_internal(
             c_min: config.c_min,
             p_samp: config.p_samp,
             fanout: config.fanout.clone(),
+            metric: config.metric,
         };
 
         let indices: Vec<usize> = (0..npoints).collect();
@@ -469,7 +470,7 @@ fn build_internal(
             let edges = if let Some(ref q) = qdata {
                 leaf_build::build_leaf_quantized(q, &leaf.indices, config.k)
             } else {
-                leaf_build::build_leaf(data, ndims, &leaf.indices, config.k, matches!(config.metric, Metric::CosineNormalized | Metric::Cosine))
+                leaf_build::build_leaf(data, ndims, &leaf.indices, config.k, config.metric)
             };
             total_edges.fetch_add(edges.len(), Ordering::Relaxed);
             hash_prune.add_edges_batched(&edges);
