@@ -55,6 +55,26 @@ thread_local! {
     static QUANT_SEEN: RefCell<Vec<bool>> = RefCell::new(Vec::new());
 }
 
+/// Release thread-local leaf build buffers on the calling thread.
+///
+/// After leaf building is complete, these buffers pin pages in glibc's
+/// per-thread arenas, preventing `malloc_trim` from returning freed
+/// reservoir memory to the OS. Calling this from each rayon thread
+/// allows the arena heaps to be reclaimed.
+pub fn release_thread_buffers() {
+    LEAF_BUFFERS.with(|cell| {
+        let mut bufs = cell.borrow_mut();
+        bufs.local_data = Vec::new();
+        bufs.norms_sq = Vec::new();
+        bufs.dot_matrix = Vec::new();
+        bufs.dist_matrix = Vec::new();
+        bufs.seen = Vec::new();
+    });
+    QUANT_SEEN.with(|cell| {
+        *cell.borrow_mut() = Vec::new();
+    });
+}
+
 /// An edge produced by leaf building: (source, destination, distance).
 #[derive(Debug, Clone, Copy)]
 pub struct Edge {
