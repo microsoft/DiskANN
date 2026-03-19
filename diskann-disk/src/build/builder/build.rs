@@ -236,11 +236,15 @@ where
             self.index_configuration.num_threads
         );
 
+        let t_pq = std::time::Instant::now();
         self.generate_compressed_data(&pool).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::PqConstruction);
+        let pq_secs = t_pq.elapsed().as_secs_f64();
 
+        let t_index = std::time::Instant::now();
         self.build_inmem_index(&pool).await?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::InmemIndexBuild);
+        let index_secs = t_index.elapsed().as_secs_f64();
 
         // Return freed memory (f32 data, graph, PiPNN internals) to the OS
         // before disk layout starts. Without this, ~1.7 GB of freed-but-retained
@@ -252,8 +256,15 @@ where
         }
 
         // Use physical file to pass the memory index to the disk writer
+        let t_layout = std::time::Instant::now();
         self.create_disk_layout()?;
         logger.log_checkpoint(DiskIndexBuildCheckpoint::DiskLayout);
+        let layout_secs = t_layout.elapsed().as_secs_f64();
+
+        println!("Disk Index Build Phases");
+        println!("  PQ compression: {:.3}s", pq_secs);
+        println!("  Graph build:    {:.3}s", index_secs);
+        println!("  Disk layout:    {:.3}s", layout_secs);
 
         Ok(())
     }
