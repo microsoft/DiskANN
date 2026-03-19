@@ -4,6 +4,8 @@
  */
 
 mod grid_insert;
+mod grid_multihop_search;
+mod grid_range_search;
 mod grid_search;
 mod inplace_delete;
 
