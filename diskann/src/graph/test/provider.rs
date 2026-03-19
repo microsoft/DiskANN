@@ -893,6 +893,11 @@ impl<'a> Accessor<'a> {
             get_vector: provider.get_vector.local(),
         }
     }
+
+    /// Return a reference to the underlying provider.
+    pub fn provider(&self) -> &Provider {
+        self.provider
+    }
 }
 
 impl provider::HasId for Accessor<'_> {
@@ -965,6 +970,24 @@ impl glue::SearchExt for Accessor<'_> {
 
 impl glue::ExpandBeam<[f32]> for Accessor<'_> {}
 impl glue::FillSet for Accessor<'_> {}
+
+impl provider::CacheableAccessor for Accessor<'_> {
+    type Map = diskann_utils::lifetime::Slice<f32>;
+
+    fn as_cached<'a, 'b>(element: &'a &'b [f32]) -> &'a &'b [f32]
+    where
+        Self: 'a + 'b,
+    {
+        element
+    }
+
+    fn from_cached<'a>(element: &'a [f32]) -> &'a [f32]
+    where
+        Self: 'a,
+    {
+        element
+    }
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Strategy {
