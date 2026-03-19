@@ -16,8 +16,7 @@ rand = { workspace = true }
 rand_distr = { workspace = true }
 bytemuck = { workspace = true, features = ["must_cast"] }
 num-traits = { workspace = true }
-matrixmultiply = "0.3"
-cblas-sys = "0.1"
+diskann-linalg = { workspace = true }
 half = { workspace = true }
 diskann-quantization = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

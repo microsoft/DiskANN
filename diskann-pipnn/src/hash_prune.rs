@@ -95,35 +95,7 @@ impl LshSketches {
     }
 }
 
-/// Compute A * B^T where A is n x d and B is m x d.
-/// Result is n x m (row-major).
-/// Uses matrixmultiply for near-BLAS performance.
-#[allow(dead_code)] // Alternative implementation kept for benchmarking/debugging.
-fn gemm_abt(a: &[f32], n: usize, d: usize, b: &[f32], m: usize, result: &mut [f32]) {
-    debug_assert_eq!(a.len(), n * d);
-    debug_assert_eq!(b.len(), m * d);
-    debug_assert_eq!(result.len(), n * m);
-    result.fill(0.0);
 
-    unsafe {
-        matrixmultiply::sgemm(
-            n,
-            d,
-            m,
-            1.0,
-            a.as_ptr(),
-            d as isize,
-            1,
-            b.as_ptr(),
-            1,
-            d as isize,
-            0.0,
-            result.as_mut_ptr(),
-            m as isize,
-            1,
-        );
-    }
-}
 
 /// A single entry in the HashPrune reservoir.
 #[derive(Debug, Clone, Copy)]

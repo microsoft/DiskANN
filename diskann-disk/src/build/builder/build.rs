@@ -373,8 +373,7 @@ where
             self.storage_provider,
         )?;
 
-        // Set BLAS to single-threaded (PiPNN uses rayon for outer parallelism)
-        diskann_pipnn::gemm::set_blas_threads(1);
+
 
         // Build the PiPNN graph, using pre-trained SQ if available.
         let graph = match &self.build_quantizer {
