@@ -3008,7 +3008,8 @@ mod tests {
         // Baseline //
         //////////////
 
-        /// A complete snapshot of a quantizer's serialized form and expected behavior.
+        /// A complete snapshot of a spherical quantizer's serialized form and expected
+        /// behavior on the local test dataset.
         #[derive(Debug, Clone, Serialize, Deserialize)]
         struct Baseline {
             /// Number of bits per quantized dimension.
@@ -3018,7 +3019,6 @@ mod tests {
             /// The data transform used for pre-conditioning.
             transform: DataTransform,
             /// Pre-scaling configuration.
-            #[serde(default)]
             pre_scale: ScaleConfig,
             /// Effective dimensionality of compressed vectors.
             dim: usize,
