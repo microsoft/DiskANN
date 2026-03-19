@@ -113,7 +113,7 @@ fn default_c_min() -> usize {
     256
 }
 fn default_p_samp() -> f64 {
-    0.05
+    0.005
 }
 fn default_fanout() -> Vec<usize> {
     vec![10, 3]

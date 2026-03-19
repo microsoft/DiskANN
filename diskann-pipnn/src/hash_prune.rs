@@ -97,7 +97,22 @@ impl LshSketches {
 
 
 
+/// Convert f32 distance to bf16 (truncate lower 16 mantissa bits).
+/// For non-negative values, bf16 bit ordering matches f32 ordering,
+/// so u16 comparison gives correct distance ordering.
+#[inline(always)]
+fn f32_to_bf16(v: f32) -> u16 {
+    (v.to_bits() >> 16) as u16
+}
+
+/// Convert bf16 back to f32 (zero-fill lower mantissa bits).
+#[inline(always)]
+fn bf16_to_f32(v: u16) -> f32 {
+    f32::from_bits((v as u32) << 16)
+}
+
 /// A single entry in the HashPrune reservoir.
+/// Packed to exactly 8 bytes: 4 (neighbor) + 2 (hash) + 2 (distance as bf16).
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 struct ReservoirEntry {
@@ -105,8 +120,9 @@ struct ReservoirEntry {
     neighbor: u32,
     /// Hash bucket (16-bit).
     hash: u16,
-    /// Distance from the point to this candidate neighbor.
-    distance: f32,
+    /// Distance stored as bf16 (raw u16 bits). Non-negative bf16 values
+    /// are monotonically ordered as u16, enabling integer comparison.
+    distance: u16,
 }
 
 /// HashPrune reservoir for a single point.
@@ -119,8 +135,8 @@ pub struct HashPruneReservoir {
     entries: Vec<ReservoirEntry>,
     /// Maximum reservoir size.
     l_max: usize,
-    /// Cached farthest distance and its index in entries.
-    farthest_dist: f32,
+    /// Cached farthest distance (bf16) and its index in entries.
+    farthest_dist: u16,
     farthest_idx: usize,
 }
 
@@ -129,7 +145,7 @@ impl HashPruneReservoir {
         Self {
             entries: Vec::with_capacity(l_max),
             l_max,
-            farthest_dist: f32::NEG_INFINITY,
+            farthest_dist: 0,
             farthest_idx: 0,
         }
     }
@@ -140,7 +156,7 @@ impl HashPruneReservoir {
         Self {
             entries: Vec::new(),
             l_max,
-            farthest_dist: f32::NEG_INFINITY,
+            farthest_dist: 0,
             farthest_idx: 0,
         }
     }
@@ -157,11 +173,11 @@ impl HashPruneReservoir {
     #[inline]
     fn update_farthest(&mut self) {
         if self.entries.is_empty() {
-            self.farthest_dist = f32::NEG_INFINITY;
+            self.farthest_dist = 0;
             self.farthest_idx = 0;
             return;
         }
-        let mut max_dist = f32::NEG_INFINITY;
+        let mut max_dist: u16 = 0;
         let mut max_idx = 0;
         for (idx, entry) in self.entries.iter().enumerate() {
             if entry.distance > max_dist {
@@ -174,14 +190,17 @@ impl HashPruneReservoir {
     }
 
     /// Try to insert a candidate neighbor with the given hash and distance.
+    /// Distance is converted to bf16 at the boundary for compact storage.
     #[inline]
     pub fn insert(&mut self, hash: u16, neighbor: u32, distance: f32) -> bool {
+        let dist_bf16 = f32_to_bf16(distance);
+
         // If the hash bucket already exists, keep the closer point.
         if let Some(idx) = self.find_hash(hash) {
-            if distance < self.entries[idx].distance {
+            if dist_bf16 < self.entries[idx].distance {
                 let was_farthest = idx == self.farthest_idx;
                 self.entries[idx].neighbor = neighbor;
-                self.entries[idx].distance = distance;
+                self.entries[idx].distance = dist_bf16;
                 if was_farthest {
                     self.update_farthest();
                 }
@@ -195,25 +214,25 @@ impl HashPruneReservoir {
             let pos = self.entries
                 .binary_search_by_key(&hash, |e| e.hash)
                 .unwrap_or_else(|e| e);
-            self.entries.insert(pos, ReservoirEntry { neighbor, distance, hash });
-            if distance > self.farthest_dist {
-                self.farthest_dist = distance;
+            self.entries.insert(pos, ReservoirEntry { neighbor, distance: dist_bf16, hash });
+            if dist_bf16 > self.farthest_dist {
+                self.farthest_dist = dist_bf16;
                 // Position may have shifted
                 self.update_farthest();
             } else if self.entries.len() == 1 {
-                self.farthest_dist = distance;
+                self.farthest_dist = dist_bf16;
                 self.farthest_idx = 0;
             }
             return true;
         }
 
         // Reservoir is full: evict farthest if new is closer.
-        if distance < self.farthest_dist {
+        if dist_bf16 < self.farthest_dist {
             self.entries.remove(self.farthest_idx);
             let pos = self.entries
                 .binary_search_by_key(&hash, |e| e.hash)
                 .unwrap_or_else(|e| e);
-            self.entries.insert(pos, ReservoirEntry { neighbor, distance, hash });
+            self.entries.insert(pos, ReservoirEntry { neighbor, distance: dist_bf16, hash });
             self.update_farthest();
             return true;
         }
@@ -223,13 +242,14 @@ impl HashPruneReservoir {
 
     /// Get all neighbors in the reservoir, sorted by distance.
     pub fn get_neighbors_sorted(&self) -> Vec<(u32, f32)> {
-        let mut neighbors: Vec<(u32, f32)> = self
+        let mut neighbors: Vec<(u32, u16)> = self
             .entries
             .iter()
             .map(|e| (e.neighbor, e.distance))
             .collect();
-        neighbors.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        neighbors
+        // u16 comparison is correct for non-negative bf16 values.
+        neighbors.sort_unstable_by_key(|&(_, d)| d);
+        neighbors.into_iter().map(|(id, d)| (id, bf16_to_f32(d))).collect()
     }
 
     /// Get the number of entries in the reservoir.
