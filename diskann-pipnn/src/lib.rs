@@ -171,7 +171,7 @@ impl Default for PiPNNConfig {
             num_hash_planes: 12,
             c_max: 1024,
             c_min: 256,
-            p_samp: 0.05,
+            p_samp: 0.005,
             fanout: vec![10, 3],
             k: 3,
             max_degree: 64,

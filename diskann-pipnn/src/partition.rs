@@ -126,7 +126,7 @@ fn partition_assign_quantized(
 
 /// Fused GEMM + assignment: compute distances to leaders in stripes and immediately
 /// extract top-k assignments without materializing the full N x L distance matrix.
-/// Peak memory: STRIPE * L * 4 bytes (~64MB) instead of N * L * 4 bytes (~4GB for 1M x 1000).
+/// Peak memory: stripe * L * 4 bytes (~64MB) instead of N * L * 4 bytes.
 fn partition_assign(
     data: &[f32],
     ndims: usize,
@@ -170,13 +170,15 @@ fn partition_assign_impl(
     let mut assignments = vec![0u32; np * num_assign];
 
     // Fused parallel stripes: GEMM + distance + top-k in one pass.
-    const STRIPE: usize = 16_384;
+    // Adaptive stripe size: limit per-stripe GEMM output to ~64 MB.
+    let stripe: usize = ((64 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>()))
+        .clamp(256, 16_384);
     assignments
-        .par_chunks_mut(STRIPE * num_assign)
+        .par_chunks_mut(stripe * num_assign)
         .enumerate()
         .for_each(|(stripe_idx, assign_chunk)| {
-            let start = stripe_idx * STRIPE;
-            let end = (start + STRIPE).min(np);
+            let start = stripe_idx * stripe;
+            let end = (start + stripe).min(np);
             let sn = end - start;
             let stripe_points = &points[start..end];
 
@@ -242,6 +244,68 @@ fn force_split(indices: &[usize], c_max: usize) -> Vec<Leaf> {
         .collect()
 }
 
+/// Merge undersized clusters into the nearest large cluster by centroid distance.
+///
+/// Paper (arXiv:2602.21247): "Merge undersized clusters into the nearest
+/// (by centroid) appropriately-sized cluster."
+fn merge_small_into_nearest(
+    data: &[f32],
+    ndims: usize,
+    mut clusters: Vec<Vec<usize>>,
+    c_min: usize,
+) -> Vec<Vec<usize>> {
+    let mut large: Vec<Vec<usize>> = Vec::new();
+    let mut smalls: Vec<Vec<usize>> = Vec::new();
+
+    for c in clusters.drain(..) {
+        if c.len() < c_min && !c.is_empty() {
+            smalls.push(c);
+        } else if !c.is_empty() {
+            large.push(c);
+        }
+    }
+
+    if smalls.is_empty() || large.is_empty() {
+        if large.is_empty() { return smalls; }
+        return large;
+    }
+
+    // Compute centroids for large clusters.
+    let centroids: Vec<Vec<f32>> = large.iter()
+        .map(|c| {
+            let mut centroid = vec![0.0f32; ndims];
+            let inv = 1.0 / c.len() as f32;
+            for &idx in c {
+                let p = &data[idx * ndims..(idx + 1) * ndims];
+                for d in 0..ndims { centroid[d] += p[d]; }
+            }
+            for d in 0..ndims { centroid[d] *= inv; }
+            centroid
+        })
+        .collect();
+
+    // For each small cluster, find nearest large cluster by L2 distance
+    // from the small cluster's representative point to each large centroid.
+    for small in smalls {
+        let rep = &data[small[0] * ndims..(small[0] + 1) * ndims];
+        let nearest = centroids.iter().enumerate()
+            .map(|(i, c)| {
+                let mut dist = 0.0f32;
+                for d in 0..ndims {
+                    let diff = unsafe { *rep.get_unchecked(d) - *c.get_unchecked(d) };
+                    dist += diff * diff;
+                }
+                (i, dist)
+            })
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        large[nearest].extend(small);
+    }
+
+    large
+}
+
 /// Partition the dataset using Randomized Ball Carving.
 ///
 /// `data` is row-major: npoints_global x ndims.
@@ -277,7 +341,6 @@ pub fn partition(
     // Sample leaders.
     let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
         .max(2)
-        .min(1000)
         .min(n);
 
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
@@ -286,40 +349,15 @@ pub fn partition(
     let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout);
 
     // Map local indices back to global.
-    let mut clusters: Vec<Vec<usize>> = clusters_local
+    let clusters: Vec<Vec<usize>> = clusters_local
         .into_iter()
         .map(|local_cluster| {
             local_cluster.into_iter().map(|li| indices[li]).collect()
         })
         .collect();
 
-    // Merge undersized clusters.
-    let mut merged_clusters: Vec<Vec<usize>> = Vec::new();
-    let mut small_clusters: Vec<Vec<usize>> = Vec::new();
-
-    for cluster in clusters.drain(..) {
-        if cluster.len() < config.c_min && !cluster.is_empty() {
-            small_clusters.push(cluster);
-        } else if !cluster.is_empty() {
-            merged_clusters.push(cluster);
-        }
-    }
-
-    if !small_clusters.is_empty() && !merged_clusters.is_empty() {
-        // Merge small clusters into the nearest large cluster (by index, simple heuristic).
-        for small in small_clusters {
-            // Just append to the smallest existing cluster.
-            let min_idx = merged_clusters
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, c)| c.len())
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            merged_clusters[min_idx].extend(small);
-        }
-    } else if merged_clusters.is_empty() {
-        merged_clusters = small_clusters;
-    }
+    // Merge undersized clusters into nearest large cluster by centroid proximity.
+    let merged_clusters = merge_small_into_nearest(data, ndims, clusters, config.c_min);
 
     if merged_clusters.len() == 1 && merged_clusters[0].len() > config.c_max {
         return force_split(&merged_clusters[0], config.c_max);
@@ -367,7 +405,6 @@ pub fn parallel_partition(
     // Sample leaders.
     let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
         .max(2)
-        .min(1000)
         .min(n);
 
     let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
@@ -378,7 +415,7 @@ pub fn parallel_partition(
     let assign_time = t0.elapsed();
 
     let t1 = std::time::Instant::now();
-    let mut clusters: Vec<Vec<usize>> = clusters_local
+    let clusters: Vec<Vec<usize>> = clusters_local
         .into_iter()
         .map(|local_cluster| {
             local_cluster.into_iter().map(|li| indices[li]).collect()
@@ -394,31 +431,8 @@ pub fn parallel_partition(
         "top-level partition assign"
     );
 
-    // Merge undersized clusters.
-    let mut merged_clusters: Vec<Vec<usize>> = Vec::new();
-    let mut small_clusters: Vec<Vec<usize>> = Vec::new();
-
-    for cluster in clusters.drain(..) {
-        if cluster.len() < config.c_min && !cluster.is_empty() {
-            small_clusters.push(cluster);
-        } else if !cluster.is_empty() {
-            merged_clusters.push(cluster);
-        }
-    }
-
-    if !small_clusters.is_empty() && !merged_clusters.is_empty() {
-        for small in small_clusters {
-            let min_idx = merged_clusters
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, c)| c.len())
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            merged_clusters[min_idx].extend(small);
-        }
-    } else if merged_clusters.is_empty() {
-        merged_clusters = small_clusters;
-    }
+    // Merge undersized clusters into nearest large cluster by centroid proximity.
+    let merged_clusters = merge_small_into_nearest(data, ndims, clusters, config.c_min);
 
     let need_recurse = merged_clusters.iter().filter(|c| c.len() > config.c_max).count();
     let total_in_recurse: usize = merged_clusters.iter().filter(|c| c.len() > config.c_max).map(|c| c.len()).sum();
