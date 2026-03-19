@@ -1,0 +1,318 @@
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT license.
+
+# DiskANN Benchmarks Workflow
+# Migrated from ADO pipeline: .pipelines/DiskANN-Benchmarks.yml
+#
+# This workflow runs macro benchmarks comparing the current branch against a baseline.
+# It is manually triggered and requires a baseline reference (branch, tag, or commit).
+
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: 'A branch, commit SHA, or tag name to compare the current branch with'
+        required: true
+        default: 'main'
+        type: string
+
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+  # Use the Rust version specified in rust-toolchain.toml
+  rust_stable: "1.92"
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+  pull-requests: write  # Required for posting PR comments
+
+jobs:
+  # Macro benchmark: Mimir Enron dataset
+  macro-benchmark-mimir-enron:
+    name: Macro Benchmark - Mimir Enron
+    runs-on: ubuntu-latest
+    # TODO: For production benchmarks, consider using a self-hosted runner with:
+    # - NVMe storage for consistent I/O performance
+    # - CPU pinning (taskset) for reduced variance
+    # - Dedicated hardware to avoid noisy neighbor effects
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout current branch
+        uses: actions/checkout@v4
+        with:
+          path: diskann_rust
+          lfs: true
+
+      - name: Checkout baseline (${{ inputs.baseline_ref }})
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: baseline
+          lfs: true
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - name: Cache Rust dependencies (current)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: diskann_rust -> target
+          key: benchmark-current
+
+      - name: Cache Rust dependencies (baseline)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: baseline -> target
+          key: benchmark-baseline
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssl libssl-dev pkg-config python3-pip
+          pip install csvtomd numpy scipy
+
+      # Download the public Wikipedia-100K dataset via big-ann-benchmarks
+      # Dataset: 100K Cohere Wikipedia embeddings (768-dim, float32, cosine distance)
+      # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
+      - name: Clone big-ann-benchmarks
+        run: git clone --depth 1 https://github.com/harsha-simhadri/big-ann-benchmarks.git
+
+      - name: Download wikipedia-100K dataset
+        working-directory: big-ann-benchmarks
+        run: python create_dataset.py --dataset wikipedia-100K
+
+      - name: Copy dataset to benchmark directories
+        run: |
+          mkdir -p diskann_rust/target/tmp baseline/target/tmp
+          cp -r big-ann-benchmarks/data/wikipedia_cohere diskann_rust/target/tmp/
+          cp -r big-ann-benchmarks/data/wikipedia_cohere baseline/target/tmp/
+
+      - name: Run baseline benchmark
+        working-directory: baseline
+        run: |
+          # Note: For accurate benchmarks, consider using CPU pinning on self-hosted runners:
+          # sudo taskset -c 0,2,4,6 ionice -c 1 -n 0 cargo run ...
+          cargo run -p diskann-benchmark --features disk-index --release -- \
+            run --input-file diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
+            --output-file target/tmp/wikipedia-100K_benchmark_crate_baseline.json
+
+      - name: Run current branch benchmark
+        working-directory: diskann_rust
+        run: |
+          cargo run -p diskann-benchmark --features disk-index --release -- \
+            run --input-file diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
+            --output-file target/tmp/wikipedia-100K_benchmark_crate_target.json
+
+      - name: Generate diff stats (baseline vs target)
+        continue-on-error: true
+        run: |
+          python diskann_rust/.github/scripts/compare_disk_index_json_output.py \
+            --baseline baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json \
+            --branch diskann_rust/target/tmp/wikipedia-100K_benchmark_crate_target.json \
+            --out diskann_rust/target/tmp/wikipedia-100K_change.csv
+
+      - name: Convert results to Markdown
+        working-directory: diskann_rust
+        run: |
+          csvtomd target/tmp/wikipedia-100K_change.csv > target/tmp/wikipedia-100K_change.md
+          echo "### Benchmark Results: Wikipedia-100K Dataset" >> $GITHUB_STEP_SUMMARY
+          cat target/tmp/wikipedia-100K_change.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Validate benchmark results
+        working-directory: diskann_rust
+        run: |
+          python .github/scripts/benchmark_result_parse.py \
+            --mode pr \
+            --file target/tmp/wikipedia-100K_change.csv
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()  # Upload even if validation fails
+        with:
+          name: benchmark-results-wikipedia-100K
+          path: |
+            diskann_rust/target/tmp/wikipedia-100K_change.csv
+            diskann_rust/target/tmp/wikipedia-100K_change.md
+            diskann_rust/target/tmp/wikipedia-100K_benchmark_crate_target.json
+            baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json
+          retention-days: 30
+
+  # Macro benchmark: OAI Large dataset
+  macro-benchmark-oai-large:
+    name: Macro Benchmark - OAI Large
+    runs-on: ubuntu-latest
+    # TODO: For production benchmarks, consider using a self-hosted runner
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout current branch
+        uses: actions/checkout@v4
+        with:
+          path: diskann_rust
+          lfs: true
+
+      - name: Checkout baseline (${{ inputs.baseline_ref }})
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.baseline_ref }}
+          path: baseline
+          lfs: true
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - name: Cache Rust dependencies (current)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: diskann_rust -> target
+          key: benchmark-current
+
+      - name: Cache Rust dependencies (baseline)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: baseline -> target
+          key: benchmark-baseline
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssl libssl-dev pkg-config python3-pip
+          pip install csvtomd numpy scipy
+
+      # Download the public Wikipedia-100K dataset via big-ann-benchmarks
+      # Dataset: 100K Cohere Wikipedia embeddings (768-dim, float32, cosine distance)
+      # Source: https://github.com/harsha-simhadri/big-ann-benchmarks
+      - name: Clone big-ann-benchmarks
+        run: git clone --depth 1 https://github.com/harsha-simhadri/big-ann-benchmarks.git
+
+      - name: Download wikipedia-100K dataset
+        working-directory: big-ann-benchmarks
+        run: python create_dataset.py --dataset wikipedia-100K
+
+      - name: Copy dataset to benchmark directories
+        run: |
+          mkdir -p diskann_rust/target/tmp baseline/target/tmp
+          cp -r big-ann-benchmarks/data/wikipedia_cohere diskann_rust/target/tmp/
+          cp -r big-ann-benchmarks/data/wikipedia_cohere baseline/target/tmp/
+
+      - name: Run baseline benchmark
+        working-directory: baseline
+        run: |
+          cargo run -p diskann-benchmark --features disk-index --release -- \
+            run --input-file diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
+            --output-file target/tmp/wikipedia-100K_benchmark_crate_baseline.json
+
+      - name: Run current branch benchmark
+        working-directory: diskann_rust
+        run: |
+          cargo run -p diskann-benchmark --features disk-index --release -- \
+            run --input-file diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
+            --output-file target/tmp/wikipedia-100K_benchmark_crate_target.json
+
+      - name: Generate diff stats (baseline vs target)
+        continue-on-error: true
+        run: |
+          python diskann_rust/.github/scripts/compare_disk_index_json_output.py \
+            --baseline baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json \
+            --branch diskann_rust/target/tmp/wikipedia-100K_benchmark_crate_target.json \
+            --out diskann_rust/target/tmp/wikipedia-100K_change.csv
+
+      - name: Convert results to Markdown
+        working-directory: diskann_rust
+        run: |
+          csvtomd target/tmp/wikipedia-100K_change.csv > target/tmp/wikipedia-100K_change.md
+          echo "### Benchmark Results: Wikipedia-100K Dataset" >> $GITHUB_STEP_SUMMARY
+          cat target/tmp/wikipedia-100K_change.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Validate benchmark results
+        working-directory: diskann_rust
+        run: |
+          python .github/scripts/benchmark_result_parse.py \
+            --mode pr \
+            --file target/tmp/wikipedia-100K_change.csv
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()  # Upload even if validation fails
+        with:
+          name: benchmark-results-oai-wikipedia-100K
+          path: |
+            diskann_rust/target/tmp/wikipedia-100K_change.csv
+            diskann_rust/target/tmp/wikipedia-100K_change.md
+            diskann_rust/target/tmp/wikipedia-100K_benchmark_crate_target.json
+            baseline/target/tmp/wikipedia-100K_benchmark_crate_baseline.json
+          retention-days: 30
+
+  # NOTE: IAI micro-benchmarks are temporarily disabled in the ADO pipeline
+  # due to callgrind not running with Rust version `ms-1.86.0`.
+  # Uncomment when ready to enable:
+  #
+  # micro-benchmark-iai:
+  #   name: Micro Benchmark - IAI
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 120
+  #
+  #   steps:
+  #     - name: Checkout current branch
+  #       uses: actions/checkout@v4
+  #       with:
+  #         path: diskann_rust
+  #
+  #     - name: Checkout baseline (${{ inputs.baseline_ref }})
+  #       uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ inputs.baseline_ref }}
+  #         path: baseline
+  #
+  #     - name: Install Rust ${{ env.rust_stable }}
+  #       uses: dtolnay/rust-toolchain@master
+  #       with:
+  #         toolchain: ${{ env.rust_stable }}
+  #
+  #     - name: Install valgrind and iai-callgrind-runner
+  #       run: |
+  #         sudo apt-get update
+  #         sudo apt-get install -y valgrind
+  #         cargo install --version 0.14.0 iai-callgrind-runner
+  #
+  #     - name: Run baseline IAI benchmarks
+  #       working-directory: baseline
+  #       run: |
+  #         cargo bench --bench bench_main_iai
+  #         cargo bench --bench bench_main_vector_iai
+  #
+  #     - name: Copy IAI baseline files
+  #       run: |
+  #         mkdir -p diskann_rust/target
+  #         cp -R baseline/target/iai diskann_rust/target/
+  #
+  #     - name: Run current branch IAI benchmarks
+  #       working-directory: diskann_rust
+  #       run: |
+  #         cargo bench --bench bench_main_iai
+  #         cargo bench --bench bench_main_vector_iai
