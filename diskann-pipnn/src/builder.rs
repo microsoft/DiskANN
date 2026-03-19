@@ -23,6 +23,21 @@ use crate::leaf_build;
 use crate::partition::{self, PartitionConfig};
 use crate::{PiPNNConfig, PiPNNError, PiPNNResult};
 
+/// Ask glibc to return freed pages to the OS.
+/// Without this, RSS stays inflated after large temporary allocations
+/// (e.g. partition GEMM buffers) even though the memory is freed.
+#[cfg(target_os = "linux")]
+fn trim_heap() {
+    unsafe {
+        extern "C" { fn malloc_trim(pad: usize) -> i32; }
+        malloc_trim(0);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn trim_heap() {}
+
+
 use diskann_vector::distance::{Distance, DistanceProvider, Metric};
 
 /// Create a DiskANN distance functor for the given metric.
@@ -452,6 +467,9 @@ fn build_internal(
             total_pts = total_pts,
             "Partition complete"
         );
+        // Return freed partition GEMM buffers to the OS so they don't inflate
+        // peak RSS during the subsequent leaf build + reservoir filling phase.
+        trim_heap();
         tracing::debug!(
             small_leaves = small_leaves,
             med_leaves = med_leaves,
@@ -484,10 +502,18 @@ fn build_internal(
         );
     }
 
+    // Release thread-local leaf buffers so their arena pages can be reclaimed.
+    // Without this, ~3 MB per rayon thread pins entire 64 MB glibc heap segments,
+    // preventing ~500 MB of freed reservoir memory from being returned to the OS.
+    (0..rayon::current_num_threads()).into_par_iter().for_each(|_| {
+        leaf_build::release_thread_buffers();
+    });
+
     // Extract final graph from HashPrune.
     let t3 = Instant::now();
     let adjacency = hash_prune.extract_graph();
     tracing::info!(elapsed_secs = t3.elapsed().as_secs_f64(), "Graph extraction complete");
+    trim_heap();
 
     // Optional final prune pass.
     let adjacency = if config.final_prune {
@@ -504,6 +530,10 @@ fn build_internal(
         medoid,
         metric: config.metric,
     };
+
+    // Return all freed memory (reservoirs, sketches, partition buffers, leaf buffers)
+    // to the OS before handing off to the disk layout phase.
+    trim_heap();
 
     tracing::info!(
         avg_degree = graph.avg_degree(),
