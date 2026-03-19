@@ -5,7 +5,8 @@
 
 use diskann_wide::{SIMDMask, SIMDMulAdd, SIMDPartialOrd, SIMDSelect, SIMDSumTree, SIMDVector};
 
-use super::common::{BlockTranspose, square_norm};
+use super::common::square_norm;
+use crate::multi_vector::{BlockTransposed, BlockTransposedRef};
 use diskann_utils::{
     strided::StridedView,
     views::{Matrix, MatrixView, MutMatrixView},
@@ -25,7 +26,7 @@ diskann_wide::alias!(u32s = u32x8);
 //
 // Return the residual distance.
 pub fn distances_in_place(
-    dataset: &BlockTranspose<16>,
+    dataset: BlockTransposedRef<'_, f32, 16>,
     data_norms: &[f32],
     centers: MatrixView<'_, f32>,
     center_norms: &[f32],
@@ -85,11 +86,10 @@ pub fn distances_in_place(
         // SAFETY: Closure pre-conditions mean that this access is in-bounds.
         let block_ptr = unsafe { dataset.block_ptr_unchecked(block) };
         for dim in 0..dataset.ncols() {
-            // SAFETY: For all rows in this block, 16 reads are valid and by construction,
-            // `dim < dataset.block_size()`. This loads the first 8.
+            // SAFETY: Each block stores `N * ncols` contiguous f32s (N=16).
+            // `dim < dataset.ncols()`, so `N * dim + 7 < N * ncols`. Loads first 8.
             let d0 = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(N * dim)) };
-            // SAFETY: For all rows in this block, 16 reads are valid and by construction,
-            // `dim < dataset.block_size()`. This loads the last 8.
+            // SAFETY: Same reasoning; `N * dim + N2 + 7 < N * ncols`. Loads last 8.
             let d1 = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(N * dim + N2)) };
 
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.
@@ -126,11 +126,10 @@ pub fn distances_in_place(
         // SAFETY: Closure pre-conditions mean that this access is in-bounds.
         let block_ptr = unsafe { dataset.block_ptr_unchecked(block) };
         for dim in 0..dataset.ncols() {
-            // SAFETY: For all rows in this block, 16 reads are valid and by construction,
-            // `dim < dataset.block_size()`. This loads the first 8.
+            // SAFETY: Each block stores `N * ncols` contiguous f32s (N=16).
+            // `dim < dataset.ncols()`, so `N * dim + 7 < N * ncols`. Loads first 8.
             let d0 = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(N * dim)) };
-            // SAFETY: For all rows in this block, 16 reads are valid and by construction,
-            // `dim < dataset.block_size()`. This loads the last 8.
+            // SAFETY: Same reasoning; `N * dim + N2 + 7 < N * ncols`. Loads last 8.
             let d1 = unsafe { f32s::load_simd(diskann_wide::ARCH, block_ptr.add(N * dim + N2)) };
 
             // SAFETY: Closure pre-conditions and Check 2 make this a valid access.
@@ -373,7 +372,7 @@ fn update_centroids(mut centers: MutMatrixView<'_, f32>, data: StridedView<'_, f
 pub(crate) fn lloyds_inner(
     data: StridedView<'_, f32>,
     square_norms: &[f32],
-    transpose: &BlockTranspose<16>,
+    transpose: BlockTransposedRef<'_, f32, 16>,
     mut centers: MutMatrixView<'_, f32>,
     max_reps: usize,
 ) -> (Vec<u32>, f32) {
@@ -393,7 +392,7 @@ pub(crate) fn lloyds_inner(
     let dim = data.ncols();
     assert_eq!(
         dim,
-        transpose.block_size(),
+        transpose.ncols(),
         "data and transpose should have the same dimensions"
     );
     assert_eq!(
@@ -450,9 +449,15 @@ pub fn lloyds(
         "data and centers must have the same dimension",
     );
 
-    let transpose = BlockTranspose::<16>::from_matrix_view(data);
+    let transpose = BlockTransposed::<f32, 16>::from_matrix_view(data);
     let square_norms: Vec<f32> = data.row_iter().map(square_norm).collect();
-    lloyds_inner(data.into(), &square_norms, &transpose, centers, max_reps)
+    lloyds_inner(
+        data.into(),
+        &square_norms,
+        transpose.as_view(),
+        centers,
+        max_reps,
+    )
 }
 
 #[cfg(test)]
@@ -522,7 +527,7 @@ mod tests {
             let data_norms: Vec<f32> = data.row_iter().map(square_norm).collect();
 
             let residual = distances_in_place(
-                &(BlockTranspose::from_matrix_view(data.as_view())),
+                BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
                 &data_norms,
                 centers.as_view(),
                 &center_norms,
@@ -585,7 +590,7 @@ mod tests {
         let mut nearest = vec![0; ndata];
 
         let _ = distances_in_place(
-            &(BlockTranspose::from_matrix_view(data.as_view())),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -752,7 +757,7 @@ mod tests {
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -769,7 +774,7 @@ mod tests {
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -786,7 +791,7 @@ mod tests {
         let center_norms = vec![0.0; centers.nrows() + 1]; // Incorrect
         let mut nearest = vec![0; data.nrows()];
         distances_in_place(
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -803,7 +808,7 @@ mod tests {
         let center_norms = vec![0.0; centers.nrows()];
         let mut nearest = vec![0; data.nrows() + 1]; // Incorrect
         distances_in_place(
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             &data_norms,
             centers.as_view(),
             &center_norms,
@@ -824,7 +829,7 @@ mod tests {
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             centers.as_mut_view(),
             1,
         );
@@ -840,7 +845,7 @@ mod tests {
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
-            &BlockTranspose::from_matrix_view(data_incorrect.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data_incorrect.as_view()).as_view(),
             centers.as_mut_view(),
             1,
         );
@@ -856,7 +861,7 @@ mod tests {
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
-            &BlockTranspose::from_matrix_view(data_incorrect.as_view()), // Incorrect
+            BlockTransposed::<f32, 16>::from_matrix_view(data_incorrect.as_view()).as_view(), // Incorrect
             centers.as_mut_view(),
             1,
         );
@@ -871,7 +876,7 @@ mod tests {
         lloyds_inner(
             data.as_view().into(),
             &square_norms,
-            &BlockTranspose::from_matrix_view(data.as_view()),
+            BlockTransposed::<f32, 16>::from_matrix_view(data.as_view()).as_view(),
             centers.as_mut_view(),
             1,
         );

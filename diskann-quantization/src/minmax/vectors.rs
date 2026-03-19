@@ -203,16 +203,16 @@ pub type FullQueryMut<'a> = slice::SliceMut<'a, f32, FullQueryMeta>;
 // Compensated Distances //
 ///////////////////////////
 #[inline(always)]
-fn kernel<const NBITS: usize, F>(
+fn kernel<const NBITS: usize, const MBITS: usize, F>(
     x: DataRef<'_, NBITS>,
-    y: DataRef<'_, NBITS>,
+    y: DataRef<'_, MBITS>,
     f: F,
 ) -> distances::MathematicalResult<f32>
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
             BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
     F: Fn(f32, &MinMaxCompensation, &MinMaxCompensation) -> f32,
@@ -230,37 +230,37 @@ where
 
 pub struct MinMaxIP;
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::MathematicalResult<f32>>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::MathematicalResult<f32>>
     for MinMaxIP
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
             BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
     fn evaluate(
         x: DataRef<'_, NBITS>,
-        y: DataRef<'_, NBITS>,
+        y: DataRef<'_, MBITS>,
     ) -> distances::MathematicalResult<f32> {
         kernel(x, y, |v, _, _| v)
     }
 }
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::Result<f32>>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::Result<f32>>
     for MinMaxIP
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
             BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(-v?.into_inner())
     }
@@ -303,20 +303,20 @@ where
 
 pub struct MinMaxL2Squared;
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::MathematicalResult<f32>>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::MathematicalResult<f32>>
     for MinMaxL2Squared
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
             BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
     fn evaluate(
         x: DataRef<'_, NBITS>,
-        y: DataRef<'_, NBITS>,
+        y: DataRef<'_, MBITS>,
     ) -> distances::MathematicalResult<f32> {
         kernel(x, y, |v, xm, ym| {
             -2.0 * v + xm.norm_squared + ym.norm_squared
@@ -324,18 +324,18 @@ where
     }
 }
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::Result<f32>>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::Result<f32>>
     for MinMaxL2Squared
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     InnerProduct: for<'a, 'b> PureDistanceFunction<
             BitSlice<'a, NBITS, Unsigned>,
-            BitSlice<'b, NBITS, Unsigned>,
+            BitSlice<'b, MBITS, Unsigned>,
             distances::MathematicalResult<u32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let v: distances::MathematicalResult<f32> = Self::evaluate(x, y);
         Ok(v?.into_inner())
     }
@@ -386,19 +386,19 @@ where
 
 pub struct MinMaxCosine;
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::Result<f32>>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::Result<f32>>
     for MinMaxCosine
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
             DataRef<'a, NBITS>,
-            DataRef<'b, NBITS>,
+            DataRef<'b, MBITS>,
             distances::MathematicalResult<f32>,
         >,
 {
     // 1 - <X, Y> / (|X| * |Y|)
-    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let ip: MV<f32> = MinMaxIP::evaluate(x, y)?;
         let (xm, ym) = (x.meta(), y.meta());
         Ok(1.0 - ip.into_inner() / (xm.norm_squared.sqrt() * ym.norm_squared.sqrt()))
@@ -426,18 +426,18 @@ where
 
 pub struct MinMaxCosineNormalized;
 
-impl<const NBITS: usize>
-    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, NBITS>, distances::Result<f32>>
+impl<const NBITS: usize, const MBITS: usize>
+    PureDistanceFunction<DataRef<'_, NBITS>, DataRef<'_, MBITS>, distances::Result<f32>>
     for MinMaxCosineNormalized
 where
-    Unsigned: Representation<NBITS>,
+    Unsigned: Representation<NBITS> + Representation<MBITS>,
     MinMaxIP: for<'a, 'b> PureDistanceFunction<
             DataRef<'a, NBITS>,
-            DataRef<'b, NBITS>,
+            DataRef<'b, MBITS>,
             distances::MathematicalResult<f32>,
         >,
 {
-    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, NBITS>) -> distances::Result<f32> {
+    fn evaluate(x: DataRef<'_, NBITS>, y: DataRef<'_, MBITS>) -> distances::Result<f32> {
         let ip: MathematicalValue<f32> = MinMaxIP::evaluate(x, y)?;
         Ok(1.0 - ip.into_inner()) // 1 - <X, Y>
     }
@@ -477,6 +477,50 @@ mod minmax_vector_tests {
     use super::*;
     use crate::{alloc::GlobalAllocator, scalar::bit_scale};
 
+    /// Builds a random MinMax quantized vector and its full-precision reconstruction.
+    ///
+    /// Returns `(compressed, original)` where `compressed` has its `MinMaxCompensation`
+    /// metadata fully populated and `original` is the dequantized f32 vector.
+    fn random_minmax_vector<const NBITS: usize>(
+        dim: usize,
+        rng: &mut impl Rng,
+    ) -> (Data<NBITS>, Vec<f32>)
+    where
+        Unsigned: Representation<NBITS>,
+    {
+        let mut v = Data::<NBITS>::new_boxed(dim);
+
+        let domain = Unsigned::domain_const::<NBITS>();
+        let code_dist = Uniform::new_inclusive(*domain.start(), *domain.end()).unwrap();
+
+        {
+            let mut bs = v.vector_mut();
+            for i in 0..dim {
+                bs.set(i, code_dist.sample(rng)).unwrap();
+            }
+        }
+
+        let a: f32 = Uniform::new_inclusive(0.0, 2.0).unwrap().sample(rng);
+        let b: f32 = Uniform::new_inclusive(0.0, 2.0).unwrap().sample(rng);
+
+        let original: Vec<f32> = (0..dim)
+            .map(|i| a * v.vector().get(i).unwrap() as f32 + b)
+            .collect();
+
+        let code_sum: f32 = (0..dim).map(|i| v.vector().get(i).unwrap() as f32).sum();
+        let norm_squared: f32 = original.iter().map(|x| x * x).sum();
+
+        v.set_meta(MinMaxCompensation {
+            a,
+            b,
+            n: a * code_sum,
+            norm_squared,
+            dim: dim as u32,
+        });
+
+        (v, original)
+    }
+
     fn test_minmax_compensated_vectors<const NBITS: usize, R>(dim: usize, rng: &mut R)
     where
         Unsigned: Representation<NBITS>,
@@ -494,70 +538,11 @@ mod minmax_vector_tests {
     {
         assert!(dim <= bit_scale::<NBITS>() as usize);
 
-        // Create two vectors with known compensation values
-        let mut v1 = Data::<NBITS>::new_boxed(dim);
-        let mut v2 = Data::<NBITS>::new_boxed(dim);
+        let (v1, original1) = random_minmax_vector::<NBITS>(dim, rng);
+        let (v2, original2) = random_minmax_vector::<NBITS>(dim, rng);
 
-        let domain = Unsigned::domain_const::<NBITS>();
-        let code_distribution = Uniform::new_inclusive(*domain.start(), *domain.end()).unwrap();
-
-        // Set bit values
-        {
-            let mut bitslice1 = v1.vector_mut();
-            let mut bitslice2 = v2.vector_mut();
-
-            for i in 0..dim {
-                bitslice1.set(i, code_distribution.sample(rng)).unwrap();
-                bitslice2.set(i, code_distribution.sample(rng)).unwrap();
-            }
-        }
-        let a_rnd = Uniform::new_inclusive(0.0, 2.0).unwrap();
-        let b_rnd = Uniform::new_inclusive(0.0, 2.0).unwrap();
-
-        // Set compensation coefficients
-        // v1: X = a1 * X' + b1
-        // v2: Y = a2 * Y' + b2
-        let a1 = a_rnd.sample(rng);
-        let b1 = b_rnd.sample(rng);
-        let a2 = a_rnd.sample(rng);
-        let b2 = b_rnd.sample(rng);
-
-        // Calculate sum of vector elements for n values
-        let sum1: f32 = (0..dim).map(|i| v1.vector().get(i).unwrap() as f32).sum();
-        let sum2: f32 = (0..dim).map(|i| v2.vector().get(i).unwrap() as f32).sum();
-
-        // Create original full-precision vectors for reference calculations
-        let mut original1 = Vec::with_capacity(dim);
-        let mut original2 = Vec::with_capacity(dim);
-
-        // Calculate the reconstructed original vectors and their norms
-        for i in 0..dim {
-            let val1 = a1 * v1.vector().get(i).unwrap() as f32 + b1;
-            let val2 = a2 * v2.vector().get(i).unwrap() as f32 + b2;
-            original1.push(val1);
-            original2.push(val2);
-        }
-
-        // Calculate squared norms
-        let norm1_squared: f32 = original1.iter().map(|x| x * x).sum();
-        let norm2_squared: f32 = original2.iter().map(|x| x * x).sum();
-
-        // Set compensation coefficients
-        v1.set_meta(MinMaxCompensation {
-            a: a1,
-            b: b1,
-            n: a1 * sum1,
-            norm_squared: norm1_squared,
-            dim: dim as u32,
-        });
-
-        v2.set_meta(MinMaxCompensation {
-            a: a2,
-            b: b2,
-            n: a2 * sum2,
-            norm_squared: norm2_squared,
-            dim: dim as u32,
-        });
+        let norm1_squared = v1.meta().norm_squared;
+        let norm2_squared = v2.meta().norm_squared;
 
         // Calculate raw integer dot product
         let expected_ip = (0..dim).map(|i| original1[i] * original2[i]).sum::<f32>();
@@ -741,4 +726,60 @@ mod minmax_vector_tests {
     test_minmax_compensated!(unsigned_minmax_compensated_test_u2, 2, 0xaedf3d2a223b7b77);
     test_minmax_compensated!(unsigned_minmax_compensated_test_u4, 4, 0xf60c0c8d1aadc126);
     test_minmax_compensated!(unsigned_minmax_compensated_test_u8, 8, 0x09fa14c42a9d7d98);
+
+    /// Test the heterogeneous MinMax kernel for N-bit queries × M-bit database vectors.
+    ///
+    /// Verifies that `kernel::<N, M, _>` produces inner-product and squared-L2
+    /// results matching the full-precision reference, for random codes and
+    /// random compensation coefficients.
+    fn test_minmax_heterogeneous_kernel<const NBITS: usize, const MBITS: usize, R>(
+        dim: usize,
+        rng: &mut R,
+    ) where
+        Unsigned: Representation<NBITS> + Representation<MBITS>,
+        InnerProduct: for<'a, 'b> PureDistanceFunction<
+                BitSlice<'a, NBITS, Unsigned>,
+                BitSlice<'b, MBITS, Unsigned>,
+                distances::MathematicalResult<u32>,
+            >,
+        R: Rng,
+    {
+        let (v_query, original1) = random_minmax_vector::<NBITS>(dim, rng);
+        let (v_data, original2) = random_minmax_vector::<MBITS>(dim, rng);
+
+        // ── Inner Product ──
+        let expected_ip: f32 = original1.iter().zip(&original2).map(|(x, y)| x * y).sum();
+        let computed_ip = kernel(v_query.reborrow(), v_data.reborrow(), |v, _, _| v)
+            .unwrap()
+            .into_inner();
+        assert!(
+            (expected_ip - computed_ip).abs() / expected_ip.abs().max(1e-10) < 1e-6,
+            "Heterogeneous IP ({},{}) failed: expected {}, got {} on dim: {}",
+            NBITS,
+            MBITS,
+            expected_ip,
+            computed_ip,
+            dim,
+        );
+    }
+
+    macro_rules! test_minmax_heterogeneous {
+        ($name:ident, $N:literal, $M:literal, $seed:literal) => {
+            #[test]
+            fn $name() {
+                let mut rng = StdRng::seed_from_u64($seed);
+                // Use the smaller bit width's scale as max dimension.
+                const MAX_DIM: usize = bit_scale::<$M>() as usize;
+                for dim in 1..=MAX_DIM {
+                    for _ in 0..TRIALS {
+                        test_minmax_heterogeneous_kernel::<$N, $M, _>(dim, &mut rng);
+                    }
+                }
+            }
+        };
+    }
+
+    test_minmax_heterogeneous!(minmax_heterogeneous_8x4, 8, 4, 0xb7c3d9e5f1a20864);
+    test_minmax_heterogeneous!(minmax_heterogeneous_8x2, 8, 2, 0x4e8f2c6a1d3b5079);
+    test_minmax_heterogeneous!(minmax_heterogeneous_8x1, 8, 1, 0x1b0f2c614d2a7141);
 }

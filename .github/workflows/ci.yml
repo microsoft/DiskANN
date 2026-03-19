@@ -19,6 +19,10 @@ env:
   # This ensures that we do not overwrite the parameters in `.cargo/config.toml` unnecessarily.
   RUST_CONFIG: 'build.rustflags=["-Dwarnings"]'
   RUST_BACKTRACE: 1
+  # The features we want to explicitly test. For example, the `flatbuffers-build` feature
+  # of `diskann-quantization` requires additional setup and so must not be included by default.
+  DISKANN_FEATURES: "virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,disk-index,flatbuffers,linalg,codegen"
+
   # Use the Rust version specified in rust-toolchain.toml
   rust_stable: "1.92"
 
@@ -35,8 +39,9 @@ jobs:
     name: basic checks
     runs-on: ubuntu-latest
     needs:
-      - clippy
       - fmt
+      - clippy-default-features
+      - clippy-features
       - clippy-no-default-features
       # TODO: Re-enable docs check later
       # - docs
@@ -49,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: rustfmt
@@ -62,44 +67,60 @@ jobs:
             exit 1
           fi
 
-  clippy:
+  clippy-default-features:
     strategy:
       matrix:
         runner:
           - ubuntu-latest
           - ubuntu-24.04-arm
+          - windows-latest
+
       fail-fast: false
-    name: clippy (${{ matrix.runner }})
+    name: clippy-default-features (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: "clippy --workspace --all-targets"
-        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG"
+        run: cargo clippy --locked --workspace --all-targets --no-deps --config "$RUST_CONFIG" -- -Dwarnings
+
+  clippy-features:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - windows-latest
+      fail-fast: false
+    name: clippy-features (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: "clippy --workspace --all-targets"
+        run: |
+          set -euxo pipefail
+          cargo clippy --locked --workspace \
+            --all-targets \
+            --no-deps \
+            --features ${{ env.DISKANN_FEATURES }} \
+            --config "$RUST_CONFIG" \
+            -- -Dwarnings
+
 
   clippy-no-default-features:
-    name: clippy ${{ matrix.crate }} (no default features)
+    name: clippy (no default features)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        crate:
-          # Core crates
-          - diskann
-          - diskann-providers
-          - diskann-disk
-          - diskann-quantization
-          - diskann-utils
-          # Benchmark/tools crates
-          - diskann-benchmark-core
-          - diskann-benchmark-runner
-          - diskann-benchmark
-          - diskann-tools
 
     steps:
       - uses: actions/checkout@v4
@@ -107,23 +128,37 @@ jobs:
           lfs: true
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          # Cache per-crate to avoid conflicts
-          key: ${{ matrix.crate }}
 
-      - name: Clippy ${{ matrix.crate }} (no default features)
+      - name: Clippy - select crates (no default features)
         run: |
-          cargo clippy --locked --package ${{ matrix.crate }} \
-            --no-default-features \
-            --profile ci \
-            --no-deps \
-            --config "$RUST_CONFIG"
+          set -euxo pipefail
+          crates=(
+            # Core crates
+            diskann
+            diskann-providers
+            diskann-disk
+            diskann-quantization
+            diskann-utils
+            # Benchmark/tools crates
+            diskann-benchmark-core
+            diskann-benchmark-runner
+            diskann-benchmark
+            diskann-tools
+          )
+          for crate in "${crates[@]}"; do
+            cargo clippy --locked --package "$crate" \
+              --no-default-features \
+              --profile ci \
+              --no-deps \
+              --config "$RUST_CONFIG" \
+              -- -Dwarnings
+          done
 
   codeql:
     name: CodeQL security analysis
@@ -142,7 +177,7 @@ jobs:
           languages: rust
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
 
@@ -163,7 +198,7 @@ jobs:
   #   steps:
   #     - uses: actions/checkout@v4
   #     - name: Install Rust ${{ env.rust_stable }}
-  #       uses: dtolnay/rust-toolchain@stable
+  #       uses: dtolnay/rust-toolchain@master
   #       with:
   #         toolchain: ${{ env.rust_stable }}
   #     - uses: Swatinem/rust-cache@v2
@@ -235,6 +270,7 @@ jobs:
           - windows-latest
           - ubuntu-latest
           - ubuntu-24.04-arm
+          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -242,7 +278,7 @@ jobs:
           lfs: true
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
 
@@ -268,6 +304,7 @@ jobs:
         os:
           - windows-latest
           - ubuntu-latest
+          - macos-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -275,7 +312,7 @@ jobs:
           lfs: true
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
 
@@ -292,8 +329,7 @@ jobs:
           cargo nextest run --locked --workspace \
             --cargo-profile ci \
             --config "$RUST_CONFIG" \
-            --features \
-              virtual_storage,bf_tree,spherical-quantization,product-quantization,tracing,experimental_diversity_search,flatbuffers,linalg,codegen
+            --features ${{ env.DISKANN_FEATURES }}
 
           cargo test --locked --doc --workspace --profile ci --config "$RUST_CONFIG"
 
@@ -309,7 +345,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust ${{ env.rust_stable }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.rust_stable }}
           components: llvm-tools-preview
@@ -372,7 +408,7 @@ jobs:
           lfs: true
 
       - name: Install Rust nightly with miri
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
           components: miri

@@ -340,7 +340,7 @@ use half::f16;
 
 use crate::{
     Const, SIMDCast, SIMDDotProduct, SIMDFloat, SIMDMask, SIMDSelect, SIMDSigned, SIMDSumTree,
-    SIMDUnsigned, SIMDVector, SplitJoin, lifetime::AddLifetime,
+    SIMDUnsigned, SIMDVector, SplitJoin, ZipUnzip, lifetime::AddLifetime,
 };
 
 pub(crate) mod emulated;
@@ -568,6 +568,7 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         f16x16: <Self, f16, 16, mask_f16x16>
         + SplitJoin<Halved = Self::f16x8>
+        + ZipUnzip<Halved = Self::f16x8>
         + SIMDCast<f32, Cast = Self::f32x16>
     );
 
@@ -600,6 +601,8 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         i8x32: <Self, i8, 32, mask_i8x32>
         + SIMDSigned
+        + SplitJoin<Halved = Self::i8x16>
+        + ZipUnzip<Halved = Self::i8x16>
     );
     vector!(
         i8x64: <Self, i8, 64, mask_i8x64>
@@ -614,6 +617,7 @@ pub trait Architecture: sealed::Sealed {
         i16x16: <Self, i16, 16, mask_i16x16>
         + SIMDSigned
         + SplitJoin<Halved = Self::i16x8>
+        + ZipUnzip<Halved = Self::i16x8>
         + From<Self::i8x16>
         + From<Self::u8x16>
     );
@@ -634,6 +638,7 @@ pub trait Architecture: sealed::Sealed {
         + SIMDSigned
         + SIMDSumTree
         + SplitJoin<Halved = Self::i32x4>
+        + ZipUnzip<Halved = Self::i32x4>
         + SIMDDotProduct<Self::i16x16>
         + SIMDDotProduct<Self::u8x32, Self::i8x32>
         + SIMDDotProduct<Self::i8x32, Self::u8x32>
@@ -656,6 +661,8 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         u8x32: <Self, u8, 32, mask_u8x32>
         + SIMDUnsigned
+        + SplitJoin<Halved = Self::u8x16>
+        + ZipUnzip<Halved = Self::u8x16>
     );
 
     vector!(
@@ -670,6 +677,7 @@ pub trait Architecture: sealed::Sealed {
     vector!(
         u32x8: <Self, u32, 8, mask_u32x8>
         + SplitJoin<Halved = Self::u32x4>
+        + ZipUnzip<Halved = Self::u32x4>
         + SIMDUnsigned
         + SIMDSumTree
     );
