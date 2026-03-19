@@ -191,8 +191,11 @@ fn partition_assign_impl(
     let mut assignments = vec![0u32; np * num_assign];
 
     // Fused parallel stripes: GEMM + distance + top-k in one pass.
-    // Adaptive stripe size: limit per-stripe GEMM output to ~64 MB.
-    let stripe: usize = ((64 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>()))
+    // Adaptive stripe size: limit per-stripe GEMM output to ~16 MB.
+    // Smaller stripes reduce concurrent memory from ~1.4 GB (8 threads × 90 MB)
+    // to ~350 MB (8 threads × 22 MB), cutting partition peak RSS by ~1 GB.
+    // Partition is <5% of total build time, so the throughput cost is negligible.
+    let stripe: usize = ((16 * 1024 * 1024) / (nl.max(1) * std::mem::size_of::<f32>()))
         .clamp(256, 16_384);
     assignments
         .par_chunks_mut(stripe * num_assign)
