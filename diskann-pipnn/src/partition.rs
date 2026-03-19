@@ -11,6 +11,7 @@
 //! - Merge undersized clusters
 //! - Recurse on oversized clusters
 
+use diskann::utils::VectorRepr;
 use rand::prelude::IndexedRandom;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
@@ -129,8 +130,8 @@ fn partition_assign_quantized(
 /// Fused GEMM + assignment: compute distances to leaders in stripes and immediately
 /// extract top-k assignments without materializing the full N x L distance matrix.
 /// Peak memory: stripe * L * 4 bytes (~64MB) instead of N * L * 4 bytes.
-fn partition_assign(
-    data: &[f32],
+fn partition_assign<T: VectorRepr + Send + Sync>(
+    data: &[T],
     ndims: usize,
     points: &[usize],
     leaders: &[usize],
@@ -141,8 +142,8 @@ fn partition_assign(
 }
 
 /// Core implementation: fused GEMM + distance + top-k assignment in parallel stripes.
-fn partition_assign_impl(
-    data: &[f32],
+fn partition_assign_impl<T: VectorRepr + Send + Sync>(
+    data: &[T],
     ndims: usize,
     points: &[usize],
     leaders: &[usize],
@@ -155,11 +156,12 @@ fn partition_assign_impl(
 
     use diskann_vector::distance::Metric;
 
-    // Extract leader data (shared, stays in cache).
+    // Extract leader data (shared, stays in cache), converting T -> f32.
     let mut l_data = vec![0.0f32; nl * ndims];
     for (i, &idx) in leaders.iter().enumerate() {
-        l_data[i * ndims..(i + 1) * ndims]
-            .copy_from_slice(&data[idx * ndims..(idx + 1) * ndims]);
+        let src = &data[idx * ndims..(idx + 1) * ndims];
+        let dst = &mut l_data[i * ndims..(i + 1) * ndims];
+        T::as_f32_into(src, dst).expect("f32 conversion");
     }
     // Precompute leader norms.
     // L2 needs squared norms; Cosine needs sqrt norms; CosineNormalized/IP need none.
@@ -208,8 +210,9 @@ fn partition_assign_impl(
 
             let mut p_data = vec![0.0f32; sn * ndims];
             for (i, &idx) in stripe_points.iter().enumerate() {
-                p_data[i * ndims..(i + 1) * ndims]
-                    .copy_from_slice(&data[idx * ndims..(idx + 1) * ndims]);
+                let src = &data[idx * ndims..(idx + 1) * ndims];
+                let dst = &mut p_data[i * ndims..(i + 1) * ndims];
+                T::as_f32_into(src, dst).expect("f32 conversion");
             }
 
             let mut dots = vec![0.0f32; sn * nl];
@@ -293,8 +296,8 @@ fn force_split(indices: &[usize], c_max: usize) -> Vec<Leaf> {
 ///
 /// Paper (arXiv:2602.21247): "Merge undersized clusters into the nearest
 /// (by centroid) appropriately-sized cluster."
-fn merge_small_into_nearest(
-    data: &[f32],
+fn merge_small_into_nearest<T: VectorRepr>(
+    data: &[T],
     ndims: usize,
     mut clusters: Vec<Vec<usize>>,
     c_min: usize,
@@ -315,14 +318,15 @@ fn merge_small_into_nearest(
         return large;
     }
 
-    // Compute centroids for large clusters.
+    // Compute centroids for large clusters, converting T -> f32 per point.
     let centroids: Vec<Vec<f32>> = large.iter()
         .map(|c| {
             let mut centroid = vec![0.0f32; ndims];
             let inv = 1.0 / c.len() as f32;
+            let mut point_buf = vec![0.0f32; ndims];
             for &idx in c {
-                let p = &data[idx * ndims..(idx + 1) * ndims];
-                for d in 0..ndims { centroid[d] += p[d]; }
+                T::as_f32_into(&data[idx * ndims..(idx + 1) * ndims], &mut point_buf).expect("f32 conversion");
+                for d in 0..ndims { centroid[d] += point_buf[d]; }
             }
             for d in 0..ndims { centroid[d] *= inv; }
             centroid
@@ -332,12 +336,13 @@ fn merge_small_into_nearest(
     // For each small cluster, find nearest large cluster by L2 distance
     // from the small cluster's representative point to each large centroid.
     for small in smalls {
-        let rep = &data[small[0] * ndims..(small[0] + 1) * ndims];
+        let mut rep_buf = vec![0.0f32; ndims];
+        T::as_f32_into(&data[small[0] * ndims..(small[0] + 1) * ndims], &mut rep_buf).expect("f32 conversion");
         let nearest = centroids.iter().enumerate()
             .map(|(i, c)| {
                 let mut dist = 0.0f32;
                 for d in 0..ndims {
-                    let diff = unsafe { *rep.get_unchecked(d) - *c.get_unchecked(d) };
+                    let diff = unsafe { *rep_buf.get_unchecked(d) - *c.get_unchecked(d) };
                     dist += diff * diff;
                 }
                 (i, dist)
@@ -355,8 +360,8 @@ fn merge_small_into_nearest(
 ///
 /// `data` is row-major: npoints_global x ndims.
 /// `indices` are the global indices of the points to partition.
-pub fn partition(
-    data: &[f32],
+pub fn partition<T: VectorRepr + Send + Sync>(
+    data: &[T],
     ndims: usize,
     indices: &[usize],
     config: &PartitionConfig,
@@ -425,8 +430,8 @@ pub fn partition(
 
 /// Partition using parallelism at the top level.
 /// Prints timing breakdown for the top-level operations.
-pub fn parallel_partition(
-    data: &[f32],
+pub fn parallel_partition<T: VectorRepr + Send + Sync>(
+    data: &[T],
     ndims: usize,
     indices: &[usize],
     config: &PartitionConfig,

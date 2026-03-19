@@ -14,6 +14,7 @@
 
 use std::cell::RefCell;
 
+use diskann::utils::VectorRepr;
 use diskann_vector::PureDistanceFunction;
 use diskann_vector::distance::SquaredL2;
 
@@ -124,8 +125,8 @@ fn extract_knn(dist_matrix: &[f32], n: usize, k: usize) -> Vec<(usize, usize, f3
 /// Build a leaf partition: compute all-pairs distances and extract bi-directed k-NN edges.
 ///
 /// Returns edges as (global_src, global_dst, distance).
-pub fn build_leaf(
-    data: &[f32],
+pub fn build_leaf<T: VectorRepr>(
+    data: &[T],
     ndims: usize,
     indices: &[usize],
     k: usize,
@@ -142,8 +143,8 @@ pub fn build_leaf(
     })
 }
 
-fn build_leaf_with_buffers(
-    data: &[f32],
+fn build_leaf_with_buffers<T: VectorRepr>(
+    data: &[T],
     ndims: usize,
     indices: &[usize],
     k: usize,
@@ -153,11 +154,12 @@ fn build_leaf_with_buffers(
     let n = indices.len();
     bufs.ensure_capacity(n, ndims);
 
-    // Extract local data into reused buffer.
+    // Extract local data into reused buffer, converting T -> f32 on the fly.
     let local_data = &mut bufs.local_data[..n * ndims];
     for (i, &idx) in indices.iter().enumerate() {
-        local_data[i * ndims..(i + 1) * ndims]
-            .copy_from_slice(&data[idx * ndims..(idx + 1) * ndims]);
+        let src = &data[idx * ndims..(idx + 1) * ndims];
+        let dst = &mut local_data[i * ndims..(i + 1) * ndims];
+        T::as_f32_into(src, dst).expect("f32 conversion");
     }
 
     // Compute norms into reused buffer.

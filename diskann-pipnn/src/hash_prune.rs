@@ -9,8 +9,10 @@
 //! Maintains a reservoir of l_max entries per point, keyed by hash bucket.
 //! This is history-independent (order of insertion does not matter).
 
+use std::cell::RefCell;
 use std::sync::Mutex;
 
+use diskann::utils::VectorRepr;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 use rayon::prelude::*;
@@ -33,7 +35,7 @@ impl LshSketches {
     /// Create new LSH sketches for the given data using parallel dot products.
     ///
     /// `data` is row-major: npoints x ndims.
-    pub fn new(data: &[f32], npoints: usize, ndims: usize, num_planes: usize, seed: u64) -> Self {
+    pub fn new<T: VectorRepr + Send + Sync>(data: &[T], npoints: usize, ndims: usize, num_planes: usize, seed: u64) -> Self {
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
 
         // Generate random hyperplanes from standard normal distribution.
@@ -50,17 +52,25 @@ impl LshSketches {
             .par_chunks_mut(num_planes)
             .enumerate()
             .for_each(|(i, sketch_row)| {
-                let point = &data[i * ndims..(i + 1) * ndims];
-                for j in 0..num_planes {
-                    let plane = &hyperplanes[j * ndims..(j + 1) * ndims];
-                    let mut dot = 0.0f32;
-                    for d in 0..ndims {
-                        unsafe {
-                            dot += *point.get_unchecked(d) * *plane.get_unchecked(d);
-                        }
-                    }
-                    sketch_row[j] = dot;
+                // Thread-local buffer for T -> f32 conversion.
+                thread_local! {
+                    static SKETCH_BUF: RefCell<Vec<f32>> = RefCell::new(Vec::new());
                 }
+                SKETCH_BUF.with(|cell| {
+                    let mut buf = cell.borrow_mut();
+                    buf.resize(ndims, 0.0);
+                    T::as_f32_into(&data[i * ndims..(i + 1) * ndims], &mut buf).expect("f32 conversion");
+                    for j in 0..num_planes {
+                        let plane = &hyperplanes[j * ndims..(j + 1) * ndims];
+                        let mut dot = 0.0f32;
+                        for d in 0..ndims {
+                            unsafe {
+                                dot += *buf.get_unchecked(d) * *plane.get_unchecked(d);
+                            }
+                        }
+                        sketch_row[j] = dot;
+                    }
+                });
             });
 
         Self {
@@ -278,8 +288,8 @@ impl HashPrune {
     /// Create a new HashPrune instance.
     ///
     /// `data` is row-major: npoints x ndims.
-    pub fn new(
-        data: &[f32],
+    pub fn new<T: VectorRepr + Send + Sync>(
+        data: &[T],
         npoints: usize,
         ndims: usize,
         num_planes: usize,
