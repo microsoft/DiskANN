@@ -343,16 +343,21 @@ impl HashPrune {
         }
     }
 
-    /// Extract the final graph as adjacency lists.
+    /// Extract the final graph as adjacency lists, consuming the HashPrune.
     ///
-    /// Returns a vector of neighbor lists (one per point), each truncated to max_degree.
-    pub fn extract_graph(&self) -> Vec<Vec<u32>> {
+    /// Consumes self so that reservoirs and sketches are freed as extraction proceeds,
+    /// rather than staying alive until the caller drops HashPrune.
+    /// Each reservoir is dropped immediately after its neighbors are extracted.
+    pub fn extract_graph(self) -> Vec<Vec<u32>> {
+        let max_degree = self.max_degree;
+        // Drop sketches first (~50 MB for 1M points × 12 planes).
+        drop(self.sketches);
         self.reservoirs
-            .par_iter()
-            .map(|reservoir| {
-                let res = reservoir.lock().unwrap_or_else(|e| e.into_inner());
+            .into_par_iter()
+            .map(|mutex| {
+                let res = mutex.into_inner().unwrap_or_else(|e| e.into_inner());
                 let mut neighbors = res.get_neighbors_sorted();
-                neighbors.truncate(self.max_degree);
+                neighbors.truncate(max_degree);
                 neighbors.into_iter().map(|(id, _)| id).collect()
             })
             .collect()
