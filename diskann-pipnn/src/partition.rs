@@ -31,6 +31,8 @@ pub struct PartitionConfig {
     pub c_min: usize,
     pub p_samp: f64,
     pub fanout: Vec<usize>,
+    /// Distance metric for partition assignment.
+    pub metric: diskann_vector::distance::Metric,
 }
 
 /// Compute squared L2 distance between two f32 slices using manual loop
@@ -133,24 +135,25 @@ fn partition_assign(
     points: &[usize],
     leaders: &[usize],
     fanout: usize,
+    metric: diskann_vector::distance::Metric,
 ) -> Vec<Vec<usize>> {
-    partition_assign_impl(data, ndims, points, leaders, fanout, true)
+    partition_assign_impl(data, ndims, points, leaders, fanout, metric)
 }
 
-/// Core implementation with control over parallelism strategy.
-/// `use_rayon_stripes`: true = many parallel stripes (for top-level with many points),
-///                      false = fewer stripes with multi-threaded BLAS (not used currently).
+/// Core implementation: fused GEMM + distance + top-k assignment in parallel stripes.
 fn partition_assign_impl(
     data: &[f32],
     ndims: usize,
     points: &[usize],
     leaders: &[usize],
     fanout: usize,
-    _use_rayon_stripes: bool,
+    metric: diskann_vector::distance::Metric,
 ) -> Vec<Vec<usize>> {
     let np = points.len();
     let nl = leaders.len();
     let num_assign = fanout.min(nl);
+
+    use diskann_vector::distance::Metric;
 
     // Extract leader data (shared, stays in cache).
     let mut l_data = vec![0.0f32; nl * ndims];
@@ -158,13 +161,31 @@ fn partition_assign_impl(
         l_data[i * ndims..(i + 1) * ndims]
             .copy_from_slice(&data[idx * ndims..(idx + 1) * ndims]);
     }
-    let mut l_norms = vec![0.0f32; nl];
-    for i in 0..nl {
-        let row = &l_data[i * ndims..(i + 1) * ndims];
-        let mut norm = 0.0f32;
-        for &v in row { norm += v * v; }
-        l_norms[i] = norm;
-    }
+    // Precompute leader norms.
+    // L2 needs squared norms; Cosine needs sqrt norms; CosineNormalized/IP need none.
+    let l_norms: Vec<f32> = match metric {
+        Metric::L2 => {
+            let mut norms = vec![0.0f32; nl];
+            for i in 0..nl {
+                let row = &l_data[i * ndims..(i + 1) * ndims];
+                let mut norm = 0.0f32;
+                for &v in row { norm += v * v; }
+                norms[i] = norm;
+            }
+            norms
+        }
+        Metric::Cosine => {
+            let mut norms = vec![0.0f32; nl];
+            for i in 0..nl {
+                let row = &l_data[i * ndims..(i + 1) * ndims];
+                let mut norm = 0.0f32;
+                for &v in row { norm += v * v; }
+                norms[i] = norm.sqrt();
+            }
+            norms
+        }
+        Metric::CosineNormalized | Metric::InnerProduct => Vec::new(),
+    };
 
     // Flat assignments: assignments[i * num_assign .. (i+1) * num_assign]
     let mut assignments = vec![0u32; np * num_assign];
@@ -188,26 +209,47 @@ fn partition_assign_impl(
                     .copy_from_slice(&data[idx * ndims..(idx + 1) * ndims]);
             }
 
-            let mut p_norms = vec![0.0f32; sn];
-            for i in 0..sn {
-                let row = &p_data[i * ndims..(i + 1) * ndims];
-                let mut norm = 0.0f32;
-                for &v in row { norm += v * v; }
-                p_norms[i] = norm;
-            }
-
             let mut dots = vec![0.0f32; sn * nl];
             crate::gemm::sgemm_abt(&p_data, sn, ndims, &l_data, nl, &mut dots);
 
             let mut buf: Vec<(u32, f32)> = Vec::with_capacity(nl);
             for i in 0..sn {
-                let pi = p_norms[i];
                 let dot_row = &dots[i * nl..(i + 1) * nl];
 
                 buf.clear();
-                for j in 0..nl {
-                    let d = (pi + l_norms[j] - 2.0 * dot_row[j]).max(0.0);
-                    buf.push((j as u32, d));
+                match metric {
+                    Metric::CosineNormalized => {
+                        // Pre-normalized: dist = 1 - dot(a, b)
+                        for j in 0..nl {
+                            buf.push((j as u32, (1.0 - dot_row[j]).max(0.0)));
+                        }
+                    }
+                    Metric::Cosine => {
+                        // Unnormalized: dist = 1 - dot(a,b)/(||a||*||b||)
+                        let mut pi = 0.0f32;
+                        let row = &p_data[i * ndims..(i + 1) * ndims];
+                        for &v in row { pi += v * v; }
+                        let pi_sqrt = pi.sqrt();
+                        for j in 0..nl {
+                            let denom = pi_sqrt * l_norms[j];
+                            let cos_sim = if denom > 0.0 { dot_row[j] / denom } else { 0.0 };
+                            buf.push((j as u32, (1.0 - cos_sim).max(0.0)));
+                        }
+                    }
+                    Metric::L2 => {
+                        let mut pi = 0.0f32;
+                        let row = &p_data[i * ndims..(i + 1) * ndims];
+                        for &v in row { pi += v * v; }
+                        for j in 0..nl {
+                            let d = (pi + l_norms[j] - 2.0 * dot_row[j]).max(0.0);
+                            buf.push((j as u32, d));
+                        }
+                    }
+                    Metric::InnerProduct => {
+                        for j in 0..nl {
+                            buf.push((j as u32, -dot_row[j]));
+                        }
+                    }
                 }
 
                 if num_assign < buf.len() {
@@ -346,7 +388,7 @@ pub fn partition(
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
     // Fused GEMM + assignment (avoids materializing full distance matrix).
-    let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout);
+    let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout, config.metric);
 
     // Map local indices back to global.
     let clusters: Vec<Vec<usize>> = clusters_local
@@ -411,7 +453,7 @@ pub fn parallel_partition(
 
     // Fused GEMM + assignment.
     let t0 = std::time::Instant::now();
-    let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout);
+    let clusters_local = partition_assign(data, ndims, indices, &leaders, fanout, config.metric);
     let assign_time = t0.elapsed();
 
     let t1 = std::time::Instant::now();
@@ -627,6 +669,7 @@ mod tests {
             c_min: 3,
             p_samp: 0.5,
             fanout: vec![3],
+        metric: diskann_vector::distance::Metric::L2,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
@@ -647,6 +690,7 @@ mod tests {
             c_min: 5,
             p_samp: 0.1,
             fanout: vec![3, 2],
+        metric: diskann_vector::distance::Metric::L2,
         };
 
         let mut rng2 = rand::rngs::StdRng::seed_from_u64(123);
@@ -683,6 +727,7 @@ mod tests {
             c_min: 10,
             p_samp: 0.05,
             fanout: vec![5, 3],
+        metric: diskann_vector::distance::Metric::L2,
         };
 
         let leaves = parallel_partition(&data, 2, &indices, &config, 42);
@@ -714,6 +759,7 @@ mod tests {
             c_min: 20,
             p_samp: 0.05,
             fanout: vec![3, 2], // fanout > 1 creates overlap
+            metric: diskann_vector::distance::Metric::L2,
         };
 
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
@@ -742,6 +788,7 @@ mod tests {
             c_min: 10,
             p_samp: 0.1,
             fanout: vec![5, 2],
+        metric: diskann_vector::distance::Metric::L2,
         };
 
         let leaves = parallel_partition(&data, ndims, &indices, &config, 99);
@@ -765,6 +812,7 @@ mod tests {
             c_min: 1,
             p_samp: 0.5,
             fanout: vec![3],
+        metric: diskann_vector::distance::Metric::L2,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
@@ -782,6 +830,7 @@ mod tests {
             c_min: 1,
             p_samp: 0.5,
             fanout: vec![3],
+        metric: diskann_vector::distance::Metric::L2,
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
         let leaves = partition(&data, 2, &indices, &config, 0, &mut rng);
@@ -801,6 +850,7 @@ mod tests {
             c_min: 5,
             p_samp: 0.1,
             fanout: vec![3],
+        metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "should produce at least one leaf");
@@ -834,6 +884,7 @@ mod tests {
             c_min: 2,
             p_samp: 0.5,
             fanout: vec![100], // much larger than npoints
+            metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "high fanout should still produce leaves");
@@ -861,6 +912,7 @@ mod tests {
             c_min: 8,
             p_samp: 0.1,
             fanout: vec![4, 2],
+        metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(leaves.len() > 1, "multi-level fanout should produce multiple leaves");
@@ -888,6 +940,7 @@ mod tests {
             c_min: 30,
             p_samp: 0.1,
             fanout: vec![3],
+        metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "c_min == c_max should produce leaves");
@@ -915,6 +968,7 @@ mod tests {
             c_min: 3,
             p_samp: 1.0,
             fanout: vec![3],
+        metric: diskann_vector::distance::Metric::L2,
         };
         let leaves = parallel_partition(&data, ndims, &indices, &config, 42);
         assert!(!leaves.is_empty(), "p_samp=1.0 should produce leaves");
@@ -942,6 +996,7 @@ mod tests {
             c_min: 20,
             p_samp: 0.05,
             fanout: vec![3, 2],
+        metric: diskann_vector::distance::Metric::L2,
         };
 
         let (shift, inverse_scale) = {
