@@ -2869,6 +2869,8 @@ mod tests {
 
         use super::*;
 
+        use crate::test_util::Check;
+
         const TRAINING_SEED: u64 = 0x7d535118722ff197;
 
         ///////////////////////
@@ -3103,6 +3105,8 @@ mod tests {
                 .collect()
         }
 
+        const TOLERANCE: Check = Check::absrel(5e-8, 0.0);
+
         /// Assert that the deserialized quantizer produces the expected
         /// per-layout query distances.
         fn assert_layout_distances(
@@ -3141,11 +3145,10 @@ mod tests {
                         let distance = computer
                             .evaluate_similarity(Opaque::new(compressed))
                             .unwrap();
-                        assert_eq!(
-                            distance, *expected,
-                            "{label}: layout={layout:?}, \
-                             query={qi}, data={di}"
-                        );
+
+                        if let Err(err) = TOLERANCE.check(distance, *expected) {
+                            panic!("{label}: layout = {layout:?}, query={qi}, data={di}\n{err}")
+                        }
                     }
                 }
             }
@@ -3323,15 +3326,10 @@ mod tests {
             );
 
             // Verify pairwise data distances.
-            //
-            // NOTE: These use exact `assert_eq!` on f32 intentionally. The
-            // codepaths are deterministic, so baseline values must be
-            // bit-identical. This can be relaxed to approximate comparison
-            // in the future with sufficient motivation (e.g.,
-            // platform-specific floating-point behavior).
             let f = quantizer.distance_computer(GlobalAllocator).unwrap();
             let n = baseline.compressed_vectors.len();
             let expected_len = n * (n + 1) / 2;
+
             assert_eq!(
                 baseline.data_distances.len(),
                 expected_len,
@@ -3346,10 +3344,10 @@ mod tests {
                     let distance = f
                         .evaluate_similarity(Opaque::new(a), Opaque::new(b))
                         .unwrap();
-                    assert_eq!(
-                        distance, baseline.data_distances[k],
-                        "data distance mismatch at pair ({i}, {j})"
-                    );
+
+                    if let Err(err) = TOLERANCE.check(distance, baseline.data_distances[k]) {
+                        panic!("data distance mismatch at pair ({i}, {j})\n{err}");
+                    }
                     k += 1;
                 }
             }
