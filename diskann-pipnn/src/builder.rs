@@ -52,6 +52,31 @@ fn make_dist_fn(metric: Metric) -> Distance<f32, f32> {
     <f32 as DistanceProvider<f32>>::distance_comparer(metric, None)
 }
 
+/// Timing breakdown for the PiPNN build phases.
+#[derive(Debug, Clone, Default)]
+pub struct PiPNNBuildStats {
+    pub total_secs: f64,
+    pub sketch_secs: f64,
+    pub partition_secs: f64,
+    pub leaf_build_secs: f64,
+    pub extract_secs: f64,
+    pub final_prune_secs: f64,
+    pub num_leaves: usize,
+    pub total_edges: usize,
+}
+
+impl std::fmt::Display for PiPNNBuildStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "PiPNN Build Timing")?;
+        writeln!(f, "  LSH sketches:   {:.3}s", self.sketch_secs)?;
+        writeln!(f, "  Partition:      {:.3}s  ({} leaves)", self.partition_secs, self.num_leaves)?;
+        writeln!(f, "  Leaf build:     {:.3}s  ({} edges)", self.leaf_build_secs, self.total_edges)?;
+        writeln!(f, "  Graph extract:  {:.3}s", self.extract_secs)?;
+        writeln!(f, "  Final prune:    {:.3}s", self.final_prune_secs)?;
+        writeln!(f, "  Total:          {:.3}s", self.total_secs)
+    }
+}
+
 /// The result of building a PiPNN index.
 #[derive(Debug)]
 pub struct PiPNNGraph {
@@ -65,6 +90,8 @@ pub struct PiPNNGraph {
     pub medoid: usize,
     /// Distance metric used to build this graph.
     pub metric: Metric,
+    /// Build timing breakdown.
+    pub build_stats: PiPNNBuildStats,
 }
 
 impl PiPNNGraph {
@@ -429,6 +456,8 @@ fn build_internal<T: VectorRepr + Send + Sync>(
     config: &PiPNNConfig,
     qdata: Option<crate::quantize::QuantizedData>,
 ) -> PiPNNResult<PiPNNGraph> {
+    let t_total = Instant::now();
+
     // Compute medoid once upfront.
     let medoid = find_medoid(data, npoints, ndims);
 
@@ -443,9 +472,15 @@ fn build_internal<T: VectorRepr + Send + Sync>(
         config.max_degree,
         42,
     );
-    tracing::info!(elapsed_secs = t0.elapsed().as_secs_f64(), "HashPrune init complete");
+    let sketch_secs = t0.elapsed().as_secs_f64();
+    tracing::info!(elapsed_secs = sketch_secs, "HashPrune init complete");
 
     // Run multiple replicas of partitioning + leaf building.
+    let mut partition_secs = 0.0f64;
+    let mut leaf_build_secs = 0.0f64;
+    let mut total_leaves = 0usize;
+    let mut total_edges_count = 0usize;
+
     for replica in 0..config.replicas {
         let seed = 1000 + replica as u64 * 7919;
 
@@ -464,16 +499,17 @@ fn build_internal<T: VectorRepr + Send + Sync>(
         } else {
             partition::parallel_partition(data, ndims, &indices, &partition_config, seed)
         };
-        let partition_time = t1.elapsed();
+        partition_secs += t1.elapsed().as_secs_f64();
 
         let total_pts: usize = leaves.iter().map(|l| l.indices.len()).sum();
         let leaf_sizes: Vec<usize> = leaves.iter().map(|l| l.indices.len()).collect();
+        total_leaves += leaves.len();
         let small_leaves = leaf_sizes.iter().filter(|&&s| s < 64).count();
         let med_leaves = leaf_sizes.iter().filter(|&&s| s >= 64 && s < 512).count();
         let big_leaves = leaf_sizes.iter().filter(|&&s| s >= 512).count();
         tracing::info!(
             replica = replica,
-            partition_secs = partition_time.as_secs_f64(),
+            partition_secs = t1.elapsed().as_secs_f64(),
             num_leaves = leaves.len(),
             avg_leaf_size = total_pts as f64 / leaves.len().max(1) as f64,
             max_leaf_size = leaf_sizes.iter().max().unwrap_or(&0),
@@ -507,17 +543,19 @@ fn build_internal<T: VectorRepr + Send + Sync>(
             hash_prune.add_edges_batched(&edges);
         });
 
+        let replica_edges = total_edges.load(Ordering::Relaxed);
+        total_edges_count += replica_edges;
+        leaf_build_secs += t2.elapsed().as_secs_f64();
+
         tracing::info!(
             replica = replica,
             elapsed_secs = t2.elapsed().as_secs_f64(),
-            total_edges = total_edges.load(Ordering::Relaxed),
+            total_edges = replica_edges,
             "Leaf build and merge complete"
         );
     }
 
     // Release thread-local leaf buffers so their arena pages can be reclaimed.
-    // Without this, ~3 MB per rayon thread pins entire 64 MB glibc heap segments,
-    // preventing ~500 MB of freed reservoir memory from being returned to the OS.
     (0..rayon::current_num_threads()).into_par_iter().for_each(|_| {
         leaf_build::release_thread_buffers();
     });
@@ -525,15 +563,31 @@ fn build_internal<T: VectorRepr + Send + Sync>(
     // Extract final graph from HashPrune.
     let t3 = Instant::now();
     let adjacency = hash_prune.extract_graph();
-    tracing::info!(elapsed_secs = t3.elapsed().as_secs_f64(), "Graph extraction complete");
+    let extract_secs = t3.elapsed().as_secs_f64();
+    tracing::info!(elapsed_secs = extract_secs, "Graph extraction complete");
     trim_heap();
 
     // Optional final prune pass.
+    let t4 = Instant::now();
     let adjacency = if config.final_prune {
         tracing::info!("Applying final prune");
         final_prune(data, ndims, &adjacency, config.max_degree, config.metric, config.alpha)
     } else {
         adjacency
+    };
+    let final_prune_secs = t4.elapsed().as_secs_f64();
+
+    let total_secs = t_total.elapsed().as_secs_f64();
+
+    let build_stats = PiPNNBuildStats {
+        total_secs,
+        sketch_secs,
+        partition_secs,
+        leaf_build_secs,
+        extract_secs,
+        final_prune_secs,
+        num_leaves: total_leaves,
+        total_edges: total_edges_count,
     };
 
     let graph = PiPNNGraph {
@@ -542,6 +596,7 @@ fn build_internal<T: VectorRepr + Send + Sync>(
         ndims,
         medoid,
         metric: config.metric,
+        build_stats,
     };
 
     // Return all freed memory (reservoirs, sketches, partition buffers, leaf buffers)
@@ -1132,6 +1187,7 @@ mod tests {
             ndims: 4,
             medoid: 0,
             metric: Metric::L2,
+            build_stats: Default::default(),
         };
         let query = vec![1.0f32, 2.0, 3.0, 4.0];
         let results = graph.search(&[], &query, 5, 10);
@@ -1314,6 +1370,7 @@ mod tests {
             ndims: 4,
             medoid: 0,
             metric: Metric::L2,
+            build_stats: Default::default(),
         };
         let dir = std::env::temp_dir().join("pipnn_test_save_single");
         std::fs::create_dir_all(&dir).unwrap();
