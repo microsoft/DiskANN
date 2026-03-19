@@ -2808,7 +2808,6 @@ pub(crate) mod tests {
         let accessor = <inmem::spherical::Quantized as SearchStrategy<
             DefaultProvider<NoStore, inmem::spherical::SphericalStore>,
             [f32],
-            _,
         >>::search_accessor(&strategy, index.provider(), ctx)
         .unwrap();
         let computer = accessor.build_query_computer(data.row(0)).unwrap();

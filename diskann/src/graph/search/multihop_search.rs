@@ -53,16 +53,15 @@ impl<'q, InternalId> MultihopSearch<'q, InternalId> {
     }
 }
 
-impl<'q, DP, S, T, O> Search<DP, S, T, O> for MultihopSearch<'q, DP::InternalId>
+impl<'q, DP, S, T> Search<DP, S, T> for MultihopSearch<'q, DP::InternalId>
 where
     DP: DataProvider,
-    S: glue::SearchStrategy<DP, T, O>,
+    S: glue::SearchStrategy<DP, T>,
     T: Sync + ?Sized,
-    O: Send,
 {
     type Output = SearchStats;
 
-    fn search<PP, OB>(
+    fn search<O, PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
@@ -72,6 +71,7 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
+        O: Send,
         PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
         OB: SearchOutputBuffer<O> + Send + ?Sized,
     {

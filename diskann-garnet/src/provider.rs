@@ -760,7 +760,7 @@ impl<'a, T: VectorRepr> SearchPostProcess<FullAccessor<'a, T>, [T], GarnetId> fo
     }
 }
 
-impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], GarnetId> for FullPrecision {
+impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T]> for FullPrecision {
     type SearchAccessor<'a> = FullAccessor<'a, T>;
     type SearchAccessorError = GarnetProviderError;
     type QueryComputer = T::QueryDistance;
@@ -776,20 +776,6 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], GarnetId> for FullPre
 
 impl<T: VectorRepr> DefaultPostProcessor<GarnetProvider<T>, [T], GarnetId> for FullPrecision {
     default_post_processor!(glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>);
-}
-
-impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T], u32> for FullPrecision {
-    type SearchAccessor<'a> = FullAccessor<'a, T>;
-    type SearchAccessorError = GarnetProviderError;
-    type QueryComputer = T::QueryDistance;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a GarnetProvider<T>,
-        context: &'a <GarnetProvider<T> as DataProvider>::Context,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider, context, true))
-    }
 }
 
 impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for FullPrecision {

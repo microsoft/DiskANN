@@ -340,15 +340,8 @@ where
     }
 }
 
-impl<'this, Data, ProviderFactory>
-    SearchStrategy<
-        DiskProvider<Data>,
-        [Data::VectorDataType],
-        (
-            <DiskProvider<Data> as DataProvider>::InternalId,
-            Data::AssociatedDataType,
-        ),
-    > for DiskSearchStrategy<'this, Data, ProviderFactory>
+impl<'this, Data, ProviderFactory> SearchStrategy<DiskProvider<Data>, [Data::VectorDataType]>
+    for DiskSearchStrategy<'this, Data, ProviderFactory>
 where
     Data: GraphDataType<VectorIdType = u32>,
     ProviderFactory: VertexProviderFactory<Data>,

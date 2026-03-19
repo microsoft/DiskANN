@@ -291,19 +291,11 @@ where
 /// A search strategy for query objects of type `T`.
 ///
 /// This trait should be overloaded by data providers wishing to extend
-///
-/// The type `O` represents the type written into the output buffer
-/// during a search. This is often the same as the provider's internal ID type,
-/// but it can differ depending on the use case. For example, it might represent
-/// associated data or alternative identifiers.
-///
-/// [`crate::index::diskann_async::DiskANNIndex::search`].
-pub trait SearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    Send + Sync
+/// (search)[`crate::graph::DiskANNIndex::search`].
+pub trait SearchStrategy<Provider, T>: Send + Sync
 where
     Provider: DataProvider,
     T: ?Sized,
-    O: Send,
 {
     /// The computer used by the associated accessor.
     ///
@@ -342,7 +334,7 @@ where
 /// `default_post_processor()` to obtain the processor and invoke its
 /// [`SearchPostProcess::post_process`] method.
 pub trait DefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T, O>
+    SearchStrategy<Provider, T>
 where
     Provider: DataProvider,
     T: ?Sized,
@@ -357,7 +349,7 @@ where
 
 /// Aggregate trait for strategies that support both search access and a default post-processor.
 pub trait DefaultSearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    SearchStrategy<Provider, T, O> + DefaultPostProcessor<Provider, T, O>
+    SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>
 where
     Provider: DataProvider,
     T: ?Sized,
@@ -367,7 +359,7 @@ where
 
 impl<S, Provider, T, O> DefaultSearchStrategy<Provider, T, O> for S
 where
-    S: SearchStrategy<Provider, T, O> + DefaultPostProcessor<Provider, T, O>,
+    S: SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>,
     Provider: DataProvider,
     T: ?Sized,
     O: Send,

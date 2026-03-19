@@ -2151,7 +2151,7 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: Search<DP, S, T, O>,
+        P: Search<DP, S, T>,
         S: glue::DefaultPostProcessor<DP, T, O>,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,
@@ -2172,8 +2172,8 @@ where
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<P::Output>>
     where
-        P: Search<DP, S, T, O>,
-        S: glue::SearchStrategy<DP, T, O>,
+        P: Search<DP, S, T>,
+        S: glue::SearchStrategy<DP, T>,
         PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
         O: Send,
         OB: search_output_buffer::SearchOutputBuffer<O> + Send + ?Sized,

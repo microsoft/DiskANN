@@ -112,13 +112,12 @@ where
 ///
 /// The [`BetaComputer`] then uses this ID to consult the filter predicate and adjust the
 /// distance accordingly.
-impl<Provider, Strategy, T, I, O> SearchStrategy<Provider, T, O> for BetaFilter<Strategy, I>
+impl<Provider, Strategy, T, I> SearchStrategy<Provider, T> for BetaFilter<Strategy, I>
 where
     T: ?Sized,
     I: VectorId,
-    O: Send,
     Provider: DataProvider<InternalId = I>,
-    Strategy: SearchStrategy<Provider, T, O>,
+    Strategy: SearchStrategy<Provider, T>,
 {
     /// An accessor that returns the ID in addition to the element yielded by the inner
     /// accessor.
