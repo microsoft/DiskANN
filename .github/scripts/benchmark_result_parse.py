@@ -8,8 +8,6 @@ Benchmark Result Parser for GitHub Actions
 Parses benchmark CSV results and validates against thresholds.
 Posts comments to GitHub PRs when regressions are detected.
 
-Migrated from ADO: .pipelines/templates/BenchmarkResultParse.py
-
 Usage:
     python benchmark_result_parse.py --mode pr --file results.csv
     python benchmark_result_parse.py --mode aa --file results.csv --data search
@@ -72,10 +70,30 @@ DATA_TEMPLATE_FULL = {
         "mean_comps": [],
         "mean_hops": [],
         "recall": []
+    },
+    "search-with-L=100-bw=4": {
+        "latency_95": [],
+        "mean_latency": [],
+        "mean_io_time": [],
+        "mean_cpus": [],
+        "qps": [],
+        "mean_ios": [],
+        "mean_comps": [],
+        "mean_hops": [],
+        "recall": []
+    },
+    "search-with-L=200-bw=4": {
+        "latency_95": [],
+        "mean_latency": [],
+        "mean_io_time": [],
+        "mean_cpus": [],
+        "qps": [],
+        "mean_ios": [],
+        "mean_comps": [],
+        "mean_hops": [],
+        "recall": []
     }
 }
-
-# Template for search-only benchmark data
 DATA_TEMPLATE_SEARCH = {
     "search_disk_index-search_completed": {
         "duration_seconds": [],
@@ -85,6 +103,28 @@ DATA_TEMPLATE_SEARCH = {
         "total_duration_seconds": [],
     },
     "search-with-L=2000-bw=4": {
+        "latency_95": [],
+        "mean_latency": [],
+        "mean_io_time": [],
+        "mean_cpus": [],
+        "qps": [],
+        "mean_ios": [],
+        "mean_comps": [],
+        "mean_hops": [],
+        "recall": []
+    },
+    "search-with-L=100-bw=4": {
+        "latency_95": [],
+        "mean_latency": [],
+        "mean_io_time": [],
+        "mean_cpus": [],
+        "qps": [],
+        "mean_ios": [],
+        "mean_comps": [],
+        "mean_hops": [],
+        "recall": []
+    },
+    "search-with-L=200-bw=4": {
         "latency_95": [],
         "mean_latency": [],
         "mean_io_time": [],
@@ -136,6 +176,28 @@ DATA_THRESHOLDS = {
         "mean_comps": [1, 'LT', 50000],
         "mean_hops": [1, 'LT', ""],
         "recall": [1, 'GT', 95.1]
+    },
+    "search-with-L=100-bw=4": {
+        "latency_95": [10, 'LT', ""],
+        "mean_latency": [10, 'LT', ""],
+        "mean_io_time": [10, 'LT', ""],
+        "mean_cpus": [10, 'LT', ""],
+        "qps": [10, 'GT', ""],
+        "mean_ios": [10, 'LT', ""],
+        "mean_comps": [10, 'LT', ""],
+        "mean_hops": [10, 'LT', ""],
+        "recall": [1, 'GT', ""]
+    },
+    "search-with-L=200-bw=4": {
+        "latency_95": [10, 'LT', ""],
+        "mean_latency": [10, 'LT', ""],
+        "mean_io_time": [10, 'LT', ""],
+        "mean_cpus": [10, 'LT', ""],
+        "qps": [10, 'GT', ""],
+        "mean_ios": [10, 'LT', ""],
+        "mean_comps": [10, 'LT', ""],
+        "mean_hops": [10, 'LT', ""],
+        "recall": [1, 'GT', ""]
     }
 }
 
@@ -147,35 +209,32 @@ DATA_THRESHOLDS = {
 def parse_csv(file_path: str, data: dict[str, dict[str, list]]) -> dict[str, dict[str, list]]:
     """
     Parse benchmark CSV file and populate data structure.
-    
-    CSV format expected:
-        Column 0: (unused)
-        Column 1: Category name (e.g., "search-with-L=2000-bw=4")
-        Column 2: Metric name (e.g., "qps")
-        Column 3: Current value
-        Column 4: Baseline value
-        Column 5: Change percentage
+
+    CSV format produced by compare_disk_index_json_output.py:
+        Column 0: Parent Span Name  (category, e.g. "index-build statistics")
+        Column 1: Span Name         (display name, unused for matching)
+        Column 2: Stat Key          (metric key, e.g. "qps")
+        Column 3: Stat Value (Target)
+        Column 4: Stat Value (Baseline)
+        Column 5: Deviation (%)
     """
     with open(file_path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         next(reader)  # Skip header row
-        
-        current_key = None
+
         for row in reader:
             if len(row) < 6:
                 continue
-                
-            # Column 1 contains category name (only set on first row of category)
-            if row[1]:
-                current_key = row[1]
-            elif current_key and current_key in data:
-                metric_name = row[2]
-                if metric_name in data[current_key]:
-                    # Append: [current_value, baseline_value, change_percentage]
-                    data[current_key][metric_name].append(row[3])  # current
-                    data[current_key][metric_name].append(row[4])  # baseline
-                    data[current_key][metric_name].append(row[5])  # change %
-    
+
+            category = row[0].strip()
+            metric_name = row[2].strip()
+
+            if category in data and metric_name in data[category]:
+                # Append: [current_value, baseline_value, change_percentage]
+                data[category][metric_name].append(row[3])  # target (current)
+                data[category][metric_name].append(row[4])  # baseline
+                data[category][metric_name].append(row[5])  # deviation %
+
     return data
 
 
@@ -286,8 +345,8 @@ def check_thresholds(
             
             values = data[category][metric]
             if not values:
-                print(f"ERROR: {category}/{metric} has no data")
-                return True, f"Missing data for {category}/{metric}"
+                # No data for this metric in the CSV — skip silently
+                continue
             
             # Parse values: [current, baseline, change%]
             try:

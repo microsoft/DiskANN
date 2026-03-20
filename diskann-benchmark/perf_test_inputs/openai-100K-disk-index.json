@@ -1,0 +1,40 @@
+{
+    "search_directories": [
+        "target/tmp"
+    ],
+    "jobs": [
+        {
+            "type": "disk-index",
+            "content": {
+                "source": {
+                    "disk-index-source": "Build",
+                    "data_type": "float32",
+                    "data": "OpenAIArXiv/openai_base.bin.crop_nb_100000",
+                    "distance": "squared_l2",
+                    "dim": 1536,
+                    "max_degree": 32,
+                    "l_build": 50,
+                    "num_threads": 8,
+                    "build_ram_limit_gb": 4.0,
+                    "num_pq_chunks": 192,
+                    "quantization_type": "FP",
+                    "save_path": "openai_100k_benchmark_index"
+                },
+                "search_phase": {
+                    "queries": "OpenAIArXiv/openai_query.bin",
+                    "groundtruth": "OpenAIArXiv/openai-100K",
+                    "search_list": [
+                        100,
+                        200
+                    ],
+                    "beam_width": 4,
+                    "recall_at": 100,
+                    "num_threads": 4,
+                    "is_flat_search": false,
+                    "distance": "squared_l2",
+                    "vector_filters_file": null
+                }
+            }
+        }
+    ]
+}
