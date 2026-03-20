@@ -80,6 +80,37 @@
       "range_search_second_round": false,
       "result_distances": [],
       "result_ids": []
+    },
+    {
+      "comparisons": 101,
+      "description": "With a low starting L value and a large radius, we expect the range search second round to be triggered. This exercises the frontier expansion path. Results must not contain duplicates.",
+      "grid_dims": 1,
+      "grid_size": 100,
+      "hops": 101,
+      "inner_radius": null,
+      "metrics": {
+        "append_neighbors": 0,
+        "get_neighbors": 101,
+        "get_vector": 101,
+        "set_neighbors": 0,
+        "set_vector": 0
+      },
+      "num_results": 3,
+      "query": [
+        0.5
+      ],
+      "radius": 3.0999999046325684,
+      "range_search_second_round": false,
+      "result_distances": [
+        0.25,
+        0.25,
+        2.25
+      ],
+      "result_ids": [
+        0,
+        1,
+        2
+      ]
     }
   ]
 }
