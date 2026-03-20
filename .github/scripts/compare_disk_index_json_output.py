@@ -11,8 +11,6 @@ disk-index benchmarks and produces a CSV file comparing the metrics with deviati
 The output format matches the CSV structure expected by benchmark_result_parse.py:
   Parent Span Name, Span Name, Stat Key, Stat Value (Target), Stat Value (Baseline), Deviation (%)
 
-Migrated from ADO: .pipelines/templates/compare_disk_index_json_output.py
-
 Usage:
     python compare_disk_index_json_output.py \\
         --baseline baseline/target/tmp/<dataset>_benchmark_crate_baseline.json \\
