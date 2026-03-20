@@ -113,7 +113,7 @@ jobs:
           # Note: For accurate benchmarks, consider using CPU pinning on self-hosted runners:
           # sudo taskset -c 0,2,4,6 ionice -c 1 -n 0 cargo run ...
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
+            run --input-file ../diskann_rust/diskann-benchmark/perf_test_inputs/wikipedia-100K-disk-index.json \
             --output-file target/tmp/wikipedia-100K_benchmark_crate_baseline.json
 
       - name: Run current branch benchmark
@@ -226,7 +226,7 @@ jobs:
         working-directory: baseline
         run: |
           cargo run -p diskann-benchmark --features disk-index --release -- \
-            run --input-file diskann-benchmark/perf_test_inputs/openai-100K-disk-index.json \
+            run --input-file ../diskann_rust/diskann-benchmark/perf_test_inputs/openai-100K-disk-index.json \
             --output-file target/tmp/openai-100K_benchmark_crate_baseline.json
 
       - name: Run current branch benchmark
