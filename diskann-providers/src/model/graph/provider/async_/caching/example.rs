@@ -230,18 +230,21 @@ mod tests {
     use std::sync::Arc;
 
     use diskann::{
-        graph::DiskANNIndex,
+        graph::{DiskANNIndex, glue::SearchStrategy, search::Knn, search_output_buffer},
         provider::{
             Accessor, DataProvider, Delete, NeighborAccessor, NeighborAccessorMut, SetElement,
         },
         utils::async_tools,
     };
     use diskann_quantization::num::PowerOfTwo;
+    use diskann_utils::views::Matrix;
+    use diskann_vector::{PureDistanceFunction, distance::SquaredL2};
     use rstest::rstest;
 
     use crate::{
         index::diskann_async::tests as async_tests,
         model::graph::provider::async_::caching::provider::{AsCacheAccessorFor, CachingProvider},
+        utils as crate_utils,
     };
 
     fn test_provider(
@@ -699,6 +702,332 @@ mod tests {
             index.multi_insert(strategy, &ctx, batch).await.unwrap();
 
             check_stats(index.provider());
+        }
+    }
+
+    #[rstest]
+    #[case(1, 100)]
+    #[case(3, 7)]
+    #[case(4, 5)]
+    #[tokio::test]
+    async fn grid_search(#[case] dim: usize, #[case] grid_size: usize) {
+        let l = 10;
+        let max_degree = 2 * dim;
+        let num_points = (grid_size).pow(dim as u32);
+        let start_id = u32::MAX;
+        let start_point = vec![grid_size as f32; dim];
+        let metric = Metric::L2;
+        let cache_size = PowerOfTwo::new(128 * 1024).unwrap();
+
+        let index_config = diskann::graph::config::Builder::new(
+            max_degree,
+            diskann::graph::config::MaxDegree::default_slack(),
+            l,
+            metric.into(),
+        )
+        .build()
+        .unwrap();
+
+        let config = test_provider::Config::new(
+            metric,
+            index_config.max_degree().get(),
+            test_provider::StartPoint::new(start_id, start_point.clone()),
+        )
+        .unwrap();
+
+        let mut vectors = <f32 as async_tests::GenerateGrid>::generate_grid(dim, grid_size);
+
+        let provider = CachingProvider::new(
+            test_provider::Provider::new(config),
+            ExampleCache::new(cache_size, None),
+        );
+        let index = Arc::new(DiskANNIndex::new(index_config, provider, None));
+
+        let adjacency_lists = match dim {
+            1 => crate_utils::generate_1d_grid_adj_list(grid_size as u32),
+            3 => crate_utils::genererate_3d_grid_adj_list(grid_size as u32),
+            4 => crate_utils::generate_4d_grid_adj_list(grid_size as u32),
+            _ => panic!("Unsupported number of dimensions"),
+        };
+        assert_eq!(adjacency_lists.len(), num_points);
+        assert_eq!(vectors.len(), num_points);
+
+        let strategy = cache_provider::Cached::new(test_provider::Strategy::new());
+        let ctx = ctx();
+        async_tests::populate_data(index.provider(), &ctx, &vectors).await;
+        {
+            // Note: Without the fully qualified syntax - this fails to compile.
+            let mut accessor =
+                <cache_provider::Cached<test_provider::Strategy> as SearchStrategy<
+                    cache_provider::CachingProvider<test_provider::Provider, ExampleCache>,
+                    [f32],
+                >>::search_accessor(&strategy, index.provider(), &ctx)
+                .unwrap();
+            async_tests::populate_graph(&mut accessor, &adjacency_lists).await;
+
+            accessor
+                .set_neighbors(start_id, &[num_points as u32 - 1])
+                .await
+                .unwrap();
+        }
+
+        // Test with the zero query — the farthest point from the entry point.
+        let search_k = dim + 1;
+        let search_l = 10;
+        {
+            let query = vec![0.0f32; dim];
+            let mut ids = vec![0u32; search_k];
+            let mut distances = vec![0.0f32; search_k];
+            let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let knn = Knn::new_default(search_k, search_l).unwrap();
+            index
+                .search(knn, &strategy, &ctx, query.as_slice(), &mut output)
+                .await
+                .unwrap();
+
+            // The nearest neighbor should be id 0 with distance 0.
+            assert_eq!(ids[0], 0, "expected the nearest neighbor to be 0");
+            assert_eq!(distances[0], 0.0, "expected the nearest distance to be 0");
+            for &d in &distances[1..search_k] {
+                assert_eq!(
+                    d, 1.0,
+                    "expected corner query close neighbor to have distance 1.0"
+                );
+            }
+        }
+
+        // Test with the start point to ensure it is filtered out.
+        {
+            let query = start_point.clone();
+            let mut ids = vec![0u32; search_k];
+            let mut distances = vec![0.0f32; search_k];
+            let mut output = search_output_buffer::IdDistance::new(&mut ids, &mut distances);
+            let knn = Knn::new_default(search_k, search_l).unwrap();
+            index
+                .search(knn, &strategy, &ctx, query.as_slice(), &mut output)
+                .await
+                .unwrap();
+
+            assert_ne!(
+                ids[0] as usize, num_points,
+                "start point should not be returned"
+            );
+        }
+
+        // Paged Search
+        let corpus: Matrix<f32> = async_tests::squish(vectors.iter(), dim);
+
+        // Test paged search with the zero query.
+        {
+            let query = vec![0.0f32; dim];
+            let mut gt = crate::test_utils::groundtruth(corpus.as_view(), &query, |a, b| {
+                SquaredL2::evaluate(a, b)
+            });
+            let max_candidates = gt.len();
+            let mut state = index
+                .start_paged_search(strategy, &ctx, query.as_slice(), search_l)
+                .await
+                .unwrap();
+
+            let mut buffer = vec![diskann::neighbor::Neighbor::<u32>::default(); search_k];
+            let mut seen = 0;
+            while !gt.is_empty() {
+                let count = index
+                    .next_search_results::<cache_provider::Cached<test_provider::Strategy>, [f32]>(
+                        &ctx,
+                        &mut state,
+                        search_k,
+                        &mut buffer,
+                    )
+                    .await
+                    .unwrap();
+                for b in buffer.iter().take(count) {
+                    let m = gt.iter().position(|g| g.id == b.id);
+                    if let Some(j) = m {
+                        gt.remove(j);
+                    }
+                    seen += 1;
+                    if seen == max_candidates {
+                        break;
+                    }
+                }
+                if seen == max_candidates {
+                    break;
+                }
+            }
+        }
+
+        // Test paged search with the start point.
+        {
+            let query = start_point.clone();
+            let mut gt = crate::test_utils::groundtruth(corpus.as_view(), &query, |a, b| {
+                SquaredL2::evaluate(a, b)
+            });
+            let max_candidates = gt.len();
+            let mut state = index
+                .start_paged_search(strategy, &ctx, query.as_slice(), search_l)
+                .await
+                .unwrap();
+
+            let mut buffer = vec![diskann::neighbor::Neighbor::<u32>::default(); search_k];
+            let mut seen = 0;
+            while !gt.is_empty() {
+                let count = index
+                    .next_search_results::<cache_provider::Cached<test_provider::Strategy>, [f32]>(
+                        &ctx,
+                        &mut state,
+                        search_k,
+                        &mut buffer,
+                    )
+                    .await
+                    .unwrap();
+                for b in buffer.iter().take(count) {
+                    let m = gt.iter().position(|g| g.id == b.id);
+                    if let Some(j) = m {
+                        gt.remove(j);
+                    }
+                    seen += 1;
+                    if seen == max_candidates {
+                        break;
+                    }
+                }
+                if seen == max_candidates {
+                    break;
+                }
+            }
+        }
+
+        // Unfortunately - this is needed for the `check_grid_search` test.
+        vectors.push(start_point.clone());
+    }
+
+    #[tokio::test]
+    async fn test_inplace_delete_2d() {
+        // create small index instance
+        let metric = Metric::L2;
+        let num_points = 4;
+        let strategy = cache_provider::Cached::new(test_provider::DeletionAwareStrategy::new());
+        let cache_size = PowerOfTwo::new(128 * 1024).unwrap();
+        let start_id = num_points as u32;
+        let start_point = vec![0.5, 0.5];
+
+        let index_config = diskann::graph::config::Builder::new(
+            4, // target_degree
+            diskann::graph::config::MaxDegree::default_slack(),
+            10, // l_build
+            metric.into(),
+        )
+        .build()
+        .unwrap();
+
+        let config = test_provider::Config::new(
+            metric,
+            index_config.max_degree().get(),
+            test_provider::StartPoint::new(start_id, start_point.clone()),
+        )
+        .unwrap();
+
+        let index = DiskANNIndex::new(
+            index_config,
+            CachingProvider::new(
+                test_provider::Provider::new(config),
+                ExampleCache::new(cache_size, None),
+            ),
+            None,
+        );
+
+        let ctx = ctx();
+
+        // vectors are the four corners of a square, with the start point in the middle
+        // the middle point forms an edge to each corner, while corners form an edge
+        // to their opposite vertex vertically as well as the middle
+        let vectors = [
+            vec![0.0, 0.0],
+            vec![0.0, 1.0],
+            vec![1.0, 0.0],
+            vec![1.0, 1.0],
+        ];
+        let adjacency_lists = [
+            AdjacencyList::from_iter_untrusted([4, 1]),
+            AdjacencyList::from_iter_untrusted([4, 0]),
+            AdjacencyList::from_iter_untrusted([4, 3]),
+            AdjacencyList::from_iter_untrusted([4, 2]),
+            AdjacencyList::from_iter_untrusted([0, 1, 2, 3]),
+        ];
+
+        // Note: Without the fully qualified syntax - this fails to compile.
+        let mut accessor =
+            <cache_provider::Cached<test_provider::DeletionAwareStrategy> as SearchStrategy<
+                cache_provider::CachingProvider<test_provider::Provider, ExampleCache>,
+                [f32],
+            >>::search_accessor(&strategy, index.provider(), &ctx)
+            .unwrap();
+
+        async_tests::populate_data(index.provider(), &ctx, &vectors).await;
+        async_tests::populate_graph(&mut accessor, &adjacency_lists).await;
+
+        index
+            .inplace_delete(
+                strategy,
+                &ctx,
+                &3, // id to delete
+                3,  // num_to_replace
+                diskann::graph::InplaceDeleteMethod::VisitedAndTopK {
+                    k_value: 4,
+                    l_value: 10,
+                },
+            )
+            .await
+            .unwrap();
+
+        // Check that the vertex was marked as deleted.
+        assert!(
+            index
+                .data_provider
+                .status_by_internal_id(&ctx, 3)
+                .await
+                .unwrap()
+                .is_deleted()
+        );
+
+        // expected outcome:
+        // vertex 4 (the start point) has its edge to 3 deleted
+        // vertex 2 (the other point with edge pointing to 3) should have its edge to point 3 deleted,
+        // and replaced with edges to points 0 and 1
+        // vertices 0 and 1 should add an edge pointing to 2.
+        // vertex 3 should be dropped
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(4, &mut list).await.unwrap();
+            list.sort();
+            assert_eq!(&*list, &[0, 1, 2]);
+        }
+
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(2, &mut list).await.unwrap();
+            list.sort();
+            assert_eq!(&*list, &[0, 1, 4]);
+        }
+
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(0, &mut list).await.unwrap();
+            list.sort();
+            assert_eq!(&*list, &[1, 2, 4]);
+        }
+
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(1, &mut list).await.unwrap();
+            list.sort();
+            assert_eq!(&*list, &[0, 2, 4]);
+        }
+
+        {
+            let mut list = AdjacencyList::new();
+            accessor.get_neighbors(3, &mut list).await.unwrap();
+            assert!(list.is_empty());
         }
     }
 }

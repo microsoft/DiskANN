@@ -18,9 +18,10 @@ use thiserror::Error;
 use crate::{
     ANNError, ANNResult,
     error::{Infallible, message},
-    graph::{AdjacencyList, glue, test::synthetic},
+    graph::{AdjacencyList, SearchOutputBuffer, glue, test::synthetic},
     internal::counter::{Counter, LocalCounter},
-    provider,
+    neighbor::Neighbor,
+    provider::{self, BuildQueryComputer},
     utils::VectorRepr,
 };
 
@@ -1061,6 +1062,143 @@ impl<'a> glue::AsElement<&'a [f32]> for Accessor<'a> {
 }
 
 impl glue::InplaceDeleteStrategy<Provider> for Strategy {
+    type DeleteElement<'a> = [f32];
+    type DeleteElementGuard = Box<[f32]>;
+    type DeleteElementError = AccessedInvalidId;
+    type PruneStrategy = Self;
+    type SearchStrategy = Self;
+
+    fn prune_strategy(&self) -> Self::PruneStrategy {
+        *self
+    }
+
+    fn search_strategy(&self) -> Self::SearchStrategy {
+        *self
+    }
+
+    async fn get_delete_element<'a>(
+        &'a self,
+        provider: &'a Provider,
+        _context: &'a <Provider as provider::DataProvider>::Context,
+        id: <Provider as provider::DataProvider>::InternalId,
+    ) -> Result<Self::DeleteElementGuard, Self::DeleteElementError> {
+        provider
+            .terms
+            .get(&id)
+            .map(|v| (*v.data).into())
+            .ok_or(AccessedInvalidId(id))
+    }
+}
+
+//--------------------------------------//
+// Deletion-Aware Strategy and PostProc //
+//--------------------------------------//
+
+/// A [`glue::SearchPostProcess`] that filters out deleted IDs before copying results.
+///
+/// This is analogous to the `RemoveDeletedIdsAndCopy` post-processor in `diskann-providers`,
+/// tailored for the test provider.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FilterDeletedCopyIds;
+
+impl<'a, T> glue::SearchPostProcess<Accessor<'a>, T> for FilterDeletedCopyIds
+where
+    T: ?Sized,
+    Accessor<'a>: BuildQueryComputer<T, Id = u32>,
+{
+    type Error = std::convert::Infallible;
+
+    fn post_process<I, B>(
+        &self,
+        accessor: &mut Accessor<'a>,
+        _query: &T,
+        _computer: &<Accessor<'a> as BuildQueryComputer<T>>::QueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> impl std::future::Future<Output = Result<usize, Self::Error>> + Send
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: SearchOutputBuffer<u32> + Send + ?Sized,
+    {
+        let provider = accessor.provider;
+        let count = output.extend(candidates.filter_map(|n| {
+            let is_deleted = provider.is_deleted(n.id).unwrap_or(true);
+            if is_deleted {
+                None
+            } else {
+                Some((n.id, n.distance))
+            }
+        }));
+        std::future::ready(Ok(count))
+    }
+}
+
+/// A strategy variant that filters deleted IDs during search post-processing.
+///
+/// This is needed for `inplace_delete` which relies on the post-processor to exclude
+/// deleted items from search results. The base [`Strategy`] uses [`glue::CopyIds`] which
+/// does not filter deletions.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DeletionAwareStrategy {
+    _phantom: (),
+}
+
+impl DeletionAwareStrategy {
+    pub fn new() -> Self {
+        Self { _phantom: () }
+    }
+}
+
+impl glue::SearchStrategy<Provider, [f32]> for DeletionAwareStrategy {
+    type QueryComputer = <f32 as VectorRepr>::QueryDistance;
+    type PostProcessor = FilterDeletedCopyIds;
+    type SearchAccessorError = Infallible;
+    type SearchAccessor<'a> = Accessor<'a>;
+
+    fn search_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        _context: &'a Context,
+    ) -> Result<Accessor<'a>, Infallible> {
+        Ok(Accessor::new(provider))
+    }
+
+    fn post_processor(&self) -> Self::PostProcessor {
+        FilterDeletedCopyIds
+    }
+}
+
+impl glue::PruneStrategy<Provider> for DeletionAwareStrategy {
+    type DistanceComputer = <f32 as VectorRepr>::Distance;
+    type PruneAccessor<'a> = Accessor<'a>;
+    type PruneAccessorError = Infallible;
+
+    fn prune_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        _context: &'a Context,
+    ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
+        Ok(Accessor::new(provider))
+    }
+}
+
+impl glue::InsertStrategy<Provider, [f32]> for DeletionAwareStrategy {
+    type PruneStrategy = Self;
+
+    fn prune_strategy(&self) -> Self::PruneStrategy {
+        *self
+    }
+
+    fn insert_search_accessor<'a>(
+        &'a self,
+        provider: &'a Provider,
+        _context: &'a Context,
+    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
+        Ok(Accessor::new(provider))
+    }
+}
+
+impl glue::InplaceDeleteStrategy<Provider> for DeletionAwareStrategy {
     type DeleteElement<'a> = [f32];
     type DeleteElementGuard = Box<[f32]>;
     type DeleteElementError = AccessedInvalidId;
