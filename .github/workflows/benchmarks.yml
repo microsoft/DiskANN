@@ -16,6 +16,14 @@ on:
         required: true
         default: 'main'
         type: string
+  push:
+    branches:
+      - 'user/tianyuanyuan/add-benchmark-pipeline'
+    paths:
+      - 'diskann-benchmark/perf_test_inputs/**-disk-index.json'
+      - '.github/workflows/benchmarks.yml'
+      - '.github/scripts/compare_disk_index_json_output.py'
+      - '.github/scripts/benchmark_result_parse.py'
 
 # Cancel in-progress runs when a new run is triggered
 concurrency:
@@ -53,10 +61,10 @@ jobs:
           path: diskann_rust
           lfs: true
 
-      - name: Checkout baseline (${{ inputs.baseline_ref }})
+      - name: Checkout baseline (${{ inputs.baseline_ref || 'main' }})
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.baseline_ref }}
+          ref: ${{ inputs.baseline_ref || 'main' }}
           path: baseline
           lfs: true
 
@@ -168,10 +176,10 @@ jobs:
           path: diskann_rust
           lfs: true
 
-      - name: Checkout baseline (${{ inputs.baseline_ref }})
+      - name: Checkout baseline (${{ inputs.baseline_ref || 'main' }})
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.baseline_ref }}
+          ref: ${{ inputs.baseline_ref || 'main' }}
           path: baseline
           lfs: true
 
