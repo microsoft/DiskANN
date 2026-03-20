@@ -260,6 +260,67 @@ jobs:
           find ./target -type f -regex ".*/deps/float16_conversion-[a-f0-9]*$" | xargs -n1 qemu-x86_64 -cpu Nehalem
 
 
+  # This test validates AVX-512 code paths using Intel SDE (Software Development Emulator).
+  #
+  # SDE emulates a Sapphire Rapids CPU, which supports all AVX-512 extensions required by
+  # the V4 backend (avx512f, bw, cd, dq, vl, vnni, bitalg, vpopcntdq, vbmi).
+  #
+  # The V4 functions are compiled with `#[target_feature(enable = ...)]` regardless of the
+  # target CPU, and runtime dispatch detects the SDE-emulated features via `cpuid`. No
+  # special RUSTFLAGS are needed beyond the defaults.
+  sde:
+    needs: basics
+    name: sde-avx512-tests
+    runs-on: ubuntu-latest
+    env:
+      SDE_VERSION: "sde-external-10.7.0-2026-02-18-lin"
+      # Use SDE as the test runner so cargo test automatically runs binaries under emulation.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "${{ github.workspace }}/intel-sde/sde64 -spr --"
+      # Force diskann-wide tests to require V4 architecture.
+      WIDE_TEST_MIN_ARCH: "x86-64-v4"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust ${{ env.rust_stable }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_stable }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache Intel SDE
+        id: cache-sde
+        uses: actions/cache@v4
+        with:
+          path: intel-sde
+          key: intel-${{ env.SDE_VERSION }}
+
+      - name: Download Intel SDE
+        if: steps.cache-sde.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          SDE_URL="https://downloadmirror.intel.com/913594/${SDE_VERSION}.tar.xz"
+          wget -qO intel-sde.tar.xz "$SDE_URL"
+          mkdir -p intel-sde
+          tar xf intel-sde.tar.xz --strip-components=1 -C intel-sde
+          rm intel-sde.tar.xz
+
+      - name: Verify SDE installation
+        run: ./intel-sde/sde64 --version
+
+      # Note that the compile-tests do not behave well at all when running under SDE.
+      #
+      # We skip those tests because they don't change for AVX512 anyways.
+      - name: "SDE Tests (Sapphire Rapids)"
+        run: |
+          set -euxo pipefail
+          cargo test --locked \
+            --package diskann-wide \
+            --package diskann-vector \
+            --package diskann-quantization \
+            -- --skip compile_tests
+
   test-workspace:
     needs: basics
     name: test workspace
