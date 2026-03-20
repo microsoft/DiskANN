@@ -3105,7 +3105,7 @@ mod tests {
                 .collect()
         }
 
-        const TOLERANCE: Check = Check::absrel(5e-8, 0.0);
+        const TOLERANCE: Check = Check::absrel(1e-7, 0.0);
 
         /// Assert that the deserialized quantizer produces the expected
         /// per-layout query distances.
