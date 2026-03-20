@@ -89,7 +89,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y openssl libssl-dev pkg-config python3-pip
-          pip install csvtomd numpy scipy
+          pip install numpy scipy
 
       # Download the public Wikipedia-100K dataset via big-ann-benchmarks
       # Dataset: 100K Cohere Wikipedia embeddings (768-dim, float32, cosine distance)
@@ -134,9 +134,18 @@ jobs:
       - name: Convert results to Markdown
         working-directory: diskann_rust
         run: |
-          csvtomd target/tmp/wikipedia-100K_change.csv > target/tmp/wikipedia-100K_change.md
-          echo "### Benchmark Results: Wikipedia-100K Dataset" >> $GITHUB_STEP_SUMMARY
-          cat target/tmp/wikipedia-100K_change.md >> $GITHUB_STEP_SUMMARY
+          python3 -c "
+          import csv, os
+          rows = list(csv.reader(open('target/tmp/wikipedia-100K_change.csv')))
+          if len(rows) < 2:
+              print('No data'); exit(0)
+          header = rows[0]
+          sep = ['---'] * len(header)
+          md = '\n'.join(' | '.join(r) for r in [header, sep] + rows[1:])
+          open('target/tmp/wikipedia-100K_change.md', 'w').write(md + '\n')
+          "
+          echo '### Benchmark Results: Wikipedia-100K Dataset' >> "$GITHUB_STEP_SUMMARY"
+          cat target/tmp/wikipedia-100K_change.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate benchmark results
         working-directory: diskann_rust
@@ -204,7 +213,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y openssl libssl-dev pkg-config python3-pip
-          pip install csvtomd numpy scipy
+          pip install numpy scipy
 
       # Download the public OpenAI ArXiv 100K dataset via big-ann-benchmarks
       # Dataset: 100K OpenAI embeddings of ArXiv papers (1536-dim, float32, euclidean distance)
@@ -247,9 +256,18 @@ jobs:
       - name: Convert results to Markdown
         working-directory: diskann_rust
         run: |
-          csvtomd target/tmp/openai-100K_change.csv > target/tmp/openai-100K_change.md
-          echo "### Benchmark Results: OpenAI ArXiv 100K Dataset" >> $GITHUB_STEP_SUMMARY
-          cat target/tmp/openai-100K_change.md >> $GITHUB_STEP_SUMMARY
+          python3 -c "
+          import csv, os
+          rows = list(csv.reader(open('target/tmp/openai-100K_change.csv')))
+          if len(rows) < 2:
+              print('No data'); exit(0)
+          header = rows[0]
+          sep = ['---'] * len(header)
+          md = '\n'.join(' | '.join(r) for r in [header, sep] + rows[1:])
+          open('target/tmp/openai-100K_change.md', 'w').write(md + '\n')
+          "
+          echo '### Benchmark Results: OpenAI ArXiv 100K Dataset' >> "$GITHUB_STEP_SUMMARY"
+          cat target/tmp/openai-100K_change.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate benchmark results
         working-directory: diskann_rust
