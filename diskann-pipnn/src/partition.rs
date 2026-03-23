@@ -535,7 +535,7 @@ pub fn parallel_partition_quantized(
     let fanout = if !config.fanout.is_empty() { config.fanout[0] } else { 3 };
 
     let num_leaders = ((n as f64 * config.p_samp).ceil() as usize)
-        .max(2).min(1000).min(n);
+        .max(2).min(n);
 
     let leaders: Vec<usize> = indices.choose_multiple(&mut rng, num_leaders).copied().collect();
 
@@ -622,7 +622,7 @@ fn partition_quantized_recursive(
     }
 
     let fanout = if level < config.fanout.len() { config.fanout[level] } else { 1 };
-    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize).max(2).min(1000).min(n);
+    let num_leaders = ((n as f64 * config.p_samp).ceil() as usize).max(2).min(n);
 
     let leaders: Vec<usize> = indices.choose_multiple(rng, num_leaders).copied().collect();
 
