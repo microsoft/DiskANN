@@ -5,7 +5,7 @@
 
 //! Diversity-aware search.
 
-use diskann_utils::future::{AssertSend, SendFuture};
+use diskann_utils::future::SendFuture;
 use hashbrown::HashSet;
 
 use super::{Knn, Search, record::NoopSearchRecord, scratch::SearchScratch};
@@ -14,7 +14,7 @@ use crate::{
     error::IntoANNResult,
     graph::{
         DiverseSearchParams,
-        glue::{SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{SearchExt, SearchPostProcess},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },
@@ -92,25 +92,29 @@ where
     }
 }
 
-impl<DP, S, T, O, OB, P> Search<DP, S, T, O, OB> for Diverse<P>
+impl<DP, S, T, P> Search<DP, S, T> for Diverse<P>
 where
     DP: DataProvider,
+    S: crate::graph::glue::SearchStrategy<DP, T>,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
-    O: Send,
-    OB: SearchOutputBuffer<O> + Send,
     P: AttributeValueProvider<Id = DP::InternalId>,
 {
     type Output = SearchStats;
 
-    fn search(
+    fn search<O, PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        processor: PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        O: Send,
+        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -135,8 +139,7 @@ where
             // Post-process diverse results
             diverse_scratch.best.post_process();
 
-            let result_count = strategy
-                .post_processor()
+            let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
@@ -144,7 +147,6 @@ where
                     diverse_scratch.best.iter().take(self.inner.l_value().get()),
                     output,
                 )
-                .send()
                 .await
                 .into_ann_result()?;
 

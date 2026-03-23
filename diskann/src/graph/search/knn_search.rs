@@ -7,7 +7,7 @@
 
 use std::{fmt::Debug, num::NonZeroUsize};
 
-use diskann_utils::future::{AssertSend, SendFuture};
+use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
 use super::Search;
@@ -15,7 +15,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{self, SearchExt, SearchPostProcess},
         index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
@@ -143,13 +143,11 @@ impl Knn {
     }
 }
 
-impl<DP, S, T, O, OB> Search<DP, S, T, O, OB> for Knn
+impl<DP, S, T> Search<DP, S, T> for Knn
 where
     DP: DataProvider,
+    S: glue::SearchStrategy<DP, T>,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
-    O: Send,
-    OB: SearchOutputBuffer<O> + Send + ?Sized,
 {
     type Output = SearchStats;
 
@@ -163,6 +161,7 @@ where
     ///
     /// * `index` - The DiskANN index to search.
     /// * `strategy` - The search strategy to use for accessing and processing elements.
+    /// * `processor` - The post-processor to apply to the search results.
     /// * `context` - The context to pass through to providers.
     /// * `query` - The query vector for which nearest neighbors are sought.
     /// * `output` - A mutable buffer to store the search results. Must be pre-allocated by the caller.
@@ -177,14 +176,20 @@ where
     /// # Errors
     ///
     /// Returns an error if there is a failure accessing elements or computing distances.
-    fn search(
+    fn search<O, PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        processor: PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        O: Send,
+        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -206,8 +211,7 @@ where
                 )
                 .await?;
 
-            let result_count = strategy
-                .post_processor()
+            let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
@@ -215,7 +219,6 @@ where
                     scratch.best.iter().take(self.l_value.get().into_usize()),
                     output,
                 )
-                .send()
                 .await
                 .into_ann_result()?;
 
@@ -246,25 +249,29 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
     }
 }
 
-impl<'r, DP, S, T, O, OB, SR> Search<DP, S, T, O, OB> for RecordedKnn<'r, SR>
+impl<'r, DP, S, T, SR> Search<DP, S, T> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
+    S: glue::SearchStrategy<DP, T>,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
-    O: Send,
-    OB: SearchOutputBuffer<O> + Send + ?Sized,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
 {
     type Output = SearchStats;
 
-    fn search(
+    fn search<O, PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        processor: PP,
         context: &DP::Context,
         query: &T,
         output: &mut OB,
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        O: Send,
+        PP: for<'a> SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -286,8 +293,7 @@ where
                 )
                 .await?;
 
-            let result_count = strategy
-                .post_processor()
+            let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
@@ -298,7 +304,6 @@ where
                         .take(self.inner.l_value.get().into_usize()),
                     output,
                 )
-                .send()
                 .await
                 .into_ann_result()?;
 
