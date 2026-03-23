@@ -26,7 +26,7 @@
 #endif
 
 // block size for reading/ processing large files and matrices in blocks
-#define BLOCK_SIZE 5000000
+#define POINT_BLOCK_SIZE 5000000
 
 // #define SAVE_INFLATED_PQ true
 
@@ -192,7 +192,7 @@ int estimate_cluster_sizes(float *test_data_float, size_t num_test, float *pivot
         shard_counts[i] = 0;
     }
 
-    size_t block_size = num_test <= BLOCK_SIZE ? num_test : BLOCK_SIZE;
+    size_t block_size = num_test <= POINT_BLOCK_SIZE ? num_test : POINT_BLOCK_SIZE;
     uint32_t *block_closest_centers = new uint32_t[block_size * k_base];
     float *block_data_float;
 
@@ -270,7 +270,7 @@ int shard_data_into_clusters(const std::string data_file, float *pivots, const s
         shard_counts[i] = 0;
     }
 
-    size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
+    size_t block_size = num_points <= POINT_BLOCK_SIZE ? num_points : POINT_BLOCK_SIZE;
     std::unique_ptr<uint32_t[]> block_closest_centers = std::make_unique<uint32_t[]>(block_size * k_base);
     std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * dim);
     std::unique_ptr<float[]> block_data_float = std::make_unique<float[]>(block_size * dim);
@@ -358,7 +358,7 @@ int shard_data_into_clusters_only_ids(const std::string data_file, float *pivots
         shard_counts[i] = 0;
     }
 
-    size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
+    size_t block_size = num_points <= POINT_BLOCK_SIZE ? num_points : POINT_BLOCK_SIZE;
     std::unique_ptr<uint32_t[]> block_closest_centers = std::make_unique<uint32_t[]>(block_size * k_base);
     std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * dim);
     std::unique_ptr<float[]> block_data_float = std::make_unique<float[]>(block_size * dim);
@@ -434,7 +434,7 @@ int retrieve_shard_data_from_ids(const std::string data_file, std::string idmap_
     uint32_t num_written = 0;
     std::cout << "Shard has " << shard_size << " points" << std::endl;
 
-    size_t block_size = num_points <= BLOCK_SIZE ? num_points : BLOCK_SIZE;
+    size_t block_size = num_points <= POINT_BLOCK_SIZE ? num_points : POINT_BLOCK_SIZE;
     std::unique_ptr<T[]> block_data_T = std::make_unique<T[]>(block_size * dim);
 
     size_t num_blocks = DIV_ROUND_UP(num_points, block_size);
