@@ -15,8 +15,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use diskann::{
     graph::{
-        search::Knn,
-        search_output_buffer, DiskANNIndex, SearchOutputBuffer, StartPointStrategy,
+        search::Knn, search_output_buffer, DiskANNIndex, SearchOutputBuffer, StartPointStrategy,
     },
     provider::DefaultContext,
     ANNError, ANNErrorKind,
@@ -671,40 +670,14 @@ where
         .ok_or_else(|| anyhow::anyhow!("no search results"))
 }
 
-/// Helper module for serializing arrays as compact single-line JSON strings
-mod compact_array {
-    use serde::Serializer;
-
-    pub fn serialize_u32_vec<S>(vec: &Vec<u32>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Serialize as a string containing the compact JSON array
-        let compact = serde_json::to_string(vec).unwrap_or_default();
-        serializer.serialize_str(&compact)
-    }
-
-    pub fn serialize_f32_vec<S>(vec: &Vec<f32>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        // Serialize as a string containing the compact JSON array
-        let compact = serde_json::to_string(vec).unwrap_or_default();
-        serializer.serialize_str(&compact)
-    }
-}
-
 /// Per-query detailed results for debugging/analysis
 #[derive(Debug, Serialize)]
 pub struct PerQueryDetails {
     pub query_id: usize,
     pub filter: String,
     pub recall: f64,
-    #[serde(serialize_with = "compact_array::serialize_u32_vec")]
     pub result_ids: Vec<u32>,
-    #[serde(serialize_with = "compact_array::serialize_f32_vec")]
     pub result_distances: Vec<f32>,
-    #[serde(serialize_with = "compact_array::serialize_u32_vec")]
     pub groundtruth_ids: Vec<u32>,
 }
 
@@ -817,7 +790,7 @@ struct DocumentIndexBuilder<DP: diskann::provider::DataProvider, T> {
     index: Arc<DiskANNIndex<DP>>,
     data: Arc<Matrix<T>>,
     attributes: Arc<Vec<Vec<Attribute>>>,
-    strategy: DocumentInsertStrategy<common::FullPrecision, [T]>,
+    strategy: DocumentInsertStrategy<common::FullPrecision>,
 }
 
 impl<DP: diskann::provider::DataProvider, T> DocumentIndexBuilder<DP, T> {
@@ -825,7 +798,7 @@ impl<DP: diskann::provider::DataProvider, T> DocumentIndexBuilder<DP, T> {
         index: Arc<DiskANNIndex<DP>>,
         data: Arc<Matrix<T>>,
         attributes: Arc<Vec<Vec<Attribute>>>,
-        strategy: DocumentInsertStrategy<common::FullPrecision, [T]>,
+        strategy: DocumentInsertStrategy<common::FullPrecision>,
     ) -> Arc<Self> {
         Arc::new(Self {
             index,
@@ -841,9 +814,9 @@ where
     DP: diskann::provider::DataProvider<Context = DefaultContext, ExternalId = u32>
         + for<'doc> diskann::provider::SetElement<Document<'doc, [T]>>
         + AsyncFriendly,
-    for<'doc> DocumentInsertStrategy<common::FullPrecision, [T]>:
+    for<'doc> DocumentInsertStrategy<common::FullPrecision>:
         diskann::graph::glue::InsertStrategy<DP, Document<'doc, [T]>>,
-    DocumentInsertStrategy<common::FullPrecision, [T]>: AsyncFriendly,
+    DocumentInsertStrategy<common::FullPrecision>: AsyncFriendly,
     T: AsyncFriendly,
 {
     type Output = ();
