@@ -17,7 +17,7 @@ use crate::{
     graph::{
         glue::{
             self, ExpandBeam, HybridPredicate, Predicate, PredicateMut, SearchExt,
-            SearchPostProcess,
+            SearchPostProcess, SearchStrategy
         },
         index::{
             DiskANNIndex, InternalSearchStats, QueryLabelProvider, QueryVisitDecision, SearchStats,
