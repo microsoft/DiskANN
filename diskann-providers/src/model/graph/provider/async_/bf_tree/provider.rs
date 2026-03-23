@@ -17,12 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use bf_tree::{BfTree, Config};
 use diskann::{
-    ANNError, ANNResult,
+    ANNError, ANNResult, default_post_processor,
     graph::{
         AdjacencyList, DiskANNIndex, SearchOutputBuffer,
         glue::{
-            self, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy, PruneStrategy,
-            SearchExt, SearchStrategy,
+            self, DefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy,
+            PruneStrategy, SearchExt, SearchStrategy,
         },
     },
     neighbor::Neighbor,
@@ -43,9 +43,7 @@ use crate::model::{
             neighbor_provider::NeighborProvider, quant_vector_provider::QuantVectorProvider,
             vector_provider::VectorProvider,
         },
-        common::{
-            CreateDeleteProvider, FullPrecision, Hybrid, Internal, NoDeletes, NoStore, Panics,
-        },
+        common::{CreateDeleteProvider, FullPrecision, Hybrid, NoDeletes, NoStore, Panics},
         distances,
         postprocess::{AsDeletionCheck, DeletionCheck, RemoveDeletedIdsAndCopy},
     },
@@ -1466,33 +1464,6 @@ where
 /// Perform a search entirely in the full-precision space.
 ///
 /// Starting points are not filtered out of the final results.
-impl<T, Q, D> SearchStrategy<BfTreeProvider<T, Q, D>, [T]> for Internal<FullPrecision>
-where
-    T: VectorRepr,
-    Q: AsyncFriendly,
-    D: AsyncFriendly + DeletionCheck,
-{
-    type QueryComputer = T::QueryDistance;
-    type SearchAccessor<'a> = FullAccessor<'a, T, Q, D>;
-    type SearchAccessorError = Panics;
-    type PostProcessor = RemoveDeletedIdsAndCopy;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a BfTreeProvider<T, Q, D>,
-        _context: &'a DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(FullAccessor::new(provider))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
-}
-
-/// Perform a search entirely in the full-precision space.
-///
-/// Starting points are not filtered out of the final results.
 impl<T, Q, D> SearchStrategy<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
 where
     T: VectorRepr,
@@ -1502,7 +1473,6 @@ where
     type QueryComputer = T::QueryDistance;
     type SearchAccessor<'a> = FullAccessor<'a, T, Q, D>;
     type SearchAccessorError = Panics;
-    type PostProcessor = glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -1511,10 +1481,15 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(FullAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+impl<T, Q, D> DefaultPostProcessor<BfTreeProvider<T, Q, D>, [T]> for FullPrecision
+where
+    T: VectorRepr,
+    Q: AsyncFriendly,
+    D: AsyncFriendly + DeletionCheck,
+{
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, RemoveDeletedIdsAndCopy>);
 }
 
 /// An [`glue::SearchPostProcess`] implementation that reranks PQ vectors.
@@ -1569,36 +1544,6 @@ where
 }
 
 /// Perform a search entirely in the quantized space.
-///
-/// Starting points are not filtered out of the final results but results are reranked using
-/// the full-precision data.
-impl<T, D> SearchStrategy<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Internal<Hybrid>
-where
-    T: VectorRepr,
-    D: AsyncFriendly + DeletionCheck,
-{
-    type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
-    type SearchAccessor<'a> = QuantAccessor<'a, T, D>;
-    type SearchAccessorError = Panics;
-    type PostProcessor = Rerank;
-
-    fn search_accessor<'a>(
-        &'a self,
-        provider: &'a BfTreeProvider<T, QuantVectorProvider, D>,
-        _context: &'a DefaultContext,
-    ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
-        Ok(QuantAccessor::new(provider))
-    }
-
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
-}
-
-/// Perform a search entirely in the quantized space.
-///
-/// Starting points are are filtered out of the final results and results are reranked using
-/// the full-precision data.
 impl<T, D> SearchStrategy<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
 where
     T: VectorRepr,
@@ -1607,7 +1552,6 @@ where
     type QueryComputer = pq::distance::QueryComputer<Arc<FixedChunkPQTable>>;
     type SearchAccessor<'a> = QuantAccessor<'a, T, D>;
     type SearchAccessorError = Panics;
-    type PostProcessor = glue::Pipeline<glue::FilterStartPoints, Rerank>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -1616,10 +1560,16 @@ where
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError> {
         Ok(QuantAccessor::new(provider))
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Default::default()
-    }
+/// Starting points are filtered out of the final results and results are reranked using
+/// the full-precision data.
+impl<T, D> DefaultPostProcessor<BfTreeProvider<T, QuantVectorProvider, D>, [T]> for Hybrid
+where
+    T: VectorRepr,
+    D: AsyncFriendly + DeletionCheck,
+{
+    default_post_processor!(glue::Pipeline<glue::FilterStartPoints, Rerank>);
 }
 
 // Pruning
@@ -1730,13 +1680,19 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
-    type SearchStrategy = Internal<Self>;
+    type DeleteSearchAccessor<'a> = FullAccessor<'a, T, Q, D>;
+    type SearchPostProcessor = RemoveDeletedIdsAndCopy;
+    type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
-        Internal(Self)
+        Self
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        RemoveDeletedIdsAndCopy
     }
 
     async fn get_delete_element<'a>(
@@ -1764,13 +1720,19 @@ where
     type DeleteElement<'a> = [T];
     type DeleteElementGuard = Box<[T]>;
     type PruneStrategy = Self;
-    type SearchStrategy = Internal<Self>;
+    type DeleteSearchAccessor<'a> = QuantAccessor<'a, T, D>;
+    type SearchPostProcessor = Rerank;
+    type SearchStrategy = Self;
     fn search_strategy(&self) -> Self::SearchStrategy {
-        Internal(*self)
+        *self
     }
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         *self
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        Rerank
     }
 
     async fn get_delete_element<'a>(

@@ -195,6 +195,36 @@ where
     }
 }
 
+impl<I> SearchOutputBuffer<I> for Vec<Neighbor<I>>
+where
+    I: Default + Eq,
+{
+    fn size_hint(&self) -> Option<usize> {
+        None
+    }
+
+    fn push(&mut self, id: I, distance: f32) -> search_output_buffer::BufferState {
+        self.push(Neighbor::new(id, distance));
+        search_output_buffer::BufferState::Available
+    }
+
+    fn current_len(&self) -> usize {
+        self.len()
+    }
+
+    fn extend<Itr>(&mut self, itr: Itr) -> usize
+    where
+        Itr: IntoIterator<Item = (I, f32)>,
+    {
+        let before = self.len();
+        Extend::extend(
+            self,
+            itr.into_iter().map(|(id, dist)| Neighbor::new(id, dist)),
+        );
+        self.len() - before
+    }
+}
+
 #[cfg(test)]
 mod neighbor_test {
     use super::*;
@@ -345,5 +375,27 @@ mod neighbor_test {
 
             assert_eq!(&buffer, &[f(1), f(2), f(3), f(4), f(5)]);
         }
+    }
+
+    #[test]
+    fn test_vec_neighbor_search_output_buffer() {
+        use crate::graph::search_output_buffer::SearchOutputBuffer;
+
+        let mut buf: Vec<Neighbor<u32>> = Vec::new();
+        assert_eq!(SearchOutputBuffer::<u32>::size_hint(&buf), None);
+        assert_eq!(SearchOutputBuffer::<u32>::current_len(&buf), 0);
+
+        // push grows unboundedly
+        assert!(SearchOutputBuffer::push(&mut buf, 1, 0.5).is_available());
+        assert!(SearchOutputBuffer::push(&mut buf, 2, 1.0).is_available());
+        assert_eq!(SearchOutputBuffer::<u32>::current_len(&buf), 2);
+        assert_eq!(buf[0], Neighbor::new(1, 0.5));
+        assert_eq!(buf[1], Neighbor::new(2, 1.0));
+
+        // extend appends and returns count
+        let count = SearchOutputBuffer::extend(&mut buf, vec![(3u32, 1.5), (4, 2.0), (5, 2.5)]);
+        assert_eq!(count, 3);
+        assert_eq!(SearchOutputBuffer::<u32>::current_len(&buf), 5);
+        assert_eq!(buf[4], Neighbor::new(5, 2.5));
     }
 }

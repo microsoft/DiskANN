@@ -175,7 +175,10 @@ pub(crate) mod tests {
         graph::{
             self, AdjacencyList, ConsolidateKind, InplaceDeleteMethod, StartPointStrategy,
             config::IntraBatchCandidates,
-            glue::{AsElement, InplaceDeleteStrategy, InsertStrategy, SearchStrategy, aliases},
+            glue::{
+                AsElement, DefaultSearchStrategy, InplaceDeleteStrategy, InsertStrategy,
+                SearchStrategy, aliases,
+            },
             index::{PartitionedNeighbors, QueryLabelProvider, QueryVisitDecision},
             search::{Knn, Range},
             search_output_buffer,
@@ -347,7 +350,7 @@ pub(crate) mod tests {
         mut checker: Checker,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<DP, Q>,
+        S: DefaultSearchStrategy<DP, Q>,
         Q: std::fmt::Debug + Sync + ?Sized,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
@@ -395,7 +398,7 @@ pub(crate) mod tests {
         filter: &dyn QueryLabelProvider<DP::InternalId>,
     ) where
         DP: DataProvider<InternalId = u32>,
-        S: SearchStrategy<DP, Q>,
+        S: DefaultSearchStrategy<DP, Q>,
         Q: std::fmt::Debug + Sync + ?Sized,
         Checker: FnMut(usize, (u32, f32)) -> Result<(), Box<dyn std::fmt::Display>>,
     {
@@ -501,8 +504,8 @@ pub(crate) mod tests {
         quant_strategy: QS,
     ) where
         DP: DataProvider<InternalId = u32, Context = DefaultContext>,
-        FS: SearchStrategy<DP, [T]> + Clone + 'static,
-        QS: SearchStrategy<DP, [T]> + Clone + 'static,
+        FS: DefaultSearchStrategy<DP, [T]> + Clone + 'static,
+        QS: DefaultSearchStrategy<DP, [T]> + Clone + 'static,
         T: Default + Clone + Send + Sync + std::fmt::Debug,
     {
         // Assume all vectors have the same length.
@@ -924,7 +927,7 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+            + DefaultSearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -1051,7 +1054,7 @@ pub(crate) mod tests {
     ) where
         T: VectorRepr + GenerateSphericalData + Into<f32>,
         S: InsertStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
-            + SearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
+            + DefaultSearchStrategy<FullPrecisionProvider<T, DefaultQuant>, [T]>
             + Clone
             + 'static,
         rand::distr::StandardUniform: Distribution<T>,
@@ -2280,23 +2283,27 @@ pub(crate) mod tests {
             {
                 // Full Precision Search.
                 let range_search = Range::new(starting_l_value, radius).unwrap();
-                let result = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &result.ids, radius, None);
+                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
             {
                 // Quantized Search
                 let range_search = Range::new(starting_l_value, radius).unwrap();
-                let result = index
-                    .search(range_search, &Hybrid::new(None), ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &Hybrid::new(None), ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &result.ids, radius, None);
+                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                assert_range_results_exactly_match(q, &gt, &ids, radius, None);
             }
 
             {
@@ -2313,27 +2320,30 @@ pub(crate) mod tests {
                     1.0,
                 )
                 .unwrap();
-                let result = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
-                assert_range_results_exactly_match(q, &gt, &result.ids, radius, Some(inner_radius));
+                let ids: Vec<u32> = results.iter().map(|n| n.id).collect();
+                assert_range_results_exactly_match(q, &gt, &ids, radius, Some(inner_radius));
             }
 
             {
                 // Test with a lower initial beam to trigger more two-round searches
                 // We don't expect results to exactly match here
                 let range_search = Range::new(lower_l_value, radius).unwrap();
-                let result = index
-                    .search(range_search, &FullPrecision, ctx, query, &mut ())
+                let mut results: Vec<Neighbor<u32>> = Vec::new();
+                let _ = index
+                    .search(range_search, &FullPrecision, ctx, query, &mut results)
                     .await
                     .unwrap();
 
                 // check that ids don't have duplicates
                 let mut ids_set = std::collections::HashSet::new();
-                for id in &result.ids {
-                    assert!(ids_set.insert(*id));
+                for n in &results {
+                    assert!(ids_set.insert(n.id));
                 }
             }
         }
@@ -2798,7 +2808,6 @@ pub(crate) mod tests {
         let accessor = <inmem::spherical::Quantized as SearchStrategy<
             DefaultProvider<NoStore, inmem::spherical::SphericalStore>,
             [f32],
-            _,
         >>::search_accessor(&strategy, index.provider(), ctx)
         .unwrap();
         let computer = accessor.build_query_computer(data.row(0)).unwrap();

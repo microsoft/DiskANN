@@ -79,7 +79,7 @@ pub struct Metrics {}
 impl<DP, T, S> Search for Range<DP, T, S>
 where
     DP: provider::DataProvider<Context: Default, ExternalId: search::Id>,
-    S: glue::SearchStrategy<DP, [T], DP::ExternalId> + Clone + AsyncFriendly,
+    S: glue::DefaultSearchStrategy<DP, [T], DP::ExternalId> + Clone + AsyncFriendly,
     T: AsyncFriendly + Clone,
 {
     type Id = DP::ExternalId;
@@ -105,20 +105,16 @@ where
     {
         let context = DP::Context::default();
         let range_search = *parameters;
-        let result = self
+        let _ = self
             .index
             .search(
                 range_search,
                 self.strategy.get(index)?,
                 &context,
                 self.queries.row(index),
-                &mut (),
+                buffer,
             )
             .await?;
-        buffer.extend(std::iter::zip(
-            result.ids.into_iter(),
-            result.distances.into_iter(),
-        ));
 
         Ok(Metrics {})
     }

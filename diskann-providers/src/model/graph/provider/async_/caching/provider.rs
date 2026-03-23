@@ -962,7 +962,6 @@ where
         <C as AsCacheAccessorFor<'a, SearchAccessor<'a, S, DP, T>>>::Accessor,
     >;
     type SearchAccessorError = CachingError<S::SearchAccessorError, E>;
-    type PostProcessor = Pipeline<Unwrap, S::PostProcessor>;
 
     fn search_accessor<'a>(
         &'a self,
@@ -979,9 +978,28 @@ where
             .as_cache_accessor_for(inner)
             .map_err(CachingError::Cache)
     }
+}
 
-    fn post_processor(&self) -> Self::PostProcessor {
-        Pipeline::new(Unwrap, self.strategy.post_processor())
+/// [`DefaultPostProcessor`] delegation for [`Cached`]. The processor is composed by
+/// wrapping the inner strategy's processor with [`Unwrap`] via [`Pipeline`].
+impl<DP, C, T, S, E> glue::DefaultPostProcessor<CachingProvider<DP, C>, T> for Cached<S>
+where
+    T: ?Sized,
+    DP: DataProvider,
+    S: glue::DefaultPostProcessor<DP, T>
+        + for<'a> SearchStrategy<DP, T, SearchAccessor<'a>: CacheableAccessor>,
+    C: for<'a> AsCacheAccessorFor<
+            'a,
+            SearchAccessor<'a, S, DP, T>,
+            Accessor: NeighborCache<DP::InternalId>,
+            Error = E,
+        > + AsyncFriendly,
+    E: StandardError,
+{
+    type Processor = Pipeline<Unwrap, S::Processor>;
+
+    fn default_post_processor(&self) -> Self::Processor {
+        Pipeline::new(Unwrap, self.strategy.default_post_processor())
     }
 }
 
@@ -1051,21 +1069,48 @@ where
     }
 }
 
-/// More surprisingly - the `where` clause for this implementation is **also** straightforward.
-impl<DP, C, S> InplaceDeleteStrategy<CachingProvider<DP, C>> for Cached<S>
+/// The `where` clause requires that:
+///
+/// 1. The inner strategy's [`DeleteSearchAccessor`] is cacheable.
+/// 2. The cache `C` can produce a cache-accessor for the inner strategy's accessor.
+/// 3. The wrapped search strategy `Cached<S::SearchStrategy>` remains a valid
+///    `SearchStrategy` for `CachingProvider` (needed for the equality constraint on
+///    [`InplaceDeleteStrategy::SearchStrategy`]).
+impl<DP, C, S, E> InplaceDeleteStrategy<CachingProvider<DP, C>> for Cached<S>
 where
     DP: DataProvider,
     S: InplaceDeleteStrategy<DP>,
+    for<'a> S::DeleteSearchAccessor<'a>: CacheableAccessor,
     Cached<S::PruneStrategy>: PruneStrategy<CachingProvider<DP, C>>,
-    Cached<S::SearchStrategy>: for<'a> SearchStrategy<CachingProvider<DP, C>, S::DeleteElement<'a>>,
-    C: AsyncFriendly,
+    for<'a> Cached<S::SearchStrategy>: SearchStrategy<
+            CachingProvider<DP, C>,
+            S::DeleteElement<'a>,
+            SearchAccessor<'a> = CachingAccessor<
+                S::DeleteSearchAccessor<'a>,
+                <C as AsCacheAccessorFor<'a, S::DeleteSearchAccessor<'a>>>::Accessor,
+            >,
+        >,
+    C: for<'a> AsCacheAccessorFor<
+            'a,
+            S::DeleteSearchAccessor<'a>,
+            Accessor: NeighborCache<DP::InternalId>,
+            Error = E,
+        > + AsyncFriendly,
+    E: StandardError,
 {
     type DeleteElement<'a> = S::DeleteElement<'a>;
     type DeleteElementGuard = S::DeleteElementGuard;
     type DeleteElementError = S::DeleteElementError;
 
     type PruneStrategy = Cached<S::PruneStrategy>;
+
+    type DeleteSearchAccessor<'a> = CachingAccessor<
+        S::DeleteSearchAccessor<'a>,
+        <C as AsCacheAccessorFor<'a, S::DeleteSearchAccessor<'a>>>::Accessor,
+    >;
+
     type SearchStrategy = Cached<S::SearchStrategy>;
+    type SearchPostProcessor = Pipeline<Unwrap, S::SearchPostProcessor>;
 
     fn prune_strategy(&self) -> Self::PruneStrategy {
         Cached {
@@ -1077,6 +1122,10 @@ where
         Cached {
             strategy: self.strategy.search_strategy(),
         }
+    }
+
+    fn search_post_processor(&self) -> Self::SearchPostProcessor {
+        Pipeline::new(Unwrap, self.strategy.search_post_processor())
     }
 
     fn get_delete_element<'a>(

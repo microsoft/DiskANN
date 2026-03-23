@@ -106,7 +106,7 @@ impl<T: VectorRepr> DynIndex for DiskANNIndex<GarnetProvider<T>> {
             .build()
             .map_err(|e| ANNError::new(diskann::ANNErrorKind::Opaque, e))?;
         let mut accessor: provider::FullAccessor<'_, T> =
-            <FullPrecision as SearchStrategy<_, _, GarnetId>>::search_accessor(
+            <FullPrecision as SearchStrategy<_, _>>::search_accessor(
                 &FullPrecision,
                 self.inner.provider(),
                 context,

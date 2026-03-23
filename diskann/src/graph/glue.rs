@@ -291,19 +291,11 @@ where
 /// A search strategy for query objects of type `T`.
 ///
 /// This trait should be overloaded by data providers wishing to extend
-///
-/// The type `O` represents the type written into the output buffer
-/// during a search. This is often the same as the provider's internal ID type,
-/// but it can differ depending on the use case. For example, it might represent
-/// associated data or alternative identifiers.
-///
-/// [`crate::index::diskann_async::DiskANNIndex::search`].
-pub trait SearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
-    Send + Sync
+/// (search)[`crate::graph::DiskANNIndex::search`].
+pub trait SearchStrategy<Provider, T>: Send + Sync
 where
     Provider: DataProvider,
     T: ?Sized,
-    O: Send,
 {
     /// The computer used by the associated accessor.
     ///
@@ -315,9 +307,6 @@ where
         > + Send
         + Sync
         + 'static;
-
-    /// The associated [`SearchPostProcess`]or for the final results.
-    type PostProcessor: for<'a> SearchPostProcess<Self::SearchAccessor<'a>, T, O> + Send + Sync;
 
     /// An error that can occur when getting a search_accessor.
     type SearchAccessorError: StandardError;
@@ -334,10 +323,67 @@ where
         provider: &'a Provider,
         context: &'a Provider::Context,
     ) -> Result<Self::SearchAccessor<'a>, Self::SearchAccessorError>;
+}
 
-    /// Construct the [`SearchPostProcess`] struct to post-process the results of search and
-    /// store them into the output container.
-    fn post_processor(&self) -> Self::PostProcessor;
+/// Opt-in trait for strategies that have a default post-processor.
+///
+/// Strategies implementing this trait can be used with index-level search APIs such as
+/// [`crate::index::diskann_async::DiskANNIndex::search`] and
+/// [`crate::index::diskann_async::DiskANNIndex::search_with`] when no explicit
+/// post-processor is specified. The search infrastructure will call
+/// `default_post_processor()` to obtain the processor and invoke its
+/// [`SearchPostProcess::post_process`] method.
+pub trait DefaultPostProcessor<Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<Provider, T>
+where
+    Provider: DataProvider,
+    T: ?Sized,
+    O: Send,
+{
+    /// The default post-processor type.
+    type Processor: for<'a> SearchPostProcess<Self::SearchAccessor<'a>, T, O> + Send + Sync;
+
+    /// Create the default post-processor.
+    fn default_post_processor(&self) -> Self::Processor;
+}
+
+/// Aggregate trait for strategies that support both search access and a default post-processor.
+pub trait DefaultSearchStrategy<Provider, T, O = <Provider as DataProvider>::InternalId>:
+    SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>
+where
+    Provider: DataProvider,
+    T: ?Sized,
+    O: Send,
+{
+}
+
+impl<S, Provider, T, O> DefaultSearchStrategy<Provider, T, O> for S
+where
+    S: SearchStrategy<Provider, T> + DefaultPostProcessor<Provider, T, O>,
+    Provider: DataProvider,
+    T: ?Sized,
+    O: Send,
+{
+}
+
+/// Convenience macro for implementing [`DefaultPostProcessor`] when the processor
+/// is a [`Default`]-constructible type.
+///
+/// # Example
+///
+/// ```ignore
+/// impl DefaultPostProcessor<MyProvider, [f32]> for MyStrategy {
+///     default_post_processor!(CopyIds);
+/// }
+/// ```
+#[macro_export]
+macro_rules! default_post_processor {
+    ($Processor:ty) => {
+        type Processor = $Processor;
+        fn default_post_processor(&self) -> Self::Processor {
+            Default::default()
+        }
+    };
 }
 
 /// Perform post-processing on the results of search, storing the results in an output buffer.
@@ -741,14 +787,37 @@ where
     /// The pruning strategy to use after the initial search is complete.
     type PruneStrategy: PruneStrategy<Provider>;
 
+    /// The accessor used during the delete-search phase.
+    ///
+    /// This is technically redundant information as in theory, we could project through
+    /// [`Self::SearchStrategy`]. However, when trying to write generic wrappers (read,
+    /// the "caching" provider), rustc is unable to project all the way through the layers
+    /// of associated types.
+    ///
+    /// Lifting the accessor all the way to the trait level makes the caching provider possible.
+    type DeleteSearchAccessor<'a>: ExpandBeam<Self::DeleteElement<'a>, Id = Provider::InternalId>
+        + SearchExt;
+
+    /// The processor used during the delete-search phase.
+    type SearchPostProcessor: for<'a> SearchPostProcess<Self::DeleteSearchAccessor<'a>, Self::DeleteElement<'a>>
+        + Send
+        + Sync;
+
     /// The type of the search strategy to use for graph traversal.
-    type SearchStrategy: for<'a> SearchStrategy<Provider, Self::DeleteElement<'a>>;
+    type SearchStrategy: for<'a> SearchStrategy<
+            Provider,
+            Self::DeleteElement<'a>,
+            SearchAccessor<'a> = Self::DeleteSearchAccessor<'a>,
+        >;
 
     /// Construct the prune strategy object.
     fn prune_strategy(&self) -> Self::PruneStrategy;
 
     /// Construct the search strategy object.
     fn search_strategy(&self) -> Self::SearchStrategy;
+
+    /// Construct the search post-processor for the delete-search phase.
+    fn search_post_processor(&self) -> Self::SearchPostProcessor;
 
     /// Construct the accessor used to retrieve the item being deleted.
     fn get_delete_element<'a>(
@@ -1012,7 +1081,6 @@ mod tests {
 
     impl SearchStrategy<SimpleProvider, f32> for Strategy {
         type QueryComputer = QueryComputer;
-        type PostProcessor = CopyIds;
         type SearchAccessorError = ANNError;
         type SearchAccessor<'a> = Retriever<'a>;
 
@@ -1027,10 +1095,10 @@ mod tests {
                 self.errors_are_unrecoverable,
             ))
         }
+    }
 
-        fn post_processor(&self) -> Self::PostProcessor {
-            Default::default()
-        }
+    impl DefaultPostProcessor<SimpleProvider, f32> for Strategy {
+        default_post_processor!(CopyIds);
     }
 
     // Use the provided implementation.
@@ -1081,7 +1149,7 @@ mod tests {
                 let mut output = vec![Neighbor::<u32>::default(); output_len];
 
                 let count = strategy
-                    .post_processor()
+                    .default_post_processor()
                     .post_process(
                         &mut accessor,
                         &query,

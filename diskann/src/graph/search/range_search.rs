@@ -5,7 +5,7 @@
 
 //! Range-based search within a distance radius.
 
-use diskann_utils::future::{AssertSend, SendFuture};
+use diskann_utils::future::SendFuture;
 use thiserror::Error;
 
 use super::{Search, scratch::SearchScratch};
@@ -13,25 +13,15 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{self, ExpandBeam, SearchExt, SearchPostProcess, SearchStrategy},
+        glue::{self, ExpandBeam, SearchExt},
         index::{DiskANNIndex, InternalSearchStats, SearchStats},
         search::record::NoopSearchRecord,
-        search_output_buffer,
+        search_output_buffer::{self, SearchOutputBuffer},
     },
     neighbor::Neighbor,
     provider::{BuildQueryComputer, DataProvider},
     utils::IntoUsize,
 };
-
-/// Result from a range search operation.
-pub struct RangeSearchOutput<O> {
-    /// Search statistics.
-    pub stats: SearchStats,
-    /// IDs of points within the radius.
-    pub ids: Vec<O>,
-    /// Distances corresponding to each ID.
-    pub distances: Vec<f32>,
-}
 
 /// Error type for [`Range`] parameter validation.
 #[derive(Debug, Error)]
@@ -167,23 +157,28 @@ impl Range {
     }
 }
 
-impl<DP, S, T, O> Search<DP, S, T, O, ()> for Range
+impl<DP, S, T> Search<DP, S, T> for Range
 where
     DP: DataProvider,
+    S: glue::SearchStrategy<DP, T>,
     T: Sync + ?Sized,
-    S: SearchStrategy<DP, T, O>,
-    O: Send + Default + Clone,
 {
-    type Output = RangeSearchOutput<O>;
+    type Output = SearchStats;
 
-    fn search(
+    fn search<O, PP, OB>(
         self,
         index: &DiskANNIndex<DP>,
         strategy: &S,
+        processor: PP,
         context: &DP::Context,
         query: &T,
-        _output: &mut (),
-    ) -> impl SendFuture<ANNResult<Self::Output>> {
+        output: &mut OB,
+    ) -> impl SendFuture<ANNResult<Self::Output>>
+    where
+        O: Send,
+        PP: for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, T, O> + Send + Sync,
+        OB: SearchOutputBuffer<O> + Send + ?Sized,
+    {
         async move {
             let mut accessor = strategy
                 .search_accessor(&index.data_provider, context)
@@ -241,62 +236,82 @@ where
                 initial_stats
             };
 
-            // Post-process results
-            let mut result_ids: Vec<O> = vec![O::default(); scratch.in_range.len()];
-            let mut result_dists: Vec<f32> = vec![f32::MAX; scratch.in_range.len()];
+            // Post-process results directly into the output buffer, filtering by radius.
+            let radius = self.radius();
+            let inner_radius = self.inner_radius();
+            let mut filtered = DistanceFiltered::new(output, |dist| {
+                if let Some(ir) = inner_radius
+                    && dist <= ir
+                {
+                    return false;
+                }
+                dist <= radius
+            });
 
-            let mut output_buffer = search_output_buffer::IdDistance::new(
-                result_ids.as_mut_slice(),
-                result_dists.as_mut_slice(),
-            );
-
-            let _ = strategy
-                .post_processor()
+            let result_count = processor
                 .post_process(
                     &mut accessor,
                     query,
                     &computer,
                     scratch.in_range.iter().copied(),
-                    &mut output_buffer,
+                    &mut filtered,
                 )
-                .send()
                 .await
                 .into_ann_result()?;
 
-            // Filter by inner/outer radius
-            let inner_cutoff = if let Some(inner_radius) = self.inner_radius() {
-                result_dists
-                    .iter()
-                    .position(|dist| *dist > inner_radius)
-                    .unwrap_or(result_dists.len())
-            } else {
-                0
-            };
-
-            let outer_cutoff = result_dists
-                .iter()
-                .position(|dist| *dist > self.radius())
-                .unwrap_or(result_dists.len());
-
-            result_ids.truncate(outer_cutoff);
-            result_ids.drain(0..inner_cutoff);
-
-            result_dists.truncate(outer_cutoff);
-            result_dists.drain(0..inner_cutoff);
-
-            let result_count = result_ids.len();
-
-            Ok(RangeSearchOutput {
-                stats: SearchStats {
-                    cmps: stats.cmps,
-                    hops: stats.hops,
-                    result_count: result_count as u32,
-                    range_search_second_round: stats.range_search_second_round,
-                },
-                ids: result_ids,
-                distances: result_dists,
+            Ok(SearchStats {
+                cmps: stats.cmps,
+                hops: stats.hops,
+                result_count: result_count as u32,
+                range_search_second_round: stats.range_search_second_round,
             })
         }
+    }
+}
+
+/// A [`SearchOutputBuffer`] wrapper that filters results by distance before
+/// forwarding them to an inner buffer.
+struct DistanceFiltered<'a, F, B: ?Sized> {
+    predicate: F,
+    inner: &'a mut B,
+}
+
+impl<'a, F, B: ?Sized> DistanceFiltered<'a, F, B> {
+    fn new(inner: &'a mut B, predicate: F) -> Self {
+        Self { predicate, inner }
+    }
+}
+
+impl<I, F, B> SearchOutputBuffer<I> for DistanceFiltered<'_, F, B>
+where
+    F: FnMut(f32) -> bool,
+    B: SearchOutputBuffer<I> + ?Sized,
+{
+    fn size_hint(&self) -> Option<usize> {
+        self.inner.size_hint()
+    }
+
+    fn push(&mut self, id: I, distance: f32) -> search_output_buffer::BufferState {
+        if (self.predicate)(distance) {
+            self.inner.push(id, distance)
+        } else {
+            match self.inner.size_hint() {
+                Some(0) => search_output_buffer::BufferState::Full,
+                _ => search_output_buffer::BufferState::Available,
+            }
+        }
+    }
+
+    fn current_len(&self) -> usize {
+        self.inner.current_len()
+    }
+
+    fn extend<Itr>(&mut self, itr: Itr) -> usize
+    where
+        Itr: IntoIterator<Item = (I, f32)>,
+    {
+        self.inner
+            .extend(itr.into_iter().filter(|(_, dist)| (self.predicate)(*dist)))
     }
 }
 
@@ -379,6 +394,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::search_output_buffer::BufferState;
+    use crate::neighbor::Neighbor;
 
     #[test]
     fn test_range_search_validation() {
@@ -394,5 +411,79 @@ mod tests {
 
         // Invalid inner radius > radius
         assert!(Range::with_options(None, 100, None, 0.5, Some(1.0), 1.0, 1.0).is_err());
+    }
+
+    #[test]
+    fn distance_filtered_push_accepts_passing_items() {
+        let mut inner: Vec<Neighbor<u32>> = Vec::new();
+        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
+
+        assert_eq!(filtered.push(1, 0.5), BufferState::Available);
+        assert_eq!(filtered.current_len(), 1);
+        assert_eq!(inner[0].id, 1);
+        assert_eq!(inner[0].distance, 0.5);
+    }
+
+    #[test]
+    fn distance_filtered_push_rejects_failing_items() {
+        let mut inner: Vec<Neighbor<u32>> = Vec::new();
+        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
+
+        assert_eq!(filtered.push(1, 1.5), BufferState::Available);
+        assert_eq!(filtered.current_len(), 0);
+    }
+
+    #[test]
+    fn distance_filtered_extend_filters_correctly() {
+        let mut inner: Vec<Neighbor<u32>> = Vec::new();
+        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
+        assert!(filtered.size_hint().is_none());
+
+        let items = vec![(1u32, 0.3), (2, 1.5), (3, 0.7), (4, 2.0), (5, 0.9)];
+        let count = filtered.extend(items);
+
+        assert_eq!(count, 3);
+        assert_eq!(inner.len(), 3);
+        assert_eq!(inner[0].id, 1);
+        assert_eq!(inner[1].id, 3);
+        assert_eq!(inner[2].id, 5);
+    }
+
+    #[test]
+    fn distance_filtered_respects_inner_capacity() {
+        let mut ids = [0u32; 2];
+        let mut dists = [0.0f32; 2];
+        let mut inner = search_output_buffer::IdDistance::new(&mut ids, &mut dists);
+        let mut filtered = DistanceFiltered::new(&mut inner, |d| d < 1.0);
+        assert_eq!(filtered.size_hint(), Some(2));
+
+        let items = vec![(1u32, 0.1), (2, 0.2), (3, 0.3)];
+        let count = filtered.extend(items);
+
+        assert_eq!(count, 2);
+        assert_eq!(ids, [1, 2]);
+    }
+
+    #[test]
+    fn distance_filtered_inner_radius_pattern() {
+        let mut inner: Vec<Neighbor<u32>> = Vec::new();
+        let radius = 1.0f32;
+        let inner_radius = Some(0.3f32);
+        let mut filtered = DistanceFiltered::new(&mut inner, |dist| {
+            if let Some(ir) = inner_radius
+                && dist <= ir
+            {
+                return false;
+            }
+            dist < radius
+        });
+
+        let items = vec![(1u32, 0.1), (2, 0.5), (3, 0.3), (4, 1.0), (5, 0.8)];
+        let count = filtered.extend(items);
+
+        // 0.1 and 0.3 are <= inner_radius, 1.0 is not < radius
+        assert_eq!(count, 2);
+        assert_eq!(inner[0].id, 2);
+        assert_eq!(inner[1].id, 5);
     }
 }
