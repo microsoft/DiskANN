@@ -10,9 +10,10 @@ use diskann::{
         AdjacencyList, SearchOutputBuffer,
         config::defaults::MAX_OCCLUSION_SIZE,
         glue::{
-            self, DefaultPostProcessor, ExpandBeam, FillSet, InplaceDeleteStrategy, InsertStrategy,
+            self, DefaultPostProcessor, ExpandBeam, InplaceDeleteStrategy, InsertStrategy,
             PruneStrategy, SearchExt, SearchPostProcess, SearchStrategy,
         },
+        workingset::{self, map::Entry},
     },
     neighbor::Neighbor,
     provider::{
@@ -25,9 +26,9 @@ use diskann::{
     },
 };
 use diskann_providers::model::graph::provider::async_::common::FullPrecision;
+use diskann_utils::Reborrow;
 use diskann_vector::{PreprocessedDistanceFunction, contains::ContainsSimd, distance::Metric};
 use std::{
-    collections::{HashMap, hash_map::Entry},
     future, mem,
     ops::{Deref, DerefMut},
 };
@@ -248,6 +249,7 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
     type InternalId = u32;
     type ExternalId = GarnetId;
     type Error = GarnetProviderError;
+    type Guard = NoopGuard<u32>;
 
     fn to_internal_id(
         &self,
@@ -276,9 +278,8 @@ impl<T: VectorRepr> DataProvider for GarnetProvider<T> {
     }
 }
 
-impl<T: VectorRepr> SetElement<[T]> for GarnetProvider<T> {
+impl<T: VectorRepr> SetElement<&[T]> for GarnetProvider<T> {
     type SetError = GarnetProviderError;
-    type Guard = NoopGuard<u32>;
 
     async fn set_element(
         &self,
@@ -467,7 +468,7 @@ impl<T: VectorRepr> SearchExt for FullAccessor<'_, T> {
     }
 }
 
-impl<T: VectorRepr> ExpandBeam<[T]> for FullAccessor<'_, T> {
+impl<T: VectorRepr> ExpandBeam<&[T]> for FullAccessor<'_, T> {
     fn expand_beam<Itr, P, F>(
         &mut self,
         ids: Itr,
@@ -521,7 +522,6 @@ impl<T: VectorRepr> ExpandBeam<[T]> for FullAccessor<'_, T> {
 }
 
 impl<T: VectorRepr> Accessor for FullAccessor<'_, T> {
-    type Extended = Vec<T>;
     type Element<'a>
         = Vec<T>
     where
@@ -571,7 +571,7 @@ impl<T: VectorRepr> BuildDistanceComputer for FullAccessor<'_, T> {
     }
 }
 
-impl<T: VectorRepr> BuildQueryComputer<[T]> for FullAccessor<'_, T> {
+impl<T: VectorRepr> BuildQueryComputer<&[T]> for FullAccessor<'_, T> {
     type QueryComputer = T::QueryDistance;
     type QueryComputerError = GarnetProviderError;
 
@@ -583,15 +583,42 @@ impl<T: VectorRepr> BuildQueryComputer<[T]> for FullAccessor<'_, T> {
     }
 }
 
-impl<T: VectorRepr> FillSet for FullAccessor<'_, T> {
-    async fn fill_set<Itr>(
-        &mut self,
-        set: &mut HashMap<Self::Id, Self::Extended>,
-        itr: Itr,
-    ) -> Result<(), Self::GetError>
+/// An escape hatch for the blanket implementation of [`workingset::Fill`].
+///
+/// Without an `&[T]: Into<Escape<T>>`, the blanket implementation for `workingset::Map`
+/// is not applicable, allowing customization of `Fill`.
+pub struct Escape<T>(Box<[T]>);
+
+impl<'a, T> Reborrow<'a> for Escape<T> {
+    type Target = &'a [T];
+    fn reborrow(&'a self) -> Self::Target {
+        &self.0
+    }
+}
+
+type WorkingSet<T> = workingset::Map<u32, Escape<T>>;
+type WorkingSetView<'a, T> = workingset::map::View<'a, u32, Escape<T>>;
+
+impl<T: VectorRepr> workingset::Fill<WorkingSet<T>> for FullAccessor<'_, T> {
+    type Error = GarnetProviderError;
+
+    type View<'a>
+        = WorkingSetView<'a, T>
     where
-        Itr: Iterator<Item = Self::Id> + Send + Sync,
+        Self: 'a;
+
+    async fn fill<'a, Itr>(
+        &'a mut self,
+        set: &'a mut WorkingSet<T>,
+        itr: Itr,
+    ) -> Result<Self::View<'a>, Self::Error>
+    where
+        Itr: ExactSizeIterator<Item = Self::Id> + Clone + Send + Sync,
+        Self: 'a,
     {
+        // Evict items from the working set to make room if needed.
+        set.prepare(itr.clone());
+
         self.filtered_ids.clear();
         for id in itr {
             if id == 0 {
@@ -601,7 +628,7 @@ impl<T: VectorRepr> FillSet for FullAccessor<'_, T> {
                     } else {
                         return Err(GarnetError::Read.into());
                     };
-                    e.insert(guard.to_vec());
+                    e.insert(Escape((&**guard).into()));
                 }
             } else if !set.contains_key(&id) {
                 self.filtered_ids.push(4);
@@ -614,12 +641,12 @@ impl<T: VectorRepr> FillSet for FullAccessor<'_, T> {
                 self.context.term(Term::Vector),
                 &self.filtered_ids,
                 |id, v| {
-                    set.insert(self.filtered_ids[id as usize * 2 + 1], v.to_vec());
+                    set.insert(self.filtered_ids[id as usize * 2 + 1], Escape(v.into()));
                 },
             );
         }
 
-        Ok(())
+        Ok(set.view())
     }
 }
 
@@ -729,14 +756,16 @@ impl<T: VectorRepr> NeighborAccessorMut for DelegateNeighborAccessor<'_, '_, T> 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CopyExternalIds;
 
-impl<'a, T: VectorRepr> SearchPostProcess<FullAccessor<'a, T>, [T], GarnetId> for CopyExternalIds {
+impl<'a, 'b, T: VectorRepr> SearchPostProcess<FullAccessor<'a, T>, &'b [T], GarnetId>
+    for CopyExternalIds
+{
     type Error = GarnetProviderError;
 
     fn post_process<I, B>(
         &self,
         accessor: &mut FullAccessor<'a, T>,
         _query: &[T],
-        _computer: &<FullAccessor<'a, T> as BuildQueryComputer<[T]>>::QueryComputer,
+        _computer: &<FullAccessor<'a, T> as BuildQueryComputer<&'b [T]>>::QueryComputer,
         candidates: I,
         output: &mut B,
     ) -> impl Future<Output = Result<usize, Self::Error>> + Send
@@ -760,7 +789,7 @@ impl<'a, T: VectorRepr> SearchPostProcess<FullAccessor<'a, T>, [T], GarnetId> fo
     }
 }
 
-impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T]> for FullPrecision {
+impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, &[T]> for FullPrecision {
     type SearchAccessor<'a> = FullAccessor<'a, T>;
     type SearchAccessorError = GarnetProviderError;
     type QueryComputer = T::QueryDistance;
@@ -774,7 +803,7 @@ impl<T: VectorRepr> SearchStrategy<GarnetProvider<T>, [T]> for FullPrecision {
     }
 }
 
-impl<T: VectorRepr> DefaultPostProcessor<GarnetProvider<T>, [T], GarnetId> for FullPrecision {
+impl<T: VectorRepr> DefaultPostProcessor<GarnetProvider<T>, &[T], GarnetId> for FullPrecision {
     default_post_processor!(glue::Pipeline<glue::FilterStartPoints, CopyExternalIds>);
 }
 
@@ -782,6 +811,7 @@ impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for FullPrecision {
     type PruneAccessor<'a> = FullAccessor<'a, T>;
     type PruneAccessorError = GarnetProviderError;
     type DistanceComputer = T::Distance;
+    type WorkingSet = WorkingSet<T>;
 
     fn prune_accessor<'a>(
         &'a self,
@@ -790,21 +820,13 @@ impl<T: VectorRepr> PruneStrategy<GarnetProvider<T>> for FullPrecision {
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         Ok(FullAccessor::new(provider, context, false))
     }
-}
 
-impl<'a, T: VectorRepr> glue::AsElement<&'a [T]> for FullAccessor<'_, T> {
-    type Error = GarnetProviderError;
-
-    fn as_element(
-        &mut self,
-        vector: &'a [T],
-        _id: Self::Id,
-    ) -> impl Future<Output = Result<Self::Element<'_>, Self::Error>> + Send {
-        future::ready(Ok(vector.to_vec()))
+    fn create_working_set(&self, capacity: usize) -> Self::WorkingSet {
+        workingset::map::Builder::new(workingset::map::Capacity::Default).build(capacity)
     }
 }
 
-impl<T: VectorRepr> InsertStrategy<GarnetProvider<T>, [T]> for FullPrecision {
+impl<T: VectorRepr> InsertStrategy<GarnetProvider<T>, &[T]> for FullPrecision {
     type PruneStrategy = Self;
 
     fn insert_search_accessor<'a>(
@@ -821,7 +843,7 @@ impl<T: VectorRepr> InsertStrategy<GarnetProvider<T>, [T]> for FullPrecision {
 }
 
 impl<T: VectorRepr> InplaceDeleteStrategy<GarnetProvider<T>> for FullPrecision {
-    type DeleteElement<'a> = [T];
+    type DeleteElement<'a> = &'a [T];
     type DeleteElementGuard = Box<[T]>;
     type DeleteElementError = GarnetProviderError;
 

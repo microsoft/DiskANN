@@ -95,8 +95,8 @@ where
 impl<DP, S, T, P> Search<DP, S, T> for Diverse<P>
 where
     DP: DataProvider,
-    S: crate::graph::glue::SearchStrategy<DP, T>,
-    T: Sync + ?Sized,
+    T: Copy + Send + Sync,
+    S: SearchStrategy<DP, T>,
     P: AttributeValueProvider<Id = DP::InternalId>,
 {
     type Output = SearchStats;
@@ -107,7 +107,7 @@ where
         strategy: &S,
         processor: PP,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where

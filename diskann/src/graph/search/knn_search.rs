@@ -146,8 +146,8 @@ impl Knn {
 impl<DP, S, T> Search<DP, S, T> for Knn
 where
     DP: DataProvider,
-    S: glue::SearchStrategy<DP, T>,
-    T: Sync + ?Sized,
+    S: SearchStrategy<DP, T>,
+    T: Copy + Send + Sync,
 {
     type Output = SearchStats;
 
@@ -182,7 +182,7 @@ where
         strategy: &S,
         processor: PP,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where
@@ -252,8 +252,8 @@ impl<'r, SR: ?Sized> RecordedKnn<'r, SR> {
 impl<'r, DP, S, T, SR> Search<DP, S, T> for RecordedKnn<'r, SR>
 where
     DP: DataProvider,
-    S: glue::SearchStrategy<DP, T>,
-    T: Sync + ?Sized,
+    S: SearchStrategy<DP, T>,
+    T: Copy + Send + Sync,
     SR: super::record::SearchRecord<DP::InternalId> + ?Sized,
 {
     type Output = SearchStats;
@@ -264,7 +264,7 @@ where
         strategy: &S,
         processor: PP,
         context: &DP::Context,
-        query: &T,
+        query: T,
         output: &mut OB,
     ) -> impl SendFuture<ANNResult<Self::Output>>
     where

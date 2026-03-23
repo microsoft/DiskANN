@@ -11,7 +11,7 @@ use diskann::{
     provider::{Accessor, AsNeighbor, BuildQueryComputer, DelegateNeighbor, HasId},
     ANNError, ANNErrorKind,
 };
-use diskann_utils::{future::AsyncFriendly, Reborrow};
+use diskann_utils::Reborrow;
 use roaring::RoaringTreemap;
 
 use crate::traits::attribute_accessor::AttributeAccessor;
@@ -68,52 +68,10 @@ where
     type Id = <IA as HasId>::Id;
 }
 
-/// Say, while implementing the [`Accessor`] trait, we want
-/// Extended = Element = T, and ElementRef = &T and T is a
-/// struct.
-/// Now Element has to implement Into<Extended> as per the
-/// requirements of the Accessor trait. But Extended == Element,
-/// so we run into the Rust orphan rule where T::Into<T> has
-/// already been defined for all T.
-/// So, we introduce a new layer of abstraction with the Extended
-/// struct. This is the same as Element, with a different type name.
-/// Now Element needs to implement Into<Extended> which sidesteps
-/// the orphan rule issue.
-pub struct Extended<T, U> {
-    element: T,
-    map: U,
-}
-
-impl<'this, T, U> Reborrow<'this> for Extended<T, U>
-where
-    T: Reborrow<'this>,
-{
-    type Target = EncodedDocument<T::Target, &'this U>;
-
-    fn reborrow(&'this self) -> Self::Target {
-        EncodedDocument::new(self.element.reborrow(), &self.map)
-    }
-}
-
-impl<T, U, V> From<EncodedDocument<T, V>> for Extended<U, V>
-where
-    T: Into<U>,
-    V: Clone,
-{
-    fn from(value: EncodedDocument<T, V>) -> Self {
-        let (vec, attrs) = value.destructure();
-        Self {
-            element: vec.into(),
-            map: attrs.clone(),
-        }
-    }
-}
-
 impl<IA> Accessor for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
 {
-    type Extended = Extended<IA::Extended, RoaringTreemap>;
     type Element<'a>
         = EncodedDocument<IA::Element<'a>, RoaringTreemap>
     where
@@ -204,17 +162,16 @@ where
     }
 }
 
-impl<IA, Q> BuildQueryComputer<FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
+impl<'q, IA, Q> BuildQueryComputer<&'q FilteredQuery<Q>> for EncodedDocumentAccessor<IA>
 where
-    IA: BuildQueryComputer<Q>,
-    Q: AsyncFriendly + Clone,
+    IA: BuildQueryComputer<&'q Q>,
 {
     type QueryComputerError = ANNError;
     type QueryComputer = InlineBetaComputer<IA::QueryComputer>;
 
     fn build_query_computer(
         &self,
-        from: &FilteredQuery<Q>,
+        from: &'q FilteredQuery<Q>,
     ) -> Result<Self::QueryComputer, Self::QueryComputerError> {
         let inner_computer = self
             .inner_accessor
@@ -234,7 +191,7 @@ impl<IA, Q> ExpandBeam<Q> for EncodedDocumentAccessor<IA>
 where
     IA: Accessor,
     EncodedDocumentAccessor<IA>: BuildQueryComputer<Q> + AsNeighbor,
-    Q: Clone + AsyncFriendly,
+    Q: Clone,
 {
 }
 
