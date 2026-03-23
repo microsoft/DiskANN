@@ -779,4 +779,37 @@ mod tests {
         let mut output = Memory::new();
         cli.check_target(&mut output).unwrap();
     }
+
+    #[test]
+    fn document_filter_integration() {
+        let input_path = example_directory().join("document-filter.json");
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let output_path = tempdir.path().join("output.json");
+        assert!(!output_path.exists());
+
+        let modified_input_path = tempdir.path().join("input.json");
+
+        let mut raw = value_from_file(&input_path);
+        prefix_search_directories(&mut raw, &root_directory());
+        save_to_file(&modified_input_path, &raw);
+
+        let command = Commands::Run {
+            input_file: modified_input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        cli.run(&mut output).unwrap();
+
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        println!("output = {}", output);
+        // Check that the results file is generated.
+        assert!(output_path.exists());
+
+        let results: Vec<Value> = load_from_file(&output_path);
+        assert_eq!(results.len(), num_jobs(&raw));
+    }
 }
