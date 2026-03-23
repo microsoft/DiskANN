@@ -220,8 +220,7 @@ where
             .inner_accessor
             .build_query_computer(from.query())
             .into_ann_result()?;
-        let id_query =
-            EncodedFilterExpr::try_create(from.filter_expr(), self.attribute_map.clone())?;
+        let id_query = EncodedFilterExpr::new(from.filter_expr(), self.attribute_map.clone())?;
 
         Ok(InlineBetaComputer::new(
             inner_computer,

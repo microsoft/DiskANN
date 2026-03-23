@@ -20,7 +20,7 @@ pub(crate) struct EncodedFilterExpr {
 }
 
 impl EncodedFilterExpr {
-    pub fn try_create(
+    pub fn new(
         ast_expr: &ASTExpr,
         attribute_map: Arc<RwLock<AttributeEncoder>>,
     ) -> ANNResult<Self> {

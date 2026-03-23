@@ -8,7 +8,10 @@
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
-use diskann::graph::{Config, config::{Builder, MaxDegree, PruneKind, ConfigError}};
+use diskann::graph::{
+    config::{Builder, ConfigError, MaxDegree, PruneKind},
+    Config,
+};
 use diskann_benchmark_runner::{
     files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
 };
@@ -48,8 +51,8 @@ impl DocumentBuildParams {
         let metric = self.distance.into();
         let prune_kind = PruneKind::from_metric(metric);
         let mut config_builder = Builder::new(
-            self.max_degree, // pruned_degree
-            MaxDegree::default_slack(),  // max_degree
+            self.max_degree,            // pruned_degree
+            MaxDegree::default_slack(), // max_degree
             self.l_build,
             prune_kind,
         );

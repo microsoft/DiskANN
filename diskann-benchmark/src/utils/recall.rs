@@ -2,6 +2,7 @@
  * Copyright (c) Microsoft Corporation.
  * Licensed under the MIT license.
  */
+
 use diskann_benchmark_core as benchmark_core;
 
 use serde::Serialize;
