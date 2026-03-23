@@ -15,7 +15,7 @@
                     "max_degree": 59,
                     "l_build": 72,
                     "num_threads": 4,
-                    "build_ram_limit_gb": 10.0,
+                    "build_ram_limit_gb": 4.0,
                     "num_pq_chunks": 192,
                     "quantization_type": "FP",
                     "save_path": "wikipedia_100k_benchmark_index"
