@@ -27,7 +27,7 @@
                         2000
                     ],
                     "beam_width": 4,
-                    "recall_at": 1000,
+                    "recall_at": 100,
                     "num_threads": 4,
                     "is_flat_search": false,
                     "distance": "squared_l2",
