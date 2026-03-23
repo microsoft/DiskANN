@@ -24,7 +24,10 @@ use diskann_benchmark_runner::{
 };
 use diskann_providers::{
     index::diskann_async,
-    model::{configuration::IndexConfiguration, graph::provider::async_::common},
+    model::{
+        configuration::IndexConfiguration,
+        graph::provider::async_::{common, DeterminantDiversitySearchParams},
+    },
 };
 use diskann_utils::{
     future::AsyncFriendly,
@@ -350,6 +353,8 @@ where
         + provider::SetElement<[T]>,
     T: SampleableForStart + std::fmt::Debug + Copy + AsyncFriendly + bytemuck::Pod,
     S: glue::DefaultSearchStrategy<DP, [T]> + Clone + AsyncFriendly,
+    DeterminantDiversitySearchParams:
+        for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, [T], DP::ExternalId> + Send + Sync,
 {
     match &input {
         SearchPhase::Topk(search_phase) => {
@@ -366,19 +371,40 @@ where
             let groundtruth =
                 datafiles::load_groundtruth(datafiles::BinFile(&search_phase.groundtruth))?;
 
-            let knn = benchmark_core::search::graph::KNN::new(
-                index,
-                queries,
-                benchmark_core::search::graph::Strategy::broadcast(search_strategy),
-            )?;
-
             let steps = search::knn::SearchSteps::new(
                 search_phase.reps,
                 &search_phase.num_threads,
                 &search_phase.runs,
             );
 
-            let search_results = search::knn::run(&knn, &groundtruth, steps)?;
+            let search_results = if let (Some(eta), Some(power)) = (
+                search_phase.determinant_diversity_eta,
+                search_phase.determinant_diversity_power,
+            ) {
+                let knn =
+                    benchmark_core::search::graph::determinant_diversity::DeterminantDiversity::new(
+                    index,
+                    queries,
+                    benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+                )?;
+
+                search::knn::run_determinant_diversity(
+                    &knn,
+                    &groundtruth,
+                    steps,
+                    eta,
+                    power,
+                    search_phase.determinant_diversity_results_k,
+                )?
+            } else {
+                let knn = benchmark_core::search::graph::KNN::new(
+                    index,
+                    queries,
+                    benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+                )?;
+
+                search::knn::run(&knn, &groundtruth, steps)?
+            };
             result.append(AggregatedSearchResults::Topk(search_results));
             Ok(result)
         }

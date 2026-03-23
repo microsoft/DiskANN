@@ -66,7 +66,9 @@ mod imp {
     };
     use diskann_providers::{
         index::diskann_async::{self},
-        model::graph::provider::async_::{common::NoDeletes, inmem},
+        model::graph::provider::async_::{
+            common::NoDeletes, inmem, DeterminantDiversitySearchParams,
+        },
     };
     use diskann_quantization::alloc::GlobalAllocator;
     use diskann_utils::views::Matrix;
@@ -331,15 +333,34 @@ mod imp {
                             );
 
                             for &layout in self.input.query_layouts.iter() {
-                                let knn = benchmark_core::search::graph::KNN::new(
-                                    index.clone(),
-                                    queries.clone(),
-                                    benchmark_core::search::graph::Strategy::broadcast(
-                                        inmem::spherical::Quantized::search(layout.into()),
-                                    ),
-                                )?;
+                                let strategy = inmem::spherical::Quantized::search(layout.into());
+                                let search_results = if let (Some(eta), Some(power)) = (
+                                    search_phase.determinant_diversity_eta,
+                                    search_phase.determinant_diversity_power,
+                                ) {
+                                    let knn = benchmark_core::search::graph::determinant_diversity::DeterminantDiversity::new(
+                                        index.clone(),
+                                        queries.clone(),
+                                        benchmark_core::search::graph::Strategy::broadcast(strategy),
+                                    )?;
 
-                                let search_results = search::knn::run(&knn, &groundtruth, steps)?;
+                                    search::knn::run_determinant_diversity(
+                                        &knn,
+                                        &groundtruth,
+                                        steps,
+                                        eta,
+                                        power,
+                                        search_phase.determinant_diversity_results_k,
+                                    )?
+                                } else {
+                                    let knn = benchmark_core::search::graph::KNN::new(
+                                        index.clone(),
+                                        queries.clone(),
+                                        benchmark_core::search::graph::Strategy::broadcast(strategy),
+                                    )?;
+
+                                    search::knn::run(&knn, &groundtruth, steps)?
+                                };
                                 result.append(SearchRun {
                                     layout,
                                     results: AggregatedSearchResults::Topk(search_results),

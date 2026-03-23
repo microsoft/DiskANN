@@ -155,6 +155,42 @@ impl SearchResults {
             mean_hops: mean_hops as f32,
         }
     }
+
+    pub fn new_determinant_diversity(
+        summary: benchmark_core::search::graph::determinant_diversity::Summary,
+    ) -> Self {
+        let benchmark_core::search::graph::determinant_diversity::Summary {
+            setup,
+            parameters,
+            end_to_end_latencies,
+            mean_latencies,
+            p90_latencies,
+            p99_latencies,
+            recall,
+            mean_cmps,
+            mean_hops,
+            ..
+        } = summary;
+
+        let qps = end_to_end_latencies
+            .iter()
+            .map(|latency| recall.num_queries as f64 / latency.as_seconds())
+            .collect();
+
+        Self {
+            num_tasks: setup.tasks.into(),
+            search_n: parameters.inner.k_value().get(),
+            search_l: parameters.inner.l_value().get(),
+            qps,
+            search_latencies: end_to_end_latencies,
+            mean_latencies,
+            p90_latencies,
+            p99_latencies,
+            recall: (&recall).into(),
+            mean_cmps: mean_cmps as f32,
+            mean_hops: mean_hops as f32,
+        }
+    }
 }
 
 fn format_search_results_table<F>(

@@ -11,6 +11,7 @@ edition = "2024"
 anyhow.workspace = true
 diskann.workspace = true
 diskann-benchmark-runner = { workspace = true }
+diskann-providers.workspace = true
 diskann-utils.default-features = false
 diskann-utils.workspace = true
 futures-util = { workspace = true, default-features = false }

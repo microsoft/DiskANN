@@ -1,0 +1,454 @@
+[
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "determinant_diversity_eta": null,
+          "determinant_diversity_power": null,
+          "determinant_diversity_results_k": null,
+          "groundtruth": "C:\\wikipedia_dataset\\groundtruth_k100.bin",
+          "num_threads": [
+            8
+          ],
+          "queries": "C:\\wikipedia_dataset\\query.bin",
+          "reps": 1,
+          "runs": [
+            {
+              "recall_k": 10,
+              "search_l": [
+                20,
+                30,
+                40,
+                50,
+                100,
+                200
+              ],
+              "search_n": 10
+            }
+          ],
+          "search-type": "topk"
+        },
+        "source": {
+          "data_type": "float32",
+          "distance": "squared_l2",
+          "index-source": "Load",
+          "load_path": "C:\\wikipedia_dataset\\wikipedia_saved_index"
+        }
+      },
+      "type": "async-index-build"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "Topk": [
+          {
+            "mean_cmps": 1514.68994140625,
+            "mean_hops": 28.469999313354492,
+            "mean_latencies": [
+              1413.43
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              2157
+            ],
+            "p99_latencies": [
+              3712
+            ],
+            "qps": [
+              4886.15264340858
+            ],
+            "recall": {
+              "average": 0.406,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 20,
+            "search_latencies": [
+              20466
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 1916.7900390625,
+            "mean_hops": 37.97999954223633,
+            "mean_latencies": [
+              1921.54
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              2990
+            ],
+            "p99_latencies": [
+              5072
+            ],
+            "qps": [
+              3545.8478122118995
+            ],
+            "recall": {
+              "average": 0.409,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 30,
+            "search_latencies": [
+              28202
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 2288.7900390625,
+            "mean_hops": 47.43000030517578,
+            "mean_latencies": [
+              2935.55
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              4750
+            ],
+            "p99_latencies": [
+              7347
+            ],
+            "qps": [
+              2267.5222784063853
+            ],
+            "recall": {
+              "average": 0.417,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 40,
+            "search_latencies": [
+              44101
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 2652.449951171875,
+            "mean_hops": 57.040000915527344,
+            "mean_latencies": [
+              2716.51
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              4333
+            ],
+            "p99_latencies": [
+              6903
+            ],
+            "qps": [
+              2401.5946588534784
+            ],
+            "recall": {
+              "average": 0.419,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 50,
+            "search_latencies": [
+              41639
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 4426.0400390625,
+            "mean_hops": 106.4000015258789,
+            "mean_latencies": [
+              4522.62
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              6900
+            ],
+            "p99_latencies": [
+              8430
+            ],
+            "qps": [
+              1539.7644160443451
+            ],
+            "recall": {
+              "average": 0.425,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 100,
+            "search_latencies": [
+              64945
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 7640.009765625,
+            "mean_hops": 205.7100067138672,
+            "mean_latencies": [
+              8594.32
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              12535
+            ],
+            "p99_latencies": [
+              21987
+            ],
+            "qps": [
+              831.1861025683651
+            ],
+            "recall": {
+              "average": 0.432,
+              "maximum": 10,
+              "minimum": 1,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 200,
+            "search_latencies": [
+              120310
+            ],
+            "search_n": 10
+          }
+        ]
+      }
+    }
+  },
+  {
+    "input": {
+      "content": {
+        "search_phase": {
+          "determinant_diversity_eta": 0.01,
+          "determinant_diversity_power": 2.0,
+          "determinant_diversity_results_k": 10,
+          "groundtruth": "C:\\wikipedia_dataset\\groundtruth_k100.bin",
+          "num_threads": [
+            8
+          ],
+          "queries": "C:\\wikipedia_dataset\\query.bin",
+          "reps": 1,
+          "runs": [
+            {
+              "recall_k": 10,
+              "search_l": [
+                20,
+                30,
+                40,
+                50,
+                100,
+                200
+              ],
+              "search_n": 10
+            }
+          ],
+          "search-type": "topk"
+        },
+        "source": {
+          "data_type": "float32",
+          "distance": "squared_l2",
+          "index-source": "Load",
+          "load_path": "C:\\wikipedia_dataset\\wikipedia_saved_index"
+        }
+      },
+      "type": "async-index-build"
+    },
+    "results": {
+      "build": null,
+      "search": {
+        "Topk": [
+          {
+            "mean_cmps": 1514.68994140625,
+            "mean_hops": 28.469999313354492,
+            "mean_latencies": [
+              2416.91
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              3698
+            ],
+            "p99_latencies": [
+              8820
+            ],
+            "qps": [
+              2810.883741848437
+            ],
+            "recall": {
+              "average": 0.408,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 20,
+            "search_latencies": [
+              35576
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 1916.7900390625,
+            "mean_hops": 37.97999954223633,
+            "mean_latencies": [
+              3083.14
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              4464
+            ],
+            "p99_latencies": [
+              6221
+            ],
+            "qps": [
+              2288.8532845044633
+            ],
+            "recall": {
+              "average": 0.412,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 30,
+            "search_latencies": [
+              43690
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 2288.7900390625,
+            "mean_hops": 47.43000030517578,
+            "mean_latencies": [
+              4265.17
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              6233
+            ],
+            "p99_latencies": [
+              10556
+            ],
+            "qps": [
+              1710.1617813045114
+            ],
+            "recall": {
+              "average": 0.418,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 40,
+            "search_latencies": [
+              58474
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 2652.449951171875,
+            "mean_hops": 57.040000915527344,
+            "mean_latencies": [
+              4419.41
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              6687
+            ],
+            "p99_latencies": [
+              10292
+            ],
+            "qps": [
+              1623.666563834451
+            ],
+            "recall": {
+              "average": 0.422,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 50,
+            "search_latencies": [
+              61589
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 4426.0400390625,
+            "mean_hops": 106.4000015258789,
+            "mean_latencies": [
+              8935.56
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              14054
+            ],
+            "p99_latencies": [
+              17442
+            ],
+            "qps": [
+              818.7393052178256
+            ],
+            "recall": {
+              "average": 0.428,
+              "maximum": 10,
+              "minimum": 0,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 100,
+            "search_latencies": [
+              122139
+            ],
+            "search_n": 10
+          },
+          {
+            "mean_cmps": 7640.009765625,
+            "mean_hops": 205.7100067138672,
+            "mean_latencies": [
+              16669.73
+            ],
+            "num_tasks": 8,
+            "p90_latencies": [
+              22001
+            ],
+            "p99_latencies": [
+              72498
+            ],
+            "qps": [
+              436.14603913974554
+            ],
+            "recall": {
+              "average": 0.437,
+              "maximum": 10,
+              "minimum": 1,
+              "num_queries": 100,
+              "recall_k": 10,
+              "recall_n": 10
+            },
+            "search_l": 200,
+            "search_latencies": [
+              229281
+            ],
+            "search_n": 10
+          }
+        ]
+      }
+    }
+  }
+]
