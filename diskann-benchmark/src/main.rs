@@ -794,8 +794,17 @@ mod tests {
         prefix_search_directories(&mut raw, &root_directory());
         save_to_file(&modified_input_path, &raw);
 
+        run_document_filter_integration(&modified_input_path, &output_path, &raw);
+    }
+
+    #[cfg(feature = "document-index")]
+    fn run_document_filter_integration(
+        input_path: &std::path::Path,
+        output_path: &std::path::Path,
+        raw: &serde_json::Value,
+    ) {
         let command = Commands::Run {
-            input_file: modified_input_path.to_owned(),
+            input_file: input_path.to_owned(),
             output_file: output_path.to_owned(),
             dry_run: false,
         };
@@ -809,7 +818,32 @@ mod tests {
         // Check that the results file is generated.
         assert!(output_path.exists());
 
-        let results: Vec<Value> = load_from_file(&output_path);
-        assert_eq!(results.len(), num_jobs(&raw));
+        let results: Vec<Value> = load_from_file(output_path);
+        assert_eq!(results.len(), num_jobs(raw));
+    }
+
+    #[cfg(not(feature = "document-index"))]
+    fn run_document_filter_integration(
+        input_path: &std::path::Path,
+        output_path: &std::path::Path,
+        _raw: &serde_json::Value,
+    ) {
+        let command = Commands::Run {
+            input_file: input_path.to_owned(),
+            output_file: output_path.to_owned(),
+            dry_run: false,
+        };
+        let cli = Cli::from_commands(command, true);
+        let mut output = Memory::new();
+
+        let err = cli.run(&mut output).unwrap_err();
+        println!("err = {:?}", err);
+
+        let output = String::from_utf8(output.into_inner()).unwrap();
+        assert!(output.contains("\"document-index\" feature"));
+        println!("output = {}", output);
+
+        // The output file should not have been created because we failed.
+        assert!(!output_path.exists());
     }
 }
