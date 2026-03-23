@@ -162,7 +162,8 @@ DATA_THRESHOLDS = {
         "total_duration_seconds": [10, 'LT', ""],
     },
     "index-build statistics": {
-        "total_time": [10, 'LT', 1206],
+        # total_time contract TBD: requires baseline run on target hardware (see PBI: threshold calibration)
+        "total_time": [10, 'LT', ""],
         "total_comparisons": [1, 'LT', ""],
         "search_hops": [1, 'LT', ""]
     },
@@ -171,11 +172,14 @@ DATA_THRESHOLDS = {
         "mean_latency": [10, 'LT', ""],
         "mean_io_time": [10, 'LT', ""],
         "mean_cpus": [10, 'LT', ""],
-        "qps": [10, 'GT', 29],
-        "mean_ios": [1, 'LT', 2026],
-        "mean_comps": [1, 'LT', 50000],
+        # qps/recall/mean_ios/mean_comps contracts TBD: prior values were calibrated for
+        # internal mimir-enron 1M-vector dataset on production hardware, not applicable here.
+        # See PBI: define alert thresholds for public dataset benchmarks.
+        "qps": [10, 'GT', ""],
+        "mean_ios": [1, 'LT', ""],
+        "mean_comps": [1, 'LT', ""],
         "mean_hops": [1, 'LT', ""],
-        "recall": [1, 'GT', 95.1]
+        "recall": [1, 'GT', ""]
     },
     "search-with-L=100-bw=4": {
         "latency_95": [10, 'LT', ""],
