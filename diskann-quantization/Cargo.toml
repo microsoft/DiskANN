@@ -29,6 +29,8 @@ uninlined_format_args = "allow"
 
 [dev-dependencies]
 cfg-if = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 trybuild = "1.0.101"
 rand_distr = { workspace = true }
 
