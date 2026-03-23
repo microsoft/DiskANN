@@ -22,6 +22,7 @@ diskann-quantization = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+parking_lot = "0.12"
 
 [dev-dependencies]
 criterion = { workspace = true }
