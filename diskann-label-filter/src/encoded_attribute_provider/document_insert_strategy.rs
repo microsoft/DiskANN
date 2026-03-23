@@ -233,7 +233,7 @@ where
     fn prune_accessor<'a>(
         &'a self,
         provider: &'a DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>>,
-        context: &'a <DocumentProvider<DP, RoaringAttributeStore<DP::InternalId>> as DataProvider>::Context,
+        context: &'a DP::Context,
     ) -> Result<Self::PruneAccessor<'a>, Self::PruneAccessorError> {
         self.inner
             .prune_accessor(provider.inner_provider(), context)

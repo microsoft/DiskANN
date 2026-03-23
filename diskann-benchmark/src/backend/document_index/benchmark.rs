@@ -15,20 +15,21 @@ use std::sync::Arc;
 use anyhow::Result;
 use diskann::{
     graph::{
-        config::Builder as ConfigBuilder, config::MaxDegree, config::PruneKind, search::Knn,
+        search::Knn,
         search_output_buffer, DiskANNIndex, SearchOutputBuffer, StartPointStrategy,
     },
     provider::DefaultContext,
+    ANNError, ANNErrorKind,
 };
 use diskann_benchmark_core::{
-    build::{self, AsProgress, Build, Parallelism, Progress},
+    build::{self, Build, Parallelism},
     recall, search as search_api, tokio,
 };
 use diskann_benchmark_runner::{
     dispatcher::{DispatchRule, FailureScore, MatchScore},
     output::Output,
     registry::Benchmarks,
-    utils::{datatype, percentiles, MicroSeconds},
+    utils::{datatype, fmt, percentiles, MicroSeconds},
     Any,
 };
 use diskann_label_filter::{
@@ -40,8 +41,11 @@ use diskann_label_filter::{
     },
     inline_beta_search::inline_beta_filter::InlineBetaStrategy,
     query::FilteredQuery,
-    read_and_parse_queries, read_baselabels, ASTExpr,
+    read_and_parse_queries, read_baselabels,
+    traits::attribute_store::AttributeStore,
+    ASTExpr,
 };
+
 use diskann_providers::model::graph::provider::async_::{
     common::{self, NoStore, TableBasedDeletes},
     inmem::{CreateFullPrecision, DefaultProvider, DefaultProviderParameters, SetStartPoints},
@@ -51,10 +55,10 @@ use diskann_utils::views::MatrixView;
 use diskann_utils::{future::AsyncFriendly, sampling::medoid::ComputeMedoid};
 use diskann_vector::distance::SquaredL2;
 use diskann_vector::PureDistanceFunction;
-use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
 
 use crate::{
+    backend::index::build::ProgressMeter,
     inputs::document_index::DocumentIndexBuild,
     utils::{
         datafiles::{self, BinFile},
@@ -100,23 +104,11 @@ where
     type Error = std::convert::Infallible;
 
     fn try_match(_from: &&'a DocumentIndexBuild) -> Result<MatchScore, FailureScore> {
-        match _from.build.data_type {
-            datatype::DataType::Float32 => Ok(MatchScore(0)),
-            datatype::DataType::UInt8 => Ok(MatchScore(0)),
-            datatype::DataType::Int8 => Ok(MatchScore(0)),
-            _ => Err(datatype::MATCH_FAIL),
-        }
+        datatype::Type::<T>::try_match(&_from.build.data_type)
     }
 
     fn convert(from: &'a DocumentIndexBuild) -> Result<Self, Self::Error> {
         Ok(DocumentIndexJob::new(from))
-    }
-
-    fn description(
-        f: &mut std::fmt::Formatter<'_>,
-        _from: Option<&&'a DocumentIndexBuild>,
-    ) -> std::fmt::Result {
-        writeln!(f, "tag: \"{}\"", DocumentIndexBuild::tag())
     }
 }
 
@@ -236,23 +228,14 @@ impl<'a, T> DocumentIndexJob<'a, T> {
             .collect();
 
         // 3. Create the index configuration
-        let metric = build.distance.into();
-        let prune_kind = PruneKind::from_metric(metric);
-        let mut config_builder = ConfigBuilder::new(
-            build.max_degree, // pruned_degree
-            MaxDegree::Same,  // max_degree
-            build.l_build,    // l_build
-            prune_kind,       // prune_kind
-        );
-        config_builder.alpha(build.alpha);
-        let config = config_builder.build()?;
+        let config = build.build_config()?;
 
         // 4. Create the data provider directly
         writeln!(output, "Creating index...")?;
         let params = DefaultProviderParameters {
             max_points: num_vectors,
             frozen_points: diskann::utils::ONE,
-            metric,
+            metric: build.distance.into(),
             dim,
             prefetch_lookahead: None,
             prefetch_cache_line_level: None,
@@ -278,7 +261,6 @@ impl<'a, T> DocumentIndexJob<'a, T> {
         let medoid_idx = compute_medoid_index(&data)?;
         let start_point_id = num_vectors as u32; // Start points begin at max_points
         let medoid_attrs = attributes.get(medoid_idx).cloned().unwrap_or_default();
-        use diskann_label_filter::traits::attribute_store::AttributeStore;
         attribute_store.set_element(&start_point_id, &medoid_attrs)?;
 
         let doc_provider = DocumentProvider::new(inner_provider, attribute_store);
@@ -306,15 +288,8 @@ impl<'a, T> DocumentIndexJob<'a, T> {
         );
         let num_tasks = NonZeroUsize::new(build.num_threads).unwrap_or(diskann::utils::ONE);
         let parallelism = Parallelism::dynamic(diskann::utils::ONE, num_tasks);
-        let progress = IndicatifAsProgress({
-            let bar = ProgressBar::with_draw_target(Some(num_vectors as u64), output.draw_target());
-            bar.set_style(
-                ProgressStyle::with_template("Building [{elapsed_precise}] {wide_bar} {percent}")
-                    .expect("valid template"),
-            );
-            bar
-        });
-        let build_results = build::build_tracked(builder, parallelism, &rt, Some(&progress))?;
+        let build_results =
+            build::build_tracked(builder, parallelism, &rt, Some(&ProgressMeter::new(output)))?;
         let insert_latencies: Vec<MicroSeconds> = build_results
             .take_output()
             .into_iter()
@@ -416,11 +391,6 @@ impl<'a, T> DocumentIndexJob<'a, T> {
             label_load_time,
             build_time,
             insert_latencies: insert_percentiles,
-            build_params: BuildParamsStats {
-                max_degree: build.max_degree,
-                l_build: build.l_build,
-                alpha: build.alpha,
-            },
             search: search_results,
         };
 
@@ -700,12 +670,6 @@ where
         .pop()
         .ok_or_else(|| anyhow::anyhow!("no search results"))
 }
-#[derive(Debug, Serialize)]
-pub struct BuildParamsStats {
-    pub max_degree: usize,
-    pub l_build: usize,
-    pub alpha: f32,
-}
 
 /// Helper module for serializing arrays as compact single-line JSON strings
 mod compact_array {
@@ -772,7 +736,6 @@ pub struct DocumentIndexStats {
     pub label_load_time: MicroSeconds,
     pub build_time: MicroSeconds,
     pub insert_latencies: percentiles::Percentiles<MicroSeconds>,
-    pub build_params: BuildParamsStats,
     pub search: Vec<SearchRunStats>,
 }
 
@@ -797,16 +760,9 @@ impl std::fmt::Display for DocumentIndexStats {
         writeln!(f, "    P50: {} us", self.insert_latencies.median)?;
         writeln!(f, "    P90: {} us", self.insert_latencies.p90)?;
         writeln!(f, "    P99: {} us", self.insert_latencies.p99)?;
-        writeln!(f, "  Build Parameters:")?;
-        writeln!(f, "    max_degree (R): {}", self.build_params.max_degree)?;
-        writeln!(f, "    l_build (L): {}", self.build_params.l_build)?;
-        writeln!(f, "    alpha: {}", self.build_params.alpha)?;
 
         if !self.search.is_empty() {
-            writeln!(f, "\nFiltered Search Results:")?;
-            writeln!(
-                f,
-                "  {:>8} {:>8} {:>10} {:>10} {:>15} {:>12} {:>12} {:>10} {:>8} {:>10} {:>12}",
+            let header = [
                 "L",
                 "KNN",
                 "Avg Cmps",
@@ -817,41 +773,34 @@ impl std::fmt::Display for DocumentIndexStats {
                 "Recall",
                 "Threads",
                 "Queries",
-                "WallClock(s)"
-            )?;
-            for s in &self.search {
-                let mean_qps = if s.qps.is_empty() {
-                    0.0
-                } else {
-                    s.qps.iter().sum::<f64>() / s.qps.len() as f64
-                };
+                "WallClock(s)",
+            ];
+            writeln!(f, "\nFiltered Search Results:")?;
+            let mut table = fmt::Table::new(header, self.search.len());
+            self.search.iter().enumerate().for_each(|(row_idx, s)| {
+                let mut row = table.row(row_idx);
+                let mean_qps = percentiles::mean(&s.qps).unwrap_or(0.0);
                 let max_qps = s.qps.iter().cloned().fold(0.0_f64, f64::max);
-                let mean_wall_clock = if s.wall_clock_time.is_empty() {
-                    0.0
-                } else {
-                    s.wall_clock_time
+                let mean_wall_clock = percentiles::mean(
+                    &s.wall_clock_time
                         .iter()
-                        .map(|t| t.as_seconds())
-                        .sum::<f64>()
-                        / s.wall_clock_time.len() as f64
-                };
-                writeln!(
-                    f,
-                    "  {:>8} {:>8} {:>10.1} {:>10.1} {:>7.1}({:>5.1}) {:>12.1} {:>12} {:>10.4} {:>8} {:>10} {:>12.3}",
-                    s.search_l,
-                    s.search_n,
-                    s.mean_cmps,
-                    s.mean_hops,
-                    mean_qps,
-                    max_qps,
-                    s.mean_latency,
-                    s.p99_latency,
-                    s.recall.average,
-                    s.num_threads,
-                    s.num_queries,
-                    mean_wall_clock
-                )?;
-            }
+                        .map(|l| l.as_seconds())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap_or(0.0);
+                row.insert(s.search_l, 0);
+                row.insert(s.search_n, 1);
+                row.insert(format!("{:.1}", s.mean_cmps), 2);
+                row.insert(format!("{:.1}", s.mean_hops), 3);
+                row.insert(format!("{:.1}({:.1})", mean_qps, max_qps), 4);
+                row.insert(format!("{:.1} s", s.mean_latency), 5);
+                row.insert(format!("{:.1} s", s.p99_latency), 6);
+                row.insert(format!("{:.4}", s.recall.average), 7);
+                row.insert(s.num_threads, 8);
+                row.insert(s.num_queries, 9);
+                row.insert(format!("{:.3} s", mean_wall_clock), 10);
+            });
+            write!(f, "{}", table)?;
         }
         Ok(())
     }
@@ -906,34 +855,17 @@ where
     async fn build(&self, range: std::ops::Range<usize>) -> diskann::ANNResult<Self::Output> {
         let ctx = DefaultContext;
         for i in range {
-            let attrs = self.attributes.get(i).cloned().unwrap_or_default();
+            let attrs = self.attributes.get(i).cloned().ok_or_else(|| {
+                ANNError::message(
+                    ANNErrorKind::Opaque,
+                    format!("Failed to get attributes at index {}", i),
+                )
+            })?;
             let doc = Document::new(self.data.row(i), attrs);
             self.index
                 .insert(self.strategy, &ctx, &(i as u32), &doc)
                 .await?;
         }
         Ok(())
-    }
-}
-
-/// Adapts an already-constructed [`ProgressBar`] into the [`AsProgress`] / [`Progress`]
-/// traits expected by [`build_tracked`].
-struct IndicatifAsProgress(ProgressBar);
-
-struct IndicatifProgress(ProgressBar);
-
-impl Progress for IndicatifProgress {
-    fn progress(&self, handled: usize) {
-        self.0.inc(handled as u64);
-    }
-
-    fn finish(&self) {
-        self.0.finish();
-    }
-}
-
-impl AsProgress for IndicatifAsProgress {
-    fn as_progress(&self, _max: usize) -> Arc<dyn Progress> {
-        Arc::new(IndicatifProgress(self.0.clone()))
     }
 }

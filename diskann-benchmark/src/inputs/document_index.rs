@@ -8,6 +8,7 @@
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
+use diskann::graph::{Config, config::{Builder, MaxDegree, PruneKind, ConfigError}};
 use diskann_benchmark_runner::{
     files::InputFile, utils::datatype::DataType, CheckDeserialization, Checker,
 };
@@ -42,21 +43,27 @@ pub(crate) struct DocumentBuildParams {
     pub(crate) num_threads: usize,
 }
 
+impl DocumentBuildParams {
+    pub(crate) fn build_config(&self) -> Result<Config, ConfigError> {
+        let metric = self.distance.into();
+        let prune_kind = PruneKind::from_metric(metric);
+        let mut config_builder = Builder::new(
+            self.max_degree, // pruned_degree
+            MaxDegree::default_slack(),  // max_degree
+            self.l_build,
+            prune_kind,
+        );
+        config_builder.alpha(self.alpha);
+        let config = config_builder.build()?;
+        Ok(config)
+    }
+}
+
 impl CheckDeserialization for DocumentBuildParams {
     fn check_deserialization(&mut self, checker: &mut Checker) -> Result<(), anyhow::Error> {
         self.data.check_deserialization(checker)?;
         self.data_labels.check_deserialization(checker)?;
-
-        // checking if the max_degree, l_build and alpha values are valid.
-        use diskann::graph::config::{Builder, MaxDegree, PruneKind};
-        let mut builder = Builder::new(
-            self.max_degree,
-            MaxDegree::Value(self.max_degree),
-            self.l_build,
-            PruneKind::Occluding,
-        );
-        builder.alpha(self.alpha);
-        builder.build()?;
+        self.build_config()?;
         Ok(())
     }
 }
@@ -67,9 +74,7 @@ pub(crate) struct DocumentSearchParams {
     pub(crate) query_predicates: InputFile,
     pub(crate) groundtruth: InputFile,
     pub(crate) beta: f32,
-    #[serde(default = "default_reps")]
     pub(crate) reps: NonZeroUsize,
-    #[serde(default = "default_thread_counts")]
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
 }

@@ -21,6 +21,10 @@
                     "query_predicates": "query.10.label.jsonl",
                     "groundtruth": "disk_index_10pts_idx_uint32_truth_search_filter_res.bin",
                     "beta": 0.5,
+                    "reps": 5,
+                    "num_threads": [
+                        1
+                    ],
                     "runs": [
                         {
                             "search_n": 20,
