@@ -832,6 +832,7 @@ dependencies = [
  "diskann-vector",
  "half",
  "num-traits",
+ "parking_lot",
  "rand 0.9.2",
  "rand_distr",
  "rayon",

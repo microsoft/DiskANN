@@ -10,7 +10,8 @@
 //! This is history-independent (order of insertion does not matter).
 
 use std::cell::RefCell;
-use std::sync::Mutex;
+
+use parking_lot::Mutex;
 
 use diskann::utils::VectorRepr;
 use rand::SeedableRng;
@@ -161,10 +162,20 @@ impl HashPruneReservoir {
     }
 
     /// Create a reservoir without pre-allocating capacity.
-    /// Saves memory and init time when most reservoirs stay small.
     pub fn new_lazy(l_max: usize) -> Self {
         Self {
             entries: Vec::new(),
+            l_max,
+            farthest_dist: 0,
+            farthest_idx: 0,
+        }
+    }
+
+    /// Create a reservoir with a specific initial capacity hint.
+    /// Avoids Vec doubling when the expected fill is known.
+    pub fn new_with_capacity(l_max: usize, initial_capacity: usize) -> Self {
+        Self {
+            entries: Vec::with_capacity(initial_capacity),
             l_max,
             farthest_dist: 0,
             farthest_idx: 0,
@@ -301,8 +312,10 @@ impl HashPrune {
         let sketches = LshSketches::new(data, npoints, ndims, num_planes, seed);
         tracing::debug!(elapsed_secs = t0.elapsed().as_secs_f64(), "sketch computation");
         let t1 = std::time::Instant::now();
-        // Use lazy allocation: don't pre-allocate reservoir capacity.
-        // Reservoirs grow on demand as edges are inserted.
+        // Use lazy allocation: reservoirs grow on demand as edges are inserted.
+        // Pre-allocating 64×8B×1M = 512 MB upfront is worse because it spikes
+        // before any leaf data is freed. Lazy growth + malloc_trim between
+        // phases keeps peak RSS lower despite realloc fragmentation.
         let reservoirs = (0..npoints)
             .map(|_| Mutex::new(HashPruneReservoir::new_lazy(l_max)))
             .collect();
@@ -320,7 +333,7 @@ impl HashPrune {
     #[inline]
     pub fn add_edge(&self, p: usize, c: usize, distance: f32) {
         let hash = self.sketches.relative_hash(p, c);
-        self.reservoirs[p].lock().unwrap_or_else(|e| e.into_inner()).insert(hash, c as u32, distance);
+        self.reservoirs[p].lock().insert(hash, c as u32, distance);
     }
 
     /// Add a batch of edges in parallel. Each edge is (point_idx, neighbor_idx, distance).
@@ -343,7 +356,7 @@ impl HashPrune {
         let mut i = 0;
         while i < sorted.len() {
             let src = sorted[i].src;
-            let mut reservoir = self.reservoirs[src].lock().unwrap_or_else(|e| e.into_inner());
+            let mut reservoir = self.reservoirs[src].lock();
             while i < sorted.len() && sorted[i].src == src {
                 let edge = sorted[i];
                 let hash = self.sketches.relative_hash(src, edge.dst);
@@ -365,7 +378,7 @@ impl HashPrune {
         self.reservoirs
             .into_par_iter()
             .map(|mutex| {
-                let res = mutex.into_inner().unwrap_or_else(|e| e.into_inner());
+                let res = mutex.into_inner();
                 let mut neighbors = res.get_neighbors_sorted();
                 neighbors.truncate(max_degree);
                 neighbors.into_iter().map(|(id, _)| id).collect()
