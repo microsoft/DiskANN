@@ -81,6 +81,12 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) search_list: Vec<u32>,
     pub(crate) recall_at: u32,
     pub(crate) is_flat_search: bool,
+    #[serde(default)]
+    pub(crate) is_determinant_diversity_search: bool,
+    #[serde(default)]
+    pub(crate) determinant_diversity_eta: Option<f64>,
+    #[serde(default)]
+    pub(crate) determinant_diversity_power: Option<f64>,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
@@ -224,6 +230,35 @@ impl CheckDeserialization for DiskSearchPhase {
         if self.num_threads == 0 {
             anyhow::bail!("num_threads must be positive");
         }
+
+        if self.is_determinant_diversity_search {
+            if self.is_flat_search {
+                anyhow::bail!(
+                    "is_determinant_diversity_search is not supported when is_flat_search is true"
+                );
+            }
+
+            let eta = self.determinant_diversity_eta.unwrap_or(0.01);
+            let power = self.determinant_diversity_power.unwrap_or(2.0);
+
+            if eta < 0.0 || !eta.is_finite() {
+                anyhow::bail!("determinant_diversity_eta must be >= 0.0 and finite, got {eta}");
+            }
+
+            if power <= 0.0 || !power.is_finite() {
+                anyhow::bail!("determinant_diversity_power must be > 0.0 and finite, got {power}");
+            }
+
+            self.determinant_diversity_eta = Some(eta);
+            self.determinant_diversity_power = Some(power);
+        } else if self.determinant_diversity_eta.is_some()
+            || self.determinant_diversity_power.is_some()
+        {
+            anyhow::bail!(
+                "determinant_diversity_eta/determinant_diversity_power may only be set when is_determinant_diversity_search is true"
+            );
+        }
+
         if let Some(n) = self.num_nodes_to_cache {
             if n == 0 {
                 anyhow::bail!("num_nodes_to_cache must be positive if specified");
@@ -268,6 +303,9 @@ impl Example for DiskIndexOperation {
             recall_at: 10,
             num_threads: 8,
             is_flat_search: false,
+            is_determinant_diversity_search: false,
+            determinant_diversity_eta: None,
+            determinant_diversity_power: None,
             distance: SimilarityMeasure::SquaredL2,
             vector_filters_file: None,
             num_nodes_to_cache: None,
@@ -384,6 +422,22 @@ impl DiskSearchPhase {
         write_field!(f, "Recall@", self.recall_at)?;
         write_field!(f, "Threads", self.num_threads)?;
         write_field!(f, "Flat Search", self.is_flat_search)?;
+        write_field!(
+            f,
+            "Determinant Diversity Search",
+            self.is_determinant_diversity_search
+        )?;
+        match (
+            self.determinant_diversity_eta,
+            self.determinant_diversity_power,
+        ) {
+            (Some(eta), Some(power)) => write_field!(
+                f,
+                "Determinant Diversity Params",
+                format!("eta={eta}, power={power}")
+            )?,
+            _ => write_field!(f, "Determinant Diversity Params", "none")?,
+        }
         write_field!(f, "Distance", self.distance)?;
         match &self.vector_filters_file {
             Some(vf) => write_field!(f, "Vector Filters File", vf.display())?,

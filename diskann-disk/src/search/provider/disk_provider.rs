@@ -39,8 +39,10 @@ use diskann::{
 use diskann_providers::storage::StorageReadProvider;
 use diskann_providers::{
     model::{
-        compute_pq_distance, compute_pq_distance_for_pq_coordinates, graph::traits::GraphDataType,
-        pq::quantizer_preprocess, PQData, PQScratch,
+        compute_pq_distance, compute_pq_distance_for_pq_coordinates,
+        graph::{provider::async_::determinant_diversity_post_process, traits::GraphDataType},
+        pq::quantizer_preprocess,
+        PQData, PQScratch,
     },
     storage::{get_compressed_pq_file, get_disk_index_file, get_pq_pivot_file, LoadWith},
 };
@@ -279,6 +281,30 @@ impl<'a> RerankAndFilter<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct DeterminantDiversityRerankAndFilter<'a> {
+    filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
+    top_k: usize,
+    eta: f64,
+    power: f64,
+}
+
+impl<'a> DeterminantDiversityRerankAndFilter<'a> {
+    fn new(
+        filter: &'a (dyn Fn(&u32) -> bool + Send + Sync),
+        top_k: usize,
+        eta: f64,
+        power: f64,
+    ) -> Self {
+        Self {
+            filter,
+            top_k,
+            eta,
+            power,
+        }
+    }
+}
+
 impl<Data, VP>
     SearchPostProcess<
         DiskAccessor<'_, Data, VP>,
@@ -337,6 +363,84 @@ where
             .sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         // Store the reranked results.
         Ok(output.extend(reranked))
+    }
+}
+
+impl<Data, VP>
+    SearchPostProcess<
+        DiskAccessor<'_, Data, VP>,
+        [Data::VectorDataType],
+        (
+            <DiskProvider<Data> as DataProvider>::InternalId,
+            Data::AssociatedDataType,
+        ),
+    > for DeterminantDiversityRerankAndFilter<'_>
+where
+    Data: GraphDataType<VectorIdType = u32>,
+    VP: VertexProvider<Data>,
+{
+    type Error = ANNError;
+
+    async fn post_process<I, B>(
+        &self,
+        accessor: &mut DiskAccessor<'_, Data, VP>,
+        query: &[Data::VectorDataType],
+        _computer: &DiskQueryComputer,
+        candidates: I,
+        output: &mut B,
+    ) -> Result<usize, Self::Error>
+    where
+        I: Iterator<Item = Neighbor<u32>> + Send,
+        B: search_output_buffer::SearchOutputBuffer<(u32, Data::AssociatedDataType)>
+            + Send
+            + ?Sized,
+    {
+        let provider = accessor.provider;
+        let query_f32 = Data::VectorDataType::as_f32(query).map_err(Into::into)?;
+
+        let candidate_ids: Vec<u32> = candidates
+            .map(|candidate| candidate.id)
+            .filter(|id| (self.filter)(id))
+            .collect();
+
+        if candidate_ids.is_empty() {
+            return Ok(0);
+        }
+
+        ensure_vertex_loaded(&mut accessor.scratch.vertex_provider, &candidate_ids)?;
+
+        let mut candidate_vectors = Vec::with_capacity(candidate_ids.len());
+        let mut associated_data = HashMap::with_capacity(candidate_ids.len());
+
+        for id in candidate_ids {
+            let vector = accessor.scratch.vertex_provider.get_vector(&id)?;
+            let distance = provider
+                .distance_comparer
+                .evaluate_similarity(query, vector);
+            let vector_f32 = Data::VectorDataType::as_f32(vector).map_err(Into::into)?;
+            let data = accessor.scratch.vertex_provider.get_associated_data(&id)?;
+
+            candidate_vectors.push((id, distance, vector_f32.to_vec()));
+            associated_data.insert(id, *data);
+        }
+
+        let borrowed: Vec<(u32, f32, &[f32])> = candidate_vectors
+            .iter()
+            .map(|(id, distance, vector)| (*id, *distance, vector.as_slice()))
+            .collect();
+
+        let reranked = determinant_diversity_post_process(
+            borrowed, &query_f32, self.top_k, self.eta, self.power,
+        );
+
+        Ok(
+            output.extend(reranked.into_iter().filter_map(|(id, distance)| {
+                associated_data
+                    .get(&id)
+                    .copied()
+                    .map(|data| ((id, data), distance))
+            })),
+        )
     }
 }
 
@@ -933,6 +1037,9 @@ where
         beam_width: Option<usize>,
         vector_filter: Option<VectorFilter<Data>>,
         is_flat_search: bool,
+        is_determinant_diversity_search: bool,
+        determinant_diversity_eta: Option<f64>,
+        determinant_diversity_power: Option<f64>,
     ) -> ANNResult<SearchResult<Data::AssociatedDataType>> {
         let mut query_stats = QueryStatistics::default();
         let mut indices = vec![0u32; return_list_size as usize];
@@ -951,6 +1058,9 @@ where
             &mut associated_data,
             &vector_filter.unwrap_or(default_vector_filter::<Data>()),
             is_flat_search,
+            is_determinant_diversity_search,
+            determinant_diversity_eta,
+            determinant_diversity_power,
         )?;
 
         let mut search_result = SearchResult {
@@ -988,6 +1098,9 @@ where
         associated_data: &mut [Data::AssociatedDataType],
         vector_filter: &(dyn Fn(&Data::VectorIdType) -> bool + Send + Sync),
         is_flat_search: bool,
+        is_determinant_diversity_search: bool,
+        determinant_diversity_eta: Option<f64>,
+        determinant_diversity_power: Option<f64>,
     ) -> ANNResult<SearchResultStats> {
         let mut result_output_buffer = search_output_buffer::IdDistanceAssociatedData::new(
             &mut indices[..k_value],
@@ -1010,13 +1123,31 @@ where
             ))?
         } else {
             let knn_search = Knn::new(k, l, beam_width)?;
-            self.runtime.block_on(self.index.search(
-                knn_search,
-                &strategy,
-                &DefaultContext,
-                strategy.query,
-                &mut result_output_buffer,
-            ))?
+            if is_determinant_diversity_search {
+                let processor = DeterminantDiversityRerankAndFilter::new(
+                    vector_filter,
+                    k,
+                    determinant_diversity_eta.unwrap_or(0.01),
+                    determinant_diversity_power.unwrap_or(2.0),
+                );
+
+                self.runtime.block_on(self.index.search_with(
+                    knn_search,
+                    &strategy,
+                    processor,
+                    &DefaultContext,
+                    strategy.query,
+                    &mut result_output_buffer,
+                ))?
+            } else {
+                self.runtime.block_on(self.index.search(
+                    knn_search,
+                    &strategy,
+                    &DefaultContext,
+                    strategy.query,
+                    &mut result_output_buffer,
+                ))?
+            }
         };
         query_stats.total_comparisons = stats.cmps;
         query_stats.search_hops = stats.hops;
@@ -1493,7 +1624,17 @@ mod disk_provider_tests {
                 let query = &aligned_box.as_slice()[1..];
                 let result = params
                     .index_search_engine
-                    .search(query, params.k as u32, params.l as u32, beam_width, None, false)
+                    .search(
+                        query,
+                        params.k as u32,
+                        params.l as u32,
+                        beam_width,
+                        None,
+                        false,
+                        false,
+                        None,
+                        None,
+                    )
                     .unwrap();
                 let indices: Vec<u32> = result.results.iter().map(|item| item.vertex_id).collect();
                 let associated_data: Vec<u32> =
@@ -1605,6 +1746,9 @@ mod disk_provider_tests {
             &mut associated_data,
             &|_| true,
             false,
+            false,
+            None,
+            None,
         );
 
         assert!(result.is_err());
@@ -1674,6 +1818,9 @@ mod disk_provider_tests {
             Some(4),
             None,
             false,
+            false,
+            None,
+            None,
         );
         assert!(result.is_ok(), "Expected search to succeed");
         let search_result = result.unwrap();
@@ -2013,6 +2160,9 @@ mod disk_provider_tests {
             &mut associated_data,
             &vector_filter,
             is_flat_search,
+            false,
+            None,
+            None,
         );
 
         assert!(result.is_ok(), "Expected search to succeed");
@@ -2034,6 +2184,9 @@ mod disk_provider_tests {
             None, // beam_width
             Some(Box::new(vector_filter)),
             is_flat_search,
+            false,
+            None,
+            None,
         );
 
         assert!(result_with_filter.is_ok(), "Expected search to succeed");

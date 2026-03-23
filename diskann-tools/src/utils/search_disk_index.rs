@@ -256,6 +256,9 @@ where
                     Some(parameters.beam_width as usize),
                     Some(vector_filter_function),
                     parameters.is_flat_search,
+                    false,
+                    None,
+                    None,
                 );
 
                 match result {
