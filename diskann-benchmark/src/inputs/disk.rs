@@ -87,6 +87,12 @@ pub(crate) struct DiskSearchPhase {
     pub(crate) determinant_diversity_eta: Option<f64>,
     #[serde(default)]
     pub(crate) determinant_diversity_power: Option<f64>,
+    #[serde(default)]
+    pub(crate) is_multi_attribute_diversity_search: bool,
+    #[serde(default)]
+    pub(crate) multi_attribute_diversity_eta: Option<f64>,
+    #[serde(default)]
+    pub(crate) multi_attribute_diversity_power: Option<f64>,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) vector_filters_file: Option<InputFile>,
     pub(crate) num_nodes_to_cache: Option<usize>,
@@ -259,6 +265,42 @@ impl CheckDeserialization for DiskSearchPhase {
             );
         }
 
+        if self.is_multi_attribute_diversity_search {
+            if self.is_flat_search {
+                anyhow::bail!(
+                    "is_multi_attribute_diversity_search is not supported when is_flat_search is true"
+                );
+            }
+
+            let eta = self.multi_attribute_diversity_eta.unwrap_or(0.01);
+            let power = self.multi_attribute_diversity_power.unwrap_or(2.0);
+
+            if eta < 0.0 || !eta.is_finite() {
+                anyhow::bail!("multi_attribute_diversity_eta must be >= 0.0 and finite, got {eta}");
+            }
+
+            if power <= 0.0 || !power.is_finite() {
+                anyhow::bail!(
+                    "multi_attribute_diversity_power must be > 0.0 and finite, got {power}"
+                );
+            }
+
+            self.multi_attribute_diversity_eta = Some(eta);
+            self.multi_attribute_diversity_power = Some(power);
+        } else if self.multi_attribute_diversity_eta.is_some()
+            || self.multi_attribute_diversity_power.is_some()
+        {
+            anyhow::bail!(
+                "multi_attribute_diversity_eta/multi_attribute_diversity_power may only be set when is_multi_attribute_diversity_search is true"
+            );
+        }
+
+        if self.is_determinant_diversity_search && self.is_multi_attribute_diversity_search {
+            anyhow::bail!(
+                "is_determinant_diversity_search and is_multi_attribute_diversity_search are mutually exclusive"
+            );
+        }
+
         if let Some(n) = self.num_nodes_to_cache {
             if n == 0 {
                 anyhow::bail!("num_nodes_to_cache must be positive if specified");
@@ -306,6 +348,9 @@ impl Example for DiskIndexOperation {
             is_determinant_diversity_search: false,
             determinant_diversity_eta: None,
             determinant_diversity_power: None,
+            is_multi_attribute_diversity_search: false,
+            multi_attribute_diversity_eta: None,
+            multi_attribute_diversity_power: None,
             distance: SimilarityMeasure::SquaredL2,
             vector_filters_file: None,
             num_nodes_to_cache: None,
@@ -437,6 +482,22 @@ impl DiskSearchPhase {
                 format!("eta={eta}, power={power}")
             )?,
             _ => write_field!(f, "Determinant Diversity Params", "none")?,
+        }
+        write_field!(
+            f,
+            "Multi-Attr Diversity Search",
+            self.is_multi_attribute_diversity_search
+        )?;
+        match (
+            self.multi_attribute_diversity_eta,
+            self.multi_attribute_diversity_power,
+        ) {
+            (Some(eta), Some(power)) => write_field!(
+                f,
+                "Multi-Attr Diversity Params",
+                format!("eta={eta}, power={power}")
+            )?,
+            _ => write_field!(f, "Multi-Attr Diversity Params", "none")?,
         }
         write_field!(f, "Distance", self.distance)?;
         match &self.vector_filters_file {

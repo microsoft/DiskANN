@@ -26,7 +26,9 @@ use diskann_providers::{
     index::diskann_async,
     model::{
         configuration::IndexConfiguration,
-        graph::provider::async_::{common, DeterminantDiversitySearchParams},
+        graph::provider::async_::{
+            common, DeterminantDiversitySearchParams, MultiAttributeDiversitySearchParams,
+        },
     },
 };
 use diskann_utils::{
@@ -355,6 +357,8 @@ where
     S: glue::DefaultSearchStrategy<DP, [T]> + Clone + AsyncFriendly,
     DeterminantDiversitySearchParams:
         for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, [T], DP::ExternalId> + Send + Sync,
+    MultiAttributeDiversitySearchParams:
+        for<'a> glue::SearchPostProcess<S::SearchAccessor<'a>, [T], DP::ExternalId> + Send + Sync,
 {
     match &input {
         SearchPhase::Topk(search_phase) => {
@@ -378,6 +382,24 @@ where
             );
 
             let search_results = if let (Some(eta), Some(power)) = (
+                search_phase.multi_attribute_diversity_eta,
+                search_phase.multi_attribute_diversity_power,
+            ) {
+                let knn = benchmark_core::search::graph::multi_attribute_diversity::MultiAttributeDiversity::new(
+                    index,
+                    queries,
+                    benchmark_core::search::graph::Strategy::broadcast(search_strategy),
+                )?;
+
+                search::knn::run_multi_attribute_diversity(
+                    &knn,
+                    &groundtruth,
+                    steps,
+                    eta,
+                    power,
+                    search_phase.multi_attribute_diversity_results_k,
+                )?
+            } else if let (Some(eta), Some(power)) = (
                 search_phase.determinant_diversity_eta,
                 search_phase.determinant_diversity_power,
             ) {

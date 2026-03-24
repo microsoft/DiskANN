@@ -122,6 +122,38 @@ pub(super) struct SearchResults {
 }
 
 impl SearchResults {
+    fn from_topk_parts(
+        setup: benchmark_core::search::Setup,
+        search_n: usize,
+        search_l: usize,
+        end_to_end_latencies: Vec<MicroSeconds>,
+        mean_latencies: Vec<f64>,
+        p90_latencies: Vec<MicroSeconds>,
+        p99_latencies: Vec<MicroSeconds>,
+        recall: benchmark_core::recall::RecallMetrics,
+        mean_cmps: f64,
+        mean_hops: f64,
+    ) -> Self {
+        let qps = end_to_end_latencies
+            .iter()
+            .map(|latency| recall.num_queries as f64 / latency.as_seconds())
+            .collect();
+
+        Self {
+            num_tasks: setup.tasks.into(),
+            search_n,
+            search_l,
+            qps,
+            search_latencies: end_to_end_latencies,
+            mean_latencies,
+            p90_latencies,
+            p99_latencies,
+            recall: (&recall).into(),
+            mean_cmps: mean_cmps as f32,
+            mean_hops: mean_hops as f32,
+        }
+    }
+
     pub fn new(summary: benchmark_core::search::graph::knn::Summary) -> Self {
         let benchmark_core::search::graph::knn::Summary {
             setup,
@@ -136,24 +168,18 @@ impl SearchResults {
             ..
         } = summary;
 
-        let qps = end_to_end_latencies
-            .iter()
-            .map(|latency| recall.num_queries as f64 / latency.as_seconds())
-            .collect();
-
-        Self {
-            num_tasks: setup.tasks.into(),
-            search_n: parameters.k_value().get(),
-            search_l: parameters.l_value().get(),
-            qps,
-            search_latencies: end_to_end_latencies,
+        Self::from_topk_parts(
+            setup,
+            parameters.k_value().get(),
+            parameters.l_value().get(),
+            end_to_end_latencies,
             mean_latencies,
             p90_latencies,
             p99_latencies,
-            recall: (&recall).into(),
-            mean_cmps: mean_cmps as f32,
-            mean_hops: mean_hops as f32,
-        }
+            recall,
+            mean_cmps,
+            mean_hops,
+        )
     }
 
     pub fn new_determinant_diversity(
@@ -172,24 +198,48 @@ impl SearchResults {
             ..
         } = summary;
 
-        let qps = end_to_end_latencies
-            .iter()
-            .map(|latency| recall.num_queries as f64 / latency.as_seconds())
-            .collect();
-
-        Self {
-            num_tasks: setup.tasks.into(),
-            search_n: parameters.inner.k_value().get(),
-            search_l: parameters.inner.l_value().get(),
-            qps,
-            search_latencies: end_to_end_latencies,
+        Self::from_topk_parts(
+            setup,
+            parameters.inner.k_value().get(),
+            parameters.inner.l_value().get(),
+            end_to_end_latencies,
             mean_latencies,
             p90_latencies,
             p99_latencies,
-            recall: (&recall).into(),
-            mean_cmps: mean_cmps as f32,
-            mean_hops: mean_hops as f32,
-        }
+            recall,
+            mean_cmps,
+            mean_hops,
+        )
+    }
+
+    pub fn new_multi_attribute_diversity(
+        summary: benchmark_core::search::graph::multi_attribute_diversity::Summary,
+    ) -> Self {
+        let benchmark_core::search::graph::multi_attribute_diversity::Summary {
+            setup,
+            parameters,
+            end_to_end_latencies,
+            mean_latencies,
+            p90_latencies,
+            p99_latencies,
+            recall,
+            mean_cmps,
+            mean_hops,
+            ..
+        } = summary;
+
+        Self::from_topk_parts(
+            setup,
+            parameters.inner.k_value().get(),
+            parameters.inner.l_value().get(),
+            end_to_end_latencies,
+            mean_latencies,
+            p90_latencies,
+            p99_latencies,
+            recall,
+            mean_cmps,
+            mean_hops,
+        )
     }
 }
 

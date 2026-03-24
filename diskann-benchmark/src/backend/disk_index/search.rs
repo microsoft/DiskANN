@@ -45,6 +45,9 @@ pub(super) struct DiskSearchStats {
     pub(crate) is_determinant_diversity_search: bool,
     pub(crate) determinant_diversity_eta: Option<f64>,
     pub(crate) determinant_diversity_power: Option<f64>,
+    pub(crate) is_multi_attribute_diversity_search: bool,
+    pub(crate) multi_attribute_diversity_eta: Option<f64>,
+    pub(crate) multi_attribute_diversity_power: Option<f64>,
     pub(crate) distance: SimilarityMeasure,
     pub(crate) uses_vector_filters: bool,
     pub(super) num_nodes_to_cache: Option<usize>,
@@ -241,6 +244,15 @@ where
 
     // Execute search iterations
     for &l in search_params.search_list.iter() {
+        let use_diversity_post_process = search_params.is_determinant_diversity_search
+            || search_params.is_multi_attribute_diversity_search;
+        let diversity_eta = search_params
+            .multi_attribute_diversity_eta
+            .or(search_params.determinant_diversity_eta);
+        let diversity_power = search_params
+            .multi_attribute_diversity_power
+            .or(search_params.determinant_diversity_power);
+
         let mut statistics_vec: Vec<QueryStatistics> =
             vec![QueryStatistics::default(); num_queries];
         let mut result_counts: Vec<u32> = vec![0; num_queries];
@@ -279,9 +291,9 @@ where
                 Some(search_params.beam_width),
                 vector_filter,
                 search_params.is_flat_search,
-                search_params.is_determinant_diversity_search,
-                search_params.determinant_diversity_eta,
-                search_params.determinant_diversity_power,
+                use_diversity_post_process,
+                diversity_eta,
+                diversity_power,
             ) {
                 Ok(search_result) => {
                     *stats = search_result.stats.query_statistics;
@@ -350,6 +362,9 @@ where
         is_determinant_diversity_search: search_params.is_determinant_diversity_search,
         determinant_diversity_eta: search_params.determinant_diversity_eta,
         determinant_diversity_power: search_params.determinant_diversity_power,
+        is_multi_attribute_diversity_search: search_params.is_multi_attribute_diversity_search,
+        multi_attribute_diversity_eta: search_params.multi_attribute_diversity_eta,
+        multi_attribute_diversity_power: search_params.multi_attribute_diversity_power,
         distance: search_params.distance,
         uses_vector_filters: search_params.vector_filters_file.is_some(),
         num_nodes_to_cache: search_params.num_nodes_to_cache,
@@ -445,6 +460,22 @@ impl fmt::Display for DiskSearchStats {
             match (
                 self.determinant_diversity_eta,
                 self.determinant_diversity_power,
+            ) {
+                (Some(eta), Some(power)) => format!("eta={eta}, power={power}"),
+                _ => "None".to_string(),
+            }
+        )?;
+        writeln!(
+            f,
+            "Multi-div search, : {}",
+            self.is_multi_attribute_diversity_search
+        )?;
+        writeln!(
+            f,
+            "Multi-div params, : {}",
+            match (
+                self.multi_attribute_diversity_eta,
+                self.multi_attribute_diversity_power,
             ) {
                 (Some(eta), Some(power)) => format!("eta={eta}, power={power}"),
                 _ => "None".to_string(),

@@ -5,6 +5,7 @@
 
 pub mod determinant_diversity;
 pub mod knn;
+pub mod multi_attribute_diversity;
 pub mod multihop;
 pub mod range;
 
