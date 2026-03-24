@@ -220,12 +220,12 @@ jobs:
   # test suite for `diskann-wide`, `diskann-vector`, and `diskann-quantization` under
   # Intel SDE configured as a Nehalem CPU.
   #
-  # SED will abort if any unrecognised instruction (e.g. AVX) is executed.
+  # SDE will abort if any unrecognised instruction (e.g. AVX) is executed.
   #
   # EXCLUDED TESTS
   #
   # * compile-tests: These don't behave well under SDE.
-  # * pivots::test::run_test_happy_path: The double-whammy of emulated SIMD and emulated
+  # * pivots::tests::run_test_happy_path: The double-whammy of emulated SIMD and emulated
   #   architecture make this test take too long.
   baseline:
     needs: basics
