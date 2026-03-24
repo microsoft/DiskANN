@@ -14,7 +14,7 @@
                     "dim": 768,
                     "max_degree": 59,
                     "l_build": 72,
-                    "num_threads": 4,
+                    "num_threads": 1,
                     "build_ram_limit_gb": 4.0,
                     "num_pq_chunks": 192,
                     "quantization_type": "FP",
