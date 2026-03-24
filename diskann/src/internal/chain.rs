@@ -32,8 +32,8 @@ where
 
 impl<A, B> Iterator for Chain<A, B>
 where
-    A: Iterator,
-    B: Iterator<Item = A::Item>,
+    A: ExactSizeIterator,
+    B: ExactSizeIterator<Item = A::Item>,
 {
     type Item = A::Item;
 

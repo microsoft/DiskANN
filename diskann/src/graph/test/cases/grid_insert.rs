@@ -402,7 +402,7 @@ fn _grid_build_and_search(params: TestParams, mut parent: TestPath<'_>) {
         max_minibatch_par,
     );
 
-    // Build the index - enabling `working_set_resuse`.
+    // Build the index - enabling `working_set_reuse`.
     let _ = run_build(&reuse_index, grid_data.as_view(), batchsize, true, &rt);
     assert_eq_verbose!(
         index.provider().dump_neighbors(true),
