@@ -14,7 +14,7 @@ use crate::{
     error::IntoANNResult,
     graph::{
         DiverseSearchParams,
-        glue::{SearchExt, SearchPostProcess},
+        glue::{SearchExt, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search_output_buffer::SearchOutputBuffer,
     },

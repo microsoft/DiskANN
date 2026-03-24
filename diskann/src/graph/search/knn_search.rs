@@ -15,7 +15,7 @@ use crate::{
     ANNError, ANNErrorKind, ANNResult,
     error::IntoANNResult,
     graph::{
-        glue::{SearchStrategy, SearchExt, SearchPostProcess},
+        glue::{SearchExt, SearchPostProcess, SearchStrategy},
         index::{DiskANNIndex, SearchStats},
         search::record::NoopSearchRecord,
         search_output_buffer::SearchOutputBuffer,
