@@ -27,8 +27,10 @@ on:
 
 # Cancel in-progress runs when a new run is triggered
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: true
+  # Use unique group per run for A/A testing (allows parallel runs).
+  # For production, change back to: github.event.pull_request.number || github.sha
+  group: ${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 env:
   RUST_BACKTRACE: 1
