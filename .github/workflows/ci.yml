@@ -270,7 +270,7 @@ jobs:
       - name: "SDE Baseline Tests (Nehalem)"
         run: |
           set -euxo pipefail
-          cargo test --locked \
+          cargo test --locked --profile ci \
               --package diskann-wide \
               --package diskann-vector \
               --package diskann-quantization \
@@ -333,7 +333,7 @@ jobs:
       - name: "SDE Tests (AVX-512)"
         run: |
           set -euxo pipefail
-          cargo test --locked \
+          cargo test --locked --profile ci \
             --package diskann-wide \
             --package diskann-vector \
             --package diskann-quantization \
