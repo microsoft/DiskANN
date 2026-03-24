@@ -68,6 +68,7 @@ mod imp {
         index::diskann_async::{self},
         model::graph::provider::async_::{
             common::NoDeletes, inmem, DeterminantDiversitySearchParams,
+            MultiAttributeDiversitySearchParams,
         },
     };
     use diskann_quantization::alloc::GlobalAllocator;
@@ -335,6 +336,24 @@ mod imp {
                             for &layout in self.input.query_layouts.iter() {
                                 let strategy = inmem::spherical::Quantized::search(layout.into());
                                 let search_results = if let (Some(eta), Some(power)) = (
+                                    search_phase.multi_attribute_diversity_eta,
+                                    search_phase.multi_attribute_diversity_power,
+                                ) {
+                                    let knn = benchmark_core::search::graph::multi_attribute_diversity::MultiAttributeDiversity::new(
+                                        index.clone(),
+                                        queries.clone(),
+                                        benchmark_core::search::graph::Strategy::broadcast(strategy),
+                                    )?;
+
+                                    search::knn::run_multi_attribute_diversity(
+                                        &knn,
+                                        &groundtruth,
+                                        steps,
+                                        eta,
+                                        power,
+                                        search_phase.multi_attribute_diversity_results_k,
+                                    )?
+                                } else if let (Some(eta), Some(power)) = (
                                     search_phase.determinant_diversity_eta,
                                     search_phase.determinant_diversity_power,
                                 ) {

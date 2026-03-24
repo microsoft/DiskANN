@@ -6,7 +6,9 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use diskann_benchmark_core::{self as benchmark_core, search as core_search};
-use diskann_providers::model::graph::provider::async_::DeterminantDiversitySearchParams;
+use diskann_providers::model::graph::provider::async_::{
+    DeterminantDiversitySearchParams, MultiAttributeDiversitySearchParams,
+};
 
 use crate::{backend::index::result::SearchResults, inputs::async_::GraphSearch};
 
@@ -36,9 +38,11 @@ pub(crate) fn run<I>(
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
     steps: SearchSteps<'_>,
 ) -> anyhow::Result<Vec<SearchResults>> {
-    run_search(runner, groundtruth, steps, |setup, search_l, search_n| {
+    run_search_with_builder(steps, |setup, search_l, search_n| {
         let search_params = diskann::graph::search::Knn::new(search_n, search_l, None).unwrap();
-        core_search::Run::new(search_params, setup)
+        Ok(core_search::Run::new(search_params, setup))
+    }, |parameters, recall_k, search_n| {
+        runner.search_all(parameters, groundtruth, recall_k, search_n)
     })
 }
 
@@ -64,7 +68,7 @@ pub(crate) fn run_determinant_diversity<I>(
     power: f64,
     results_k: Option<usize>,
 ) -> anyhow::Result<Vec<SearchResults>> {
-    run_search_determinant_diversity(runner, groundtruth, steps, |setup, search_l, search_n| {
+    run_search_with_builder(steps, |setup, search_l, search_n| {
         let base = diskann::graph::search::Knn::new(search_n, search_l, None).unwrap();
         let processor =
             DeterminantDiversitySearchParams::new(results_k.unwrap_or(search_n), eta, power)
@@ -78,49 +82,50 @@ pub(crate) fn run_determinant_diversity<I>(
                 processor,
             };
         Ok(core_search::Run::new(search_params, setup))
+    }, |parameters, recall_k, search_n| {
+        runner.search_all(parameters, groundtruth, recall_k, search_n)
     })
 }
 
-fn run_search<I, F>(
-    runner: &dyn Knn<I>,
+type MultiAttributeRun =
+    core_search::Run<diskann_benchmark_core::search::graph::multi_attribute_diversity::Parameters>;
+
+pub(crate) fn run_multi_attribute_diversity<I>(
+    runner: &dyn MultiAttributeDiversityKnn<I>,
     groundtruth: &dyn benchmark_core::recall::Rows<I>,
     steps: SearchSteps<'_>,
-    builder: F,
+    eta: f64,
+    power: f64,
+    results_k: Option<usize>,
 ) -> anyhow::Result<Vec<SearchResults>>
-where
-    F: Fn(core_search::Setup, usize, usize) -> Run,
 {
-    let mut all = Vec::new();
+    run_search_with_builder(steps, |setup, search_l, search_n| {
+        let base = diskann::graph::search::Knn::new(search_n, search_l, None).unwrap();
+        let processor =
+            MultiAttributeDiversitySearchParams::new(results_k.unwrap_or(search_n), eta, power)
+                .map_err(|err| {
+                    anyhow::anyhow!("Invalid multi-attribute-diversity parameters: {err}")
+                })?;
 
-    for threads in steps.num_tasks.iter() {
-        for run in steps.runs.iter() {
-            let setup = core_search::Setup {
-                threads: *threads,
-                tasks: *threads,
-                reps: steps.reps,
+        let search_params =
+            diskann_benchmark_core::search::graph::multi_attribute_diversity::Parameters {
+                inner: base,
+                processor,
             };
-
-            let parameters: Vec<_> = run
-                .search_l
-                .iter()
-                .map(|&search_l| builder(setup.clone(), search_l, run.search_n))
-                .collect();
-
-            all.extend(runner.search_all(parameters, groundtruth, run.recall_k, run.search_n)?);
-        }
-    }
-
-    Ok(all)
+        Ok(core_search::Run::new(search_params, setup))
+    }, |parameters, recall_k, search_n| {
+        runner.search_all(parameters, groundtruth, recall_k, search_n)
+    })
 }
 
-fn run_search_determinant_diversity<I, F>(
-    runner: &dyn DeterminantDiversityKnn<I>,
-    groundtruth: &dyn benchmark_core::recall::Rows<I>,
+fn run_search_with_builder<P, F, E>(
     steps: SearchSteps<'_>,
     builder: F,
+    mut execute: E,
 ) -> anyhow::Result<Vec<SearchResults>>
 where
-    F: Fn(core_search::Setup, usize, usize) -> anyhow::Result<DeterminantRun>,
+    F: Fn(core_search::Setup, usize, usize) -> anyhow::Result<core_search::Run<P>>,
+    E: FnMut(Vec<core_search::Run<P>>, usize, usize) -> anyhow::Result<Vec<SearchResults>>,
 {
     let mut all = Vec::new();
 
@@ -138,7 +143,7 @@ where
                 .map(|&search_l| builder(setup.clone(), search_l, run.search_n))
                 .collect::<anyhow::Result<Vec<_>>>()?;
 
-            all.extend(runner.search_all(parameters, groundtruth, run.recall_k, run.search_n)?);
+            all.extend(execute(parameters, run.recall_k, run.search_n)?);
         }
     }
 
@@ -149,6 +154,16 @@ pub(crate) trait DeterminantDiversityKnn<I> {
     fn search_all(
         &self,
         parameters: Vec<DeterminantRun>,
+        groundtruth: &dyn benchmark_core::recall::Rows<I>,
+        recall_k: usize,
+        recall_n: usize,
+    ) -> anyhow::Result<Vec<SearchResults>>;
+}
+
+pub(crate) trait MultiAttributeDiversityKnn<I> {
+    fn search_all(
+        &self,
+        parameters: Vec<MultiAttributeRun>,
         groundtruth: &dyn benchmark_core::recall::Rows<I>,
         recall_k: usize,
         recall_n: usize,
@@ -241,6 +256,41 @@ where
         Ok(results
             .into_iter()
             .map(SearchResults::new_determinant_diversity)
+            .collect())
+    }
+}
+
+impl<DP, T, S> MultiAttributeDiversityKnn<DP::InternalId>
+    for Arc<core_search::graph::multi_attribute_diversity::MultiAttributeDiversity<DP, T, S>>
+where
+    DP: diskann::provider::DataProvider,
+    core_search::graph::multi_attribute_diversity::MultiAttributeDiversity<DP, T, S>:
+        core_search::Search<
+            Id = DP::InternalId,
+            Parameters = diskann_benchmark_core::search::graph::multi_attribute_diversity::Parameters,
+            Output = core_search::graph::knn::Metrics,
+        >,
+{
+    fn search_all(
+        &self,
+        parameters: Vec<MultiAttributeRun>,
+        groundtruth: &dyn benchmark_core::recall::Rows<DP::InternalId>,
+        recall_k: usize,
+        recall_n: usize,
+    ) -> anyhow::Result<Vec<SearchResults>> {
+        let results = core_search::search_all(
+            self.clone(),
+            parameters.into_iter(),
+            core_search::graph::multi_attribute_diversity::Aggregator::new(
+                groundtruth,
+                recall_k,
+                recall_n,
+            ),
+        )?;
+
+        Ok(results
+            .into_iter()
+            .map(SearchResults::new_multi_attribute_diversity)
             .collect())
     }
 }

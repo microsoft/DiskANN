@@ -126,6 +126,9 @@ pub(crate) struct TopkSearchPhase {
     pub(crate) determinant_diversity_eta: Option<f64>,
     pub(crate) determinant_diversity_power: Option<f64>,
     pub(crate) determinant_diversity_results_k: Option<usize>,
+    pub(crate) multi_attribute_diversity_eta: Option<f64>,
+    pub(crate) multi_attribute_diversity_power: Option<f64>,
+    pub(crate) multi_attribute_diversity_results_k: Option<usize>,
     // Enable sweeping threads
     pub(crate) num_threads: Vec<NonZeroUsize>,
     pub(crate) runs: Vec<GraphSearch>,
@@ -145,6 +148,20 @@ impl CheckDeserialization for TopkSearchPhase {
         if self.determinant_diversity_eta.is_some() != self.determinant_diversity_power.is_some() {
             return Err(anyhow!(
                 "determinant_diversity_eta and determinant_diversity_power must either both be set or both be omitted"
+            ));
+        }
+
+        if self.multi_attribute_diversity_eta.is_some()
+            != self.multi_attribute_diversity_power.is_some()
+        {
+            return Err(anyhow!(
+                "multi_attribute_diversity_eta and multi_attribute_diversity_power must either both be set or both be omitted"
+            ));
+        }
+
+        if self.determinant_diversity_eta.is_some() && self.multi_attribute_diversity_eta.is_some() {
+            return Err(anyhow!(
+                "determinant_diversity and multi_attribute_diversity are mutually exclusive"
             ));
         }
 
@@ -169,6 +186,30 @@ impl CheckDeserialization for TopkSearchPhase {
         if let Some(k) = self.determinant_diversity_results_k {
             if k == 0 {
                 return Err(anyhow!("determinant_diversity_results_k must be > 0"));
+            }
+        }
+
+        if let Some(eta) = self.multi_attribute_diversity_eta {
+            if eta < 0.0 {
+                return Err(anyhow!(
+                    "multi_attribute_diversity_eta must be >= 0.0, got {}",
+                    eta
+                ));
+            }
+        }
+
+        if let Some(power) = self.multi_attribute_diversity_power {
+            if power <= 0.0 {
+                return Err(anyhow!(
+                    "multi_attribute_diversity_power must be > 0.0, got {}",
+                    power
+                ));
+            }
+        }
+
+        if let Some(k) = self.multi_attribute_diversity_results_k {
+            if k == 0 {
+                return Err(anyhow!("multi_attribute_diversity_results_k must be > 0"));
             }
         }
 
@@ -200,6 +241,9 @@ impl Example for TopkSearchPhase {
             determinant_diversity_eta: None,
             determinant_diversity_power: None,
             determinant_diversity_results_k: None,
+            multi_attribute_diversity_eta: None,
+            multi_attribute_diversity_power: None,
+            multi_attribute_diversity_results_k: None,
             num_threads: THREAD_COUNTS.to_vec(),
             runs,
         }

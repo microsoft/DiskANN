@@ -14,6 +14,11 @@ pub use determinant_diversity_post_process::{
     DeterminantDiversityError, DeterminantDiversitySearchParams, determinant_diversity_post_process,
 };
 
+mod multi_attribute_diversity_post_process;
+pub use multi_attribute_diversity_post_process::{
+    MultiAttributeDiversityError, MultiAttributeDiversitySearchParams,
+};
+
 pub mod distances;
 
 pub mod memory_vector_provider;
