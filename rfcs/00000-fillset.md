@@ -203,6 +203,7 @@ where
 {
     type WorkingSet: Send + Sync + 'static;
     type Seed: workingset::AsWorkingSet<Self::WorkingSet> + Send + Sync + 'static;
+    type FinishError: Into<ANNError> + std::fmt::Debug + Send + Sync;
 
     type InsertStrategy: for<'a> InsertStrategy<
             Provider,
@@ -218,9 +219,9 @@ where
         context: &Provider::Context,
         batch: &Arc<B>,
         ids: Itr,
-    ) -> Self::Seed
+    ) -> impl std::future::Future<Output = Result<Self::Seed, Self::FinishError>> + Send
     where
-        Itr: ExactSizeIterator<Item = Provider::InternalId>;
+        Itr: ExactSizeIterator<Item = Provider::InternalId> + Send;
 }
 
 pub trait Batch: Send + Sync + 'static {
@@ -407,4 +408,88 @@ Quant only builds saw a drop in `get_element` calls through a combination of usi
 
 ### Inmem Providers
 
+All benchmarks were run on a Linux work station, pinned to NUMA node 1 with 32 available threads (16 physical cores).
+Build and search were run with all available threads.
+Recall is measured as recall@10.
 
+#### BIGANN (10M vectors, uint8, L2, full-precision)
+
+Build time: 80.9s to 75.0s (-7.3%)
+
+| search_l | Recall (main) | Recall (PR) | Δ | QPS (main) | QPS (PR) | Change |
+|----------|---------------|-------------|---|------------|----------|--------|
+| 10 | 0.6994 | 0.6980 | -0.0013 | 437,235 | 417,275 | -4.6% |
+| 20 | 0.8113 | 0.8113 | +0.0000 | 316,146 | 300,138 | -5.1% |
+| 30 | 0.8657 | 0.8661 | +0.0004 | 236,128 | 227,593 | -3.6% |
+| 40 | 0.8985 | 0.8992 | +0.0007 | 193,364 | 187,196 | -3.2% |
+| 50 | 0.9195 | 0.9194 | -0.0000 | 164,061 | 157,156 | -4.2% |
+| 60 | 0.9336 | 0.9338 | +0.0002 | 142,110 | 137,421 | -3.3% |
+| 70 | 0.9448 | 0.9448 | +0.0000 | 124,684 | 120,208 | -3.6% |
+| 80 | 0.9526 | 0.9524 | -0.0003 | 111,065 | 107,899 | -2.9% |
+| 90 | 0.9595 | 0.9589 | -0.0006 | 101,246 | 97,557 | -3.6% |
+| 100 | 0.9646 | 0.9639 | -0.0007 | 90,864 | 87,595 | -3.6% |
+
+#### PQ (OpenAI 1M vectors, f32, L2, product quantization with 128 chunks)
+
+Quant-Only Build: 105.6s to 106.4s (+0.7%)
+
+The main goal here is to verify that recall is still poor with quant-only builds at 128 chunks.
+
+| search_l | Recall (main) | Recall (PR) | Δ | QPS (main) | QPS (PR) | Change |
+|----------|---------------|-------------|---|------------|----------|--------|
+| 10 | 0.1774 | 0.1798 | +0.0024 | 38,916 | 44,654 | +14.7% |
+| 20 | 0.2876 | 0.2924 | +0.0047 | 35,466 | 40,261 | +13.5% |
+| 30 | 0.3587 | 0.3626 | +0.0038 | 33,016 | 37,236 | +12.8% |
+| 40 | 0.4081 | 0.4113 | +0.0031 | 31,022 | 34,733 | +12.0% |
+| 50 | 0.4445 | 0.4486 | +0.0042 | 29,306 | 32,795 | +11.9% |
+| 60 | 0.4747 | 0.4779 | +0.0032 | 27,907 | 31,018 | +11.1% |
+| 70 | 0.5004 | 0.5035 | +0.0032 | 26,583 | 29,501 | +11.0% |
+| 80 | 0.5217 | 0.5246 | +0.0029 | 25,446 | 28,116 | +10.5% |
+| 90 | 0.5399 | 0.5428 | +0.0029 | 24,377 | 26,876 | +10.2% |
+| 100 | 0.5552 | 0.5594 | +0.0042 | 23,420 | 25,774 | +10.1% |
+
+**Hybrid Build (48 FP vectors per-prune)**: Build: 125.7s to 123.3s (-1.9%)
+
+| search_l | Recall (main) | Recall (PR) | Δ | QPS (main) | QPS (PR) | Change |
+|----------|---------------|-------------|---|------------|----------|--------|
+| 10 | 0.4486 | 0.4481 | -0.0004 | 31,914 | 36,151 | +13.3% |
+| 20 | 0.6265 | 0.6249 | -0.0015 | 27,807 | 31,267 | +12.4% |
+| 30 | 0.7109 | 0.7102 | -0.0007 | 24,937 | 27,838 | +11.6% |
+| 40 | 0.7607 | 0.7609 | +0.0002 | 22,704 | 25,249 | +11.2% |
+| 50 | 0.7952 | 0.7946 | -0.0005 | 20,923 | 23,162 | +10.7% |
+| 60 | 0.8202 | 0.8200 | -0.0002 | 19,372 | 21,421 | +10.6% |
+| 70 | 0.8392 | 0.8387 | -0.0005 | 18,106 | 19,912 | +10.0% |
+| 80 | 0.8543 | 0.8536 | -0.0008 | 16,970 | 18,656 | +9.9% |
+| 90 | 0.8669 | 0.8659 | -0.0010 | 15,996 | 17,545 | +9.7% |
+| 100 | 0.8770 | 0.8764 | -0.0006 | 15,128 | 16,570 | +9.5% |
+
+#### Spherical (OpenAI 1M vectors, f32, L2, 1-bit spherical quantization)
+
+Build time: 14.5s to 13.9s (-3.9%)
+
+**Full-precision Query Layout**
+
+| search_l | Recall (main) | Recall (PR) | Δ | QPS (main) | QPS (PR) | Change |
+|----------|---------------|-------------|---|------------|----------|---|
+| 10 | 0.5301 | 0.5301 | +0.0000 | 136,697 | 137,860 | +0.9% |
+| 20 | 0.7123 | 0.7148 | +0.0025 | 96,581 | 95,611 | -1.0% |
+| 30 | 0.7843 | 0.7851 | +0.0007 | 74,860 | 74,673 | -0.2% |
+| 40 | 0.8229 | 0.8244 | +0.0015 | 60,805 | 61,444 | +1.1% |
+| 50 | 0.8494 | 0.8505 | +0.0011 | 52,015 | 51,918 | -0.2% |
+| 60 | 0.8678 | 0.8688 | +0.0010 | 45,198 | 45,487 | +0.6% |
+| 70 | 0.8819 | 0.8828 | +0.0010 | 40,229 | 40,531 | +0.8% |
+| 80 | 0.8935 | 0.8941 | +0.0006 | 36,168 | 36,350 | +0.5% |
+| 90 | 0.9026 | 0.9033 | +0.0007 | 32,883 | 33,050 | +0.5% |
+| 100 | 0.9103 | 0.9107 | +0.0004 | 30,256 | 30,322 | +0.2% |
+
+#### Summary
+
+- **Recall**: No major changes.
+
+- **Build time**: No major changes.
+  BIGANN may see a slight improvement.
+  I included it because the cheap distance computations make other inefficiencies stand out.
+
+- **QPS**: BIGANN shows a ~3-5% dip and spherical is neutral (within ±1%), both within expected run-to-run variance.
+  PQ shows a +10-15% improvement that persists across reruns.
+  However, the number of hops and comparisons is the same, so I think this is reflective of secondary effects (allocator state maybe?) and cannot be attributed to this PR.
